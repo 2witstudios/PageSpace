@@ -19,6 +19,7 @@ let capturedInsertValues: Record<string, unknown> | null = null;
 // Track the last inserted log hash for chain simulation
 let lastInsertedHash: string | null = null;
 
+// @scaffold - ORM chain mock for db.insert().values() and db.query.activityLogs.findFirst
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({

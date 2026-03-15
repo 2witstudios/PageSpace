@@ -88,6 +88,7 @@ function mockValidators(userOk = true, pageOk = true) {
   }
 }
 
+/** @scaffold — ORM chain mock: db.select().from().leftJoin/innerJoin().where().limit() */
 function makeSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -100,6 +101,7 @@ function makeSelectChain(rows: unknown[]) {
 
 // ---------------------------------------------------------------------------
 // getDriveIdsForUser
+// REVIEW: All tests in this block use inline @scaffold ORM chain mocks
 // ---------------------------------------------------------------------------
 describe('getDriveIdsForUser', () => {
   beforeEach(() => {
@@ -168,6 +170,7 @@ describe('getDriveIdsForUser', () => {
 
 // ---------------------------------------------------------------------------
 // getUserAccessLevel
+// REVIEW: All tests use inline @scaffold ORM chain mocks with sequential mockReturnValueOnce
 // ---------------------------------------------------------------------------
 describe('getUserAccessLevel', () => {
   beforeEach(() => {
@@ -189,13 +192,13 @@ describe('getUserAccessLevel', () => {
   it('logs debug message for invalid userId when silent=false', async () => {
     mockValidators(false, true);
     await getUserAccessLevel('bad-id', VALID_PAGE, { silent: false });
-    expect(loggers.api.debug).toHaveBeenCalled();
+    expect(loggers.api.debug).toHaveBeenCalledWith(expect.stringContaining('userId'));
   });
 
   it('logs debug message for invalid pageId when silent=false', async () => {
     mockValidators(true, false);
     await getUserAccessLevel(VALID_USER, 'bad-id', { silent: false });
-    expect(loggers.api.debug).toHaveBeenCalled();
+    expect(loggers.api.debug).toHaveBeenCalledWith(expect.stringContaining('pageId'));
   });
 
   it('returns null when page not found', async () => {
@@ -219,7 +222,7 @@ describe('getUserAccessLevel', () => {
     vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
-    expect(loggers.api.debug).toHaveBeenCalled();
+    expect(loggers.api.debug).toHaveBeenCalledWith(expect.stringContaining('not found'));
   });
 
   it('returns full access when user is drive owner', async () => {
@@ -392,7 +395,10 @@ describe('getUserAccessLevel', () => {
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
-    expect(loggers.api.error).toHaveBeenCalled();
+    expect(loggers.api.error).toHaveBeenCalledWith(
+      expect.stringContaining('Error'),
+      expect.any(Object),
+    );
   });
 
   it('returns null when page has no driveId (admin check skipped)', async () => {
@@ -428,7 +434,7 @@ describe('getUserAccessLevel', () => {
     vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
-    expect(loggers.api.debug).toHaveBeenCalled();
+    expect(loggers.api.debug).toHaveBeenCalledWith(expect.stringContaining('owner'));
   });
 });
 
@@ -436,6 +442,10 @@ describe('getUserAccessLevel', () => {
 // canUserViewPage / canUserEditPage / canUserSharePage / canUserDeletePage
 // ---------------------------------------------------------------------------
 
+/**
+ * @scaffold — ORM chain mock: sets up getUserAccessLevel return via inline chain mocks
+ * REVIEW: This helper uses deep chain mocks; consider replacing with a repository abstraction
+ */
 function setupAccessLevel(perms: { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null) {
   mockValidators(true, true);
   if (perms === null) {
@@ -893,7 +903,10 @@ describe('getUserDriveAccess', () => {
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
-    expect(loggers.api.error).toHaveBeenCalled();
+    expect(loggers.api.error).toHaveBeenCalledWith(
+      expect.stringContaining('Error'),
+      expect.any(Object),
+    );
   });
 
   it('logs owner grant message when silent=false and user is owner', async () => {
@@ -938,7 +951,7 @@ describe('getUserDriveAccess', () => {
     } as unknown as ReturnType<typeof db.select>);
 
     await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
-    expect(loggers.api.debug).toHaveBeenCalled();
+    expect(loggers.api.debug).toHaveBeenCalledWith(expect.stringContaining('not found'));
   });
 
   it('logs page access check messages when silent=false and user is not a member', async () => {

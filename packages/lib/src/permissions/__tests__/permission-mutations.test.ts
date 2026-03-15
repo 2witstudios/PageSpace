@@ -31,6 +31,9 @@ describe('permission-mutations zero-trust', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>;
 
   beforeEach(async () => {
+    // Restore mocks first so spies from prior test don't interfere with setup
+    vi.restoreAllMocks();
+
     // Delete in foreign key order to avoid deadlocks from cascade contention
     await db.delete(pagePermissions);
     await db.delete(pages);

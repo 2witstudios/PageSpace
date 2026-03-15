@@ -19,8 +19,9 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
 
   afterEach(async () => {
     // Clean up only our test data to avoid interfering with parallel tests
+    // Silent catch on each to ensure all cleanup runs even if one fails
+    if (testPage) await db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)).catch(() => {});
     if (testDrive) {
-      await db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)).catch(() => {});
       await db.delete(pages).where(eq(pages.driveId, testDrive.id)).catch(() => {});
       await db.delete(driveMembers).where(eq(driveMembers.driveId, testDrive.id)).catch(() => {});
       await db.delete(drives).where(eq(drives.id, testDrive.id)).catch(() => {});
@@ -63,6 +64,7 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       expect(result).toBeNull();
     });
 
+    // REVIEW: Sleep-based timing test — relies on 50ms delay for NOW boundary expiration.
     it('given permission expiring at NOW boundary, should deny access', async () => {
       const now = new Date();
 
@@ -454,6 +456,8 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       expect(afterRevoke).toBeNull();
     });
 
+    // REVIEW: Sleep-based timing test — relies on 700ms delay for expiration.
+    // Consider using fake timers or a configurable clock if this becomes flaky.
     it('given permission expired after initial grant, should deny access', async () => {
       const expiresIn500ms = new Date(Date.now() + 500);
 

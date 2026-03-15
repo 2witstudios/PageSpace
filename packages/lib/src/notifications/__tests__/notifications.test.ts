@@ -84,6 +84,7 @@ const mockNotification = {
   metadata: {},
 };
 
+/** @scaffold — ORM chain mock: db.insert().values().returning() */
 function setupInsertChain(returnValue: object) {
   const returningFn = vi.fn().mockResolvedValue([returnValue]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -91,6 +92,7 @@ function setupInsertChain(returnValue: object) {
   return { returningFn, valuesFn };
 }
 
+/** @scaffold — ORM chain mock: db.select().from().leftJoin().where().orderBy().limit() */
 function setupSelectChain(returnValue: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(returnValue);
   const orderByFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -102,6 +104,7 @@ function setupSelectChain(returnValue: unknown[]) {
   return { selectFn, fromFn, whereFn, orderByFn, limitFn };
 }
 
+/** @scaffold — ORM chain mock: db.update().set().where().returning() */
 function setupUpdateChain(returnValue: object[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -110,6 +113,7 @@ function setupUpdateChain(returnValue: object[]) {
   return { setFn, whereFn, returningFn };
 }
 
+/** @scaffold — ORM chain mock: db.delete().where() */
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
@@ -136,7 +140,7 @@ describe('createNotification', () => {
       message: 'Test message',
     });
 
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
     expect(result).toEqual(mockNotification);
   });
 
@@ -298,7 +302,7 @@ describe('markNotificationAsRead', () => {
     setupUpdateChain([{ ...mockNotification, isRead: true }]);
 
     const result = await markNotificationAsRead('notif-1', 'user-1');
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ isRead: true });
   });
 
@@ -317,7 +321,7 @@ describe('markAllNotificationsAsRead', () => {
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await markAllNotificationsAsRead('user-1');
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isRead: true }));
   });
 });
@@ -327,7 +331,7 @@ describe('deleteNotification', () => {
     setupDeleteChain();
 
     await deleteNotification('notif-1', 'user-1');
-    expect(db.delete).toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -357,35 +361,61 @@ describe('createPermissionNotification', () => {
   });
 
   it('creates PAGE_SHARED notification for granted type', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     const result = await createPermissionNotification('user-1', 'page-1', 'granted', { canView: true }, 'user-2');
     expect(result).toBeDefined();
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PAGE_SHARED', userId: 'user-1' }),
+    );
   });
 
   it('creates PERMISSION_UPDATED notification for updated type', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createPermissionNotification('user-1', 'page-1', 'updated', { canView: true, canEdit: true }, 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PERMISSION_UPDATED', userId: 'user-1' }),
+    );
   });
 
   it('creates PERMISSION_REVOKED notification for revoked type', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createPermissionNotification('user-1', 'page-1', 'revoked', {}, 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'PERMISSION_REVOKED', userId: 'user-1' }),
+    );
   });
 
   it('uses "Someone" when triggeredByUser not found', async () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createPermissionNotification('user-1', 'page-1', 'granted', { canView: true }, 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'PAGE_SHARED',
+        message: expect.stringContaining('Someone'),
+      }),
+    );
   });
 
   it('includes canEdit in permissionList when canEdit is true', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createPermissionNotification('user-1', 'page-1', 'granted', {
       canView: true,
       canEdit: true,
       canShare: true,
       canDelete: true,
     }, 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'PAGE_SHARED',
+        metadata: expect.objectContaining({ pageId: 'page-1' }),
+      }),
+    );
   });
 });
 
@@ -410,28 +440,48 @@ describe('createDriveNotification', () => {
   });
 
   it('creates DRIVE_INVITED notification', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     const result = await createDriveNotification('user-1', 'drive-1', 'invited', 'MEMBER', 'user-2');
     expect(result).toBeDefined();
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DRIVE_INVITED', userId: 'user-1' }),
+    );
   });
 
   it('creates DRIVE_JOINED notification', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createDriveNotification('user-1', 'drive-1', 'joined', 'MEMBER', 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DRIVE_JOINED', userId: 'user-1' }),
+    );
   });
 
   it('creates DRIVE_ROLE_CHANGED notification', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createDriveNotification('user-1', 'drive-1', 'role_changed', 'ADMIN', 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DRIVE_ROLE_CHANGED', userId: 'user-1' }),
+    );
   });
 
   it('works without triggeredByUserId', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createDriveNotification('user-1', 'drive-1', 'invited');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DRIVE_INVITED' }),
+    );
   });
 
   it('works without role', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     await createDriveNotification('user-1', 'drive-1', 'joined');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DRIVE_JOINED' }),
+    );
   });
 });
 
@@ -456,7 +506,7 @@ describe('createOrUpdateMessageNotification', () => {
     vi.mocked(db.query.notifications.findFirst).mockResolvedValue(undefined as never);
 
     await createOrUpdateMessageNotification('user-1', 'conv-1', 'Hello!', 'user-2');
-    expect(db.query.users.findFirst).toHaveBeenCalled();
+    expect(db.query.users.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it('skips sender lookup when senderName is provided', async () => {
@@ -473,7 +523,7 @@ describe('createOrUpdateMessageNotification', () => {
     setupUpdateChain([existingNotif]);
 
     const result = await createOrUpdateMessageNotification('user-1', 'conv-1', 'New message', 'user-2');
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
     expect(result).toBeDefined();
   });
 
@@ -519,16 +569,27 @@ describe('createMentionNotification', () => {
   });
 
   it('creates MENTION notification for valid mention', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     const result = await createMentionNotification('user-1', 'page-1', 'user-2');
     expect(result).toBeDefined();
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'MENTION', userId: 'user-1' }),
+    );
   });
 
   it('uses "Someone" when mentioner user not found', async () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
 
     await createMentionNotification('user-1', 'page-1', 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'MENTION',
+        message: expect.stringContaining('Someone'),
+      }),
+    );
   });
 });
 
@@ -563,16 +624,31 @@ describe('createTaskAssignedNotification', () => {
   });
 
   it('creates TASK_ASSIGNED notification', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
     const result = await createTaskAssignedNotification('user-1', 'task-1', 'My Task', 'page-tasks', 'user-2');
     expect(result).toBeDefined();
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'TASK_ASSIGNED',
+        userId: 'user-1',
+        metadata: expect.objectContaining({ taskId: 'task-1' }),
+      }),
+    );
   });
 
   it('uses "Someone" when assigner not found', async () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
 
     await createTaskAssignedNotification('user-1', 'task-1', 'My Task', 'page-tasks', 'user-2');
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'TASK_ASSIGNED',
+        message: expect.stringContaining('Someone'),
+      }),
+    );
   });
 });
 

@@ -73,60 +73,70 @@ describe('Logger log level methods', () => {
     anyLogger.clearContext();
   });
 
-  it('trace() calls console.log', () => {
+  it('trace() routes to console.log with message', () => {
     logger.trace('trace message');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('trace message');
   });
 
-  it('debug() calls console.log', () => {
+  it('debug() routes to console.log with message', () => {
     logger.debug('debug message');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('debug message');
   });
 
-  it('info() calls console.log', () => {
+  it('info() routes to console.log with message', () => {
     logger.info('info message');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('info message');
   });
 
-  it('warn() calls console.warn', () => {
+  it('warn() routes to console.warn with message', () => {
     logger.warn('warn message');
-    expect(consoleWarnSpy).toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
+    expect(consoleWarnSpy.mock.calls[0][0]).toContain('warn message');
   });
 
-  it('error() with Error object calls console.error', () => {
+  it('error() with Error object routes to console.error', () => {
     logger.error('error message', new Error('boom'));
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('error message');
   });
 
-  it('error() with plain metadata calls console.error', () => {
+  it('error() with plain metadata routes to console.error', () => {
     logger.error('error message', { extra: 'data' });
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('error message');
   });
 
-  it('error() with no second arg calls console.error', () => {
+  it('error() with no second arg routes to console.error', () => {
     logger.error('error only');
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('error only');
   });
 
-  it('fatal() with Error object calls console.error', () => {
+  it('fatal() with Error object routes to console.error', () => {
     logger.fatal('fatal message', new Error('boom'));
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('fatal message');
   });
 
-  it('fatal() with plain metadata calls console.error', () => {
+  it('fatal() with plain metadata routes to console.error', () => {
     logger.fatal('fatal message', { extra: 'info' });
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('fatal message');
   });
 });
 
 describe('Logger shouldLog', () => {
   let anyLogger: AnyLogger;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     anyLogger = logger as AnyLogger;
     anyLogger.config.destination = 'console';
   });
@@ -149,10 +159,11 @@ describe('Logger shouldLog', () => {
     expect(consoleLogSpy).toHaveBeenCalled();
   });
 
-  it('SILENT level suppresses all logs', () => {
+  it('SILENT level suppresses all logs including fatal', () => {
     anyLogger.config.level = LogLevel.SILENT;
     logger.fatal('should be suppressed');
     expect(consoleLogSpy).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -236,11 +247,9 @@ describe('Logger sanitizeData', () => {
     expect(result.api_key).toBe('[REDACTED]');
   });
 
-  it('does NOT redact "apiKey" field (lowerKey.includes("apiKey") is case-sensitive)', () => {
-    // sensitive list has 'apiKey' but comparison is lowerKey.includes(s), which is case-sensitive
-    // 'apikey'.includes('apiKey') === false, so the field is NOT redacted
+  it('redacts "apiKey" field (case-insensitive match)', () => {
     const result = anyLogger.sanitizeData({ apiKey: 'key123' });
-    expect(result.apiKey).toBe('key123');
+    expect(result.apiKey).toBe('[REDACTED]');
   });
 
   it('redacts "authorization" field', () => {
@@ -569,15 +578,33 @@ describe('Logger buffer / database destination', () => {
   });
 
   it('setInterval flush error handler calls console.error', async () => {
-    // Simulate the interval callback's .catch() path by calling flush
-    // then catching the error ourselves to verify the pattern matches
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const flushError = new Error('interval flush failed');
-    // Manually invoke the pattern: flush().catch(err => console.error('[Logger] Flush error:', err))
-    await Promise.resolve().then(() => { throw flushError; }).catch(err => {
-      console.error('[Logger] Flush error:', err);
-    });
+
+    // Capture the callback registered with setInterval
+    let intervalCallback: (() => void) | null = null;
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation(((cb: () => void) => {
+      intervalCallback = cb;
+      return 999 as unknown as NodeJS.Timeout;
+    }) as typeof setInterval);
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process);
+
+    // Make flush reject so the .catch() path fires
+    vi.spyOn(anyLogger, 'flush').mockRejectedValueOnce(flushError);
+
+    anyLogger.startFlushTimer();
+    expect(intervalCallback).not.toBeNull();
+
+    // Invoke the captured interval callback
+    intervalCallback!();
+
+    // Let the microtask queue flush the .catch() handler
+    await new Promise(r => setTimeout(r, 0));
+
     expect(consoleSpy).toHaveBeenCalledWith('[Logger] Flush error:', flushError);
+
+    setIntervalSpy.mockRestore();
+    onSpy.mockRestore();
   });
 });
 

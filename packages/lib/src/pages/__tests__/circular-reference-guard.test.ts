@@ -25,18 +25,15 @@ import {
   isDescendant,
   validatePageMove,
 } from '../circular-reference-guard';
-import { db } from '@pagespace/db';
+import { db, eq } from '@pagespace/db';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function setupPageTree(tree: Record<string, string | null>) {
-  vi.mocked(db.query.pages.findFirst).mockImplementation((async (args: unknown) => {
-    const opts = args as { where: unknown; columns: unknown };
-    // Extract the pageId from the eq call - we need to trace which id was queried.
-    // Since eq is mocked as a no-op string, we use call arguments
-    const eqMock = vi.mocked(require('@pagespace/db').eq);
+  vi.mocked(db.query.pages.findFirst).mockImplementation((async () => {
+    const eqMock = vi.mocked(eq);
     const calls = eqMock.mock.calls;
     if (calls.length === 0) return undefined;
     const lastCall = calls[calls.length - 1];
@@ -44,7 +41,7 @@ function setupPageTree(tree: Record<string, string | null>) {
     const parentId = tree[queriedId];
     if (parentId === undefined) return undefined;
     return { parentId };
-  }) as any);
+  }) as unknown as typeof db.query.pages.findFirst);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,9 +141,8 @@ describe('isDescendant', () => {
     let counter = 0;
     vi.mocked(db.query.pages.findFirst).mockImplementation((async () => {
       counter++;
-      // After 100 calls the depth check fires; we return a unique id each time
       return { parentId: `unique-parent-${counter}` };
-    }) as any);
+    }) as unknown as typeof db.query.pages.findFirst);
 
     await expect(isDescendant('start-id', 'ancestor-id')).rejects.toThrow(
       /Page tree depth exceeded/
@@ -212,7 +208,7 @@ describe('validatePageMove', () => {
     vi.mocked(db.query.pages.findFirst).mockImplementation((async () => {
       counter++;
       return { parentId: `unique-parent-${counter}` };
-    }) as any);
+    }) as unknown as typeof db.query.pages.findFirst);
 
     const result = await validatePageMove('page-1', 'page-2');
     expect(result.valid).toBe(false);

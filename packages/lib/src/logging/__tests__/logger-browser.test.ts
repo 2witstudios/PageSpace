@@ -99,44 +99,51 @@ describe('BrowserSafeLogger log level routing', () => {
 
   it('error() routes to console.error', () => {
     bsl.error('err msg');
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('err msg');
   });
 
   it('fatal() routes to console.error', () => {
     bsl.fatal('fatal msg');
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('fatal msg');
   });
 
   it('warn() routes to console.warn', () => {
     bsl.warn('warn msg');
-    expect(consoleWarnSpy).toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
+    expect(consoleWarnSpy.mock.calls[0][0]).toContain('warn msg');
   });
 
   it('debug() routes to console.debug', () => {
     bsl.debug('debug msg');
-    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleDebugSpy).toHaveBeenCalledTimes(1);
+    expect(consoleDebugSpy.mock.calls[0][0]).toContain('debug msg');
   });
 
   it('trace() routes to console.debug', () => {
     bsl.trace('trace msg');
-    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleDebugSpy).toHaveBeenCalledTimes(1);
+    expect(consoleDebugSpy.mock.calls[0][0]).toContain('trace msg');
   });
 
   it('info() routes to console.log', () => {
     bsl.info('info msg');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('info msg');
   });
 });
 
 describe('BrowserSafeLogger shouldLog filtering', () => {
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let consoleDebugSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -152,7 +159,7 @@ describe('BrowserSafeLogger shouldLog filtering', () => {
   it('passes levels at or above threshold', () => {
     const bsl = new BrowserSafeLogger({ level: LogLevel.INFO });
     bsl.info('should pass');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
   });
 
   it('trace is suppressed at INFO level', () => {
@@ -161,13 +168,12 @@ describe('BrowserSafeLogger shouldLog filtering', () => {
     expect(consoleDebugSpy).not.toHaveBeenCalled();
   });
 
-  it('SILENT level suppresses everything', () => {
+  it('SILENT level suppresses everything including fatal', () => {
     const bsl = new BrowserSafeLogger({ level: LogLevel.SILENT });
     bsl.fatal('nope');
-    // fatal is level 5, which is < SILENT(6), but shouldLog uses >= so SILENT suppresses all
-    // Actually: should NOT suppress FATAL(5) unless level >= SILENT(6)
-    // Let's verify the actual behavior: shouldLog returns level >= config.level
-    // FATAL(5) >= SILENT(6) => false, so it IS suppressed
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(consoleLogSpy).not.toHaveBeenCalled();
+    expect(consoleDebugSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -509,24 +515,13 @@ describe('BrowserSafeLogger environment detection', () => {
     expect(typeof bsl.getHostname()).toBe('string');
   });
 
-  it('getHostname returns "unknown" when os.hostname() throws', () => {
+  it('getHostname returns a valid hostname string in Node.js', () => {
     const bsl = new BrowserSafeLogger() as AnyLogger;
-    // Patch isNode to return true so we enter the Node branch, then
-    // patch process.versions to simulate an os module failure via a custom implementation
-    vi.spyOn(bsl, 'isNode').mockReturnValue(true);
-    // Directly test the catch path by patching the method to throw on require('os')
-    // We'll replace getHostname with a wrapper that tests the catch branch path
-    const original = bsl.getHostname;
-    bsl.getHostname = function() {
-      try {
-        throw new Error('os module unavailable');
-      } catch {
-        return 'unknown';
-      }
-    };
-    expect(bsl.getHostname()).toBe('unknown');
-    bsl.getHostname = original;
-    vi.restoreAllMocks();
+    const hostname = bsl.getHostname();
+    expect(typeof hostname).toBe('string');
+    expect(hostname.length).toBeGreaterThan(0);
+    expect(hostname).not.toBe('unknown');
+    expect(hostname).not.toBe('browser');
   });
 
   it('getMemoryUsage returns used and total in Node.js', () => {

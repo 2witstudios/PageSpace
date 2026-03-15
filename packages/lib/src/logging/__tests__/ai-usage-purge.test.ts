@@ -9,7 +9,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// vi.hoisted ensures these are available when vi.mock factory runs
+/**
+ * @scaffold — Hoisted ORM chain mocks: db.update().set().where().returning()
+ * and db.delete().where().returning()
+ * Pure functions (lt, eq, and, or, isNotNull) are mocked because they are
+ * re-exported from @pagespace/db and used as query-builder arguments.
+ */
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 const mockSet = vi.hoisted(() => vi.fn().mockReturnValue({ where: mockWhere }));
@@ -58,7 +63,7 @@ describe('ai-usage-purge', () => {
       const cutoff = new Date('2024-01-01');
       const count = await anonymizeAiUsageContent(cutoff);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledTimes(1);
       expect(mockSet).toHaveBeenCalledWith({ prompt: null, completion: null });
       expect(count).toBe(3);
     });
@@ -85,7 +90,7 @@ describe('ai-usage-purge', () => {
       const cutoff = new Date('2024-01-01');
       const count = await purgeAiUsageLogs(cutoff);
 
-      expect(db.delete).toHaveBeenCalled();
+      expect(db.delete).toHaveBeenCalledTimes(1);
       expect(count).toBe(2);
     });
 
@@ -112,7 +117,7 @@ describe('ai-usage-purge', () => {
 
       const count = await deleteAiUsageLogsForUser('user-123');
 
-      expect(db.delete).toHaveBeenCalled();
+      expect(db.delete).toHaveBeenCalledTimes(1);
       expect(count).toBe(4);
     });
 

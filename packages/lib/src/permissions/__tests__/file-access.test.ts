@@ -29,6 +29,7 @@ import { canUserViewPage, isUserDriveMember } from '../permissions';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold — ORM chain mock: db.select().from().where() for file-page links */
 function setupLinkedPages(pages: Array<{ pageId: string }>) {
   const fromFn = vi.fn().mockReturnValue({
     where: vi.fn().mockResolvedValue(pages),

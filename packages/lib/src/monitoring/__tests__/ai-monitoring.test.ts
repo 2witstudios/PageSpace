@@ -1,6 +1,9 @@
 /**
  * Tests for ai-monitoring.ts
  * Mocks @pagespace/db, logger-database, and logger-config
+ *
+ * @scaffold - ORM chain mocks (db.select().from().where().limit()) required
+ * because the source builds Drizzle query chains that must be mimicked.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -73,34 +76,32 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Set up db.select().from().where() → resolves to rows.
+ * @scaffold - ORM chain mock: db.select().from().where() → resolves to rows.
  * Also supports: db.select().from().where().limit() for detectAIErrorPatterns.
  * Also supports: db.select().from() → resolves to rows (no .where() call).
+ *
+ * Uses mockResolvedValue on terminal nodes so the chain is awaitable without
+ * injecting thenable properties (then/catch/finally) on intermediate objects.
  */
 function setupSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
 
-  // whereFn result is both a thenable (for direct await) and has .limit()
-  const whereResult = {
+  const whereFn = vi.fn().mockReturnValue({
     limit: limitFn,
-    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-    catch: (reject: (e: unknown) => unknown) =>
-      Promise.resolve(rows).catch(reject),
-    finally: (cb: () => void) => Promise.resolve(rows).finally(cb),
-  };
-  const whereFn = vi.fn().mockReturnValue(whereResult);
+  });
+  // Make where itself awaitable for code paths that await where() directly
+  whereFn.mockImplementation(() => {
+    const p = Promise.resolve(rows) as Promise<unknown[]> & { limit: ReturnType<typeof vi.fn> };
+    p.limit = limitFn;
+    return p;
+  });
 
-  // fromFn result is both thenable (no .where() used) and has .where()
-  const fromResult = {
-    where: whereFn,
-    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-    catch: (reject: (e: unknown) => unknown) =>
-      Promise.resolve(rows).catch(reject),
-    finally: (cb: () => void) => Promise.resolve(rows).finally(cb),
-  };
-  const fromFn = vi.fn().mockReturnValue(fromResult);
+  const fromFn = vi.fn().mockImplementation(() => {
+    const p = Promise.resolve(rows) as Promise<unknown[]> & { where: typeof whereFn };
+    p.where = whereFn;
+    return p;
+  });
+
   mockDbSelectFn.mockReturnValue({ from: fromFn });
   return { fromFn, whereFn, limitFn };
 }
@@ -203,29 +204,29 @@ describe('trackAIUsage', () => {
       inputTokens: 1000,
       outputTokens: 500,
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'user-1',
-        provider: 'anthropic',
-        model: 'claude-3-5-sonnet-20241022',
-        inputTokens: 1000,
-        outputTokens: 500,
-        totalTokens: 1500,
-      })
-    );
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    const payload = mockWriteAiUsage.mock.calls[0][0];
+    expect(payload.userId).toBe('user-1');
+    expect(payload.provider).toBe('anthropic');
+    expect(payload.model).toBe('claude-3-5-sonnet-20241022');
+    expect(payload.inputTokens).toBe(1000);
+    expect(payload.outputTokens).toBe(500);
+    expect(payload.totalTokens).toBe(1500);
+    expect(payload.success).toBe(true);
+    expect(typeof payload.cost).toBe('number');
+    expect(payload.cost).toBeGreaterThan(0);
   });
 
   it('should compute totalTokens from inputTokens + outputTokens', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100 });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 300 }));
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    expect(mockWriteAiUsage.mock.calls[0][0].totalTokens).toBe(300);
   });
 
   it('should not override totalTokens when already provided', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100, totalTokens: 999 });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 999 }));
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    expect(mockWriteAiUsage.mock.calls[0][0].totalTokens).toBe(999);
   });
 
   it('should pass through optional context tracking fields', async () => {
@@ -242,47 +243,45 @@ describe('trackAIUsage', () => {
       wasTruncated: false,
       truncationStrategy: 'none',
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextMessages: ['msg-1', 'msg-2'],
-        contextSize: 500,
-        systemPromptTokens: 100,
-        messageCount: 2,
-        wasTruncated: false,
-      })
-    );
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    const payload = mockWriteAiUsage.mock.calls[0][0];
+    expect(payload.contextMessages).toEqual(['msg-1', 'msg-2']);
+    expect(payload.contextSize).toBe(500);
+    expect(payload.systemPromptTokens).toBe(100);
+    expect(payload.toolDefinitionTokens).toBe(50);
+    expect(payload.conversationTokens).toBe(350);
+    expect(payload.messageCount).toBe(2);
+    expect(payload.wasTruncated).toBe(false);
+    expect(payload.truncationStrategy).toBe('none');
   });
 
   it('should set success=true when success is not false', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    expect(mockWriteAiUsage.mock.calls[0][0].success).toBe(true);
   });
 
   it('should set success=false when explicitly set', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'fail' }));
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    const payload = mockWriteAiUsage.mock.calls[0][0];
+    expect(payload.success).toBe(false);
+    expect(payload.error).toBe('fail');
   });
 
   it('should merge streamingDuration into metadata', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', streamingDuration: 1234, metadata: { custom: 'value' } });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({ custom: 'value', streamingDuration: 1234 }),
-      })
-    );
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    expect(mockWriteAiUsage.mock.calls[0][0].metadata).toEqual({ custom: 'value', streamingDuration: 1234 });
   });
 
   it('should not throw and should log debug when writeAiUsage rejects', async () => {
     mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await vi.waitFor(() => { expect(mockAiLogger.debug).toHaveBeenCalled(); });
     expect(mockAiLogger.debug).toHaveBeenCalledWith(
       'AI usage tracking failed',
-      expect.objectContaining({ error: 'db error' })
+      { error: 'db error', model: 'gpt-4o', provider: 'openai' }
     );
   });
 });
@@ -310,12 +309,16 @@ describe('trackAIToolUsage', () => {
       conversationId: 'conv-1',
       pageId: 'page-1',
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockWriteAiUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({ type: 'tool_call', toolName: 'searchPages', toolId: 'tool-123' }),
-      })
-    );
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    const payload = mockWriteAiUsage.mock.calls[0][0];
+    expect(payload.userId).toBe('user-1');
+    expect(payload.provider).toBe('openai');
+    expect(payload.model).toBe('gpt-4o');
+    expect(payload.metadata.type).toBe('tool_call');
+    expect(payload.metadata.toolName).toBe('searchPages');
+    expect(payload.metadata.toolId).toBe('tool-123');
+    expect(payload.metadata.args).toEqual({ query: 'hello' });
+    expect(payload.metadata.result).toEqual({ pages: [] });
   });
 });
 
@@ -365,7 +368,7 @@ describe('getUserAIStats', () => {
     mockDbSelectFn.mockImplementation(() => { throw new Error('db failure'); });
     const stats = await getUserAIStats('user-1');
     expect(stats.requestCount).toBe(0);
-    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get AI usage stats', expect.any(Error));
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get AI usage stats', new Error('db failure'));
   });
 
   it('should compute averageDuration correctly', async () => {
@@ -446,7 +449,7 @@ describe('getPopularAIFeatures', () => {
     mockDbSelectFn.mockImplementation(() => { throw new Error('db error'); });
     const features = await getPopularAIFeatures();
     expect(features).toEqual([]);
-    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get popular AI features', expect.any(Error));
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to get popular AI features', new Error('db error'));
   });
 });
 
@@ -458,6 +461,7 @@ describe('detectAIErrorPatterns', () => {
     vi.clearAllMocks();
   });
 
+  /** @scaffold - ORM chain mock: db.select().from().where().limit() */
   function setupErrorChain(rows: Array<{ error: string | null; provider: string; model: string }>) {
     const limitFn = vi.fn().mockResolvedValue(rows);
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -531,7 +535,7 @@ describe('detectAIErrorPatterns', () => {
     mockDbSelectFn.mockImplementation(() => { throw new Error('db failure'); });
     const patterns = await detectAIErrorPatterns();
     expect(patterns).toEqual([]);
-    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to detect AI error patterns', expect.any(Error));
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to detect AI error patterns', new Error('db failure'));
   });
 });
 
@@ -585,7 +589,7 @@ describe('getTokenEfficiencyMetrics', () => {
     mockDbSelectFn.mockImplementation(() => { throw new Error('db error'); });
     const metrics = await getTokenEfficiencyMetrics();
     expect(metrics.averageTokensPerRequest).toBe(0);
-    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to calculate token efficiency metrics', expect.any(Error));
+    expect(mockAiLogger.error).toHaveBeenCalledWith('Failed to calculate token efficiency metrics', new Error('db error'));
   });
 
   it('should compute inputOutputRatio', async () => {

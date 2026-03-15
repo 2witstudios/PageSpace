@@ -28,10 +28,12 @@ describe('Cache Trust Boundaries (Integration)', () => {
   });
 
   afterEach(async () => {
-    await PermissionCache.getInstance().clearAll();
+    // Always clear cache first to prevent stale entries from affecting next test
+    await PermissionCache.getInstance().clearAll().catch(() => {});
     // Clean up only our test data to avoid interfering with parallel tests
+    // Silent catch on each to ensure all cleanup runs even if one fails
+    if (testPage) await db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)).catch(() => {});
     if (testDrive) {
-      await db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)).catch(() => {});
       await db.delete(pages).where(eq(pages.driveId, testDrive.id)).catch(() => {});
       await db.delete(driveMembers).where(eq(driveMembers.driveId, testDrive.id)).catch(() => {});
       await db.delete(drives).where(eq(drives.id, testDrive.id)).catch(() => {});
@@ -257,6 +259,8 @@ describe('Cache Trust Boundaries (Integration)', () => {
       expect(fresh).toBeNull();
     });
 
+    // REVIEW: Sleep-based timing test — relies on 700ms delay for expiration.
+    // Consider using fake timers or a configurable clock if this becomes flaky.
     it('given permission expired after caching, bypassCache returns null', async () => {
       const expiresIn500ms = new Date(Date.now() + 500);
 

@@ -7,6 +7,9 @@
  *  - getHashChainStats: with entries, without entries, error
  *  - verifyEntry: found valid, found invalid, not found, with chainSeed,
  *                 with previousLogHash, neither, error
+ *
+ * @scaffold - ORM chain mocks required for db.select().from().where() and
+ * db.query.activityLogs.findFirst/findMany patterns.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -110,8 +113,8 @@ function buildValidChain(count: number): MockEntry[] {
 }
 
 /**
- * Sets up db.select() to return a count and db.query.activityLogs.findMany for paging.
- * db.select() is called once at the start to get total count.
+ * @scaffold - Sets up db.select().from().where() for count query and
+ * db.query.activityLogs.findMany for paged batch retrieval.
  */
 function setupDbMocks(entries: MockEntry[]) {
   // Count query: db.select({count}).from(activityLogs).where(...)
@@ -393,18 +396,15 @@ describe('hash-chain-verifier (full coverage)', () => {
       const firstTs = chain[0]!.timestamp;
       const lastTs = chain[chain.length - 1]!.timestamp;
 
-      // db.select() is called twice: once for total count, once for with-hash count
+      // @scaffold - db.select() is called twice: once for total count, once for with-hash count
       let selectCallCount = 0;
       mockDbSelect.mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
-          // Total count: .from().where() or just .from()
-          const fromFn = vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([{ count: 5 }]),
-            then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ count: 5 }]).then(resolve),
-            catch: (reject: (e: unknown) => unknown) => Promise.resolve([{ count: 5 }]).catch(reject),
-            finally: (cb: () => void) => Promise.resolve([{ count: 5 }]).finally(cb),
-          });
+          // Total count: await db.select().from() (no .where() call in getHashChainStats for total)
+          const fromFn = vi.fn().mockImplementation(() =>
+            Promise.resolve([{ count: 5 }])
+          );
           return { from: fromFn };
         } else {
           // With-hash count: .from().where(isNotNull)
@@ -431,15 +431,21 @@ describe('hash-chain-verifier (full coverage)', () => {
     });
 
     it('should return hasChainSeed=false when no chain seed entry found', async () => {
-      // Both count queries return 0
+      // @scaffold - Both count queries return 0: first awaits from() directly, second uses .where()
+      let selectCallCount = 0;
       mockDbSelect.mockImplementation(() => {
-        const fromFn = vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 0 }]),
-          then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ count: 0 }]).then(resolve),
-          catch: (reject: (e: unknown) => unknown) => Promise.resolve([{ count: 0 }]).catch(reject),
-          finally: (cb: () => void) => Promise.resolve([{ count: 0 }]).finally(cb),
-        });
-        return { from: fromFn };
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          const fromFn = vi.fn().mockImplementation(() =>
+            Promise.resolve([{ count: 0 }])
+          );
+          return { from: fromFn };
+        } else {
+          const fromFn = vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ count: 0 }]),
+          });
+          return { from: fromFn };
+        }
       });
 
       // findFirst returns null for both calls (chain seed and last entry)

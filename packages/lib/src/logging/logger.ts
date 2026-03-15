@@ -131,7 +131,7 @@ class Logger {
     if (!this.config.sanitize) return data;
 
     const sensitive = [
-      'password', 'token', 'secret', 'api_key', 'apiKey',
+      'password', 'token', 'secret', 'api_key', 'apikey',
       'authorization', 'cookie', 'credit_card', 'ssn', 'jwt'
     ];
 

@@ -51,6 +51,7 @@ const agentRow = {
   stateHash: 'abc123',
 };
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -60,6 +61,7 @@ function setupSelectChain(rows: unknown[]) {
   return { limitFn, whereFn };
 }
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -137,7 +139,7 @@ describe('agentRepository.updateConfig', () => {
     vi.clearAllMocks();
   });
 
-  it('calls db.update with provided config', async () => {
+  it('calls db.update with provided config fields in payload', async () => {
     const { setFn } = setupUpdateChain();
 
     await agentRepository.updateConfig('agent-1', {
@@ -145,22 +147,22 @@ describe('agentRepository.updateConfig', () => {
       aiModel: 'gpt-4',
     });
 
-    expect(db.update).toHaveBeenCalled();
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: 'New prompt',
       aiModel: 'gpt-4',
     }));
   });
 
-  it('sets updatedAt to current time when not provided', async () => {
+  it('auto-sets updatedAt to current time when not provided', async () => {
     const { setFn } = setupUpdateChain();
-    const beforeUpdate = new Date();
+    const beforeUpdate = Date.now();
 
     await agentRepository.updateConfig('agent-1', { systemPrompt: 'prompt' });
 
     const callArg = setFn.mock.calls[0][0] as { updatedAt: Date };
     expect(callArg.updatedAt).toBeInstanceOf(Date);
-    expect(callArg.updatedAt.getTime()).toBeGreaterThanOrEqual(beforeUpdate.getTime());
+    expect(callArg.updatedAt.getTime()).toBeGreaterThanOrEqual(beforeUpdate);
+    expect(callArg.updatedAt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('uses provided updatedAt when specified', async () => {

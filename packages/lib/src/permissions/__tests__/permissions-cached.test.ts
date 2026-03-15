@@ -93,7 +93,7 @@ const PAGE_ID = 'page-abc';
 const DRIVE_ID = 'drive-xyz';
 
 /**
- * Build a chainable db.select mock.
+ * @scaffold — ORM chain mock: db.select().from().leftJoin().where().limit()
  *
  * Each call to db.select() returns { from }, from returns { leftJoin, where },
  * leftJoin returns { leftJoin, where }, and where returns { limit }.
@@ -116,7 +116,7 @@ function mockSelectChain(rowSets: unknown[][]) {
   }
 }
 
-/** Shorthand to mock a single db.select that throws */
+/** @scaffold — ORM chain mock that throws on resolve */
 function mockSelectThrow(error: Error) {
   const limitFn = vi.fn().mockRejectedValue(error);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -1423,7 +1423,7 @@ describe('getPermissionCacheStats', () => {
     const result = getPermissionCacheStats();
 
     expect(result).toEqual(stats);
-    expect(mockGetCacheStats).toHaveBeenCalled();
+    expect(mockGetCacheStats).toHaveBeenCalledTimes(1);
   });
 
   it('returns whatever getCacheStats provides (no transformation)', () => {

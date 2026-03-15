@@ -117,7 +117,10 @@ describe('writeLogsToDatabase', () => {
     await expect(
       writeLogsToDatabase([makeLogEntry()] as Parameters<typeof writeLogsToDatabase>[0])
     ).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Logger] Failed to write logs'),
+      expect.any(Error),
+    );
     consoleSpy.mockRestore();
   });
 
@@ -313,6 +316,8 @@ describe('writeApiMetrics', () => {
     expect(inserted.timestamp).toBe(ts);
   });
 
+  // REVIEW: Timestamp precision test — uses Date.now() before/after boundaries.
+  // On a very slow CI, the spread could be larger than expected.
   it('defaults timestamp to now when not provided', async () => {
     const before = Date.now();
     await writeApiMetrics({
@@ -358,7 +363,10 @@ describe('writeApiMetrics', () => {
       statusCode: 500,
       duration: 1,
     })).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Logger] Failed to write API metrics'),
+      expect.any(Error),
+    );
     consoleSpy.mockRestore();
   });
 });
@@ -475,7 +483,10 @@ describe('writeAiUsage', () => {
     await expect(
       writeAiUsage({ userId: 'u-1', provider: 'openai', model: 'gpt-4' })
     ).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Logger] Failed to write AI usage'),
+      expect.any(Error),
+    );
     consoleSpy.mockRestore();
   });
 });
@@ -528,7 +539,10 @@ describe('writeUserActivity', () => {
     await expect(
       writeUserActivity({ userId: 'u-1', action: 'logout' })
     ).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Logger] Failed to write user activity'),
+      expect.any(Error),
+    );
     consoleSpy.mockRestore();
   });
 });
@@ -588,7 +602,10 @@ describe('writeError', () => {
     await expect(
       writeError({ name: 'Error', message: 'test' })
     ).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Logger] Failed to write error log'),
+      expect.any(Error),
+    );
     consoleSpy.mockRestore();
   });
 });

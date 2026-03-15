@@ -13,8 +13,8 @@ vi.mock('@pagespace/db', () => ({
     update: vi.fn(),
   },
   drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId', isTrashed: 'isTrashed', trashedAt: 'trashedAt', updatedAt: 'updatedAt' },
-  eq: vi.fn((_a, _b) => 'eq'),
-  and: vi.fn((...args) => ({ and: args })),
+  eq: vi.fn((col, val) => ({ _op: 'eq', col, val })),
+  and: vi.fn((...args) => ({ _op: 'and', args })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { driveRepository } from '../drive-repository';
-import { db } from '@pagespace/db';
+import { db, eq } from '@pagespace/db';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,15 +37,15 @@ const driveRecord = {
   trashedAt: null,
 };
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(rows: unknown[]) {
-  // findByIdBasic uses array destructuring: const [drive] = await db.select()...where()
-  // So the .where() must resolve directly to the rows array (no .limit())
   const whereFn = vi.fn().mockResolvedValue(rows);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
   vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { whereFn };
 }
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain(returnValue: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -67,12 +67,11 @@ describe('driveRepository.findById', () => {
     expect(result).toEqual(driveRecord);
   });
 
-  it('returns null/undefined when drive not found', async () => {
+  it('returns undefined when drive not found', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined as never);
 
     const result = await driveRepository.findById('nonexistent');
-    // The repository casts undefined to DriveRecord | null; underlying value is undefined
-    expect(result).toBeFalsy();
+    expect(result).toBeUndefined();
   });
 });
 
@@ -111,11 +110,20 @@ describe('driveRepository.findByIdAndOwner', () => {
     expect(result).toEqual(driveRecord);
   });
 
-  it('returns null/undefined when drive not found or wrong owner', async () => {
+  it('scopes query by both driveId and ownerId via eq()', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRecord as never);
+
+    await driveRepository.findByIdAndOwner('drive-1', 'user-1');
+
+    expect(eq).toHaveBeenCalledWith('id', 'drive-1');
+    expect(eq).toHaveBeenCalledWith('ownerId', 'user-1');
+  });
+
+  it('returns undefined when drive not found or wrong owner', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined as never);
 
     const result = await driveRepository.findByIdAndOwner('drive-1', 'wrong-user');
-    expect(result).toBeFalsy();
+    expect(result).toBeUndefined();
   });
 });
 
@@ -125,8 +133,10 @@ describe('driveRepository.findByIdAndOwner', () => {
 describe('driveRepository.trash', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('sets isTrashed to true and trashedAt to a Date', async () => {
-    const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+  it('sets isTrashed to true and trashedAt to a Date, scoped by driveId', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
+    const whereFn = vi.fn().mockResolvedValue(undefined);
+    const setFn = vi.fn().mockReturnValue({ where: whereFn });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await driveRepository.trash('drive-1');
@@ -134,6 +144,8 @@ describe('driveRepository.trash', () => {
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
     const payload = setFn.mock.calls[0][0] as { trashedAt: Date };
     expect(payload.trashedAt).toBeInstanceOf(Date);
+    expect(eq).toHaveBeenCalledWith('id', 'drive-1');
+    expect(whereFn).toHaveBeenCalledWith({ _op: 'eq', col: 'id', val: 'drive-1' });
   });
 });
 
@@ -151,13 +163,15 @@ describe('driveRepository.restore', () => {
     expect(result).toEqual(restored);
   });
 
-  it('calls update with isTrashed=false and null trashedAt', async () => {
-    const { setFn } = setupUpdateChain([{ id: 'drive-1', name: 'My Drive', slug: 'my-drive' }]);
+  it('calls update with isTrashed=false and null trashedAt, scoped by driveId', async () => {
+    const { setFn, whereFn } = setupUpdateChain([{ id: 'drive-1', name: 'My Drive', slug: 'my-drive' }]);
 
     await driveRepository.restore('drive-1');
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
       isTrashed: false,
       trashedAt: null,
     }));
+    expect(eq).toHaveBeenCalledWith('id', 'drive-1');
+    expect(whereFn).toHaveBeenCalledWith({ _op: 'eq', col: 'id', val: 'drive-1' });
   });
 });

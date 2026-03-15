@@ -63,6 +63,7 @@ import * as crypto from 'crypto';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold — ORM chain mock: db.update().set().where() */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -70,6 +71,7 @@ function setupUpdateChain() {
   return { setFn, whereFn };
 }
 
+/** @scaffold — ORM chain mock: db.insert().values() */
 function setupInsertChain() {
   const valuesFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);
@@ -112,7 +114,7 @@ describe('registerPushToken', () => {
     const result = await registerPushToken('user-1', 'push-token-abc', 'ios');
 
     expect(result).toEqual({ id: 'token-id-1' });
-    expect(db.update).toHaveBeenCalled(); // updates existing token fields
+    expect(db.update).toHaveBeenCalledTimes(1);
   });
 
   it('resets failedAttempts when updating existing token', async () => {
@@ -134,7 +136,7 @@ describe('registerPushToken', () => {
     const result = await registerPushToken('user-1', 'new-token', 'ios');
 
     expect(result).toEqual({ id: 'new-token-id' });
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledTimes(1);
   });
 
   it('deactivates other tokens for same deviceId before inserting', async () => {
@@ -145,8 +147,8 @@ describe('registerPushToken', () => {
     await registerPushToken('user-1', 'new-token', 'ios', 'device-1');
 
     // First call is to deactivate old tokens for this device
-    expect(db.update).toHaveBeenCalled();
-    expect(db.insert).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
+    expect(db.insert).toHaveBeenCalledTimes(1);
   });
 
   it('creates token with web platform', async () => {
@@ -188,7 +190,7 @@ describe('unregisterAllPushTokens', () => {
 
     await unregisterAllPushTokens('user-1');
 
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
     expect(setFn).toHaveBeenCalledWith({ isActive: false });
   });
 });
@@ -208,7 +210,7 @@ describe('getUserPushTokens', () => {
     const result = await getUserPushTokens('user-1');
 
     expect(result).toEqual(tokens);
-    expect(db.query.pushNotificationTokens.findMany).toHaveBeenCalled();
+    expect(db.query.pushNotificationTokens.findMany).toHaveBeenCalledTimes(1);
   });
 
   it('returns empty array when no tokens', async () => {
@@ -272,7 +274,7 @@ describe('sendPushNotification', () => {
   it('increments failedAttempts on iOS failure', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg...\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios', failedAttempts: '0' })] as never);
 
@@ -288,7 +290,7 @@ describe('sendPushNotification', () => {
 
     const result = await sendPushNotification('user-1', payload);
     expect(result.failed).toBe(1);
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
   });
 
   it('deactivates token after 5 consecutive failures', async () => {
@@ -318,7 +320,7 @@ describe('sendPushNotification', () => {
   it('resets failedAttempts on success', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios', failedAttempts: '2' })] as never);
 
@@ -346,17 +348,16 @@ describe('sendPushNotification', () => {
 
     const result = await sendPushNotification('user-1', payload);
 
-    if (result.sent > 0) {
-      expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
-        failedAttempts: '0',
-      }));
-    }
+    // Verify the result is determinate (sent or failed, never skipped)
+    expect(result.sent + result.failed).toBe(1);
+    // Whether cached JWT or fresh, the token update should have been called
+    expect(setFn).toHaveBeenCalledTimes(1);
   });
 
   it('removes token when APNs returns invalid token reason', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
@@ -436,6 +437,11 @@ describe('APNs JWT token generation', () => {
     // Bare key without PEM headers
     process.env.APNS_PRIVATE_KEY = 'rawkeydata';
 
+    // Advance Date.now by 2 hours to expire any cached JWT token,
+    // forcing getApnsJwtToken to regenerate and call createSign.
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + 7_200_000);
+
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
     const fakeSignature = Buffer.alloc(72, 0);
@@ -455,22 +461,19 @@ describe('APNs JWT token generation', () => {
     vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
     setupUpdateChain();
 
-    await sendPushNotification('user-1', payload);
+    const result = await sendPushNotification('user-1', payload);
 
-    // If sign was called (not cached), verify PEM format. If cached, skip assertion.
-    if (mockSign.sign.mock.calls.length > 0) {
-      expect(mockSign.sign).toHaveBeenCalledWith(
-        expect.stringContaining('-----BEGIN PRIVATE KEY-----')
-      );
-    }
-    // Either way, the send should not throw
-    expect(true).toBe(true);
+    // Verify the send completed and sign was called with PEM-wrapped key
+    expect(result.sent + result.failed).toBe(1);
+    expect(mockSign.sign).toHaveBeenCalledWith(
+      expect.stringContaining('-----BEGIN PRIVATE KEY-----')
+    );
   });
 
   it('handles APNs error response with non-BadDeviceToken reason', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
@@ -501,7 +504,7 @@ describe('APNs JWT token generation', () => {
   it('handles malformed APNs error response json', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
@@ -532,7 +535,7 @@ describe('APNs JWT token generation', () => {
   it('handles DER signature with r > 32 bytes (trimming)', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
-    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.APNS_PRIVATE_KEY = 'TEST_APNS_KEY_SENTINEL';
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 

@@ -38,6 +38,7 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(result: unknown[]) {
   const whereFn = vi.fn().mockResolvedValue(result);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -45,6 +46,7 @@ function setupSelectChain(result: unknown[]) {
   return { whereFn, fromFn };
 }
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
@@ -101,21 +103,23 @@ describe('accountRepository.getOwnedDrives', () => {
 describe('accountRepository.getDriveMemberCount', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('returns member count', async () => {
+  it('coerces string count from DB to number', async () => {
     setupSelectChain([{ count: '3' }]);
 
     const result = await accountRepository.getDriveMemberCount('drive-1');
     expect(result).toBe(3);
+    expect(typeof result).toBe('number');
   });
 
-  it('returns 0 when no members', async () => {
+  it('returns 0 when count is zero string', async () => {
     setupSelectChain([{ count: '0' }]);
 
     const result = await accountRepository.getDriveMemberCount('drive-1');
     expect(result).toBe(0);
+    expect(typeof result).toBe('number');
   });
 
-  it('returns 0 when result is empty', async () => {
+  it('returns 0 when result is empty (no rows)', async () => {
     setupSelectChain([]);
 
     const result = await accountRepository.getDriveMemberCount('drive-1');

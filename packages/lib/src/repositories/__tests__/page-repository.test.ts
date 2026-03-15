@@ -52,6 +52,7 @@ const pageRow = {
   stateHash: null,
 };
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(rows: unknown[]) {
   const orderByFn = vi.fn().mockResolvedValue(rows);
   const limitFn = vi.fn().mockResolvedValue(rows);
@@ -61,6 +62,7 @@ function setupSelectChain(rows: unknown[]) {
   return { whereFn, orderByFn, limitFn };
 }
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupInsertChain(row: unknown) {
   const returningFn = vi.fn().mockResolvedValue([row]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -68,6 +70,7 @@ function setupInsertChain(row: unknown) {
   return { valuesFn, returningFn };
 }
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain(rows: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -89,11 +92,11 @@ describe('pageRepository.findById', () => {
     expect(result).toEqual(pageRow);
   });
 
-  it('returns falsy when page not found', async () => {
+  it('returns undefined when page not found', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined as never);
 
     const result = await pageRepository.findById('nonexistent');
-    expect(result).toBeFalsy();
+    expect(result).toBeUndefined();
   });
 
   it('includes trashed pages when includeTrashed=true', async () => {
@@ -127,11 +130,11 @@ describe('pageRepository.findTrashedById', () => {
     expect(result?.isTrashed).toBe(true);
   });
 
-  it('returns falsy when page not found', async () => {
+  it('returns undefined when trashed page not found', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined as never);
 
     const result = await pageRepository.findTrashedById('nonexistent');
-    expect(result).toBeFalsy();
+    expect(result).toBeUndefined();
   });
 });
 
@@ -149,11 +152,11 @@ describe('pageRepository.findAgentById', () => {
     expect(result?.type).toBe('AI_CHAT');
   });
 
-  it('returns falsy when agent not found', async () => {
+  it('returns undefined when agent not found', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined as never);
 
     const result = await pageRepository.findAgentById('nonexistent');
-    expect(result).toBeFalsy();
+    expect(result).toBeUndefined();
   });
 });
 
@@ -185,6 +188,7 @@ describe('pageRepository.getNextPosition', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('returns 1 when no siblings exist', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const orderByFn = vi.fn().mockResolvedValue([]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -195,6 +199,7 @@ describe('pageRepository.getNextPosition', () => {
   });
 
   it('returns max position + 1 when siblings exist', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const siblings = [{ position: 5 }, { position: 3 }];
     const orderByFn = vi.fn().mockResolvedValue(siblings);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
@@ -206,6 +211,7 @@ describe('pageRepository.getNextPosition', () => {
   });
 
   it('handles parentId when provided', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const orderByFn = vi.fn().mockResolvedValue([{ position: 2 }]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -290,12 +296,16 @@ describe('pageRepository.update', () => {
 describe('pageRepository.trash', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('calls update with isTrashed=true', async () => {
+  it('calls update with isTrashed=true and trashedAt as a Date', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await pageRepository.trash('page-1');
-    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
+
+    const payload = setFn.mock.calls[0][0] as { isTrashed: boolean; trashedAt: Date };
+    expect(payload.isTrashed).toBe(true);
+    expect(payload.trashedAt).toBeInstanceOf(Date);
   });
 });
 
@@ -305,13 +315,18 @@ describe('pageRepository.trash', () => {
 describe('pageRepository.trashMany', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('calls update with isTrashed=true for multiple pages', async () => {
-    const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+  it('calls update with isTrashed=true and trashedAt for multiple pages', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
+    const whereFn = vi.fn().mockResolvedValue(undefined);
+    const setFn = vi.fn().mockReturnValue({ where: whereFn });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await pageRepository.trashMany('drive-1', ['page-1', 'page-2', 'page-3']);
-    expect(db.update).toHaveBeenCalled();
-    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
+
+    const payload = setFn.mock.calls[0][0] as { isTrashed: boolean; trashedAt: Date };
+    expect(payload.isTrashed).toBe(true);
+    expect(payload.trashedAt).toBeInstanceOf(Date);
+    expect(whereFn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -347,58 +362,52 @@ describe('pageRepository.getChildIds', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('returns empty array when no children', async () => {
+    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const whereFn = vi.fn().mockResolvedValue([]);
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
     expect(result).toEqual([]);
   });
 
   it('returns direct child IDs', async () => {
-    // First call: returns direct children. Subsequent calls for recursion: empty.
+    /** @scaffold - ORM chain mock (recursive) until Drizzle query builder is abstracted */
     vi.mocked(db.select)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'child-1' }, { id: 'child-2' }]),
         }),
-      } as unknown as unknown as ReturnType<typeof db.select>)
-      // child-1 has no children
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as unknown as unknown as ReturnType<typeof db.select>)
-      // child-2 has no children
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as unknown as unknown as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
     expect(result).toEqual(['child-1', 'child-2']);
   });
 
   it('returns all descendant IDs recursively', async () => {
-    // page-1 -> child-1 -> grandchild-1
+    /** @scaffold - ORM chain mock (recursive) until Drizzle query builder is abstracted */
     vi.mocked(db.select)
-      // page-1's direct children
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'child-1' }]),
         }),
-      } as unknown as unknown as ReturnType<typeof db.select>)
-      // child-1's children
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'grandchild-1' }]),
         }),
-      } as unknown as unknown as ReturnType<typeof db.select>)
-      // grandchild-1's children (none)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as unknown as unknown as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
-    expect(result).toContain('child-1');
-    expect(result).toContain('grandchild-1');
-    expect(result).toHaveLength(2);
+    expect(result).toEqual(['child-1', 'grandchild-1']);
   });
 });

@@ -23,6 +23,7 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -45,16 +46,17 @@ describe('activityLogRepository.anonymizeForUser', () => {
     expect(result).toEqual({ success: true });
   });
 
-  it('calls db.update with correct anonymized data', async () => {
-    const { setFn } = setupUpdateChain();
+  it('calls db.update with correct anonymized payload for the activityLogs table', async () => {
+    const { setFn, whereFn } = setupUpdateChain();
 
     await activityLogRepository.anonymizeForUser('user-1', 'anon@anonymized.invalid');
 
-    expect(db.update).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledWith({ userId: 'userId', actorEmail: 'actorEmail', actorDisplayName: 'actorDisplayName' });
     expect(setFn).toHaveBeenCalledWith({
       actorEmail: 'anon@anonymized.invalid',
       actorDisplayName: 'Deleted User',
     });
+    expect(whereFn).toHaveBeenCalledTimes(1);
   });
 
   it('returns success=false with error message on DB error', async () => {

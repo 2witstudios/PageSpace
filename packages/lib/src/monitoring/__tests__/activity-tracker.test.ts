@@ -46,8 +46,8 @@ import {
   getUserIdFromRequest,
 } from '../activity-tracker';
 
-// Helper: flush promise queue
-const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+// Flush fire-and-forget promises (single event loop tick)
+const flushMicrotasks = () => new Promise(resolve => process.nextTick(resolve));
 
 describe('activity-tracker', () => {
   beforeEach(() => {
@@ -60,7 +60,7 @@ describe('activity-tracker', () => {
   describe('trackActivity', () => {
     it('should not write anything when userId is undefined', async () => {
       await trackActivity(undefined, 'page_create');
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).not.toHaveBeenCalled();
     });
 
@@ -75,7 +75,7 @@ describe('activity-tracker', () => {
         userAgent: 'jest/test',
         metadata: { key: 'value' },
       });
-      await flush();
+      await flushMicrotasks();
 
       expect(mockWriteUserActivity).toHaveBeenCalledWith({
         userId: 'user-1',
@@ -93,22 +93,31 @@ describe('activity-tracker', () => {
 
     it('should work with no data argument', async () => {
       await trackActivity('user-1', 'some_action');
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-1', action: 'some_action' })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'some_action',
+        resource: undefined,
+        resourceId: undefined,
+        driveId: undefined,
+        pageId: undefined,
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: undefined,
+      });
     });
 
     it('should log a debug message and not throw on writeUserActivity error', async () => {
       mockWriteUserActivity.mockRejectedValueOnce(new Error('DB write failed'));
 
       await trackActivity('user-1', 'page_create');
-      await flush();
+      await flushMicrotasks();
 
       expect(mockApiDebug).toHaveBeenCalledWith(
         'Activity tracking failed',
-        expect.objectContaining({ error: 'DB write failed', action: 'page_create' })
+        { error: 'DB write failed', action: 'page_create' }
       );
     });
   });
@@ -117,23 +126,25 @@ describe('activity-tracker', () => {
   describe('trackPageOperation', () => {
     it('should call trackActivity with page_<operation> action', async () => {
       trackPageOperation('user-1', 'create', 'page-1', { extra: true });
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          action: 'page_create',
-          resource: 'page',
-          resourceId: 'page-1',
-          pageId: 'page-1',
-          metadata: { extra: true },
-        })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'page_create',
+        resource: 'page',
+        resourceId: 'page-1',
+        driveId: undefined,
+        pageId: 'page-1',
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: { extra: true },
+      });
     });
 
     it('should handle undefined userId', async () => {
       trackPageOperation(undefined, 'read', 'page-1');
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).not.toHaveBeenCalled();
     });
 
@@ -142,7 +153,7 @@ describe('activity-tracker', () => {
       for (const op of operations) {
         vi.clearAllMocks();
         trackPageOperation('user-1', op, 'page-1');
-        await flush();
+        await flushMicrotasks();
         expect(mockWriteUserActivity).toHaveBeenCalledWith(
           expect.objectContaining({ action: `page_${op}` })
         );
@@ -154,28 +165,31 @@ describe('activity-tracker', () => {
   describe('trackDriveOperation', () => {
     it('should call trackActivity with drive_<operation> action', async () => {
       trackDriveOperation('user-1', 'access', 'drive-1');
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          action: 'drive_access',
-          resource: 'drive',
-          resourceId: 'drive-1',
-          driveId: 'drive-1',
-        })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'drive_access',
+        resource: 'drive',
+        resourceId: 'drive-1',
+        driveId: 'drive-1',
+        pageId: undefined,
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: undefined,
+      });
     });
 
     it('should handle undefined userId', async () => {
       trackDriveOperation(undefined, 'create', 'drive-1');
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).not.toHaveBeenCalled();
     });
 
     it('should pass metadata', async () => {
       trackDriveOperation('user-1', 'invite_member', 'drive-1', { invitedUserId: 'u2' });
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).toHaveBeenCalledWith(
         expect.objectContaining({ metadata: { invitedUserId: 'u2' } })
       );
@@ -186,27 +200,31 @@ describe('activity-tracker', () => {
   describe('trackFeature', () => {
     it('should call trackActivity with feature_<name> action', async () => {
       trackFeature('user-1', 'ai_chat');
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          action: 'feature_ai_chat',
-          resource: 'feature',
-          resourceId: 'ai_chat',
-        })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'feature_ai_chat',
+        resource: 'feature',
+        resourceId: 'ai_chat',
+        driveId: undefined,
+        pageId: undefined,
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: undefined,
+      });
     });
 
     it('should handle undefined userId', async () => {
       trackFeature(undefined, 'ai_chat');
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).not.toHaveBeenCalled();
     });
 
     it('should pass metadata', async () => {
       trackFeature('user-1', 'search', { query: 'hello' });
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).toHaveBeenCalledWith(
         expect.objectContaining({ metadata: { query: 'hello' } })
       );
@@ -217,20 +235,25 @@ describe('activity-tracker', () => {
   describe('trackAuthEvent', () => {
     it('should call trackActivity with auth_<event> action', async () => {
       trackAuthEvent('user-1', 'login');
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          action: 'auth_login',
-          resource: 'auth',
-        })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'auth_login',
+        resource: 'auth',
+        resourceId: undefined,
+        driveId: undefined,
+        pageId: undefined,
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: undefined,
+      });
     });
 
     it('should use "anonymous" when userId is undefined', async () => {
       trackAuthEvent(undefined, 'failed_login');
-      await flush();
+      await flushMicrotasks();
 
       expect(mockWriteUserActivity).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -245,7 +268,7 @@ describe('activity-tracker', () => {
       for (const event of events) {
         vi.clearAllMocks();
         trackAuthEvent('user-1', event);
-        await flush();
+        await flushMicrotasks();
         expect(mockWriteUserActivity).toHaveBeenCalledWith(
           expect.objectContaining({ action: `auth_${event}` })
         );
@@ -257,25 +280,30 @@ describe('activity-tracker', () => {
   describe('trackError', () => {
     it('should call trackActivity with error action', async () => {
       trackError('user-1', 'DB_ERROR', 'Connection refused');
-      await flush();
+      await flushMicrotasks();
 
-      expect(mockWriteUserActivity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-1',
-          action: 'error',
-          resource: 'error',
-          metadata: expect.objectContaining({
-            type: 'DB_ERROR',
-            message: 'Connection refused',
-          }),
-        })
-      );
+      expect(mockWriteUserActivity).toHaveBeenCalledWith({
+        userId: 'user-1',
+        action: 'error',
+        resource: 'error',
+        resourceId: undefined,
+        driveId: undefined,
+        pageId: undefined,
+        sessionId: undefined,
+        ip: undefined,
+        userAgent: undefined,
+        metadata: {
+          type: 'DB_ERROR',
+          message: 'Connection refused',
+          context: undefined,
+        },
+      });
     });
 
     it('should truncate error message to 200 chars', async () => {
       const longMessage = 'E'.repeat(300);
       trackError('user-1', 'LONG_ERROR', longMessage);
-      await flush();
+      await flushMicrotasks();
 
       const call = mockWriteUserActivity.mock.calls[0][0];
       expect((call.metadata as Record<string, unknown>).message).toHaveLength(200);
@@ -283,14 +311,14 @@ describe('activity-tracker', () => {
 
     it('should handle undefined userId', async () => {
       trackError(undefined, 'SOME_ERROR', 'An error occurred');
-      await flush();
+      await flushMicrotasks();
       expect(mockWriteUserActivity).not.toHaveBeenCalled();
     });
 
     it('should include optional context in metadata', async () => {
       const context = { route: '/api/pages', method: 'POST' };
       trackError('user-1', 'API_ERROR', 'Not found', context);
-      await flush();
+      await flushMicrotasks();
 
       const call = mockWriteUserActivity.mock.calls[0][0];
       expect((call.metadata as Record<string, unknown>).context).toEqual(context);
