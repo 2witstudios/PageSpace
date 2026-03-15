@@ -87,7 +87,7 @@ import {
  * so a single process.nextTick is insufficient. vi.waitFor polls until the final
  * mock in the chain (mockInsertValues) has been called.
  */
-const waitForInsert = () => vi.waitFor(() => { expect(mockInsertValues).toHaveBeenCalled(); });
+const waitForInsert = () => vi.waitFor(() => { expect(mockInsertValues).toHaveBeenCalledTimes(1); });
 
 const baseHashData = {
   id: 'log-1',

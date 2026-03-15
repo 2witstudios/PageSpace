@@ -202,7 +202,7 @@ describe('trackAIUsage', () => {
       inputTokens: 1000,
       outputTokens: 500,
     });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     const payload = mockWriteAiUsage.mock.calls[0][0];
     expect(payload.userId).toBe('user-1');
     expect(payload.provider).toBe('anthropic');
@@ -217,13 +217,13 @@ describe('trackAIUsage', () => {
 
   it('should compute totalTokens from inputTokens + outputTokens', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100 });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     expect(mockWriteAiUsage.mock.calls[0][0].totalTokens).toBe(300);
   });
 
   it('should not override totalTokens when already provided', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 200, outputTokens: 100, totalTokens: 999 });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     expect(mockWriteAiUsage.mock.calls[0][0].totalTokens).toBe(999);
   });
 
@@ -241,7 +241,7 @@ describe('trackAIUsage', () => {
       wasTruncated: false,
       truncationStrategy: 'none',
     });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     const payload = mockWriteAiUsage.mock.calls[0][0];
     expect(payload.contextMessages).toEqual(['msg-1', 'msg-2']);
     expect(payload.contextSize).toBe(500);
@@ -255,13 +255,13 @@ describe('trackAIUsage', () => {
 
   it('should set success=true when success is not false', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     expect(mockWriteAiUsage.mock.calls[0][0].success).toBe(true);
   });
 
   it('should set success=false when explicitly set', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     const payload = mockWriteAiUsage.mock.calls[0][0];
     expect(payload.success).toBe(false);
     expect(payload.error).toBe('fail');
@@ -269,14 +269,14 @@ describe('trackAIUsage', () => {
 
   it('should merge streamingDuration into metadata', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', streamingDuration: 1234, metadata: { custom: 'value' } });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     expect(mockWriteAiUsage.mock.calls[0][0].metadata).toEqual({ custom: 'value', streamingDuration: 1234 });
   });
 
   it('should not throw and should log debug when writeAiUsage rejects', async () => {
     mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
-    await vi.waitFor(() => { expect(mockAiLogger.debug).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockAiLogger.debug).toHaveBeenCalledTimes(1); });
     expect(mockAiLogger.debug).toHaveBeenCalledWith(
       'AI usage tracking failed',
       { error: 'db error', model: 'gpt-4o', provider: 'openai' }
@@ -307,7 +307,7 @@ describe('trackAIToolUsage', () => {
       conversationId: 'conv-1',
       pageId: 'page-1',
     });
-    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalled(); });
+    await vi.waitFor(() => { expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); });
     const payload = mockWriteAiUsage.mock.calls[0][0];
     expect(payload.userId).toBe('user-1');
     expect(payload.provider).toBe('openai');
