@@ -1,5 +1,5 @@
 import { describe, it, vi, beforeEach } from 'vitest';
-import { assert } from '@/lib/memory/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 /**
  * Memory Cron Route Tests

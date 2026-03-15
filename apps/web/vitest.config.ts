@@ -9,6 +9,7 @@ const packagesDir = path.resolve(__dirname, '../../packages')
 export default defineConfig({
   plugins: [react()],
   test: {
+    name: 'web',
     globals: true,
     environment: 'jsdom',
     css: true,

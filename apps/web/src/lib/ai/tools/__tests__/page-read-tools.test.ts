@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({

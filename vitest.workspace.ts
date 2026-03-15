@@ -9,15 +9,7 @@ export default defineWorkspace([
       globals: true,
     },
   },
-  {
-    test: {
-      name: 'web',
-      root: './apps/web',
-      environment: 'jsdom',
-      globals: true,
-      setupFiles: ['./src/test/setup.ts'],
-    },
-  },
+  './apps/web/vitest.config.ts',
   {
     test: {
       name: 'realtime',
