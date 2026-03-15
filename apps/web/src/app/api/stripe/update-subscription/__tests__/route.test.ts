@@ -249,7 +249,7 @@ describe('POST /api/stripe/update-subscription', () => {
       expect(body.status).toBe('scheduled');
       expect(body.scheduleId).toBe('sch_123');
       expect(body.message).toBe('Plan change scheduled for next billing period');
-      expect(body.effectiveDate).toBeDefined();
+      expect(typeof body.effectiveDate).toBe('string');
     });
 
     it('should create subscription schedule for downgrade', async () => {

@@ -132,7 +132,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.code).toBe('LOGIN_CSRF_MISSING');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_csrf_missing',
-        expect.objectContaining({ hasHeader: false, hasCookie: true })
+        { ip: '127.0.0.1', hasHeader: false, hasCookie: true }
       );
     });
 
@@ -210,7 +210,7 @@ describe('POST /api/auth/magic-link/send', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.email).toEqual(['Please enter a valid email address']);
     });
 
     it('returns 400 for missing email', async () => {
@@ -219,7 +219,7 @@ describe('POST /api/auth/magic-link/send', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.email).toEqual(['Please enter a valid email address']);
     });
   });
 
@@ -258,7 +258,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.retryAfter).toBe(300);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_rate_limit_email',
-        { email: expect.stringMatching(/^te\*\*\*@example\.com$/), ip: '127.0.0.1' }
+        { email: 'te***@example.com', ip: '127.0.0.1' }
       );
     });
 
@@ -321,7 +321,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(sendEmail).not.toHaveBeenCalled();
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_suspended_user',
-        { email: expect.stringMatching(/^te\*\*\*@example\.com$/), ip: '127.0.0.1' }
+        { email: 'te***@example.com', ip: '127.0.0.1' }
       );
     });
 
@@ -364,12 +364,9 @@ describe('POST /api/auth/magic-link/send', () => {
       const request = createMagicLinkRequest({ email: 'user@example.com' });
       await POST(request);
 
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'user@example.com',
-          subject: 'Sign in to PageSpace',
-        })
-      );
+      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
+      expect(sendArgs.to).toBe('user@example.com');
+      expect(sendArgs.subject).toBe('Sign in to PageSpace');
     });
 
     it('logs successful email send', async () => {
@@ -378,9 +375,11 @@ describe('POST /api/auth/magic-link/send', () => {
 
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Magic link email sent',
-        expect.objectContaining({
+        {
+          email: 'te***@example.com',
           isNewUser: false,
-        })
+          ip: '127.0.0.1',
+        }
       );
     });
 
@@ -396,7 +395,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to send magic link email',
         new Error('SMTP error'),
-        { email: expect.stringMatching(/^te\*\*\*@example\.com$/) }
+        { email: 'te***@example.com' }
       );
     });
   });

@@ -201,10 +201,10 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
       expect(parseSheetContent).toHaveBeenCalledWith(mockPage().content);
       expect(evaluateSheet).toHaveBeenCalledWith(
         mockSheetData,
-        expect.objectContaining({
+        {
           pageId: mockPageId,
           pageTitle: 'Test Sheet',
-        })
+        }
       );
       expect(generateCSV).toHaveBeenCalledWith(mockEvaluation.display);
     });
@@ -241,7 +241,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      expect(response.headers.get('Content-Length')).toBeDefined();
+      expect(response.headers.get('Content-Length')).toBe('16');
     });
   });
 
@@ -253,10 +253,10 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'csv',
           pageTitle: 'Test Sheet',
-        })
+        }
       );
     });
   });

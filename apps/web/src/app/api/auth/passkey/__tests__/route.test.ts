@@ -120,11 +120,11 @@ describe('GET /api/auth/passkey', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to list passkeys');
-      expect(loggers.auth.warn).toHaveBeenCalledWith('Failed to list passkeys', expect.objectContaining({
+      expect(loggers.auth.warn).toHaveBeenCalledWith('Failed to list passkeys', {
         userId: 'user-1',
         error: 'DB_ERROR',
         ip: '127.0.0.1',
-      }));
+      });
     });
   });
 

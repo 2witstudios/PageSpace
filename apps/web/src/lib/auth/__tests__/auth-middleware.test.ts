@@ -220,7 +220,7 @@ describe('Auth Middleware', () => {
       // Assert - verify complete update chain and that lastUsed is a Date
       expect(db.update).toHaveBeenCalled();
       expect(mockSet).toHaveBeenCalled();
-      expect(capturedSetValues).toBeDefined();
+      expect(typeof capturedSetValues).toBe('object');
       expect(capturedSetValues!.lastUsed).toBeInstanceOf(Date);
     });
 
@@ -254,7 +254,7 @@ describe('Auth Middleware', () => {
 
       // Assert
       expect(result).toBeNull();
-      expect(capturedSetValues).toBeDefined();
+      expect(typeof capturedSetValues).toBe('object');
       expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'unauthorized',

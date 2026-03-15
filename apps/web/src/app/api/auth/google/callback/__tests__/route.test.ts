@@ -589,7 +589,15 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithOldAvatar.id);
+      expect(updateArgs[1]).toEqual({
+        googleId: 'google-id-123',
+        provider: 'google',
+        name: 'Existing User',
+        image: '/new-avatar.jpg',
+        emailVerified: expect.any(Date),
+      });
     });
 
     it('updates existing user with unverified email when email_verified', async () => {

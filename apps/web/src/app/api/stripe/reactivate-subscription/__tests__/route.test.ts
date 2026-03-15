@@ -195,11 +195,12 @@ describe('POST /api/stripe/reactivate-subscription', () => {
 
     await POST(request);
 
-    expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cancelAtPeriodEnd: false,
-      })
-    );
+    const setArg = vi.mocked(mockUpdateSet).mock.calls[0][0];
+    expect(setArg.cancelAtPeriodEnd).toBe(false);
+    expect(setArg.stripeScheduleId).toBeNull();
+    expect(setArg.scheduledPriceId).toBeNull();
+    expect(setArg.scheduledChangeDate).toBeNull();
+    expect(setArg.updatedAt).toBeInstanceOf(Date);
   });
 
   it('should return 400 when subscription is not scheduled for cancellation', async () => {

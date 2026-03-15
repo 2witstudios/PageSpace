@@ -285,12 +285,9 @@ describe('POST /api/account/password', () => {
 
       // First call updates users, second revokes device tokens
       expect(chain.update).toHaveBeenCalledTimes(2);
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          password: '$2a$12$newhash',
-          tokenVersion: 6,
-        })
-      );
+      const setCallArgs = vi.mocked(chain.set).mock.calls[0][0];
+      expect(setCallArgs.password).toBe('$2a$12$newhash');
+      expect(setCallArgs.tokenVersion).toBe(6);
     });
 
     it('revokes all active device tokens', async () => {

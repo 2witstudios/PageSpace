@@ -322,7 +322,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Validation failed');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('should return 400 for missing providerId', async () => {

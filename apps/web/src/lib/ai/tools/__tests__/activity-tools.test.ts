@@ -54,8 +54,8 @@ describe('activity-tools', () => {
 
   describe('get_activity', () => {
     it('has correct tool definition', () => {
-      expect(activityTools.get_activity).toBeDefined();
-      expect(activityTools.get_activity.description).toBeDefined();
+      expect(typeof activityTools.get_activity).toBe('object');
+      expect(typeof activityTools.get_activity.description).toBe('string');
       expect(activityTools.get_activity.description).toContain('activity');
     });
 
@@ -83,7 +83,7 @@ describe('activity-tools', () => {
 
     it('has expected input schema shape', () => {
       const schema = activityTools.get_activity.inputSchema;
-      expect(schema).toBeDefined();
+      expect(schema).toBeInstanceOf(z.ZodObject);
 
       // Verify schema is a Zod object using instanceof check
       expect(schema).toBeInstanceOf(z.ZodObject);
@@ -101,7 +101,7 @@ describe('activity-tools', () => {
       // The tool description should mention includeContentDiffs usage
       // This verifies the parameter was added to the schema
       const description = activityTools.get_activity.description;
-      expect(description).toBeDefined();
+      expect(typeof description).toBe('string');
     });
 
     it('accepts includeContentDiffs in execute call', async () => {

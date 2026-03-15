@@ -78,11 +78,12 @@ describe('/api/auth/socket-token', () => {
 
       await GET(request);
 
-      expect(sessionRepository.createSocketToken).toHaveBeenCalledWith({
-        tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
-        userId: 'test-user-id',
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      });
+      expect(sessionRepository.createSocketToken).toHaveBeenCalledTimes(1);
+      const storedArg = vi.mocked(sessionRepository.createSocketToken).mock.calls[0][0];
+      expect(storedArg.userId).toBe('test-user-id');
+      expect(storedArg.expiresAt).toEqual(new Date(Date.now() + 5 * 60 * 1000));
+      expect(storedArg.tokenHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(storedArg.tokenHash.length).toBe(64);
     });
 
     it('GET_withValidSession_storesHashNotPlaintext', async () => {

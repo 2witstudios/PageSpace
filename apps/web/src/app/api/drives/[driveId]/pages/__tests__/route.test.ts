@@ -189,10 +189,9 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: mockUserId }),
-        mockDriveId
-      );
+      const scopeArgs = vi.mocked(checkMCPDriveScope).mock.calls[0];
+      expect(scopeArgs[0]).toEqual(mockWebAuth(mockUserId));
+      expect(scopeArgs[1]).toBe(mockDriveId);
     });
 
     it('should proceed when checkMCPDriveScope returns null', async () => {
@@ -306,7 +305,8 @@ describe('GET /api/drives/[driveId]/pages', () => {
         where: { type: 'and' },
         orderBy: [{ type: 'asc' }],
       });
-      expect(mockExecute).toHaveBeenCalledWith(expect.objectContaining({ type: 'sql' }));
+      const executeArgs = mockExecute.mock.calls[0];
+      expect(executeArgs[0]).toHaveProperty('type', 'sql');
     });
   });
 

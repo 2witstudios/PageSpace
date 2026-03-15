@@ -177,7 +177,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('calls applyPageMutation with correct parameters', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(applyPageMutation).toHaveBeenCalledWith(expect.objectContaining({
+      expect(applyPageMutation).toHaveBeenCalledWith({
         pageId: mockPageId,
         operation: 'update',
         updates: {
@@ -193,7 +193,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
           metadata: { source: 'reprocess' },
         },
         source: 'system',
-      }));
+      });
     });
 
     it('creates service token with correct parameters', async () => {
@@ -210,13 +210,12 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('calls processor enqueue endpoint with service token', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining(`/api/ingest/by-page/${mockPageId}`),
-        expect.objectContaining({
-          method: 'POST',
-          headers: { Authorization: 'Bearer service-token-123' },
-        })
-      );
+      const fetchArgs = vi.mocked(mockFetch).mock.calls[0];
+      expect(fetchArgs[0]).toContain(`/api/ingest/by-page/${mockPageId}`);
+      expect(fetchArgs[1]).toEqual({
+        method: 'POST',
+        headers: { Authorization: 'Bearer service-token-123' },
+      });
     });
   });
 

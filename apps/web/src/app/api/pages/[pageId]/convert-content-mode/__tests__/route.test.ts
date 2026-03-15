@@ -174,7 +174,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
 
     it('returns 400 for missing targetMode', async () => {
@@ -182,7 +182,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
   });
 
@@ -397,7 +397,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
   });
 });

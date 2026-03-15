@@ -262,7 +262,13 @@ describe('GET /api/pages/[pageId]/ai-usage', () => {
       const response = await GET(createRequest(), mockParams);
       const body = await response.json();
 
-      expect(body.summary.context).toBeDefined();
+      expect(body.summary.context).toEqual({
+        currentContextSize: 5000,
+        messagesInContext: 10,
+        contextWindowSize: 200000,
+        contextUsagePercent: 3,
+        wasTruncated: false,
+      });
       expect(body.summary.context.currentContextSize).toBe(5000);
       expect(body.summary.context.messagesInContext).toBe(10);
       expect(body.summary.context.wasTruncated).toBe(false);

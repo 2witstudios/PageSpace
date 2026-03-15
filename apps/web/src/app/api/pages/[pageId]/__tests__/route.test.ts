@@ -193,8 +193,8 @@ describe('GET /api/pages/[pageId]', () => {
 
       expect(response.status).toBe(200);
       expect(body.title).toBe('Test Page');
-      expect(body.children).toBeDefined();
-      expect(body.messages).toBeDefined();
+      expect(body.children).toEqual([]);
+      expect(body.messages).toEqual([]);
     });
 
     it('passes correct parameters to service', async () => {
@@ -399,7 +399,7 @@ describe('PATCH /api/pages/[pageId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.title).toBeDefined();
+      expect(body.title).toBe('Test Page');
     });
   });
 

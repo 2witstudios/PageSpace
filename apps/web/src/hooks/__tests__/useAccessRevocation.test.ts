@@ -81,7 +81,7 @@ describe('useAccessRevocation', () => {
       );
       const handler = handlerCall?.[1];
 
-      expect(handler).toBeDefined();
+      expect(typeof handler).toBe('function');
 
       // Simulate revocation event
       act(() => {

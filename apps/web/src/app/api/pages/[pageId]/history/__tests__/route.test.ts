@@ -265,11 +265,11 @@ describe('GET /api/pages/[pageId]/history', () => {
 
       await GET(createRequest(), { params: mockParams });
 
-      // Should have called with a startDate approximately 7 days ago
+      // Should have called with a startDate exactly 7 days ago
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2]!;
 
-      expect(options.startDate).toBeDefined();
+      expect(options.startDate).toBeInstanceOf(Date);
       const daysDiff = Math.floor(
         (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
@@ -284,7 +284,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2]!;
 
-      expect(options.startDate).toBeDefined();
+      expect(options.startDate).toBeInstanceOf(Date);
       const daysDiff = Math.floor(
         (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );

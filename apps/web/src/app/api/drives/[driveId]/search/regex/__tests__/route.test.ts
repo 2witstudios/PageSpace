@@ -363,12 +363,16 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.summary).toBeDefined();
-      expect(body.stats).toBeDefined();
-      expect(body.stats.pagesScanned).toBeDefined();
-      expect(body.stats.pagesWithAccess).toBeDefined();
-      expect(body.stats.documentTypes).toBeDefined();
-      expect(body.nextSteps).toBeDefined();
+      expect(body.summary).toBe('Found 1 page matching pattern "test"');
+      expect(body.stats).toEqual({
+        pagesScanned: 10,
+        pagesWithAccess: 1,
+        documentTypes: ['DOCUMENT'],
+      });
+      expect(body.stats.pagesScanned).toBe(10);
+      expect(body.stats.pagesWithAccess).toBe(1);
+      expect(body.stats.documentTypes).toEqual(['DOCUMENT']);
+      expect(body.nextSteps).toEqual(['Use read_page with the pageId to examine full content']);
     });
 
     it('should return empty results when no matches', async () => {

@@ -217,10 +217,12 @@ describe('POST /api/account/avatar', () => {
       await POST(createUploadRequest(file));
 
       // First fetch call is DELETE of old avatar
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/avatar/user-1'),
-        expect.objectContaining({ method: 'DELETE' })
+      const deleteCall = mockFetch.mock.calls.find(
+        (call: unknown[]) => (call[1] as { method: string }).method === 'DELETE'
       );
+      expect(deleteCall).not.toBeUndefined();
+      expect(deleteCall![0]).toContain('/api/avatar/user-1');
+      expect((deleteCall![1] as { method: string }).method).toBe('DELETE');
     });
 
     it('skips deletion when old avatar is external URL (http)', async () => {
@@ -315,7 +317,7 @@ describe('POST /api/account/avatar', () => {
       const uploadCall = mockFetch.mock.calls.find(
         (call: unknown[]) => (call[1] as { method: string }).method === 'POST'
       );
-      expect(uploadCall).toBeDefined();
+      expect(uploadCall).not.toBeUndefined();
       expect(uploadCall![0]).toContain('/api/avatar/upload');
       expect((uploadCall![1] as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer mock-service-token');
     });
@@ -370,11 +372,10 @@ describe('POST /api/account/avatar', () => {
       expect(body.success).toBe(true);
       expect(body.avatarUrl).toMatch(/\/api\/avatar\/user-1\/final\.png\?t=\d+/);
       expect(body.message).toBe('Avatar uploaded successfully');
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          image: expect.stringContaining('/api/avatar/user-1/final.png'),
-        })
-      );
+      const setCallArgs = vi.mocked(chain.set).mock.calls[0];
+      const setPayload = setCallArgs[0] as { image: string };
+      expect(Object.keys(setPayload)).toEqual(['image']);
+      expect(setPayload.image).toContain('/api/avatar/user-1/final.png');
     });
   });
 
@@ -442,13 +443,11 @@ describe('DELETE /api/account/avatar', () => {
 
       await DELETE(createDeleteRequest());
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/avatar/user-1'),
-        expect.objectContaining({
-          method: 'DELETE',
-          headers: { Authorization: 'Bearer mock-service-token' },
-        })
-      );
+      const fetchCallArgs = mockFetch.mock.calls[0];
+      expect(fetchCallArgs[0]).toContain('/api/avatar/user-1');
+      const fetchOpts = fetchCallArgs[1] as { method: string; headers: Record<string, string> };
+      expect(fetchOpts.method).toBe('DELETE');
+      expect(fetchOpts.headers).toEqual({ Authorization: 'Bearer mock-service-token' });
     });
 
     it('continues when processor delete fails', async () => {

@@ -234,7 +234,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('At least one page ID is required');
     });
 
     it('returns 400 when pageIds is missing', async () => {
@@ -242,7 +242,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected array, received undefined');
     });
 
     it('returns 400 when targetDriveId is missing', async () => {
@@ -250,7 +250,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when targetDriveId is empty string', async () => {
@@ -258,7 +258,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Target drive ID is required');
     });
 
     it('defaults includeChildren to true when not provided', async () => {

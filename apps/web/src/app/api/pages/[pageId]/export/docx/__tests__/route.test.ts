@@ -207,7 +207,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
       // generateDOCX should receive HTML converted from markdown, not the raw markdown
       expect(generateDOCX).toHaveBeenCalledWith(
-        expect.not.stringContaining('# Hello World'),
+        '<h1>Hello World</h1>',
         'Test Document'
       );
     });
@@ -237,10 +237,10 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'docx',
           pageTitle: 'Test Document',
-        })
+        }
       );
     });
   });

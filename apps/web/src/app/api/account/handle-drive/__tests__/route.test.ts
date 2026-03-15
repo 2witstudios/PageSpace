@@ -277,7 +277,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.message).toContain('transferred successfully');
       expect(updateMock).toHaveBeenCalledTimes(1);
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Drive ownership transferred')
+        `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );
     });
 
@@ -365,7 +365,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.message).toContain('deleted successfully');
       expect(deleteMock).toHaveBeenCalledTimes(1);
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Drive deleted during account deletion preparation')
+        `Drive deleted during account deletion preparation: drive_abc by user_123`
       );
     });
 
@@ -406,10 +406,10 @@ describe('POST /api/account/handle-drive', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to handle drive');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error handling drive'),
-        expect.objectContaining({ message: 'Database connection lost' })
-      );
+      const errorCallArgs = vi.mocked(loggers.auth.error).mock.calls[0];
+      expect(errorCallArgs[0]).toBe('Error handling drive:');
+      expect(errorCallArgs[1]).toBeInstanceOf(Error);
+      expect((errorCallArgs[1] as Error).message).toBe('Database connection lost');
     });
 
     it('should handle transfer database errors', async () => {
@@ -452,15 +452,16 @@ describe('POST /api/account/handle-drive', () => {
       expect(logDriveActivity).toHaveBeenCalledWith(
         mockUserId,
         'ownership_transfer',
-        expect.objectContaining({
+        {
           id: mockDriveId,
           name: 'Test Drive',
-        }),
-        expect.objectContaining({
+        },
+        {
           actorEmail: 'test@example.com',
+          actorDisplayName: 'Test User',
           previousValues: { ownerId: mockUserId },
           newValues: { ownerId: mockNewOwnerId },
-        })
+        }
       );
     });
 

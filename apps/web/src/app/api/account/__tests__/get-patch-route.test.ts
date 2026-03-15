@@ -389,9 +389,9 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to update profile');
-    expect(loggers.auth.error).toHaveBeenCalledWith(
-      expect.stringContaining('Profile update error'),
-      expect.objectContaining({ message: 'DB error' })
-    );
+    const errorCallArgs = vi.mocked(loggers.auth.error).mock.calls[0];
+    expect(errorCallArgs[0]).toContain('Profile update error');
+    expect(errorCallArgs[1]).toBeInstanceOf(Error);
+    expect((errorCallArgs[1] as Error).message).toBe('DB error');
   });
 });

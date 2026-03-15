@@ -25,8 +25,8 @@ describe('search-tools', () => {
 
   describe('regex_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.regex_search).toBeDefined();
-      expect(searchTools.regex_search.description).toBeDefined();
+      expect(typeof searchTools.regex_search).toBe('object');
+      expect(typeof searchTools.regex_search.description).toBe('string');
       // Uses 'regular expression' not 'regex' in description
       expect(searchTools.regex_search.description).toContain('regular expression');
     });
@@ -61,8 +61,8 @@ describe('search-tools', () => {
 
   describe('glob_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.glob_search).toBeDefined();
-      expect(searchTools.glob_search.description).toBeDefined();
+      expect(typeof searchTools.glob_search).toBe('object');
+      expect(typeof searchTools.glob_search.description).toBe('string');
     });
 
     it('requires user authentication', async () => {
@@ -95,8 +95,8 @@ describe('search-tools', () => {
 
   describe('multi_drive_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.multi_drive_search).toBeDefined();
-      expect(searchTools.multi_drive_search.description).toBeDefined();
+      expect(typeof searchTools.multi_drive_search).toBe('object');
+      expect(typeof searchTools.multi_drive_search.description).toBe('string');
     });
 
     it('requires user authentication', async () => {

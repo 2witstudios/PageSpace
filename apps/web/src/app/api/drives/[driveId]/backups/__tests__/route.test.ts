@@ -326,7 +326,7 @@ describe('POST /api/drives/[driveId]/backups', () => {
 
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.error).toBeDefined();
+      expect(body.error).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.any(String) })]));
     });
   });
 
@@ -404,7 +404,7 @@ describe('POST /api/drives/[driveId]/backups', () => {
 
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.error).toBeDefined();
+      expect(body.error).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.any(String) })]));
     });
 
     it('should return 500 when service throws', async () => {

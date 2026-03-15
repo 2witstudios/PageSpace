@@ -310,7 +310,7 @@ describe('usePageTree', () => {
 
       expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(consoleLog).toHaveBeenCalledWith(
-        expect.stringContaining('Skipping tree revalidation')
+        '⏸️ Skipping tree revalidation - document editing in progress'
       );
       consoleLog.mockRestore();
     });

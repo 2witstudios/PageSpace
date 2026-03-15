@@ -176,18 +176,22 @@ describe('GET /api/account/devices', () => {
 
       expect(response.status).toBe(200);
       expect(body).toHaveLength(1);
-      expect(body[0]).toMatchObject({
+      expect(body[0]).toEqual({
         id: 'device-1',
         platform: 'desktop',
         deviceName: 'My MacBook',
         deviceId: 'dev-abc123',
+        lastUsedAt: '2024-06-01T00:00:00.000Z',
         trustScore: 100,
         suspiciousActivityCount: 0,
+        ipAddress: '192.168.1.1',
+        lastIpAddress: '192.168.1.1',
+        location: 'Home',
+        userAgent: 'Mozilla/5.0',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        expiresAt: '2025-01-01T00:00:00.000Z',
         isCurrent: false,
       });
-      expect(body[0].lastUsedAt).toBe('2024-06-01T00:00:00.000Z');
-      expect(body[0].createdAt).toBe('2024-01-01T00:00:00.000Z');
-      expect(body[0].expiresAt).toBe('2025-01-01T00:00:00.000Z');
     });
 
     it('uses createdAt as fallback when lastUsedAt is null', async () => {
@@ -391,15 +395,16 @@ describe('DELETE /api/account/devices', () => {
         createDeleteRequest({ 'x-device-token': 'ps_dev_current_token' })
       );
 
-      expect(createDeviceTokenRecord).toHaveBeenCalledWith(
-        'user-1',
-        'dev-abc',
-        'desktop',
-        4, // tokenVersion 3 + 1
-        expect.objectContaining({
-          deviceName: 'My MacBook',
-        })
-      );
+      const createArgs = vi.mocked(createDeviceTokenRecord).mock.calls[0];
+      expect(createArgs[0]).toBe('user-1');
+      expect(createArgs[1]).toBe('dev-abc');
+      expect(createArgs[2]).toBe('desktop');
+      expect(createArgs[3]).toBe(4); // tokenVersion 3 + 1
+      expect(createArgs[4]).toEqual({
+        deviceName: 'My MacBook',
+        userAgent: undefined,
+        ipAddress: undefined,
+      });
     });
 
     it('calls revokeExpiredDeviceTokens before creating new token', async () => {
@@ -423,16 +428,16 @@ describe('DELETE /api/account/devices', () => {
         })
       );
 
-      expect(createDeviceTokenRecord).toHaveBeenCalledWith(
-        'user-1',
-        'dev-abc',
-        'desktop',
-        4,
-        expect.objectContaining({
-          userAgent: 'TestAgent/1.0',
-          ipAddress: '10.0.0.1',
-        })
-      );
+      const createArgs = vi.mocked(createDeviceTokenRecord).mock.calls[0];
+      expect(createArgs[0]).toBe('user-1');
+      expect(createArgs[1]).toBe('dev-abc');
+      expect(createArgs[2]).toBe('desktop');
+      expect(createArgs[3]).toBe(4);
+      expect(createArgs[4]).toEqual({
+        deviceName: 'My MacBook',
+        userAgent: 'TestAgent/1.0',
+        ipAddress: '10.0.0.1',
+      });
     });
 
     it('uses x-real-ip when x-forwarded-for is missing', async () => {
@@ -443,15 +448,16 @@ describe('DELETE /api/account/devices', () => {
         })
       );
 
-      expect(createDeviceTokenRecord).toHaveBeenCalledWith(
-        'user-1',
-        'dev-abc',
-        'desktop',
-        4,
-        expect.objectContaining({
-          ipAddress: '172.16.0.1',
-        })
-      );
+      const createArgs = vi.mocked(createDeviceTokenRecord).mock.calls[0];
+      expect(createArgs[0]).toBe('user-1');
+      expect(createArgs[1]).toBe('dev-abc');
+      expect(createArgs[2]).toBe('desktop');
+      expect(createArgs[3]).toBe(4);
+      expect(createArgs[4]).toEqual({
+        deviceName: 'My MacBook',
+        userAgent: undefined,
+        ipAddress: '172.16.0.1',
+      });
     });
   });
 
@@ -543,15 +549,16 @@ describe('DELETE /api/account/devices', () => {
         createDeleteRequest({ 'x-device-token': 'ps_dev_token' })
       );
 
-      expect(createDeviceTokenRecord).toHaveBeenCalledWith(
-        'user-1',
-        'dev-abc',
-        'desktop',
-        4,
-        expect.objectContaining({
-          deviceName: undefined,
-        })
-      );
+      const createArgs = vi.mocked(createDeviceTokenRecord).mock.calls[0];
+      expect(createArgs[0]).toBe('user-1');
+      expect(createArgs[1]).toBe('dev-abc');
+      expect(createArgs[2]).toBe('desktop');
+      expect(createArgs[3]).toBe(4);
+      expect(createArgs[4]).toEqual({
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: undefined,
+      });
     });
   });
 

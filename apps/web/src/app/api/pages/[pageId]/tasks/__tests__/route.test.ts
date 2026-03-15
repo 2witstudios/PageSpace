@@ -476,11 +476,10 @@ describe('Task API Routes', () => {
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
       expect(response.status).toBe(201);
-      expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'task_added',
-        taskId: 'new-task',
-        pageId: mockPageId,
-      }));
+      const eventArg = vi.mocked(broadcastTaskEvent).mock.calls[0][0];
+      expect(eventArg.type).toBe('task_added');
+      expect(eventArg.taskId).toBe('new-task');
+      expect(eventArg.pageId).toBe(mockPageId);
     });
 
     it('returns 404 when task list page not found', async () => {

@@ -338,7 +338,7 @@ describe('PATCH /api/pages/reorder', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Database connection failed');
       expect(broadcastPageEvent).not.toHaveBeenCalled();
     });
   });

@@ -177,7 +177,7 @@ describe('POST /api/auth/resend-verification', () => {
       expect(response.headers.get('Retry-After')).toBe('3600');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Email resend rate limit exceeded',
-        expect.objectContaining({ email: 'test@example.com' })
+        { email: 'test@example.com' }
       );
     });
 
@@ -231,12 +231,9 @@ describe('POST /api/auth/resend-verification', () => {
         userId: 'test-user-id',
         type: 'email_verification',
       });
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'test@example.com',
-          subject: 'Verify your PageSpace email',
-        })
-      );
+      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
+      expect(sendArgs.to).toBe('test@example.com');
+      expect(sendArgs.subject).toBe('Verify your PageSpace email');
     });
 
     it('logs successful email resend', async () => {
@@ -244,10 +241,7 @@ describe('POST /api/auth/resend-verification', () => {
 
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Verification email resent',
-        expect.objectContaining({
-          userId: 'test-user-id',
-          email: 'test@example.com',
-        })
+        { userId: 'test-user-id', email: 'test@example.com' }
       );
     });
 
@@ -256,11 +250,8 @@ describe('POST /api/auth/resend-verification', () => {
 
       await POST(createResendRequest());
 
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'test@example.com',
-        })
-      );
+      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
+      expect(sendArgs.to).toBe('test@example.com');
     });
 
     it('uses NEXT_PUBLIC_APP_URL as fallback', async () => {

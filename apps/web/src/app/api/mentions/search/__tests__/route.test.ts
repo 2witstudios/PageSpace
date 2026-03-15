@@ -175,7 +175,7 @@ describe('GET /api/mentions/search', () => {
       // Should get 403, not an empty array that might indicate "no matches"
       expect(response.status).toBe(403);
       expect(body).not.toHaveProperty('length');
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
   });
 

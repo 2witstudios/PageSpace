@@ -197,8 +197,9 @@ describe('GET /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.owner).toBeDefined();
       expect(body.owner.id).toBe('owner_123');
+      expect(body.owner.name).toBe('Owner');
+      expect(body.owner.email).toBe('owner@example.com');
       expect(body.permissions).toHaveLength(1);
     });
 

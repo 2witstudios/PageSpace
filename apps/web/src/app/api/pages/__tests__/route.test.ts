@@ -166,7 +166,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -179,7 +179,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid option: expected one of "FOLDER"|"DOCUMENT"|"CHANNEL"|"AI_CHAT"|"CANVAS"|"SHEET"|"TASK_LIST"|"CODE"');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -192,7 +192,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -211,7 +211,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Title too long. Invalid characters in title');
     });
 
     it('returns 400 when AI chat tool validation fails', async () => {

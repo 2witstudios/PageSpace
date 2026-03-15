@@ -211,7 +211,19 @@ describe('GET /api/ai/settings', () => {
       expect(body.currentProvider).toBe('pagespace');
       expect(body.currentModel).toBe('glm-4.5-air');
       expect(body.userSubscriptionTier).toBe('free');
-      expect(body.providers).toBeDefined();
+      expect(body.providers).toEqual({
+        pagespace: { isConfigured: false, hasApiKey: false },
+        openrouter: { isConfigured: false, hasApiKey: false },
+        google: { isConfigured: false, hasApiKey: false },
+        openai: { isConfigured: false, hasApiKey: false },
+        anthropic: { isConfigured: false, hasApiKey: false },
+        xai: { isConfigured: false, hasApiKey: false },
+        ollama: { isConfigured: false, hasBaseUrl: false },
+        lmstudio: { isConfigured: false, hasBaseUrl: false },
+        glm: { isConfigured: false, hasApiKey: false },
+        minimax: { isConfigured: false, hasApiKey: false },
+        azure_openai: { isConfigured: false, hasApiKey: false, hasBaseUrl: false },
+      });
       expect(body.isAnyProviderConfigured).toBe(false);
     });
 

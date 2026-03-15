@@ -108,7 +108,7 @@ describe('POST /api/pages/tree', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when driveId is empty string', async () => {
@@ -116,7 +116,7 @@ describe('POST /api/pages/tree', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Drive ID is required');
     });
   });
 
@@ -206,7 +206,9 @@ describe('POST /api/pages/tree', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.tree).toBeDefined();
+      expect(body.tree).toEqual([
+        { id: 'page_1', children: [{ id: 'page_2', children: [] }] },
+      ]);
       expect(body.tree[0].id).toBe('page_1');
       expect(buildTree).toHaveBeenCalledWith(mockPages);
     });

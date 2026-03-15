@@ -229,13 +229,13 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockNewUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '127.0.0.1',
+      });
       expect(appendSessionCookie).toHaveBeenCalledTimes(1);
       expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
       expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
@@ -265,10 +265,12 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockNewUser.id,
         'signup',
-        expect.objectContaining({
-          email: 'te***@example.com', // Masked email
+        {
+          email: 'te***@example.com',
+          ip: '127.0.0.1',
           provider: 'google-one-tap',
-        })
+          userAgent: null,
+        }
       );
     });
 

@@ -152,7 +152,10 @@ describe('GET /api/ai/global/active', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch global conversation');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching global conversation:', expect.objectContaining({ message: 'Database error' }));
+      const errorArg = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(errorArg[0]).toBe('Error fetching global conversation:');
+      expect(errorArg[1]).toBeInstanceOf(Error);
+      expect((errorArg[1] as Error).message).toBe('Database error');
     });
   });
 });

@@ -521,7 +521,7 @@ describe('PATCH /api/drives/[driveId]', () => {
         { name: 'New', slug: 'new' }
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ driveId: mockDriveId, event: 'updated' }),
+        { driveId: mockDriveId, event: 'updated', data: { name: 'New', slug: 'new' } },
         ['user-123', 'user-456']
       );
     });
@@ -733,7 +733,7 @@ describe('DELETE /api/drives/[driveId]', () => {
         { name: 'Deleted Drive', slug: 'deleted-drive' }
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ driveId: mockDriveId, event: 'deleted' }),
+        { driveId: mockDriveId, event: 'deleted', data: { name: 'Deleted Drive', slug: 'deleted-drive' } },
         ['user-123', 'user-456']
       );
     });

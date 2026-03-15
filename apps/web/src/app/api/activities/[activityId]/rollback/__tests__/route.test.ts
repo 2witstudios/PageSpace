@@ -175,7 +175,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('returns 400 for invalid context value', async () => {
@@ -183,7 +183,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('accepts valid context values', async () => {

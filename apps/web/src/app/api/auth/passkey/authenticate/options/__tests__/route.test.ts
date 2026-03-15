@@ -156,7 +156,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for empty csrfToken', async () => {

@@ -231,7 +231,7 @@ describe('GET /api/pages/[pageId]/processing-status', () => {
       expect(body.queuePosition).toBe(3);
       expect(body.activeJobs).toBe(1);
       expect(body.estimatedWaitTime).toBe(45); // 3 * 15
-      expect(body.message).toBeDefined();
+      expect(body.message).toBe('File is being processed. Please check back shortly.');
     });
 
     it('fetches queue status for processing page', async () => {

@@ -183,11 +183,12 @@ describe('POST /api/ai/abort', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'AI stream abort requested',
-        expect.objectContaining({
+        {
           streamId: mockStreamId,
           userId: mockUserId,
           aborted: true,
-        })
+          reason: 'Stream aborted by user request',
+        }
       );
     });
   });
@@ -256,7 +257,7 @@ describe('POST /api/ai/abort', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'AI abort rate limited',
-        expect.objectContaining({ userId: mockUserId, retryAfter: 30 })
+        { userId: mockUserId, retryAfter: 30 }
       );
     });
   });
@@ -275,7 +276,11 @@ describe('POST /api/ai/abort', () => {
 
       expect(response.status).toBe(500);
       expect(data.error).toBe('Failed to abort stream');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error aborting AI stream', expect.objectContaining({ error: expect.objectContaining({ message: 'Unexpected error' }) }));
+      const errorCallArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(errorCallArgs[0]).toBe('Error aborting AI stream');
+      const errorPayload = errorCallArgs[1] as { error: Error };
+      expect(errorPayload.error).toBeInstanceOf(Error);
+      expect(errorPayload.error.message).toBe('Unexpected error');
     });
 
     it('returns 500 on JSON parse error', async () => {

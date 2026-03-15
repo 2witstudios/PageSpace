@@ -110,10 +110,9 @@ describe('POST /api/drives/[driveId]/access', () => {
       const response = await POST(request, createContext(mockDriveId));
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: mockUserId }),
-        mockDriveId
-      );
+      const scopeCallArgs = vi.mocked(checkMCPDriveScope).mock.calls[0];
+      expect(scopeCallArgs[0].userId).toBe(mockUserId);
+      expect(scopeCallArgs[1]).toBe(mockDriveId);
     });
 
     it('should proceed when MCP scope check passes', async () => {

@@ -187,12 +187,19 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(200);
       expect(body.conversations).toHaveLength(1);
-      expect(body.conversations[0]).toMatchObject({
+      expect(body.conversations[0]).toEqual({
         id: 'conv_1',
+        title: 'Hello',
         preview: 'Hello',
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-02T00:00:00.000Z',
         messageCount: 5,
+        lastMessage: {
+          role: 'assistant',
+          timestamp: '2025-01-02T00:00:00.000Z',
+        },
       });
-      expect(body.pagination).toMatchObject({
+      expect(body.pagination).toEqual({
         page: 0,
         pageSize: 50,
         totalCount: 1,
@@ -230,9 +237,11 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         20,  // pageSize
         40   // offset (page 2 * 20)
       );
-      expect(body.pagination).toMatchObject({
+      expect(body.pagination).toEqual({
         page: 2,
         pageSize: 20,
+        totalCount: 100,
+        totalPages: 5,
         hasMore: true,
       });
     });
@@ -250,7 +259,10 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to list conversations');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error listing conversations:', expect.objectContaining({ message: 'Database error' }));
+      const errorArgs = vi.mocked(loggers.ai.error).mock.calls[0];
+      expect(errorArgs[0]).toBe('Error listing conversations:');
+      expect(errorArgs[1]).toBeInstanceOf(Error);
+      expect((errorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -319,16 +331,24 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 
   describe('successful creation', () => {
     it('should create a new conversation with generated ID', async () => {
-      const request = createRequest(mockAgentId, 'POST', {});
-      const context = createContext(mockAgentId);
+      const frozenDate = new Date('2025-06-01T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const response = await POST(request, context);
-      const body = await response.json();
+      try {
+        const request = createRequest(mockAgentId, 'POST', {});
+        const context = createContext(mockAgentId);
 
-      expect(response.status).toBe(200);
-      expect(body.conversationId).toBe('generated_conv_id');
-      expect(body.title).toBe('New conversation');
-      expect(body.createdAt).toBeDefined();
+        const response = await POST(request, context);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.conversationId).toBe('generated_conv_id');
+        expect(body.title).toBe('New conversation');
+        expect(body.createdAt).toBe('2025-06-01T12:00:00.000Z');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should use custom title if provided', async () => {
@@ -369,7 +389,10 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error creating conversation:', expect.objectContaining({ message: 'Database error' }));
+      const errorArgs = vi.mocked(loggers.ai.error).mock.calls[0];
+      expect(errorArgs[0]).toBe('Error creating conversation:');
+      expect(errorArgs[1]).toBeInstanceOf(Error);
+      expect((errorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });

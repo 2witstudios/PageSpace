@@ -147,7 +147,9 @@ describe('/api/auth/google/signin', () => {
         const body = await response.json();
 
         expect(response.status).toBe(400);
-        expect(body.errors).toBeDefined();
+        expect(body.errors.platform).toEqual([
+          'Invalid option: expected one of "web"|"desktop"|"ios"',
+        ]);
       });
 
       it('accepts valid optional fields', async () => {
@@ -170,7 +172,7 @@ describe('/api/auth/google/signin', () => {
         const body = await response.json();
 
         expect(response.status).toBe(200);
-        expect(body.url).toBeDefined();
+        expect(body.url).toContain('https://accounts.google.com/o/oauth2/v2/auth');
       });
     });
 
@@ -263,12 +265,13 @@ describe('/api/auth/google/signin', () => {
 
         const url = new URL(body.url);
         const stateParam = url.searchParams.get('state');
-        expect(stateParam).toBeTruthy();
+        expect(typeof stateParam).toBe('string');
+        expect(stateParam!.length).toBeGreaterThan(0);
 
         // Decode and verify state structure
         const decoded = JSON.parse(Buffer.from(stateParam!, 'base64').toString('utf-8'));
-        expect(decoded.data).toBeDefined();
-        expect(decoded.sig).toBeDefined();
+        expect(typeof decoded.data).toBe('object');
+        expect(typeof decoded.sig).toBe('string');
         expect(decoded.data.returnUrl).toBe('/settings');
         expect(decoded.data.platform).toBe('desktop');
         expect(decoded.data.deviceId).toBe('dev-1');

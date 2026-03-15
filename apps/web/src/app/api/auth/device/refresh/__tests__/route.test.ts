@@ -169,7 +169,7 @@ describe('POST /api/auth/device/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty deviceToken', async () => {
@@ -185,7 +185,7 @@ describe('POST /api/auth/device/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty deviceId', async () => {

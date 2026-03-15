@@ -323,13 +323,18 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.summary).toBeDefined();
-      expect(body.stats).toBeDefined();
-      expect(body.stats.totalPagesScanned).toBeDefined();
-      expect(body.stats.matchingPages).toBeDefined();
-      expect(body.stats.documentTypes).toBeDefined();
-      expect(body.stats.matchTypes).toBeDefined();
-      expect(body.nextSteps).toBeDefined();
+      expect(body.summary).toBe('Found 1 page matching pattern "*.md"');
+      expect(body.stats).toEqual({
+        totalPagesScanned: 10,
+        matchingPages: 1,
+        documentTypes: ['DOCUMENT'],
+        matchTypes: { path: 0, title: 1 },
+      });
+      expect(body.stats.totalPagesScanned).toBe(10);
+      expect(body.stats.matchingPages).toBe(1);
+      expect(body.stats.documentTypes).toEqual(['DOCUMENT']);
+      expect(body.stats.matchTypes).toEqual({ path: 0, title: 1 });
+      expect(body.nextSteps).toEqual(['Use read_page with the pageId to examine content']);
     });
 
     it('should return empty results when no matches', async () => {

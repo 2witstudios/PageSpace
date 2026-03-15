@@ -363,14 +363,10 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert - security property: bcrypt.compare must be called even for non-existent users
       // This prevents timing attacks that could reveal user existence
-      expect(bcrypt.compare).toHaveBeenCalledWith(validLoginPayload.password, expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/));
-
-      // Verify the password was passed (first argument)
-      const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
-      expect(password).toBe(validLoginPayload.password);
-
-      expect(typeof hash).toBe('string');
-      expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
+      expect(bcrypt.compare).toHaveBeenCalledWith(
+        'validPassword123',
+        '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu'
+      );
     });
 
     it('logs failed login attempt', async () => {

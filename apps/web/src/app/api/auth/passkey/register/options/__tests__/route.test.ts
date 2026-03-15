@@ -176,7 +176,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.options).toBeDefined();
+      expect(typeof body.options).toBe('object');
     });
 
     it('skips CSRF validation when sessionId is null', async () => {
@@ -203,7 +203,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.options).toBeDefined();
+      expect(typeof body.options).toBe('object');
       expect(validateCSRFToken).not.toHaveBeenCalled();
     });
   });

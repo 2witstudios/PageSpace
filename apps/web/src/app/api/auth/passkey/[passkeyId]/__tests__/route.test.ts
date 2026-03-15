@@ -392,7 +392,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for empty name', async () => {

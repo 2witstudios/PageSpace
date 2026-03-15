@@ -399,12 +399,12 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
       expect(deleteConnection).toHaveBeenCalledWith('mock-db', MOCK_CONNECTION_ID);
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Drive integration connection deleted',
-        expect.objectContaining({
+        {
           connectionId: MOCK_CONNECTION_ID,
           driveId: MOCK_DRIVE_ID,
           connectionName: 'My Connection',
           deletedBy: MOCK_USER_ID,
-        })
+        }
       );
     });
   });

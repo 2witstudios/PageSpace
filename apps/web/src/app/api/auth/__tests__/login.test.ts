@@ -350,11 +350,10 @@ describe('POST /api/auth/login', () => {
       });
       await POST(request);
 
-      expect(bcrypt.compare).toHaveBeenCalledWith('anypassword', expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/));
-      const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
-      expect(password).toBe('anypassword');
-      expect(typeof hash).toBe('string');
-      expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/);
+      expect(bcrypt.compare).toHaveBeenCalledWith(
+        'anypassword',
+        '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu'
+      );
     });
 
     it('logs failed login attempt', async () => {

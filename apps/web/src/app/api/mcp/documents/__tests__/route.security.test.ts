@@ -283,11 +283,12 @@ describe('MCP Documents API - Security Tests', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'MCP document access denied - no view permission',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           pageId: 'page_123',
+          hasAccessLevel: true,
           canView: false,
-        })
+        }
       );
     });
 
@@ -310,11 +311,12 @@ describe('MCP Documents API - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'MCP document access denied - no view permission',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           pageId: 'page_123',
           hasAccessLevel: false,
-        })
+          canView: false,
+        }
       );
     });
 

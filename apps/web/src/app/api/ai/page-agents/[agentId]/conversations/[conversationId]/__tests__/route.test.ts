@@ -273,7 +273,10 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error updating conversation:', expect.objectContaining({ message: 'Database error' }));
+      const errorArgs = vi.mocked(loggers.ai.error).mock.calls[0];
+      expect(errorArgs[0]).toBe('Error updating conversation:');
+      expect(errorArgs[1]).toBeInstanceOf(Error);
+      expect((errorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -426,12 +429,12 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(loggers.ai.info).toHaveBeenCalledWith(
         'Conversation deleted',
-        expect.objectContaining({
+        {
           conversationId: mockConversationId,
           agentId: mockAgentId,
           userId: mockUserId,
           messageCount: 5,
-        })
+        }
       );
     });
   });
@@ -448,7 +451,10 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error deleting conversation:', expect.objectContaining({ message: 'Database error' }));
+      const errorArgs = vi.mocked(loggers.ai.error).mock.calls[0];
+      expect(errorArgs[0]).toBe('Error deleting conversation:');
+      expect(errorArgs[1]).toBeInstanceOf(Error);
+      expect((errorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });

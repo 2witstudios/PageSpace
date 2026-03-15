@@ -428,8 +428,9 @@ describe('GET /api/auth/magic-link/verify', () => {
         [response.headers.get('Set-Cookie')].filter(Boolean);
       const csrfCookie = setCookies.find((c: string) => c?.includes('csrf_token='));
 
-      expect(csrfCookie).toBeTruthy();
-      expect(csrfCookie).toContain('csrf_token=mock-csrf-token');
+      expect(csrfCookie).toBe(
+        'csrf_token=mock-csrf-token; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60'
+      );
       expect(csrfCookie).not.toContain('Secure');
     });
 
@@ -442,7 +443,9 @@ describe('GET /api/auth/magic-link/verify', () => {
         [response.headers.get('Set-Cookie')].filter(Boolean);
       const csrfCookie = setCookies.find((c: string) => c?.includes('csrf_token='));
 
-      expect(csrfCookie).toBeTruthy();
+      expect(csrfCookie).toBe(
+        'csrf_token=mock-csrf-token; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60; Secure'
+      );
       expect(csrfCookie).toContain('; Secure');
     });
 

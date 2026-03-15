@@ -126,7 +126,9 @@ describe('POST /api/auth/apple/signin', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.platform).toEqual([
+        'Invalid option: expected one of "web"|"desktop"|"ios"',
+      ]);
     });
 
     it('accepts valid optional fields', async () => {
@@ -149,7 +151,7 @@ describe('POST /api/auth/apple/signin', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.url).toBeDefined();
+      expect(body.url).toContain('https://appleid.apple.com/auth/authorize');
     });
   });
 
@@ -245,7 +247,8 @@ describe('POST /api/auth/apple/signin', () => {
       expect(url.searchParams.get('response_type')).toBe('code id_token');
       expect(url.searchParams.get('scope')).toBe('name email');
       expect(url.searchParams.get('response_mode')).toBe('form_post');
-      expect(url.searchParams.get('state')).toBeTruthy();
+      expect(typeof url.searchParams.get('state')).toBe('string');
+      expect(url.searchParams.get('state')!.length).toBeGreaterThan(0);
     });
 
     it('encodes state with signed HMAC', async () => {
@@ -257,8 +260,8 @@ describe('POST /api/auth/apple/signin', () => {
       const stateParam = url.searchParams.get('state')!;
       const decoded = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
 
-      expect(decoded.data).toBeDefined();
-      expect(decoded.sig).toBeDefined();
+      expect(typeof decoded.data).toBe('object');
+      expect(typeof decoded.sig).toBe('string');
       expect(decoded.data.returnUrl).toBe('/settings');
       expect(decoded.data.platform).toBe('desktop');
     });
@@ -432,7 +435,8 @@ describe('GET /api/auth/apple/signin', () => {
 
       expect(decoded.data.returnUrl).toBe('/dashboard');
       expect(decoded.data.platform).toBe('web');
-      expect(decoded.sig).toBeTruthy();
+      expect(typeof decoded.sig).toBe('string');
+      expect(decoded.sig.length).toBeGreaterThan(0);
     });
 
     it('includes all required OAuth parameters', async () => {

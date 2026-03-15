@@ -217,9 +217,8 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(getDriveAccess).toHaveBeenCalledTimes(1);
 
         // Repository should be called with deduplicated driveIds
-        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
-          expect.objectContaining({ driveIds: ['drive-1'] })
-        );
+        const createArgs = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0][0];
+        expect(createArgs.driveIds).toEqual(['drive-1']);
       });
     });
 

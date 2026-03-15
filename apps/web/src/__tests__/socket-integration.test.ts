@@ -149,7 +149,7 @@ describe('Socket.IO Integration', () => {
       expect(useSocketStore.getState().connectionStatus).toBe('connected');
 
       // Step 3: Verify socket is available for room operations
-      expect(useSocketStore.getState().socket).toBeTruthy();
+      expect(useSocketStore.getState().socket).toBe(mockSocket);
       expect(useSocketStore.getState().isInitialized).toBe(true);
 
       // Verify auth:refreshed listener is registered

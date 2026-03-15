@@ -224,7 +224,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when v2 is missing', async () => {
@@ -235,7 +235,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when both v1 and v2 are missing', async () => {
@@ -243,7 +243,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined. Invalid input: expected string, received undefined');
     });
   });
 

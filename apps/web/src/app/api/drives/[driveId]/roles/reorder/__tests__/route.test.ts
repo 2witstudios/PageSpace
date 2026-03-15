@@ -347,15 +347,16 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
       expect(logRoleActivity).toHaveBeenCalledWith(
         mockUserId,
         'role_reorder',
-        expect.objectContaining({
+        {
           driveId: mockDriveId,
           driveName: 'Test Drive',
           previousOrder: ['role_1', 'role_2', 'role_3'],
           newOrder: newOrder,
-        }),
-        expect.objectContaining({
+        },
+        {
           actorEmail: 'test@example.com',
-        })
+          actorDisplayName: 'Test User',
+        }
       );
     });
 

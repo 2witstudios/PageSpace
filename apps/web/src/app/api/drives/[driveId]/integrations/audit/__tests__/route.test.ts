@@ -288,14 +288,14 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
 
       expect(buildAuditLogWhereClause).toHaveBeenCalledWith(
         MOCK_DRIVE_ID,
-        expect.objectContaining({
+        {
           connectionId: null,
           success: null,
           agentId: null,
           dateFrom: null,
           dateTo: null,
           toolName: null,
-        })
+        }
       );
     });
   });

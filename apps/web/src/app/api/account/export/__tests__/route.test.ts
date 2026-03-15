@@ -195,8 +195,10 @@ describe('GET /api/account/export', () => {
       const body = await response2.json();
 
       expect(response2.status).toBe(429);
-      expect(body.error).toContain('Export rate limit exceeded');
-      expect(response2.headers.get('Retry-After')).toBeTruthy();
+      expect(body.error).toBe('Export rate limit exceeded. You can request one export per 24 hours.');
+      const retryAfter = Number(response2.headers.get('Retry-After'));
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(86400);
     });
   });
 

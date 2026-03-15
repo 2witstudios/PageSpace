@@ -217,10 +217,10 @@ describe('GET /api/pages/[pageId]/export/markdown', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'markdown',
           pageTitle: 'Test Document',
-        })
+        }
       );
     });
   });

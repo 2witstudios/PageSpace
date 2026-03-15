@@ -211,10 +211,10 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(parseSheetContent).toHaveBeenCalledWith(mockPage().content);
       expect(evaluateSheet).toHaveBeenCalledWith(
         mockSheetData,
-        expect.objectContaining({
+        {
           pageId: mockPageId,
           pageTitle: 'Test Sheet',
-        })
+        }
       );
       expect(generateExcel).toHaveBeenCalledWith(
         mockEvaluation.display,
@@ -270,10 +270,10 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'xlsx',
           pageTitle: 'Test Sheet',
-        })
+        }
       );
     });
   });

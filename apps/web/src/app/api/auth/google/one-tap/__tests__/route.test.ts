@@ -253,7 +253,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request');
-      expect(body.details.credential).toBeDefined();
+      expect(body.details.credential).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty credential', async () => {
@@ -269,7 +269,9 @@ describe('POST /api/auth/google/one-tap', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.details.platform).toBeDefined();
+      expect(body.details.platform).toEqual([
+        'Invalid option: expected one of "web"|"desktop"',
+      ]);
     });
   });
 
@@ -543,7 +545,15 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithOldAvatar.id);
+      expect(updateArgs[1]).toEqual({
+        googleId: 'google-id-123',
+        provider: 'google',
+        name: 'Existing User',
+        image: '/new-avatar.jpg',
+        emailVerified: expect.any(Date),
+      });
     });
 
     it('does not update complete existing user', async () => {

@@ -270,17 +270,16 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
       await DELETE(createRequest(), createContext('device-1'));
 
       expect(getActorInfo).toHaveBeenCalledWith('user-1');
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          tokenId: 'device-1',
-          tokenType: 'device',
-          tokenName: 'My MacBook',
-          deviceInfo: 'desktop - My MacBook',
-        }),
-        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: 'My MacBook',
+        deviceInfo: 'desktop - My MacBook',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
 
     it('uses undefined for tokenName when deviceName is null', async () => {
@@ -291,15 +290,16 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
       await DELETE(createRequest(), createContext('device-1'));
 
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          tokenName: undefined,
-          deviceInfo: 'desktop - Unknown',
-        }),
-        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: undefined,
+        deviceInfo: 'desktop - Unknown',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
 
     it('uses Unknown for platform when platform is null', async () => {
@@ -310,14 +310,16 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
       await DELETE(createRequest(), createContext('device-1'));
 
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          deviceInfo: 'Unknown - My MacBook',
-        }),
-        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: 'My MacBook',
+        deviceInfo: 'Unknown - My MacBook',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
   });
 
