@@ -45,6 +45,7 @@ export default defineConfig({
       '@pagespace/lib/server': path.resolve(packagesDir, 'lib/src/server'),
       '@pagespace/lib/broadcast-auth': path.resolve(packagesDir, 'lib/src/auth/broadcast-auth'),
       '@pagespace/lib/logger-browser': path.resolve(packagesDir, 'lib/src/logging/logger-browser'),
+      '@pagespace/lib/logger-database': path.resolve(packagesDir, 'lib/src/logging/logger-database'),
       '@pagespace/lib/utils/environment': path.resolve(packagesDir, 'lib/src/utils/environment'),
       '@pagespace/lib/ai-context-calculator': path.resolve(packagesDir, 'lib/src/monitoring/ai-context-calculator'),
       '@pagespace/lib/ai-monitoring': path.resolve(packagesDir, 'lib/src/monitoring/ai-monitoring'),
