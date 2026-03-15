@@ -204,8 +204,8 @@ describe('storage-limits', () => {
         })),
         insert: vi.fn(() => ({ values: vi.fn() })),
       };
-      vi.mocked(db.transaction).mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
-        await fn(mockTx);
+      vi.mocked(db.transaction).mockImplementation(async (fn) => {
+        await fn(mockTx as never);
       });
 
       await updateStorageUsage('user-1', 1024, { eventType: 'upload', pageId: 'page-1' });

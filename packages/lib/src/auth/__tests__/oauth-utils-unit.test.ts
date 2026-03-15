@@ -246,7 +246,7 @@ describe('oauth-utils', () => {
         email: 'new@test.com',
         emailVerified: true,
         name: 'New User',
-        picture: null,
+        picture: undefined,
         provider: OAuthProvider.GOOGLE,
       });
 
