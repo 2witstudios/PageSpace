@@ -227,6 +227,7 @@ describe('POST /api/auth/resend-verification', () => {
 
       expect(response.status).toBe(200);
       expect(body.message).toContain('Verification email sent successfully');
+      expect(authRepository.findUserById).toHaveBeenCalledWith('test-user-id');
       expect(createVerificationToken).toHaveBeenCalledWith({
         userId: 'test-user-id',
         type: 'email_verification',

@@ -262,6 +262,7 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(typeof decoded.data).toBe('object');
       expect(typeof decoded.sig).toBe('string');
+      expect(decoded.sig.length).toBeGreaterThan(0);
       expect(decoded.data.returnUrl).toBe('/settings');
       expect(decoded.data.platform).toBe('desktop');
     });
