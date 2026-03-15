@@ -522,7 +522,41 @@ describe('PATCH /api/pages/reorder', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('string error');
+      expect(body.error).toBe('Failed to reorder page');
+    });
+
+    it('logs warning when page tree cache invalidation fails with Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Redis down'));
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails with non-Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
     });
   });
 });

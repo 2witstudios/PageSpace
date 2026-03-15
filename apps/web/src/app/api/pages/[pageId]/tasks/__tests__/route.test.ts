@@ -106,7 +106,7 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(() => ({})),
 }));
 
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
@@ -120,15 +120,29 @@ describe('Task API Routes', () => {
     vi.resetAllMocks();
     // Reset default mock for taskStatusConfigs.findMany
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
-    // Re-set up isAuthError after resetAllMocks
-    const { isAuthError } = require('@/lib/auth');
     vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     // Re-set up db.insert to default chain
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({
         returning: vi.fn(),
       })),
     } as never);
+    // Re-set up db.transaction
+    vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      let insertCallCount = 0;
+      const tx = {
+        insert: vi.fn(() => ({
+          values: vi.fn(() => ({
+            returning: vi.fn().mockImplementation(() => {
+              insertCallCount++;
+              return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
+            }),
+          })),
+        })),
+      };
+      return callback(tx);
+    });
   });
 
   describe('GET /api/pages/[pageId]/tasks', () => {
@@ -504,6 +518,112 @@ describe('Task API Routes', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Invalid status');
+    });
+
+    it('returns 400 when assigneeAgentId is invalid', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce(null as never); // agentPage not found
+
+      const response = await POST(createRequest({ title: 'Task', assigneeAgentId: 'bad-agent' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid agent ID - must be an AI agent page');
+    });
+
+    it('returns 400 when assigneeAgentId is in different drive', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce({ id: 'agent-page', driveId: 'different-drive' } as never); // agentPage in different drive
+
+      const response = await POST(createRequest({ title: 'Task', assigneeAgentId: 'agent-page' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Agent must be in the same drive as the task list');
+    });
+
+    it('creates task with assigneeIds array (multi-assignee)', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = {
+        id: 'new-task',
+        title: 'Multi Task',
+        status: 'pending',
+        priority: 'medium',
+        position: 0,
+      };
+      const mockNewPage = {
+        id: 'new-page',
+        title: 'Multi Task',
+        type: 'DOCUMENT',
+      };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce(null as never); // lastChildPage
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never) // lastTask
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({
+        title: 'Multi Task',
+        assigneeIds: [
+          { type: 'user', id: 'user-a' },
+          { type: 'agent', id: 'agent-b' },
+        ],
+      }), { params: mockParams });
+
+      expect(response.status).toBe(201);
+    });
+
+    it('creates task with legacy single assigneeAgentId (backward compat)', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = {
+        id: 'new-task',
+        title: 'Agent Task',
+        status: 'pending',
+        priority: 'medium',
+        position: 0,
+      };
+      const mockNewPage = {
+        id: 'new-page',
+        title: 'Agent Task',
+        type: 'DOCUMENT',
+      };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce({ id: 'agent-page', driveId: 'drive-123' } as never) // agentPage valid
+        .mockResolvedValueOnce(null as never); // lastChildPage
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never) // lastTask
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({
+        title: 'Agent Task',
+        assigneeAgentId: 'agent-page',
+      }), { params: mockParams });
+
+      expect(response.status).toBe(201);
     });
 
     it('creates task with all optional fields', async () => {

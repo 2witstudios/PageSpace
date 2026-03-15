@@ -362,6 +362,42 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(200);
   });
 
+  it('clears completedAt when moving from done to non-done group (custom statuses, sequenced mocks)', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const existingTask = { ...baseTask, status: 'finished', completedAt: new Date('2024-01-01') };
+    // Use mockResolvedValueOnce to properly sequence: first call returns existingTask, second returns relations
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce(existingTask as never) // existingTask lookup
+      .mockResolvedValueOnce({ ...existingTask, status: 'open', completedAt: null, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never); // relations lookup
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+      { slug: 'open', group: 'todo' },
+      { slug: 'finished', group: 'done' },
+    ] as never);
+
+    setupTransaction({ ...existingTask, status: 'open', completedAt: null });
+
+    const response = await PATCH(createPatchRequest({ status: 'open' }), context);
+    expect(response.status).toBe(200);
+  });
+
+  it('clears completedAt when moving from completed in fallback mode (sequenced mocks)', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const existingTask = { ...baseTask, status: 'completed', completedAt: new Date('2024-01-01') };
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce(existingTask as never) // existingTask lookup
+      .mockResolvedValueOnce({ ...existingTask, status: 'pending', completedAt: null, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never); // relations lookup
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never); // no custom configs = fallback mode
+
+    setupTransaction({ ...existingTask, status: 'pending', completedAt: null });
+
+    const response = await PATCH(createPatchRequest({ status: 'pending' }), context);
+    expect(response.status).toBe(200);
+  });
+
   it('returns 400 for invalid fallback status (no custom configs)', async () => {
     setupAuth();
     setupCanEdit(true);

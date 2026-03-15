@@ -120,6 +120,7 @@ import {
 } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
 
 // ============================================================================
@@ -930,6 +931,25 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
   const mockDriveId = 'drive_abc';
   const mockDriveOwnerId = 'owner_789';
 
+  // Helper to create a mockTx with configurable drivePages and permissions
+  function createMockTx(drivePages: { id: string; title: string }[] = [], existingPermissions: Record<string, unknown>[] = []) {
+    let selectCallCount = 0;
+    return {
+      select: vi.fn().mockImplementation(() => ({
+        from: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            // First select: drivePages, Second select: existingPermissions
+            return Promise.resolve(selectCallCount === 1 ? drivePages : existingPermissions);
+          }),
+        })),
+      })),
+      delete: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    };
+  }
+
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockCurrentUserId));
@@ -941,6 +961,19 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
         where: vi.fn().mockResolvedValue([]),
       }),
     } as never);
+
+    // Re-set up db.transaction after resetAllMocks - default: empty drive (no pages)
+    vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const mockTx = createMockTx();
+      return callback(mockTx);
+    });
+
+    // Re-set up invalidation mocks
+    vi.mocked(invalidateUserPermissions).mockResolvedValue(undefined as never);
+    vi.mocked(invalidateDrivePermissions).mockResolvedValue(undefined as never);
+
+    // Re-set up activity logger mocks
+    vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' } as never);
   });
 
   const createDeleteRequest = () => {
@@ -1143,6 +1176,67 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
       expect(invalidateUserPermissions).toHaveBeenCalledWith(mockTargetUserId);
       expect(invalidateDrivePermissions).toHaveBeenCalledWith(mockDriveId);
+    });
+
+    it('should log permission revocations and delete permissions when drive has pages', async () => {
+      const drivePages = [
+        { id: 'page_1', title: 'Page One' },
+        { id: 'page_2', title: 'Page Two' },
+      ];
+      const existingPermissions = [
+        { pageId: 'page_1', canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: mockCurrentUserId, note: 'test' },
+        { pageId: 'page_2', canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: mockCurrentUserId, note: null },
+      ];
+
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx(drivePages, existingPermissions);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+
+      // logPermissionActivity should be called for each existing permission
+      expect(logPermissionActivity).toHaveBeenCalledTimes(2);
+      expect(logPermissionActivity).toHaveBeenCalledWith(
+        mockCurrentUserId,
+        'permission_revoke',
+        expect.objectContaining({ pageId: 'page_1', driveId: mockDriveId, targetUserId: mockTargetUserId, pageTitle: 'Page One' }),
+        expect.objectContaining({ reason: 'member_removal', previousValues: expect.objectContaining({ canView: true, canEdit: true }) })
+      );
+    });
+
+    it('should delete drive membership even when drive has no pages', async () => {
+      // Explicitly set empty drivePages
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx([], []);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      expect(db.transaction).toHaveBeenCalled();
+    });
+
+    it('should handle pages with no matching permissions gracefully', async () => {
+      const drivePages = [{ id: 'page_1', title: 'Page One' }];
+      // No existing permissions for this user
+      const existingPermissions: Record<string, unknown>[] = [];
+
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx(drivePages, existingPermissions);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      // No permission revocations should be logged
+      expect(logPermissionActivity).not.toHaveBeenCalled();
     });
   });
 

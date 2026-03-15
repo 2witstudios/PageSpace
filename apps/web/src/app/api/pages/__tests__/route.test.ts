@@ -67,7 +67,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPCreateScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { agentAwarenessCache, pageTreeCache, loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 
 // Test helpers
@@ -568,6 +568,84 @@ describe('POST /api/pages', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toMatch(/failed/i);
+    });
+  });
+
+  describe('cache invalidation error handling', () => {
+    it('logs warning when agent awareness cache invalidation fails with Error', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+
+      await POST(createRequest({
+        title: 'AI Chat',
+        type: 'AI_CHAT',
+        driveId: mockDriveId,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when agent awareness cache invalidation fails with non-Error', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+
+      await POST(createRequest({
+        title: 'AI Chat',
+        type: 'AI_CHAT',
+        driveId: mockDriveId,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails with Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+
+      await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'Cache error', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails with non-Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+
+      await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
     });
   });
 });

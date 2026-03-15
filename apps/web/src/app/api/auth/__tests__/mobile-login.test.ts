@@ -87,7 +87,9 @@ import bcrypt from 'bcryptjs';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
+  loggers,
 } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -571,6 +573,40 @@ describe('/api/auth/mobile/login', () => {
       );
     });
 
+    it('uses default Retry-After of 900 when IP retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
+    });
+
+    it('uses default Retry-After of 900 when email retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
+    });
+
     it('masks email in security audit event details', async () => {
       vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
@@ -747,6 +783,89 @@ describe('/api/auth/mobile/login', () => {
         expect.stringMatching(/^login:email:/),
         expect.any(Object)
       );
+    });
+  });
+
+  describe('rate limit reset failures', () => {
+    it('logs warning when rate limit reset fails after successful login', async () => {
+      vi.mocked(resetDistributedRateLimit)
+        .mockRejectedValueOnce(new Error('Redis connection failed'))
+        .mockResolvedValueOnce(undefined);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      // Login should still succeed even though rate limit reset failed
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful mobile login',
+        expect.objectContaining({
+          failureCount: 1,
+          reasons: expect.arrayContaining([expect.stringContaining('Redis connection failed')]),
+        })
+      );
+    });
+
+    it('handles reset failure with non-Error reason (string fallback)', async () => {
+      vi.mocked(resetDistributedRateLimit)
+        .mockRejectedValueOnce('connection timeout')
+        .mockResolvedValueOnce(undefined);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful mobile login',
+        expect.objectContaining({
+          failureCount: 1,
+          reasons: ['connection timeout'],
+        })
+      );
+    });
+  });
+
+  describe('session cookie for platforms', () => {
+    it('does not set session cookie for android platform', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...validLoginPayload, platform: 'android' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Set-Cookie')).toBeNull();
+    });
+  });
+
+  describe('session validation failure', () => {
+    it('returns 500 when newly created session fails validation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to generate session');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to validate newly created session');
     });
   });
 });

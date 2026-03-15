@@ -212,5 +212,40 @@ describe('GET /api/account/export', () => {
       expect(body.error).toBe('Failed to generate data export');
       consoleSpy.mockRestore();
     });
+
+    it('propagates archive error to ReadableStream controller', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      // Override the archive mock to trigger the error handler
+      mockArchive.on.mockReset();
+      mockArchive.finalize.mockReset();
+
+      let errorHandler: ((err: Error) => void) | undefined;
+
+      mockArchive.on.mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (event === 'error') {
+          errorHandler = handler as (err: Error) => void;
+        }
+        if (event === 'data') {
+          mockArchive.finalize.mockImplementation(() => {
+            // Trigger the error handler instead of data
+            if (errorHandler) {
+              errorHandler(new Error('Archive compression failed'));
+            }
+          });
+        }
+        return mockArchive;
+      });
+
+      const response = await GET(createRequest());
+
+      // The response is created with the ReadableStream, so status is 200
+      expect(response.status).toBe(200);
+      expect(response.body).toBeInstanceOf(ReadableStream);
+
+      // Reading the stream should throw since the error handler was invoked
+      const reader = response.body!.getReader();
+      await expect(reader.read()).rejects.toThrow('Archive compression failed');
+    });
   });
 });

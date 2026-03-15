@@ -199,4 +199,41 @@ describe('GET /api/auth/me', () => {
       expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
   });
+
+  describe('image sanitization', () => {
+    it('returns local image path when image is not an external HTTP URL', async () => {
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        ...mockUser,
+        image: '/uploads/avatars/user-123.jpg',
+      });
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.image).toBe('/uploads/avatars/user-123.jpg');
+    });
+  });
+
+  describe('debug logging', () => {
+    it('logs user profile in development mode with DEBUG_AUTH enabled', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalDebugAuth = process.env.DEBUG_AUTH;
+      process.env.NODE_ENV = 'development';
+      process.env.DEBUG_AUTH = 'true';
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const response = await GET(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[AUTH] User profile loaded:')
+      );
+
+      consoleSpy.mockRestore();
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.DEBUG_AUTH = originalDebugAuth;
+    });
+  });
 });
