@@ -620,7 +620,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
           targetUserEmail: 'invited@example.com',
           role: 'MEMBER',
         },
-        expect.anything()
+        { userId: 'user_123', email: 'user@example.com' }
       );
     });
 
@@ -638,7 +638,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect.objectContaining({
           targetUserEmail: undefined,
         }),
-        expect.anything()
+        { userId: 'user_123', email: 'user@example.com' }
       );
     });
   });
