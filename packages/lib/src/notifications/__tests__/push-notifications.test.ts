@@ -346,10 +346,13 @@ describe('sendPushNotification', () => {
 
     const result = await sendPushNotification('user-1', payload);
 
-    // Verify the result is determinate (sent or failed, never skipped)
-    expect(result.sent + result.failed).toBe(1);
-    // Whether cached JWT or fresh, the token update should have been called
-    expect(setFn).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ sent: 1, failed: 0, errors: [] });
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failedAttempts: '0',
+        lastFailedAt: null,
+      })
+    );
   });
 
   it('removes token when APNs returns invalid token reason', async () => {
