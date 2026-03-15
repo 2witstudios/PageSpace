@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   generateDiffsWithinBudget,
+  streamDiffsWithinBudget,
   estimateChangeMagnitude,
   calculateDiffBudget,
   type DiffBudget,
@@ -290,6 +291,154 @@ describe('diff-generator', () => {
 
       // High priority should come first despite smaller change
       expect(result[0].pageId).toBe('high');
+    });
+
+    it('does not truncate when diff fits within per-item budget', () => {
+      // Use a large budget so truncation is not needed
+      const budget: DiffBudget = { total: 100000, perItem: 100000 };
+      const requests: DiffRequest[] = [
+        {
+          pageId: 'page1',
+          beforeContent: 'Hello',
+          afterContent: 'Hello World',
+          group: createMockGroup({ pageId: 'page1' }),
+          driveId: 'drive1',
+        },
+      ];
+
+      const result = generateDiffsWithinBudget(requests, budget);
+
+      expect(result).toHaveLength(1);
+      // Diff should NOT contain truncation message
+      expect(result[0].unifiedDiff).not.toContain('truncated');
+    });
+  });
+
+  describe('streamDiffsWithinBudget', () => {
+    it('yields nothing for empty requests array', async () => {
+      const budget: DiffBudget = { total: 10000, perItem: 2000 };
+      const results: unknown[] = [];
+
+      for await (const diff of streamDiffsWithinBudget([], budget)) {
+        results.push(diff);
+      }
+
+      expect(results).toHaveLength(0);
+    });
+
+    it('yields a single diff for one request', async () => {
+      const budget: DiffBudget = { total: 10000, perItem: 5000 };
+      const requests: DiffRequest[] = [
+        {
+          pageId: 'page1',
+          beforeContent: 'Hello',
+          afterContent: 'Hello World',
+          group: createMockGroup({ pageId: 'page1' }),
+          driveId: 'drive1',
+        },
+      ];
+
+      const results: unknown[] = [];
+      for await (const diff of streamDiffsWithinBudget(requests, budget)) {
+        results.push(diff);
+      }
+
+      expect(results).toHaveLength(1);
+      expect((results[0] as { pageId: string }).pageId).toBe('page1');
+      expect((results[0] as { driveId: string }).driveId).toBe('drive1');
+    });
+
+    it('stops yielding when budget is exhausted', async () => {
+      // Very small budget that can only fit one diff
+      const budget: DiffBudget = { total: 150, perItem: 150, minUseful: 100 };
+
+      const requests: DiffRequest[] = [
+        {
+          pageId: 'page1',
+          beforeContent: 'First line\nSecond line',
+          afterContent: 'First line modified\nSecond line changed',
+          group: createMockGroup({ pageId: 'page1' }),
+          driveId: 'drive1',
+          priority: 100,
+        },
+        {
+          pageId: 'page2',
+          beforeContent: 'Another document',
+          afterContent: 'Another modified document',
+          group: createMockGroup({ pageId: 'page2' }),
+          driveId: 'drive1',
+          priority: 50,
+        },
+        {
+          pageId: 'page3',
+          beforeContent: 'Third page',
+          afterContent: 'Third page modified',
+          group: createMockGroup({ pageId: 'page3' }),
+          driveId: 'drive1',
+          priority: 10,
+        },
+      ];
+
+      const results: unknown[] = [];
+      for await (const diff of streamDiffsWithinBudget(requests, budget)) {
+        results.push(diff);
+      }
+
+      // Should not include all 3 due to budget exhaustion
+      expect(results.length).toBeLessThan(3);
+    });
+
+    it('skips requests with identical content (null diff)', async () => {
+      const budget: DiffBudget = { total: 10000, perItem: 5000 };
+      const requests: DiffRequest[] = [
+        {
+          pageId: 'same',
+          beforeContent: 'Same content',
+          afterContent: 'Same content', // Identical
+          group: createMockGroup({ pageId: 'same' }),
+          driveId: 'drive1',
+          priority: 100,
+        },
+        {
+          pageId: 'different',
+          beforeContent: 'Before',
+          afterContent: 'After',
+          group: createMockGroup({ pageId: 'different' }),
+          driveId: 'drive1',
+          priority: 50,
+        },
+      ];
+
+      const results: { pageId: string }[] = [];
+      for await (const diff of streamDiffsWithinBudget(requests, budget)) {
+        results.push(diff);
+      }
+
+      // Only the "different" request should yield
+      expect(results).toHaveLength(1);
+      expect(results[0].pageId).toBe('different');
+    });
+
+    it('truncates diff when it exceeds per-item budget', async () => {
+      const budget: DiffBudget = { total: 50000, perItem: 200, minUseful: 50 };
+      const requests: DiffRequest[] = [
+        {
+          pageId: 'page1',
+          beforeContent: '',
+          afterContent: 'x'.repeat(500), // Generates large diff
+          group: createMockGroup({ pageId: 'page1' }),
+          driveId: 'drive1',
+        },
+      ];
+
+      const results: { unifiedDiff: string }[] = [];
+      for await (const diff of streamDiffsWithinBudget(requests, budget)) {
+        results.push(diff);
+      }
+
+      expect(results).toHaveLength(1);
+      expect(results[0].unifiedDiff.length).toBeLessThanOrEqual(budget.perItem);
+      expect(results[0].unifiedDiff).toContain('truncated');
     });
   });
 });

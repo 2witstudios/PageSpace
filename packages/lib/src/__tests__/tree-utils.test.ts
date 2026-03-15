@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree } from '../content/tree-utils'
+import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree } from '../content/tree-utils'
 
 describe('tree-utils', () => {
   describe('buildTree', () => {
@@ -286,6 +286,290 @@ describe('tree-utils', () => {
 
       expect(tree[0].id).toBe('001')
       expect(tree[0].children[0].id).toBe('002')
+    })
+  })
+
+  describe('calculateSafeDepth', () => {
+    it('returns full depth for a flat tree within limit', () => {
+      const tree = [
+        { id: '1', children: [] },
+        { id: '2', children: [] },
+        { id: '3', children: [] },
+      ]
+
+      const result = calculateSafeDepth(tree, 10)
+
+      expect(result.safeDepth).toBe(1) // Only depth 0, so length is 1
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('returns correct depth for a deep tree within limit', () => {
+      type N = { id: string; children: N[] }
+      const tree: N[] = [
+        {
+          id: '1',
+          children: [
+            {
+              id: '2',
+              children: [
+                { id: '3', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const result = calculateSafeDepth(tree, 10)
+
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('truncates when tree exceeds maxNodes', () => {
+      type N = { id: string; children: N[] }
+      // Root has 5 children, each with 5 grandchildren = 1 + 5 + 25 = 31 nodes
+      const tree: N[] = [
+        {
+          id: 'root',
+          children: Array.from({ length: 5 }, (_, i) => ({
+            id: `child-${i}`,
+            children: Array.from({ length: 5 }, (_, j) => ({
+              id: `grandchild-${i}-${j}`,
+              children: [],
+            })),
+          })),
+        },
+      ]
+
+      const result = calculateSafeDepth(tree, 7) // Only allow root + children (6 nodes)
+
+      expect(result.safeDepth).toBe(1) // depth 0 = 1, depth 1 = 5 => total 6 fits; depth 2 = 25 would exceed
+      expect(result.hiddenNodes).toBe(25) // 25 grandchildren hidden
+    })
+
+    it('handles single-node tree', () => {
+      const tree = [{ id: '1', children: [] }]
+
+      const result = calculateSafeDepth(tree, 1)
+
+      expect(result.totalNodes).toBe(1)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('handles tree that fits exactly at maxNodes', () => {
+      const tree = [
+        { id: '1', children: [] },
+        { id: '2', children: [] },
+        { id: '3', children: [] },
+      ]
+
+      const result = calculateSafeDepth(tree, 3)
+
+      expect(result.totalNodes).toBe(3)
+      expect(result.hiddenNodes).toBe(0)
+    })
+
+    it('returns depth 0 when even root level exceeds maxNodes', () => {
+      const tree = Array.from({ length: 10 }, (_, i) => ({
+        id: `node-${i}`,
+        children: [],
+      }))
+
+      const result = calculateSafeDepth(tree, 5)
+
+      // depth 0 has 10 nodes which exceeds 5, so safeDepth = 0
+      expect(result.safeDepth).toBe(0)
+    })
+  })
+
+  describe('formatTreeAsMarkdown', () => {
+    it('returns "(empty)" for empty tree', () => {
+      const result = formatTreeAsMarkdown([])
+      expect(result).toBe('(empty)')
+    })
+
+    it('formats single node with icon and id', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'My Document', type: 'DOCUMENT', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('My Document')
+      expect(result).toContain('(id: 1)')
+    })
+
+    it('formats nested tree with connectors', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        {
+          id: '1',
+          title: 'Projects',
+          type: 'FOLDER',
+          children: [
+            { id: '2', title: 'Notes', type: 'DOCUMENT', children: [] },
+            { id: '3', title: 'Chat', type: 'AI_CHAT', children: [] },
+          ],
+        },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('Projects')
+      expect(result).toContain('Notes')
+      expect(result).toContain('Chat')
+    })
+
+    it('shows type icons by default', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Folder', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      // FOLDER icon is present
+      expect(result).toContain('\u{1F4C1}') // Folder emoji
+    })
+
+    it('hides icons when showIcons is false', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Folder', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree, { showIcons: false })
+
+      expect(result).not.toContain('\u{1F4C1}')
+      expect(result).toContain('Folder')
+    })
+
+    it('truncates deep tree and shows hidden nodes message', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Create a wide tree: root with 5 children, each with 5 grandchildren
+      const tree: TreeNode[] = [
+        {
+          id: 'root',
+          title: 'Root',
+          type: 'FOLDER',
+          children: Array.from({ length: 5 }, (_, i) => ({
+            id: `child-${i}`,
+            title: `Child ${i}`,
+            type: 'DOCUMENT',
+            children: Array.from({ length: 5 }, (_, j) => ({
+              id: `gc-${i}-${j}`,
+              title: `Grandchild ${i}-${j}`,
+              type: 'DOCUMENT',
+              children: [],
+            })),
+          })),
+        },
+      ]
+
+      // maxNodes=7 allows root + 5 children but not 25 grandchildren
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 7 })
+
+      expect(result).toContain('Root')
+      expect(result).toContain('hidden')
+      expect(result).toContain('more pages')
+    })
+
+    it('uses default icon for unknown types', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'Unknown', type: 'WEIRD_TYPE', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      // Falls back to document icon
+      expect(result).toContain('\u{1F4C4}')
+    })
+
+    it('formats multiple root nodes', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      const tree: TreeNode[] = [
+        { id: '1', title: 'First Root', type: 'FOLDER', children: [] },
+        { id: '2', title: 'Second Root', type: 'FOLDER', children: [] },
+      ]
+
+      const result = formatTreeAsMarkdown(tree)
+
+      expect(result).toContain('First Root')
+      expect(result).toContain('Second Root')
+    })
+  })
+
+  describe('filterToSubtree', () => {
+    it('filters to subtree rooted at given pageId', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+        { id: '4', parentId: null },
+        { id: '5', parentId: '4' },
+      ]
+
+      const result = filterToSubtree(nodes, '1')
+
+      expect(result).toHaveLength(3)
+      expect(result.map(n => n.id).sort()).toEqual(['1', '2', '3'])
+    })
+
+    it('returns only root when it has no descendants', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: null },
+      ]
+
+      const result = filterToSubtree(nodes, '1')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].id).toBe('1')
+    })
+
+    it('returns empty array when rootPageId is not found', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+
+      const result = filterToSubtree(nodes, 'nonexistent')
+
+      expect(result).toHaveLength(0)
+    })
+
+    it('includes nested descendants multiple levels deep', () => {
+      const nodes = [
+        { id: 'a', parentId: null },
+        { id: 'b', parentId: 'a' },
+        { id: 'c', parentId: 'b' },
+        { id: 'd', parentId: 'c' },
+        { id: 'e', parentId: 'd' },
+        { id: 'f', parentId: null },
+      ]
+
+      const result = filterToSubtree(nodes, 'a')
+
+      expect(result).toHaveLength(5)
+      expect(result.map(n => n.id).sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
+    })
+
+    it('filters starting from a mid-level node', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+        { id: '4', parentId: '2' },
+        { id: '5', parentId: '1' },
+      ]
+
+      const result = filterToSubtree(nodes, '2')
+
+      expect(result).toHaveLength(3)
+      expect(result.map(n => n.id).sort()).toEqual(['2', '3', '4'])
     })
   })
 })

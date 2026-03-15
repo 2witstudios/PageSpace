@@ -35,4 +35,16 @@ describe('validateResponse', () => {
       error: 'Provider response indicated failure',
     });
   });
+
+  it('given mismatch without errorPath configured, should return generic error', () => {
+    const result = validateResponse(
+      { ok: false },
+      { success: { path: '$.ok', equals: true } }
+    );
+
+    expect(result).toEqual({
+      valid: false,
+      error: 'Provider response indicated failure',
+    });
+  });
 });

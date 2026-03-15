@@ -493,5 +493,46 @@ describe('activity-diff-utils', () => {
       expect(result.length).toBe(2);
       expect(result[1].unifiedDiff.length).toBeLessThan(3000);
     });
+
+    it('truncates large diff content with hunk-aware line-by-line truncation', () => {
+      // Create a diff with many lines that exceeds the per-page limit
+      const lines = Array.from({ length: 200 }, (_, i) => `+Line ${i}: ${'x'.repeat(80)}`);
+      const largeDiff = lines.join('\n');
+
+      const diffs: StackedDiff[] = [{
+        pageId: 'bigpage',
+        pageTitle: 'Big Page',
+        changeGroupId: null,
+        aiConversationId: null,
+        collapsedCount: 1,
+        timeRange: { from: '2024-01-01T10:00:00Z', to: '2024-01-01T10:05:00Z' },
+        actors: ['user@example.com'],
+        unifiedDiff: largeDiff,
+        stats: { additions: 1000, deletions: 500, unchanged: 0, totalChanges: 1 },
+        isAiGenerated: false,
+      }];
+
+      // perPage limit is 2000 chars, total is generous
+      const result = truncateDiffsToTokenBudget(diffs, 50000, 2000);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].unifiedDiff.length).toBeLessThanOrEqual(2000);
+      expect(result[0].unifiedDiff).toContain('truncated');
+    });
+
+    it('skips remaining diffs when budget has less than 500 chars left', () => {
+      // First diff takes almost all the budget
+      const diffs = [
+        createMockDiff('page1', 4600, 500, 400), // Takes 4600 chars
+        createMockDiff('page2', 1000, 100, 50),   // Would need 1000
+      ];
+
+      const result = truncateDiffsToTokenBudget(diffs, 5000, 10000);
+
+      // After first diff (4600), remaining = 400 which is < 500 minimum
+      // So second diff is dropped entirely
+      expect(result).toHaveLength(1);
+      expect(result[0].pageId).toBe('page1');
+    });
   });
 });

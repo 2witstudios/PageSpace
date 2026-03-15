@@ -482,6 +482,21 @@ describe('diff-utils', () => {
         expect(sections).toHaveLength(1);
         expect(sections[0].type).toBe('paragraph');
       });
+
+      it('returns empty sections when tiptap doc has no content array', () => {
+        // This tests the extractTiptapSections branch where doc.content is not an array
+        const tiptapDoc = JSON.stringify({ type: 'doc' }); // No content property
+        const sections = extractSections(tiptapDoc);
+
+        expect(sections).toHaveLength(0);
+      });
+
+      it('returns empty sections when tiptap doc content is not an array', () => {
+        const tiptapDoc = JSON.stringify({ type: 'doc', content: 'not-an-array' });
+        const sections = extractSections(tiptapDoc);
+
+        expect(sections).toHaveLength(0);
+      });
     });
 
     describe('HTML content', () => {

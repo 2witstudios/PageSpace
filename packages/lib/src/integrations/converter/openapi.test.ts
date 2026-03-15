@@ -210,6 +210,54 @@ paths:
     });
   });
 
+  describe('body wrapping on collision', () => {
+    it('should wrap body as single param when body props collide with path params', async () => {
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: 'Collision API', version: '1.0.0' },
+        servers: [{ url: 'https://api.test.com' }],
+        paths: {
+          '/items/{name}': {
+            post: {
+              operationId: 'createItemWithCollision',
+              summary: 'Create item',
+              parameters: [
+                { name: 'name', in: 'path' as const, required: true, schema: { type: 'string' } },
+              ],
+              requestBody: {
+                required: true,
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                        value: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+              responses: { '201': { description: 'Created' } },
+            },
+          },
+        },
+      };
+
+      const result = await importOpenAPISpec(spec);
+      const tool = result.provider.tools.find((t) => t.id === 'createItemWithCollision');
+
+      // Body should be wrapped as 'body' parameter due to collision on 'name'
+      expect(tool?.inputSchema.properties).toHaveProperty('body');
+      expect(tool?.inputSchema.properties).toHaveProperty('name');
+
+      // Execution config should use body param template
+      const execConfig = tool?.execution.config;
+      expect(execConfig?.bodyTemplate).toEqual({ $param: 'body' });
+      expect(execConfig?.bodyEncoding).toBe('json');
+    });
+  });
+
   describe('auth detection', () => {
     it('should detect API key auth', async () => {
       const spec = {
