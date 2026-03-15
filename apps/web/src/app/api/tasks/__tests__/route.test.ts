@@ -426,21 +426,21 @@ describe('GET /api/tasks', () => {
       await GET(request);
 
       // Verify the query was called (exact filter verification would require deeper mocking)
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      /** @scaffold */ expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
 
     it('should filter by priority', async () => {
       const request = new Request('https://example.com/api/tasks?context=user&priority=high');
       await GET(request);
 
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      /** @scaffold */ expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
 
     it('should combine multiple filters', async () => {
       const request = new Request('https://example.com/api/tasks?context=user&status=pending&priority=high');
       await GET(request);
 
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      /** @scaffold */ expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -464,7 +464,7 @@ describe('GET /api/tasks', () => {
       await GET(request);
 
       // The query should be called with trashed page exclusion filter
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      /** @scaffold */ expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
   });
 

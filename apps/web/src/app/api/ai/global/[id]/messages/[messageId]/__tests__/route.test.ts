@@ -273,7 +273,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to edit message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error editing Global Assistant message', expect.any(Error));
     });
   });
 
@@ -469,7 +469,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting Global Assistant message', expect.any(Error));
     });
   });
 

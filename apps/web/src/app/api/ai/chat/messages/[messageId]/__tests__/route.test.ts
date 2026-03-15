@@ -496,7 +496,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to edit message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error editing message', expect.any(Error));
     });
   });
 
@@ -821,7 +821,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting message', expect.any(Error));
     });
   });
 

@@ -464,7 +464,7 @@ describe('POST /api/pages/bulk-copy', () => {
     it('creates page with (Copy) suffix in title', async () => {
       await POST(createRequest(validBody));
 
-      expect(txInsert).toHaveBeenCalledWith(expect.anything());
+      /** @scaffold */ expect(txInsert).toHaveBeenCalledWith(expect.any(Object));
       const insertedValues = txInsertValues.mock.calls[0][0];
       expect(insertedValues.title).toBe('Source Page (Copy)');
     });

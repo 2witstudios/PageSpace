@@ -148,7 +148,7 @@ describe('POST /api/pages/[pageId]/view', () => {
     it('inserts the page view record via upsert', async () => {
       await POST(createRequest(), mockParams);
 
-      expect(db.insert).toHaveBeenCalledWith(expect.anything());
+      /** @scaffold */ expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
     });
   });
 

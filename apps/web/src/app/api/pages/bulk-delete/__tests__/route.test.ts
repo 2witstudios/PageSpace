@@ -486,7 +486,12 @@ describe('DELETE /api/pages/bulk-delete', () => {
         mockUserId,
         'trash',
         expect.objectContaining({ title: undefined }),
-        expect.anything(),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+          actorDisplayName: 'Test User',
+          changeGroupId: 'change-group-123',
+          changeGroupType: 'user',
+        }),
       );
     });
   });

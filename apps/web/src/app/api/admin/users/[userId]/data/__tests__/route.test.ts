@@ -112,8 +112,13 @@ describe('/api/admin/users/[userId]/data', () => {
 
     expect(response.status).toBe(200);
     expect(body.message).toBe('User data deleted and anonymized');
-    expect(logUserActivity).toHaveBeenCalled();
-    expect(activityLogRepository.anonymizeForUser).toHaveBeenCalled();
+    expect(logUserActivity).toHaveBeenCalledWith(
+      'admin-123',
+      'account_delete',
+      expect.objectContaining({ targetUserId: 'user-1' }),
+      expect.any(Object)
+    );
+    expect(activityLogRepository.anonymizeForUser).toHaveBeenCalledWith('user-1', expect.any(String));
     expect(deleteAiUsageLogsForUser).toHaveBeenCalledWith('user-1');
     expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
   });

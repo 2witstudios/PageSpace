@@ -200,7 +200,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
       });
       await POST(request, createContext(mockDriveId));
 
-      expect(db.update).toHaveBeenCalledWith(expect.anything());
+      expect(db.update).toHaveBeenCalledWith(/** @scaffold */ expect.any(Object));
       expect(mockSetFn).toHaveBeenCalledWith(
         expect.objectContaining({
           isTrashed: false,

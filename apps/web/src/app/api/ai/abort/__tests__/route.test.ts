@@ -275,7 +275,7 @@ describe('POST /api/ai/abort', () => {
 
       expect(response.status).toBe(500);
       expect(data.error).toBe('Failed to abort stream');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error aborting AI stream', expect.objectContaining({ error: expect.any(Error) }));
     });
 
     it('returns 500 on JSON parse error', async () => {

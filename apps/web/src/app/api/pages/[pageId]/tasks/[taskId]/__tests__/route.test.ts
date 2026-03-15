@@ -689,7 +689,12 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
       pageId: 'linked-page-1',
       operation: 'update',
     }));
-    expect(createPageEventPayload).toHaveBeenCalled();
+    expect(createPageEventPayload).toHaveBeenCalledWith(
+      'drive-1',
+      'linked-page-1',
+      'updated',
+      expect.objectContaining({ title: 'New Title' })
+    );
     expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -1088,7 +1093,12 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       type: 'task_deleted',
       taskId: mockTaskId,
     }));
-    expect(createPageEventPayload).toHaveBeenCalled();
+    expect(createPageEventPayload).toHaveBeenCalledWith(
+      'drive-1',
+      'linked-page-1',
+      'trashed',
+      expect.objectContaining({ title: 'Existing Task', parentId: 'page-456' })
+    );
     expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
   });
 

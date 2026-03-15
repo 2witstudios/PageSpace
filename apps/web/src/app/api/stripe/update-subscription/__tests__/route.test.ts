@@ -405,7 +405,13 @@ describe('POST /api/stripe/update-subscription', () => {
       await POST(request);
 
       // Should use update (upgrade path), not schedules
-      expect(mockStripeSubscriptionsUpdate).toHaveBeenCalled();
+      expect(mockStripeSubscriptionsUpdate).toHaveBeenCalledWith(
+        'sub_123',
+        expect.objectContaining({
+          items: [{ id: 'si_123', price: mockPriceId }],
+          proration_behavior: 'always_invoice',
+        })
+      );
       expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
     });
 

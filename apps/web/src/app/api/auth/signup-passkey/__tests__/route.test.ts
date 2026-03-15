@@ -173,7 +173,7 @@ describe('POST /api/auth/signup-passkey', () => {
     it('inserts default AI settings', async () => {
       await POST(createRequest());
 
-      expect(db.insert).toHaveBeenCalledWith(expect.anything());
+      expect(db.insert).toHaveBeenCalledWith(/** @scaffold */ expect.any(Object));
       const insertValues = vi.mocked(db.insert).mock.results[0]?.value;
       expect(insertValues.values).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -275,7 +275,10 @@ describe('POST /api/stripe/reactivate-subscription', () => {
     await POST(request);
 
     expect(mockStripeSubscriptionsRetrieve).toHaveBeenCalledWith('sub_123');
-    // Verify retrieve was called (update is called after)
-    expect(mockStripeSubscriptionsUpdate).toHaveBeenCalled();
+    // Verify update was called after retrieve
+    expect(mockStripeSubscriptionsUpdate).toHaveBeenCalledWith(
+      'sub_123',
+      { cancel_at_period_end: false }
+    );
   });
 });

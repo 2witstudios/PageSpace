@@ -152,7 +152,7 @@ describe('GET /api/ai/global/active', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch global conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching global conversation:', expect.any(Error));
     });
   });
 });

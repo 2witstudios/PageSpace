@@ -633,7 +633,12 @@ describe('POST /api/pages/bulk-move', () => {
         mockUserId,
         'move',
         expect.objectContaining({ title: undefined }),
-        expect.anything(),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+          actorDisplayName: 'Test User',
+          changeGroupId: 'change-group-123',
+          changeGroupType: 'user',
+        }),
       );
     });
 

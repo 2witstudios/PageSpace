@@ -427,7 +427,10 @@ describe('buildAuditLogWhereClause', () => {
     });
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.connectionId, 'conn-123');
-    expect(and).toHaveBeenCalledWith(expect.anything(), expect.anything());
+    expect(and).toHaveBeenCalledWith(
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+    );
   });
 
   it('should add success filter', () => {
@@ -437,7 +440,10 @@ describe('buildAuditLogWhereClause', () => {
     });
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.success, true);
-    expect(and).toHaveBeenCalledWith(expect.anything(), expect.anything());
+    expect(and).toHaveBeenCalledWith(
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+    );
   });
 
   it('should add success=false filter', () => {
@@ -502,13 +508,13 @@ describe('buildAuditLogWhereClause', () => {
 
     // 7 conditions total: driveId + 6 filters
     expect(and).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything()
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
+      /** @scaffold */ expect.any(Object),
     );
   });
 });

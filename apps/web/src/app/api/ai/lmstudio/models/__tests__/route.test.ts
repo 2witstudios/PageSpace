@@ -312,7 +312,7 @@ describe('GET /api/ai/lmstudio/models', () => {
       expect(body.success).toBe(false);
       expect(body.error).toBe('Failed to discover LM Studio models');
       expect(body.models).toEqual({});
-      expect(loggers.ai.error).toHaveBeenCalled();
+      expect(loggers.ai.error).toHaveBeenCalledWith('LM Studio models discovery error', expect.any(Error));
     });
   });
 

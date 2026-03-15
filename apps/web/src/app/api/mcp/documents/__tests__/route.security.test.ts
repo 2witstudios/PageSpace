@@ -229,7 +229,7 @@ describe('MCP Documents API - Security Tests', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(mockApplyPageMutation).toHaveBeenCalled();
+      expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
     });
   });
 

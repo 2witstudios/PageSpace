@@ -113,7 +113,7 @@ describe('GET /api/users/find', () => {
       await GET(request);
 
       expect(mockFindFirst).toHaveBeenCalledWith({
-        where: expect.anything(),
+        where: { col: 'email-column', val: 'test@example.com' },
         columns: { id: true, name: true, email: true, image: true },
       });
     });

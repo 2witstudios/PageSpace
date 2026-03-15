@@ -154,7 +154,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
       expect(loggers.auth.info).not.toHaveBeenCalledWith(
         'Revoked existing sessions on passkey login',
-        expect.anything(),
+        expect.objectContaining({ userId: 'user-1' }),
       );
     });
 

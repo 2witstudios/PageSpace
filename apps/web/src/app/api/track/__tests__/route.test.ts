@@ -129,7 +129,11 @@ describe('/api/track', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(trackActivity).toHaveBeenCalled();
+      expect(trackActivity).toHaveBeenCalledWith(
+        undefined,
+        'search',
+        expect.any(Object)
+      );
     });
   });
 

@@ -142,7 +142,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: The % should be escaped to \%
-      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalledTimes(4);
       // Pattern should have the % escaped, wrapped in search wildcards
       expect(mockIlike.mock.calls[0][1]).toBe('%100\\%%');
     });
@@ -159,7 +159,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: The _ should be escaped to \_
-      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalledTimes(4);
       expect(mockIlike.mock.calls[0][1]).toBe('%user\\_name%');
     });
 
@@ -175,7 +175,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: Backslashes should be escaped
-      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalledTimes(4);
       expect(mockIlike.mock.calls[0][1]).toBe('%path\\\\to\\\\file%');
     });
 
@@ -191,7 +191,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: All special characters should be escaped
-      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalledTimes(4);
       // Order of escaping: \ first, then %, then _
       expect(mockIlike.mock.calls[0][1]).toBe('%50\\%\\_off\\\\deal%');
     });
@@ -208,7 +208,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: Pattern should just have the search term wrapped in wildcards
-      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalledTimes(4);
       expect(mockIlike.mock.calls[0][1]).toBe('%admin user%');
     });
 
@@ -223,7 +223,6 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: ilike function should be called (not raw SQL template)
-      expect(mockIlike).toHaveBeenCalled();
       // Should search across all 4 fields
       expect(mockIlike).toHaveBeenCalledTimes(4);
     });

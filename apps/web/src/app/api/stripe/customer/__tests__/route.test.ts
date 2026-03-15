@@ -293,7 +293,11 @@ describe('Customer API', () => {
 
       expect(response.status).toBe(200);
       expect(body.created).toBe(true);
-      expect(mockStripeCustomersCreate).toHaveBeenCalled();
+      expect(mockStripeCustomersCreate).toHaveBeenCalledWith({
+        email: 'test@example.com',
+        name: 'Test User',
+        metadata: { userId: 'user_123' },
+      });
     });
 
     it('should save new customer ID to database', async () => {

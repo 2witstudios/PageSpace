@@ -248,7 +248,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // getUserDriveAccess should be called
-      expect(getUserDriveAccess).toHaveBeenCalled();
+      expect(getUserDriveAccess).toHaveBeenCalledWith('user_123', 'drive_unauthorized');
 
       // But page queries should NOT be made since access was denied
       // The db.select call for pages should not happen after access denial
