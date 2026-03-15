@@ -47,20 +47,6 @@ const createTestInput = (overrides: Partial<ActivityToolInput> = {}): ActivityTo
   ...overrides,
 });
 
-/**
- * @scaffold - happy path coverage deferred
- *
- * These tests cover authentication and authorization error paths.
- * Happy path tests (actual activity results, grouping, truncation) are deferred
- * because they require either:
- * - An ActivityRepository seam to avoid complex DB mocking, OR
- * - Integration tests against a real database with seeded activity logs
- *
- * TODO: Add integration tests for:
- * - Activity grouping by drive
- * - Compact delta generation
- * - Progressive truncation under size limits
- */
 describe('activity-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();

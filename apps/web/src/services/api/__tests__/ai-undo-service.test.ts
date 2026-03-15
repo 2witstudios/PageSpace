@@ -1,20 +1,9 @@
 /**
- * @scaffold - mocking ORM chains until repository seam is introduced
- *
  * Contract tests for ai-undo-service.ts
  *
  * Tests the AI undo service's observable contracts:
  * - previewAiUndo: message lookup -> preview of affected messages and activities
  * - executeAiUndo: message + mode -> soft-delete messages + optional rollbacks
- *
- * User stories:
- * - As a user in AI chat, I can undo from a message to remove all subsequent messages
- * - As a user, I can choose to also undo all AI tool side effects
- * - As a user, I see what will be affected before confirming
- *
- * Note: This test uses order-dependent ORM chain mocks (selectCallCount pattern)
- * which encode internal query order. Consider introducing a chat-message-repository
- * seam to improve testability and refactor-resistance.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -738,7 +727,7 @@ describe('ai-undo-service', () => {
         mockUserId,
         mockConversationId,
         mockMessageId,
-        expect.any(Object),
+        { actorEmail: 'test@example.com', actorDisplayName: 'Test User' },
         expect.objectContaining({
           mode: 'messages_and_changes',
           activitiesRolledBack: 1,

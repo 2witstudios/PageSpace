@@ -226,7 +226,7 @@ describe('csrf-validation', () => {
         expect(body).toMatchObject({
           error: 'Invalid or expired CSRF token',
           code: 'CSRF_TOKEN_INVALID',
-          details: expect.any(String),
+          details: 'Your CSRF token is invalid or has expired. Refresh and try again.',
         });
       });
     });

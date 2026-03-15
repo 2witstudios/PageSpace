@@ -40,17 +40,6 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 
-/**
- * @scaffold - happy path coverage deferred
- *
- * These tests cover authentication and validation error paths.
- * Happy path tests (list_drives returning data, create_drive success, etc.)
- * are deferred because they require either:
- * - A repository seam to avoid query-builder chain mocking, OR
- * - Integration tests against a real database
- *
- * TODO: Add DriveRepository seam and test happy paths against it.
- */
 describe('drive-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();

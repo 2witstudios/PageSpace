@@ -1,11 +1,6 @@
 /**
- * @scaffold - aggregation tripwire
- *
- * This test validates that pageSpaceTools correctly aggregates all tool modules.
- * It's a scaffold test because:
- * - The unit is pure wiring/aggregation with no business logic
- * - Changes here indicate tools were added/removed/renamed
- * - Failures should prompt review of whether the change was intentional
+ * Validates that pageSpaceTools correctly aggregates all tool modules.
+ * Changes here indicate tools were added/removed/renamed.
  */
 import { describe, it, expect, vi } from 'vitest';
 

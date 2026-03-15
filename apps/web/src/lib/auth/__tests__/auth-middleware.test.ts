@@ -255,9 +255,7 @@ describe('Auth Middleware', () => {
       // Assert
       expect(result).toBeNull();
       expect(capturedSetValues).toBeDefined();
-      expect(capturedSetValues).toMatchObject({
-        revokedAt: expect.any(Date),
-      });
+      expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'unauthorized',
         expect.objectContaining({

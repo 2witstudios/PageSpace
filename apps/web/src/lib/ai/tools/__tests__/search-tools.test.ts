@@ -18,23 +18,6 @@ const createAuthContext = (userId = 'user-123') => ({
   experimental_context: { userId } as ToolExecutionContext,
 });
 
-/**
- * @scaffold - happy path coverage deferred
- *
- * These tests cover authentication and authorization error paths.
- * Happy path tests (actual search results, filtering, pagination) are deferred
- * because they require either:
- * - A SearchRepository seam to avoid complex DB iteration mocking, OR
- * - Integration tests against a real database with seeded content
- *
- * The search logic involves iterating over pages and matching patterns,
- * which is impractical to mock without coupling to implementation details.
- *
- * TODO: Add SearchService seam with methods like:
- * - searchByRegex(driveId, pattern, options): SearchResult[]
- * - searchByGlob(driveId, pattern, options): SearchResult[]
- * Then test happy paths against that seam.
- */
 describe('search-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();

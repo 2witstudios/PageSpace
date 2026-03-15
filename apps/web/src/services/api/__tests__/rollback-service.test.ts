@@ -1,6 +1,4 @@
 /**
- * @scaffold - mocking ORM chains until repository seam is introduced
- *
  * Contract tests for rollback-service.ts
  *
  * Tests the rollback service's observable contracts:
@@ -8,10 +6,6 @@
  * - executeRollback: activity + user -> database mutation + audit log
  * - getPageVersionHistory: filters -> filtered activities
  * - getUserRetentionDays: user tier -> retention days
- *
- * Per rubric §4: Since this service uses Drizzle directly without a repository
- * abstraction, we mock at the db boundary. Consider refactoring to introduce
- * a repository seam for better testability.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {

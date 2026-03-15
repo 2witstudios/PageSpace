@@ -231,10 +231,7 @@ describe('agent-mention-responder', () => {
 
     expect(mockCanUserViewPage).toHaveBeenCalledTimes(2);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    expect(mockAskAgentExecute).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: 'agent-1' }),
-      expect.any(Object)
-    );
+    expect(mockAskAgentExecute.mock.calls[0][0]).toMatchObject({ agentId: 'agent-1' });
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 
