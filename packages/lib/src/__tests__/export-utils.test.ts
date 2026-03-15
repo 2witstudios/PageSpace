@@ -202,9 +202,9 @@ describe('export-utils', () => {
       const result = generateExcel(data);
 
       expect(result).toBeInstanceOf(Buffer);
-      expect(XLSX.utils.book_new).toHaveBeenCalled();
+      expect(XLSX.utils.book_new).toHaveBeenCalledTimes(1);
       expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith(data);
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalled();
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
       expect(XLSX.write).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({ type: 'buffer', bookType: 'xlsx', compression: true })

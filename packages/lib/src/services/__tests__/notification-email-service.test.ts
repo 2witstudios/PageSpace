@@ -274,6 +274,6 @@ describe('notification-email-service', () => {
       metadata: { driveName: 'Test' },
     });
 
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 });

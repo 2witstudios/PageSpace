@@ -63,7 +63,7 @@ describe('cleanupExpiredSessions', () => {
     const result = await cleanupExpiredSessions(db as never);
     expect(result.table).toBe('sessions');
     expect(result.deleted).toBe(2);
-    expect(db.delete).toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 
   it('should return 0 when no expired sessions', async () => {

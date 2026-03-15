@@ -94,7 +94,7 @@ describe('cleanupApiMetrics', () => {
     const result = await cleanupApiMetrics({ retentionDays: 90 });
     expect(result.table).toBe('api_metrics');
     expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 
   it('returns count of deleted rows', async () => {
@@ -109,7 +109,7 @@ describe('cleanupSystemLogs', () => {
     const result = await cleanupSystemLogs({ retentionDays: 30 });
     expect(result.table).toBe('system_logs');
     expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 
   it('returns count of deleted rows', async () => {
@@ -124,7 +124,7 @@ describe('cleanupSecurityAuditLog', () => {
     const result = await cleanupSecurityAuditLog({ retentionDays: 365 });
     expect(result.table).toBe('security_audit_log');
     expect(result.deleted).toBe(0);
-    expect(db.delete).toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 
   it('returns count of deleted rows', async () => {

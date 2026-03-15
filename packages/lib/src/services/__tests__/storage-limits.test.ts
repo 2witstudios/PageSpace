@@ -209,7 +209,7 @@ describe('storage-limits', () => {
       });
 
       await updateStorageUsage('user-1', 1024, { eventType: 'upload', pageId: 'page-1' });
-      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledTimes(1);
     });
 
     it('should use existing transaction when provided', async () => {
@@ -226,7 +226,7 @@ describe('storage-limits', () => {
 
       await updateStorageUsage('user-1', 1024, { eventType: 'upload' }, mockTx as never);
       expect(db.transaction).not.toHaveBeenCalled();
-      expect(mockTx.update).toHaveBeenCalled();
+      expect(mockTx.update).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -237,7 +237,7 @@ describe('storage-limits', () => {
       vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       await updateActiveUploads('user-1', 1);
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledTimes(1);
     });
   });
 

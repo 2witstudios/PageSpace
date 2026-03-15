@@ -202,7 +202,7 @@ describe('createDrive', () => {
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
-    expect(valuesMock).toHaveBeenCalled();
+    expect(valuesMock).toHaveBeenCalledTimes(1);
     expect(result.isOwned).toBe(true);
     expect(result.role).toBe('OWNER');
   });

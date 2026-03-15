@@ -227,7 +227,7 @@ describe('oauth-utils', () => {
       });
 
       expect(result).toBeDefined();
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledTimes(1);
     });
 
     it('should create new user when not found', async () => {

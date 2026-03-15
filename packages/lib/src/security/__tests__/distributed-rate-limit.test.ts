@@ -320,7 +320,7 @@ describe('distributed-rate-limit', () => {
 
       expect(result.mode).toBe('redis');
       expect(result.error).toBeUndefined();
-      expect(mockRedis.ping).toHaveBeenCalled();
+      expect(mockRedis.ping).toHaveBeenCalledTimes(1);
     });
 
     it('returns memory mode in development when Redis unavailable', async () => {

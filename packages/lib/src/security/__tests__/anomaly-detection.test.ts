@@ -234,7 +234,7 @@ describe('Anomaly Detection', () => {
       const result = await detector.analyzeRequest(ctx);
 
       if (result.riskScore > 0.5) {
-        expect(securityAudit.logAnomalyDetected).toHaveBeenCalled();
+        expect(securityAudit.logAnomalyDetected).toHaveBeenCalledTimes(1);
       }
     });
 
@@ -253,7 +253,7 @@ describe('Anomaly Detection', () => {
       await detector.analyzeRequest(ctx);
 
       // Should have called set to update location
-      expect(mockRedisSet).toHaveBeenCalled();
+      expect(mockRedisSet).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -420,7 +420,7 @@ describe('deleteGrant', () => {
     const result = await deleteGrant(mockDb, 'grant-123');
 
     expect(result).toEqual(deletedGrant);
-    expect(mockDb.delete).toHaveBeenCalled();
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent grant, should return null', async () => {

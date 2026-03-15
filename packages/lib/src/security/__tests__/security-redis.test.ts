@@ -357,7 +357,7 @@ describe('security-redis', () => {
         await checkRateLimit('sliding-test', 10, 60000);
 
         // Verify pipeline was used
-        expect(mockRedis.pipeline).toHaveBeenCalled();
+        expect(mockRedis.pipeline).toHaveBeenCalledTimes(1);
       });
 
       it('returns resetAt timestamp', async () => {

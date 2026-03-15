@@ -169,7 +169,7 @@ describe('Security Audit Service', () => {
 
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
+      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalledTimes(1);
     });
 
     it('initializes with last event hash when events exist', async () => {
@@ -182,7 +182,7 @@ describe('Security Audit Service', () => {
 
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
+      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalledTimes(1);
     });
 
     it('only initializes once (idempotent)', async () => {
@@ -211,7 +211,7 @@ describe('Security Audit Service', () => {
       });
 
       // Transaction was called for atomic insert with row locking
-      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledTimes(1);
       expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
@@ -394,7 +394,7 @@ describe('Security Audit Service', () => {
         toTimestamp: new Date('2026-01-31'),
       });
 
-      expect(db.select).toHaveBeenCalled();
+      expect(db.select).toHaveBeenCalledTimes(1);
       expect(result).toEqual(mockEvents);
     });
 

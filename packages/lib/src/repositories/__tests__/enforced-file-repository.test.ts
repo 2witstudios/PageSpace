@@ -431,7 +431,7 @@ describe('EnforcedFileRepository', () => {
 
         await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
 
-        expect(db.update).toHaveBeenCalled();
+        expect(db.update).toHaveBeenCalledTimes(1);
       });
     });
 

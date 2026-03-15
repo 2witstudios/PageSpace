@@ -14,6 +14,10 @@ import { createChangeGroupId, inferChangeGroupType } from '../change-group';
 
 describe('change-group', () => {
   describe('createChangeGroupId', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it('should return a string', () => {
       const id = createChangeGroupId();
       expect(typeof id).toBe('string');
@@ -27,7 +31,7 @@ describe('change-group', () => {
     it('should call createId from @paralleldrive/cuid2', async () => {
       const { createId } = await import('@paralleldrive/cuid2');
       createChangeGroupId();
-      expect(createId).toHaveBeenCalled();
+      expect(createId).toHaveBeenCalledTimes(1);
     });
   });
 

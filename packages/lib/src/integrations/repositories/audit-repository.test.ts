@@ -117,7 +117,7 @@ describe('logAuditEntry', () => {
     expect(result.id).toBe('audit-123');
     expect(result.success).toBe(true);
     expect(result.durationMs).toBe(150);
-    expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 
   it('given failed audit entry, should include error details', async () => {
@@ -294,7 +294,7 @@ describe('getAuditLogsBySuccess', () => {
     const result = await getAuditLogsBySuccess(mockDb as never, 'drive-1', true);
 
     expect(result).toHaveLength(1);
-    expect(mockFindMany).toHaveBeenCalled();
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
   });
 
   it('given success filter false, should query only failures', async () => {
@@ -428,8 +428,8 @@ describe('countAuditLogsByErrorType', () => {
 
     await countAuditLogsByErrorType(mockDb as never, 'drive-1', startDate, endDate);
 
-    expect(mockDb.select).toHaveBeenCalled();
-    expect(mockSelectGroupBy).toHaveBeenCalled();
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(mockSelectGroupBy).toHaveBeenCalledTimes(1);
   });
 
   it('given only startDate, should include only startDate filter', async () => {
@@ -439,7 +439,7 @@ describe('countAuditLogsByErrorType', () => {
 
     await countAuditLogsByErrorType(mockDb as never, 'drive-1', startDate);
 
-    expect(mockSelectGroupBy).toHaveBeenCalled();
+    expect(mockSelectGroupBy).toHaveBeenCalledTimes(1);
   });
 
   it('given string count, should convert to number', async () => {

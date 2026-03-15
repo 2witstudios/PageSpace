@@ -132,7 +132,7 @@ describe('Session Abuse Vectors', () => {
 
       expect(result).toBeNull();
       // Verify the session was revoked (update with revokedAt was called)
-      expect(mockUpdateSetWhere).toHaveBeenCalled();
+      expect(mockUpdateSetWhere).toHaveBeenCalledTimes(1);
     });
 
     it('given a suspended admin user, should reject session regardless of admin role', async () => {
@@ -194,7 +194,7 @@ describe('Session Abuse Vectors', () => {
 
       expect(result).toBeNull();
       // Verify the session was revoked (update with revokedAt was called)
-      expect(mockUpdateSetWhere).toHaveBeenCalled();
+      expect(mockUpdateSetWhere).toHaveBeenCalledTimes(1);
     });
 
     it('given session with matching tokenVersion, should succeed', async () => {

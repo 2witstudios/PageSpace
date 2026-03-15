@@ -57,7 +57,7 @@ describe('token-lookup', () => {
 
       const result = await findMCPTokenByValue('mcp_some-valid-token');
       expect(result).toEqual(mockRecord);
-      expect(db.query.mcpTokens.findFirst).toHaveBeenCalled();
+      expect(db.query.mcpTokens.findFirst).toHaveBeenCalledTimes(1);
     });
 
     it('should return null when no matching token found', async () => {

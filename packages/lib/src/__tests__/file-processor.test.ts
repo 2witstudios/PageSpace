@@ -97,7 +97,10 @@ describe('file-processor', () => {
       const result = await processor.processFile(page.id)
 
       // Should attempt HTTP first
-      expect(global.fetch).toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cache/abc123hash/original'),
+        expect.any(Object)
+      )
     }, 25000)
 
     it('falls back to filesystem on HTTP error', async () => {
@@ -113,7 +116,10 @@ describe('file-processor', () => {
       await processor.processFile(page.id)
 
       // Should have attempted HTTP fetch
-      expect(global.fetch).toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cache/nonexistent/original'),
+        expect.any(Object)
+      )
     })
 
     it('skips processing if content hash matches and status is completed', async () => {
@@ -457,7 +463,10 @@ describe('file-processor', () => {
       await processor.processFile(page.id)
 
       // Should attempt fallback to filesystem
-      expect(global.fetch).toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cache/notfound123/original'),
+        expect.any(Object)
+      )
     })
 
     it('handles HTTP 500 response', async () => {
@@ -477,7 +486,10 @@ describe('file-processor', () => {
       await processor.processFile(page.id)
 
       // Should attempt fallback to filesystem
-      expect(global.fetch).toHaveBeenCalled()
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cache/error123/original'),
+        expect.any(Object)
+      )
     })
   })
 

@@ -150,7 +150,7 @@ describe('getProviderById', () => {
     const result = await getProviderById(mockDb, 'prov-1');
 
     expect(result).toEqual(provider);
-    expect(mockDb.query.integrationProviders.findFirst).toHaveBeenCalled();
+    expect(mockDb.query.integrationProviders.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent provider ID, should return null', async () => {
@@ -293,7 +293,7 @@ describe('createProvider', () => {
     });
 
     expect(result).toEqual(newProvider);
-    expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -325,7 +325,7 @@ describe('updateProvider', () => {
     const result = await updateProvider(mockDb, 'prov-1', { name: 'GitHub (Updated)' });
 
     expect(result?.name).toBe('GitHub (Updated)');
-    expect(mockDb.update).toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent provider ID, should return null', async () => {
@@ -371,7 +371,7 @@ describe('deleteProvider', () => {
     const result = await deleteProvider(mockDb, 'prov-1');
 
     expect(result).toEqual(deleted);
-    expect(mockDb.delete).toHaveBeenCalled();
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
   });
 
   it('given provider with active connections, should return null and not delete', async () => {

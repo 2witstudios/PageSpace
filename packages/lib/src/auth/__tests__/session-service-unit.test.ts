@@ -85,7 +85,7 @@ describe('SessionService', () => {
       });
 
       expect(token).toBe('ps_sess_testtoken123456789012345678901234567890a');
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledTimes(1);
     });
 
     it('should throw when user not found', async () => {
@@ -190,7 +190,7 @@ describe('SessionService', () => {
 
       const result = await service.validateSession('ps_sess_valid');
       expect(result).toBeNull();
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledTimes(1);
     });
 
     it('should revoke session when token version mismatches', async () => {
@@ -260,7 +260,7 @@ describe('SessionService', () => {
       vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       await service.revokeSession('ps_sess_token', 'user_logout');
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledTimes(1);
       expect(mockSet).toHaveBeenCalledWith(
         expect.objectContaining({ revokedReason: 'user_logout' })
       );
