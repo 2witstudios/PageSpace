@@ -1306,16 +1306,16 @@ describe('evaluation.ts additional coverage', () => {
     expect(serialized).toContain('A1');
   });
 
-  it('formatDisplayValue truncates repeating decimal to bounded length', () => {
+  it('given_repeatingDecimal_formatDisplayValueTruncatesToPrecision12', () => {
     const sheet = createEmptySheet(5, 5);
     sheet.cells.A1 = '=1/3';
 
     const result = evaluateSheet(sheet);
     const display = getDisplay(result, 'A1');
-    // 1/3 = 0.333... → toPrecision(12) produces "0.333333333333" (16 chars with "0.")
-    expect(display).toBeDefined();
-    expect(display).not.toBe((1 / 3).toString());
-    expect(Number(display!)).not.toBeNaN();
+    // Contract: numbers whose toString > 12 chars get toPrecision(12) with trailing zeros stripped
+    const num = 1 / 3;
+    const expected = num.toPrecision(12).replace(/0+$/g, '').replace(/\.$/, '');
+    expect(display).toBe(expected);
   });
 });
 

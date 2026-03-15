@@ -204,39 +204,30 @@ describe('export-utils', () => {
       expect(result).toBeInstanceOf(Buffer);
       expect(XLSX.utils.book_new).toHaveBeenCalledTimes(1);
       expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith(data);
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        'Sheet1'
-      );
-      expect(XLSX.write).toHaveBeenCalledWith(
-        expect.any(Object),
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('Sheet1');
+      expect(XLSX.write).toHaveBeenCalledTimes(1);
+      expect((XLSX.write as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(
         expect.objectContaining({ type: 'buffer', bookType: 'xlsx', compression: true })
       );
     });
 
-    it('uses custom sheet name', () => {
+    it('given_customSheetName_passesNameToAppendSheet', () => {
       const data = [['A']];
 
       generateExcel(data, 'MySheet');
 
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        'MySheet'
-      );
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('MySheet');
     });
 
-    it('uses default sheet name when not provided', () => {
+    it('given_noSheetName_usesDefaultSheet1', () => {
       const data = [['A']];
 
       generateExcel(data);
 
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        'Sheet1'
-      );
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('Sheet1');
     });
 
     it('sets workbook properties when title is provided', () => {
