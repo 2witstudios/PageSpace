@@ -219,9 +219,9 @@ describe('Anomaly Detection', () => {
     });
 
     it('logs high-risk events to security audit', async () => {
-      // Mock: bad IP (high risk)
+      // Mock: bad IP (0.5) + new user agent (0.2) → riskScore 0.7 > 0.5 threshold
       mockRedisGet.mockResolvedValue(null);
-      mockRedisSMembers.mockResolvedValue(['Mozilla/5.0']);
+      mockRedisSMembers.mockResolvedValue(['Chrome/100']);
       mockRedisSIsMember.mockResolvedValue(1);
 
       const ctx: AnomalyContext = {
@@ -233,9 +233,8 @@ describe('Anomaly Detection', () => {
 
       const result = await detector.analyzeRequest(ctx);
 
-      if (result.riskScore > 0.5) {
-        expect(securityAudit.logAnomalyDetected).toHaveBeenCalledTimes(1);
-      }
+      expect(result.riskScore).toBeGreaterThan(0.5);
+      expect(securityAudit.logAnomalyDetected).toHaveBeenCalledTimes(1);
     });
 
     it('updates last location after analysis', async () => {
