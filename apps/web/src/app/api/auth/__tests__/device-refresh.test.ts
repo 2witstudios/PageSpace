@@ -177,13 +177,10 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert - creates session token (no refresh token - devices use device tokens)
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      const sessionArg = vi.mocked(sessionService.createSession).mock.calls[0][0];
+      expect(sessionArg.userId).toBe(mockUser.id);
+      expect(sessionArg.type).toBe('user');
+      expect(sessionArg.scopes).toEqual(['*']);
     });
 
     it('updates device token activity', async () => {
@@ -229,14 +226,12 @@ describe('/api/auth/device/refresh', () => {
         '192.168.1.1',
         'Device token refresh'
       );
-      expect(trackAuthEvent).toHaveBeenCalledWith(
-        mockUser.id,
-        'refresh',
-        expect.objectContaining({
-          platform: 'desktop',
-          appVersion: '1.0.0',
-        })
-      );
+      const trackArgs = vi.mocked(trackAuthEvent).mock.calls[0];
+      expect(trackArgs[0]).toBe(mockUser.id);
+      expect(trackArgs[1]).toBe('refresh');
+      const trackData = trackArgs[2] as Record<string, unknown>;
+      expect(trackData.platform).toBe('desktop');
+      expect(trackData.appVersion).toBe('1.0.0');
     });
   });
 
@@ -269,7 +264,10 @@ describe('/api/auth/device/refresh', () => {
       const { generateDeviceToken } = await import('@pagespace/lib/server');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'valid-device-token',
-        expect.objectContaining({ ipAddress: '192.168.1.1' }),
+        {
+          userAgent: 'TestApp/1.0',
+          ipAddress: '192.168.1.1',
+        },
         hashToken,
         getTokenPrefix,
         generateDeviceToken,
@@ -384,13 +382,11 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Device token mismatch detected - possible stolen token',
-        expect.objectContaining({
-          tokenDeviceId: 'device-123',
-          providedDeviceId: 'stolen-device-999',
-        })
-      );
+      const warnArgs = vi.mocked(loggers.auth.warn).mock.calls[0];
+      expect(warnArgs[0]).toBe('Device token mismatch detected - possible stolen token');
+      const warnData = warnArgs[1] as Record<string, unknown>;
+      expect(warnData.tokenDeviceId).toBe('device-123');
+      expect(warnData.providedDeviceId).toBe('stolen-device-999');
     });
   });
 
@@ -409,7 +405,7 @@ describe('/api/auth/device/refresh', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -426,7 +422,7 @@ describe('/api/auth/device/refresh', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
   });
 

@@ -159,7 +159,7 @@ describe('/api/auth/mobile/refresh', () => {
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_refreshed-token');
       expect(body.csrfToken).toBe('mock-csrf-token');
-      expect(body.deviceToken).toBeDefined();
+      expect(body.deviceToken).toBe(validRefreshPayload.deviceToken);
     });
 
     it('updates device token activity', async () => {
@@ -230,7 +230,10 @@ describe('/api/auth/mobile/refresh', () => {
       const { generateDeviceToken } = await import('@pagespace/lib/server');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         validRefreshPayload.deviceToken,
-        expect.objectContaining({ ipAddress: '192.168.1.1' }),
+        {
+          userAgent: undefined,
+          ipAddress: '192.168.1.1',
+        },
         hashToken,
         getTokenPrefix,
         generateDeviceToken,
@@ -373,7 +376,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -390,7 +393,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -407,7 +410,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
 
     it('accepts empty deviceToken string with validation error', async () => {
@@ -425,7 +428,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Device token is required']);
     });
   });
 
@@ -497,13 +500,14 @@ describe('/api/auth/mobile/refresh', () => {
 
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-refresh',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        createdByService: 'mobile-refresh',
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('returns 500 when session validation fails', async () => {
@@ -556,10 +560,11 @@ describe('/api/auth/mobile/refresh', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Device token mismatch detected',
-        expect.objectContaining({
+        {
           tokenDeviceId: mockDeviceRecord.deviceId,
           providedDeviceId: 'mismatched-device',
-        })
+          userId: mockDeviceRecord.userId,
+        }
       );
     });
 

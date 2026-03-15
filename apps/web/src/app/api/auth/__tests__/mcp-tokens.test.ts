@@ -112,29 +112,29 @@ describe('/api/auth/mcp-tokens', () => {
         expect(response.status).toBe(200);
         expect(body.id).toBe('new-mcp-token-id');
         expect(body.name).toBe('My API Token');
-        expect(body.token).toMatch(/^mcp_/); // Token should have mcp_ prefix
-        expect(body.createdAt).toBeDefined();
+        expect(body.token).toBe('mcp_randomBase64UrlString');
+        expect(body.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
         // Assert - verify repository was called with correct params
-        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
-          expect.objectContaining({
-            name: 'My API Token',
-            userId: 'test-user-id',
-          })
-        );
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          name: 'My API Token',
+          userId: 'test-user-id',
+          tokenHash: 'mockTokenHash123',
+          tokenPrefix: 'mcp_randomBas',
+          isScoped: false,
+          driveIds: [],
+        });
 
         // Assert - verify activity logging for token creation (boundary contract)
         expect(logTokenActivity).toHaveBeenCalledWith(
           'test-user-id',
           'token_create',
-          expect.objectContaining({
+          {
             tokenId: 'new-mcp-token-id',
             tokenType: 'mcp',
             tokenName: 'My API Token',
-          }),
-          expect.objectContaining({
-            actorEmail: 'test@example.com',
-          })
+          },
+          { actorEmail: 'test@example.com' }
         );
       });
 
@@ -154,11 +154,15 @@ describe('/api/auth/mcp-tokens', () => {
         const body = await response.json();
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
-        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
-          expect.objectContaining({ name: 'My Token', userId: 'test-user-id' })
-        );
-        expect(body.token).toBeDefined();
-        expect(body.token).toMatch(/^mcp_/);
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          name: 'My Token',
+          userId: 'test-user-id',
+          tokenHash: 'mockTokenHash123',
+          tokenPrefix: 'mcp_randomBas',
+          isScoped: false,
+          driveIds: [],
+        });
+        expect(body.token).toBe('mcp_randomBase64UrlString');
       });
 
       it('associates token with authenticated user', async () => {
@@ -176,9 +180,14 @@ describe('/api/auth/mcp-tokens', () => {
         await POST(request);
 
         // Assert - verify token is associated with authenticated user
-        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
-          expect.objectContaining({ userId: 'test-user-id' })
-        );
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          name: 'My Token',
+          userId: 'test-user-id',
+          tokenHash: 'mockTokenHash123',
+          tokenPrefix: 'mcp_randomBas',
+          isScoped: false,
+          driveIds: [],
+        });
       });
     });
 
@@ -201,7 +210,9 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert
         expect(response.status).toBe(400);
-        expect(body.error).toBeDefined();
+        expect(body.error).toHaveLength(1);
+        expect(body.error[0].path).toEqual(['name']);
+        expect(body.error[0].message).toMatch(/string/i);
       });
 
       it('returns 400 for empty name', async () => {
@@ -222,7 +233,9 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert
         expect(response.status).toBe(400);
-        expect(body.error).toBeDefined();
+        expect(body.error).toHaveLength(1);
+        expect(body.error[0].path).toEqual(['name']);
+        expect(body.error[0].message).toBe('Too small: expected string to have >=1 characters');
       });
 
       it('returns 400 for name exceeding 100 characters', async () => {
@@ -244,7 +257,9 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert
         expect(response.status).toBe(400);
-        expect(body.error).toBeDefined();
+        expect(body.error).toHaveLength(1);
+        expect(body.error[0].path).toEqual(['name']);
+        expect(body.error[0].message).toBe('Too big: expected string to have <=100 characters');
       });
     });
 
@@ -290,9 +305,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          expect.objectContaining({
-            requireCSRF: true,
-          })
+          { allow: ['session'], requireCSRF: true }
         );
       });
     });
@@ -377,8 +390,8 @@ describe('/api/auth/mcp-tokens', () => {
         const body = await response.json();
 
         // Assert
-        expect(body[0].createdAt).toBeDefined();
-        expect(body[0].lastUsed).toBeDefined();
+        expect(body[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+        expect(body[0].lastUsed).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       });
     });
 
@@ -420,9 +433,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          expect.objectContaining({
-            requireCSRF: false,
-          })
+          { allow: ['session'], requireCSRF: false }
         );
       });
     });
@@ -456,14 +467,12 @@ describe('/api/auth/mcp-tokens', () => {
         expect(logTokenActivity).toHaveBeenCalledWith(
           'test-user-id',
           'token_revoke',
-          expect.objectContaining({
+          {
             tokenId: 'token-123',
             tokenType: 'mcp',
             tokenName: 'Test Token',
-          }),
-          expect.objectContaining({
-            actorEmail: 'test@example.com',
-          })
+          },
+          { actorEmail: 'test@example.com' }
         );
       });
 
@@ -558,9 +567,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          expect.objectContaining({
-            requireCSRF: true,
-          })
+          { allow: ['session'], requireCSRF: true }
         );
       });
     });

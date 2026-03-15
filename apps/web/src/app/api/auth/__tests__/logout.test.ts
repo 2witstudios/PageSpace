@@ -158,9 +158,10 @@ describe('/api/auth/logout', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'test-user-id',
         'logout',
-        expect.objectContaining({
+        {
           ip: '192.168.1.1',
-        })
+          userAgent: null,
+        }
       );
     });
   });

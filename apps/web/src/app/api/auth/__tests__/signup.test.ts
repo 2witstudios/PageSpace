@@ -141,7 +141,7 @@ vi.mock('react', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
 import {
@@ -216,13 +216,13 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: SESSION_DURATION_MS,
+        createdByIp: undefined,
+      });
 
       // Verify session cookie is set
       expect(appendSessionCookie).toHaveBeenCalledTimes(1);
@@ -242,13 +242,14 @@ describe('/api/auth/signup', () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(authRepository.createUser).toHaveBeenCalledWith(
-        expect.objectContaining({
-          email: 'new@example.com',
-          name: 'New User',
-          password: expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$/),
-        })
-      );
+      const createUserArg = vi.mocked(authRepository.createUser).mock.calls[0][0] as Record<string, unknown>;
+      expect(createUserArg.email).toBe('new@example.com');
+      expect(createUserArg.name).toBe('New User');
+      expect(createUserArg.id).toBe('mock-cuid');
+      expect(createUserArg.storageUsedBytes).toBe(0);
+      expect(createUserArg.subscriptionTier).toBe('free');
+      expect(createUserArg.password).toMatch(/^\$2[aby]?\$\d{1,2}\$/);
+      expect(createUserArg.tosAcceptedAt).toBeInstanceOf(Date);
     });
 
     it('creates a personal drive for new user', async () => {
@@ -262,25 +263,26 @@ describe('/api/auth/signup', () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'new-user-id', type: 'email_verification' }));
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'new@example.com',
-          subject: 'Verify your PageSpace email',
-        })
-      );
+      expect(createVerificationToken).toHaveBeenCalledWith({ userId: 'new-user-id', type: 'email_verification' });
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as Record<string, unknown>;
+      expect(emailArg.to).toBe('new@example.com');
+      expect(emailArg.subject).toBe('Verify your PageSpace email');
     });
 
     it('creates notification for email verification', async () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(createNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'EMAIL_VERIFICATION_REQUIRED',
-          title: 'Please verify your email',
-        })
-      );
+      expect(createNotification).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'EMAIL_VERIFICATION_REQUIRED',
+        title: 'Please verify your email',
+        message: 'Check your inbox for a verification link. You can resend it from your account settings.',
+        metadata: {
+          email: 'new@example.com',
+          settingsUrl: '/settings/account',
+        },
+      });
     });
 
     it('logs successful signup event', async () => {
@@ -301,10 +303,12 @@ describe('/api/auth/signup', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
         'signup',
-        expect.objectContaining({
+        {
           email: 'new@example.com',
           name: 'New User',
-        })
+          ip: '192.168.1.1',
+          userAgent: null,
+        }
       );
     });
 
@@ -399,7 +403,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.name).toBeDefined();
+      expect(body.errors.name).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid email format', async () => {
@@ -412,7 +416,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid email address']);
     });
 
     it('returns 400 for password shorter than 12 characters', async () => {
@@ -426,7 +430,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must be at least 12 characters long']);
     });
 
     it('returns 400 for password without uppercase', async () => {
@@ -440,7 +444,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one uppercase letter']);
     });
 
     it('returns 400 for password without lowercase', async () => {
@@ -454,7 +458,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one lowercase letter']);
     });
 
     it('returns 400 for password without number', async () => {
@@ -468,7 +472,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one number']);
     });
 
     it('returns 400 when passwords do not match', async () => {
@@ -481,7 +485,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.confirmPassword).toBeDefined();
+      expect(body.errors.confirmPassword).toEqual(['Passwords do not match']);
     });
 
     it('returns 400 when ToS not accepted', async () => {
@@ -494,7 +498,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.acceptedTos).toBeDefined();
+      expect(body.errors.acceptedTos).toEqual(['You must accept the Terms of Service and Privacy Policy']);
     });
   });
 
@@ -624,11 +628,11 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^signup:ip:/),
+        'signup:ip:10.0.0.1',
         DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^signup:email:/),
+        'signup:email:new@example.com',
         DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
     });

@@ -57,7 +57,7 @@ describe('Session Fixation Prevention - Service Layer', () => {
       const claims = await sessionService.validateSession('ps_sess_valid');
 
       expect(claims).toEqual(mockClaims);
-      expect(claims?.sessionId).toBeDefined();
+      expect(claims?.sessionId).toBe('session-123');
     });
 
     it('validateSession returns null for invalid token', async () => {
@@ -242,7 +242,7 @@ describe('Session Fixation Prevention - Auth Middleware', () => {
         sessionId: 'session-abc',
       };
 
-      expect(result.sessionId).toBeDefined();
+      expect(result.sessionId).toBe('session-abc');
       expect(result.tokenType).toBe('session');
     });
   });

@@ -532,20 +532,15 @@ describe('rollback-service', () => {
       expect(result.restoredValues).toEqual({ title: 'Old Title' });
 
       // Verify audit log was called with correct payload
-      expect(logRollbackActivity).toHaveBeenCalledWith(
-        mockUserId,
-        mockActivityId,
-        expect.objectContaining({
-          resourceType: 'page',
-          resourceId: mockPageId,
-        }),
-        expect.objectContaining({
-          actorEmail: 'test@example.com',
-        }),
-        expect.objectContaining({
-          restoredValues: { title: 'Old Title' },
-        })
-      );
+      const logArgs = vi.mocked(logRollbackActivity).mock.calls[0];
+      expect(logArgs[0]).toBe(mockUserId);
+      expect(logArgs[1]).toBe(mockActivityId);
+      expect(logArgs[2].resourceType).toBe('page');
+      expect(logArgs[2].resourceId).toBe(mockPageId);
+      expect(logArgs[2].driveId).toBe(mockDriveId);
+      expect(logArgs[2].pageId).toBe(mockPageId);
+      expect(logArgs[3]).toEqual({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' });
+      expect((logArgs[4] as Record<string, unknown>).restoredValues).toEqual({ title: 'Old Title' });
     });
 
     it('uses contentSnapshot when available for page content', async () => {
@@ -595,11 +590,8 @@ describe('rollback-service', () => {
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
       expect(result.success).toBe(true);
-      expect(mockUpdateSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: '<p>Snapshot content</p>',
-        })
-      );
+      const updateArg = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
+      expect(updateArg.content).toBe('<p>Snapshot content</p>');
     });
 
     it('returns failure with error message on database error', async () => {
@@ -736,9 +728,7 @@ describe('rollback-service', () => {
 
       expect(result.success).toBe(true);
       expect(db.delete).toHaveBeenCalled();
-      expect(result.restoredValues).toEqual(
-        expect.objectContaining({ deleted: true })
-      );
+      expect((result.restoredValues as Record<string, unknown>).deleted).toBe(true);
     });
 
     it('recreates permission on permission_revoke rollback', async () => {
@@ -781,14 +771,11 @@ describe('rollback-service', () => {
 
       expect(result.success).toBe(true);
       expect(db.insert).toHaveBeenCalled();
-      expect(mockInsertValues).toHaveBeenCalledWith(
-        expect.objectContaining({
-          canView: true,
-          canEdit: true,
-          canShare: false,
-          canDelete: false,
-        })
-      );
+      const insertArg = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
+      expect(insertArg.canView).toBe(true);
+      expect(insertArg.canEdit).toBe(true);
+      expect(insertArg.canShare).toBe(false);
+      expect(insertArg.canDelete).toBe(false);
     });
   });
 

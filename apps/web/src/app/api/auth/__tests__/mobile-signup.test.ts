@@ -207,14 +207,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'pfh0haxfpzowht3oi213cqos',
-          deviceId: 'ios-device-456',
-          platform: 'ios',
-          deviceName: 'iPhone 15 Pro',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: null,
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        deviceId: 'ios-device-456',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('creates Getting Started drive for new user', async () => {
@@ -226,7 +228,11 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(oauthRepository.createPersonalDrive).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'pfh0haxfpzowht3oi213cqos' }));
+      expect(oauthRepository.createPersonalDrive).toHaveBeenCalledWith({
+        name: 'Getting Started',
+        slug: 'getting-started',
+        ownerId: 'pfh0haxfpzowht3oi213cqos',
+      });
     });
 
     it('sends verification email', async () => {
@@ -238,13 +244,13 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'pfh0haxfpzowht3oi213cqos', type: 'email_verification' }));
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: validSignupPayload.email,
-          subject: 'Verify your PageSpace email',
-        })
-      );
+      expect(createVerificationToken).toHaveBeenCalledWith({
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        type: 'email_verification',
+      });
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as Record<string, unknown>;
+      expect(emailArg.to).toBe(validSignupPayload.email);
+      expect(emailArg.subject).toBe('Verify your PageSpace email');
     });
 
     it('creates notification to verify email', async () => {
@@ -256,12 +262,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(createNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'pfh0haxfpzowht3oi213cqos',
-          type: 'EMAIL_VERIFICATION_REQUIRED',
-        })
-      );
+      expect(createNotification).toHaveBeenCalledWith({
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        type: 'EMAIL_VERIFICATION_REQUIRED',
+        title: 'Please verify your email',
+        message: 'Check your inbox for a verification link. You can resend it from your account settings.',
+        metadata: {
+          email: validSignupPayload.email,
+          settingsUrl: '/settings/account',
+        },
+      });
     });
 
     it('resets rate limits on successful signup', async () => {
@@ -311,11 +321,14 @@ describe('/api/auth/mobile/signup', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'pfh0haxfpzowht3oi213cqos',
         'signup',
-        expect.objectContaining({
+        {
+          email: validSignupPayload.email,
+          name: validSignupPayload.name,
+          ip: '192.168.1.1',
+          userAgent: null,
           platform: 'ios',
           appVersion: '1.0.0',
-          email: validSignupPayload.email,
-        })
+        }
       );
     });
   });
@@ -374,11 +387,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform: 'ios',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: null,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 
@@ -398,7 +416,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must be at least 12 characters long']);
     });
 
     it('returns 400 for password without uppercase', async () => {
@@ -416,7 +434,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one uppercase letter']);
     });
 
     it('returns 400 for password without lowercase', async () => {
@@ -434,7 +452,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one lowercase letter']);
     });
 
     it('returns 400 for password without number', async () => {
@@ -452,7 +470,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one number']);
     });
 
     it('returns 400 for mismatched passwords', async () => {
@@ -470,7 +488,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.confirmPassword).toBeDefined();
+      expect(body.errors.confirmPassword).toEqual(['Passwords do not match']);
     });
   });
 
@@ -491,7 +509,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.name).toBeDefined();
+      expect(body.errors.name).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid email', async () => {
@@ -508,7 +526,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid email address']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -527,7 +545,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -544,7 +562,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
   });
 
@@ -741,12 +759,14 @@ describe('/api/auth/mobile/signup', () => {
       await POST(request);
 
       const { sessionService } = await import('@pagespace/lib/auth');
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-signup',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockNewUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        createdByService: 'mobile-signup',
+        createdByIp: '192.168.1.1',
+      });
     });
   });
 

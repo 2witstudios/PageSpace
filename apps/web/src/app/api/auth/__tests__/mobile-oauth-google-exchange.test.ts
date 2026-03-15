@@ -220,14 +220,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          deviceId: 'ios-device-789',
-          platform: 'ios',
-          deviceName: 'iPhone 15 Pro Max',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('logs OAuth login event', async () => {
@@ -260,11 +262,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockUser.id,
         'login',
-        expect.objectContaining({
+        {
+          email: 'oauth@example.com',
+          ip: '192.168.1.1',
           provider: 'google',
+          userAgent: null,
           platform: 'ios',
           appVersion: '1.0.0',
-        })
+        }
       );
     });
 
@@ -335,11 +340,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform: 'ios',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 
@@ -418,10 +428,12 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         undefined,
         'failed_oauth',
-        expect.objectContaining({
+        {
           provider: 'google',
           reason: 'Verification failed',
-        })
+          ip: '192.168.1.1',
+          platform: 'ios',
+        }
       );
     });
   });
@@ -441,7 +453,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.idToken).toBeDefined();
+      expect(body.errors.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -458,7 +470,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -475,7 +487,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
 
     it('returns 400 for empty idToken', async () => {
@@ -492,7 +504,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.idToken).toBeDefined();
+      expect(body.errors.idToken).toEqual(['ID token is required']);
     });
   });
 
@@ -568,7 +580,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       const response = await POST(request);
 
-      expect(response.headers.get('X-RateLimit-Limit')).toBeDefined();
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
     });
 
@@ -606,13 +618,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-oauth-google',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        createdByService: 'mobile-oauth-google',
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('returns 500 when session validation fails', async () => {
@@ -663,10 +676,11 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         undefined,
         'failed_oauth',
-        expect.objectContaining({
+        {
           provider: 'google',
           error: 'Unexpected',
-        })
+          platform: 'ios',
+        }
       );
     });
 
@@ -719,11 +733,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providedDeviceToken: existingDeviceToken,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: existingDeviceToken,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('creates new device token if not provided', async () => {
@@ -735,11 +754,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providedDeviceToken: undefined,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'ios-device-789',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro Max',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 

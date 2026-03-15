@@ -140,6 +140,7 @@ import bcrypt from 'bcryptjs';
 import {
   sessionService,
   generateCSRFToken,
+  SESSION_DURATION_MS,
   isAccountLockedByEmail,
   recordFailedLoginAttemptByEmail,
   resetFailedLoginAttempts,
@@ -237,13 +238,13 @@ describe('POST /api/auth/login', () => {
       await POST(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: SESSION_DURATION_MS,
+        createdByIp: undefined,
+      });
 
       // Verify session cookie is set
       expect(appendSessionCookie).toHaveBeenCalledTimes(1);
@@ -299,10 +300,11 @@ describe('POST /api/auth/login', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockUser.id,
         'login',
-        expect.objectContaining({
+        {
           email: mockUser.email,
           ip: '192.168.1.1',
-        })
+          userAgent: null,
+        }
       );
     });
   });
@@ -351,8 +353,6 @@ describe('POST /api/auth/login', () => {
       expect(bcrypt.compare).toHaveBeenCalledWith('anypassword', expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/));
       const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
       expect(password).toBe('anypassword');
-      // Verify a valid bcrypt hash was used (not null/undefined/empty)
-      expect(hash).toBeTruthy();
       expect(typeof hash).toBe('string');
       expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/);
     });
@@ -401,7 +401,7 @@ describe('POST /api/auth/login', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid email format', async () => {
@@ -410,7 +410,7 @@ describe('POST /api/auth/login', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid email address']);
     });
 
     it('returns 400 for missing password', async () => {
@@ -419,7 +419,7 @@ describe('POST /api/auth/login', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty password', async () => {
@@ -428,7 +428,7 @@ describe('POST /api/auth/login', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password is required']);
     });
   });
 
@@ -483,17 +483,12 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          ipAddress: '192.168.1.1',
-          details: expect.objectContaining({
-            limiter: 'ip',
-            endpoint: '/api/auth/login',
-          }),
-          riskScore: 0.4,
-        })
-      );
+      expect(securityAudit.logEvent).toHaveBeenCalledWith({
+        eventType: 'security.rate.limited',
+        ipAddress: '192.168.1.1',
+        details: { limiter: 'ip', endpoint: '/api/auth/login', email: 'te***@example.com' },
+        riskScore: 0.4,
+      });
     });
 
     it('emits security audit event when email rate limit triggers', async () => {
@@ -505,17 +500,12 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          ipAddress: '10.0.0.1',
-          details: expect.objectContaining({
-            limiter: 'email',
-            endpoint: '/api/auth/login',
-          }),
-          riskScore: 0.4,
-        })
-      );
+      expect(securityAudit.logEvent).toHaveBeenCalledWith({
+        eventType: 'security.rate.limited',
+        ipAddress: '10.0.0.1',
+        details: { limiter: 'email', endpoint: '/api/auth/login', email: 'te***@example.com' },
+        riskScore: 0.4,
+      });
     });
 
     it('masks email in security audit event details', async () => {
@@ -526,13 +516,8 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          details: expect.objectContaining({
-            email: 'te***@example.com',
-          }),
-        })
-      );
+      const logEventCall = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as { details: { email: string } };
+      expect(logEventCall.details.email).toBe('te***@example.com');
     });
   });
 
@@ -659,7 +644,7 @@ describe('POST /api/auth/login', () => {
       await POST(request);
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringContaining('192.168.1.1'),
+        'login:ip:192.168.1.1',
         DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
@@ -670,7 +655,7 @@ describe('POST /api/auth/login', () => {
       await POST(request);
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringContaining('test@example.com'),
+        'login:email:test@example.com',
         DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
@@ -696,8 +681,8 @@ describe('POST /api/auth/login', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(429);
-      expect(response.headers.get('Retry-After')).toBeTruthy();
-      expect(response.headers.get('X-RateLimit-Limit')).toBeTruthy();
+      expect(response.headers.get('Retry-After')).toBe('900');
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
     });
 
@@ -719,7 +704,7 @@ describe('POST /api/auth/login', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(429);
-      expect(response.headers.get('Retry-After')).toBeTruthy();
+      expect(response.headers.get('Retry-After')).toBe('900');
     });
 
     it('calls resetDistributedRateLimit on successful login', async () => {
@@ -731,12 +716,8 @@ describe('POST /api/auth/login', () => {
 
       await POST(request);
 
-      expect(resetDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringContaining('192.168.1.1')
-      );
-      expect(resetDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringContaining('test@example.com')
-      );
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:ip:192.168.1.1');
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('login:email:test@example.com');
     });
 
     it('includes X-RateLimit headers in successful responses', async () => {
@@ -745,9 +726,8 @@ describe('POST /api/auth/login', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      // After P1-T5 implementation, these headers should be present
-      expect(response.headers.get('X-RateLimit-Limit')).toBeTruthy();
-      expect(response.headers.get('X-RateLimit-Remaining')).toBeTruthy();
+      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('5');
     });
   });
 
@@ -765,7 +745,8 @@ describe('POST /api/auth/login', () => {
 
       expect(response.status).toBe(423);
       expect(body.error).toMatch(/locked/i);
-      expect(body.lockedUntil).toBeDefined();
+      expect(typeof body.lockedUntil).toBe('string');
+      expect(new Date(body.lockedUntil).getTime()).toBeGreaterThan(Date.now());
     });
 
     it('does not attempt password validation when account is locked', async () => {
@@ -938,7 +919,7 @@ describe('POST /api/auth/login', () => {
       const { loggers } = await import('@pagespace/lib/server');
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Revoked existing sessions on login',
-        expect.objectContaining({ userId: mockUser.id, count: 3 })
+        { userId: mockUser.id, count: 3 }
       );
     });
 
