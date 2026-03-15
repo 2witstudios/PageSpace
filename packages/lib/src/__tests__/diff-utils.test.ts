@@ -482,6 +482,21 @@ describe('diff-utils', () => {
         expect(sections).toHaveLength(1);
         expect(sections[0].type).toBe('paragraph');
       });
+
+      it('returns empty sections when tiptap doc has no content array', () => {
+        // This tests the extractTiptapSections branch where doc.content is not an array
+        const tiptapDoc = JSON.stringify({ type: 'doc' }); // No content property
+        const sections = extractSections(tiptapDoc);
+
+        expect(sections).toHaveLength(0);
+      });
+
+      it('returns empty sections when tiptap doc content is not an array', () => {
+        const tiptapDoc = JSON.stringify({ type: 'doc', content: 'not-an-array' });
+        const sections = extractSections(tiptapDoc);
+
+        expect(sections).toHaveLength(0);
+      });
     });
 
     describe('HTML content', () => {
@@ -696,6 +711,56 @@ describe('diff-utils', () => {
       // Unchanged node
       const unchangedNodes = nodeChanges.filter((c) => c.type === 'unchanged');
       expect(unchangedNodes.length).toBe(1); // Second paragraph
+    });
+  });
+
+  describe('summarizeDiff edge cases', () => {
+    it('should return "No significant changes" when additions and deletions are both zero', () => {
+      // Create a diff result with zero additions and zero deletions but not identical
+      const result = summarizeDiff({
+        format: 'text',
+        changes: [],
+        stats: { additions: 0, deletions: 0, unchanged: 100, totalChanges: 0 },
+        isIdentical: false,
+      });
+
+      expect(result).toBe('No significant changes');
+    });
+  });
+
+  describe('extractSections edge cases', () => {
+    it('should fall back to text sections when JSON parsing fails', () => {
+      // Content that detects as JSON format (starts with {) but fails to parse
+      const brokenJson = '{"type": "doc", invalid json here';
+      const sections = extractSections(brokenJson);
+      // Should fall back to extractTextSections, returning at least one section
+      expect(sections.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should handle tiptap doc without content array', () => {
+      const docWithoutContent = JSON.stringify({ type: 'doc' });
+      const sections = extractSections(docWithoutContent);
+      expect(sections).toEqual([]);
+    });
+
+    it('should handle tiptap doc with non-array content', () => {
+      const docWithBadContent = JSON.stringify({ type: 'doc', content: 'not-an-array' });
+      const sections = extractSections(docWithBadContent);
+      expect(sections).toEqual([]);
+    });
+  });
+
+  describe('diffContent prettyPrint fallback', () => {
+    it('should handle prettyPrint when JSON parsing fails', () => {
+      // Content that detects as JSON (starts with {) but second value is invalid
+      const oldContent = '{"valid": true}';
+      const newContent = '{"valid": true, broken}';
+
+      const result = diffContent(oldContent, newContent, { prettyPrint: true });
+
+      // Should still produce a diff, falling back to raw content
+      expect(result).toBeDefined();
+      expect(result.changes).toBeDefined();
     });
   });
 });

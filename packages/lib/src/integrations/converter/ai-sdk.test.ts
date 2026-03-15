@@ -299,4 +299,93 @@ describe('convertIntegrationToolsToAISDK', () => {
 
     expect(Object.keys(tools)).toHaveLength(0);
   });
+
+  it('should pass rateLimitOverride when grant has requestsPerMinute', async () => {
+    const grantWithOverride: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      rateLimitOverride: { requestsPerMinute: 10 },
+    };
+
+    const mockResult: ToolCallResult = { success: true, data: {} };
+    const mockExecutor = vi.fn().mockResolvedValue(mockResult);
+
+    const tools = convertIntegrationToolsToAISDK([grantWithOverride], executorContext, mockExecutor);
+    const firstTool = Object.values(tools)[0];
+
+    await firstTool.execute({});
+
+    expect(mockExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        grant: expect.objectContaining({
+          rateLimitOverride: { requestsPerMinute: 10 },
+        }),
+      })
+    );
+  });
+
+  it('should throw generic error when executor returns failure without error message', async () => {
+    const mockExecutor = vi.fn().mockResolvedValue({
+      success: false,
+    });
+
+    const tools = convertIntegrationToolsToAISDK([mockGrant], executorContext, mockExecutor);
+    const firstTool = Object.values(tools)[0];
+
+    await expect(firstTool.execute({})).rejects.toThrow('Integration tool execution failed');
+  });
+
+  it('should skip tools whose schema conversion throws', () => {
+    const badToolConfig: IntegrationProviderConfig = {
+      ...mockProviderConfig,
+      tools: [
+        {
+          id: 'bad_tool',
+          name: 'Bad Tool',
+          description: 'Tool with bad schema',
+          category: 'read',
+          inputSchema: null as unknown as Record<string, unknown>,
+          execution: {
+            type: 'http',
+            config: { method: 'GET', pathTemplate: '/bad' },
+          },
+        },
+        ...mockProviderConfig.tools,
+      ],
+    };
+
+    const grantWithBadTool: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      connection: {
+        ...mockGrant.connection!,
+        provider: {
+          ...mockGrant.connection!.provider!,
+          config: badToolConfig,
+        },
+      },
+    };
+
+    const mockExecutor = vi.fn();
+    const tools = convertIntegrationToolsToAISDK([grantWithBadTool], executorContext, mockExecutor);
+
+    // Bad tool should be skipped, but the two valid tools should be present
+    expect(Object.keys(tools)).toHaveLength(2);
+  });
+});
+
+describe('convertToolSchemaToZod edge cases', () => {
+  it('should skip properties that cause conversion errors', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        good: { type: 'string' },
+        bad: null as unknown as Record<string, unknown>,
+      },
+      required: ['good'],
+    };
+
+    const zodSchema = convertToolSchemaToZod(schema);
+    const shape = zodSchema.shape;
+    expect(shape).toHaveProperty('good');
+    expect(shape).not.toHaveProperty('bad');
+  });
 });

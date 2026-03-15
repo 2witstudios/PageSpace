@@ -287,4 +287,50 @@ describe('buildHttpRequest', () => {
 
     expect(result.url).toBe('https://api.example.com/v1/users');
   });
+
+  it('given body encoding multipart, should JSON-stringify the body', () => {
+    const config: HttpExecutionConfig = {
+      method: 'POST',
+      pathTemplate: '/upload',
+      bodyTemplate: {
+        file: { $param: 'file' },
+        name: { $param: 'name' },
+      },
+      bodyEncoding: 'multipart',
+    };
+    const input = { file: 'data', name: 'test.txt' };
+
+    const result = buildHttpRequest(config, input, 'https://api.example.com');
+
+    expect(result.body).toBe('{"file":"data","name":"test.txt"}');
+  });
+
+  it('given form encoding with null/undefined values, should skip those params', () => {
+    const config: HttpExecutionConfig = {
+      method: 'POST',
+      pathTemplate: '/form',
+      bodyTemplate: {
+        present: { $param: 'present' },
+        missing: { $param: 'missing' },
+        nullVal: { $param: 'nullVal' },
+      },
+      bodyEncoding: 'form',
+    };
+    const input = { present: 'yes', nullVal: null };
+
+    const result = buildHttpRequest(config, input, 'https://api.example.com');
+
+    expect(result.body).toBe('present=yes');
+  });
+
+  it('given path without leading slash, should prepend slash between base and path', () => {
+    const config: HttpExecutionConfig = {
+      method: 'GET',
+      pathTemplate: 'items',
+    };
+
+    const result = buildHttpRequest(config, {}, 'https://api.example.com');
+
+    expect(result.url).toBe('https://api.example.com/items');
+  });
 });
