@@ -255,7 +255,7 @@ describe('ContentStore', () => {
       });
 
       expect(result.contentHash).toHaveLength(64);
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.any(String));
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('test.pdf'));
     });
   });
 

@@ -186,7 +186,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     expect(processExitSpy).toHaveBeenCalledWith(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Fatal error'),
-      expect.any(Error)
+      expect.objectContaining({ message: 'DB connection refused' })
     );
   });
 
@@ -211,7 +211,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     // Error logged for failed users
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.any(Error));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.objectContaining({ message: 'Drive query failed' }));
     // Complete banner still shown
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('Storage calculation complete')
@@ -295,6 +295,6 @@ describe('scripts/calculate-initial-storage.ts', () => {
 
     // The outer .catch() handler calls console.error('Unhandled error:', ...) and process.exit(1)
     expect(processExitSpy).toHaveBeenCalledWith(1);
-    expect(consoleErrorSpy).toHaveBeenCalledWith('Unhandled error:', expect.any(Error));
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Unhandled error:', expect.objectContaining({ message: 'console.error broke' }));
   });
 });

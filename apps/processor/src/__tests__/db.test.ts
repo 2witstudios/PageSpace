@@ -1,5 +1,5 @@
 /**
- * @scaffold - Database layer: pg Pool mocking is necessary because db.ts IS
+ * @boundary-contract - Database layer: pg Pool mocking is necessary because db.ts IS
  * the lowest persistence seam (raw SQL over pg Pool). These tests characterize
  * query composition and connection lifecycle (acquire → query → release).
  */

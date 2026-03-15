@@ -1042,7 +1042,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining drive', expect.any(Error), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining drive', expect.objectContaining({ message: 'DB error' }), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1088,7 +1088,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_dm_conversation', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.any(Error), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.objectContaining({ message: 'DB error' }), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1175,7 +1175,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_drive', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity drive', expect.any(Error), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity drive', expect.objectContaining({ message: 'DB error' }), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1226,7 +1226,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_page', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity page', expect.any(Error), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity page', expect.objectContaining({ message: 'DB error' }), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1342,7 +1342,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('presence:join_page', { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining page presence', expect.any(Error), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining page presence', expect.objectContaining({ message: 'DB error' }), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1436,12 +1436,12 @@ describe('Socket.IO connection handler', () => {
       const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
       capturedIoConnectionCallback!(socket);
 
-      expect(mockWithPerEventAuth).toHaveBeenCalledWith(
-        socket,
-        'document_update',
-        expect.any(Function),
-        expect.objectContaining({ pageIdExtractor: expect.any(Function) })
-      );
+      expect(mockWithPerEventAuth).toHaveBeenCalledTimes(1);
+      const [authSocket, eventName, handler, opts] = mockWithPerEventAuth.mock.calls[0];
+      expect(authSocket).toBe(socket);
+      expect(eventName).toBe('document_update');
+      expect(typeof handler).toBe('function');
+      expect(typeof opts.pageIdExtractor).toBe('function');
     });
 
     it('given document_update handler invoked, should forward to room', async () => {

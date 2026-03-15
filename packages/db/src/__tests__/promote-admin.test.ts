@@ -136,7 +136,7 @@ describe('promote-admin.ts', () => {
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Error promoting user'),
-      expect.any(Error)
+      expect.objectContaining({ message: 'Database connection failed' })
     );
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });

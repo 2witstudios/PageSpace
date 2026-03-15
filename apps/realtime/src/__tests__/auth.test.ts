@@ -1,8 +1,7 @@
 /**
- * @scaffold - broadcast-auth lives in @pagespace/lib and may not resolve
+ * @boundary-contract - broadcast-auth lives in @pagespace/lib and may not resolve
  * in isolated realtime package tests. The mock re-implements HMAC signature
  * logic to characterize the authentication protocol contract.
- * Suggested: add integration tests that import the real broadcast-auth module.
  */
 
 import { describe, it, expect, vi } from 'vitest';

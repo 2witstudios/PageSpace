@@ -516,7 +516,7 @@ describe('Realtime Origin Validation', () => {
         validateAndLogWebSocketOrigin('https://app.example.com', metadata);
 
         expect(loggers.realtime.debug).toHaveBeenCalledWith(
-          expect.any(String),
+          'WebSocket origin validation: valid origin',
           expect.objectContaining({
             socketId: 'unique-socket-456',
             ip: '192.168.1.100',
@@ -535,7 +535,7 @@ describe('Realtime Origin Validation', () => {
         validateAndLogWebSocketOrigin('https://app.example.com', metadata);
 
         expect(loggers.realtime.debug).toHaveBeenCalledWith(
-          expect.any(String),
+          'WebSocket origin validation: valid origin',
           expect.objectContaining({
             socketId: 'test-socket',
             ip: undefined,

@@ -189,7 +189,7 @@ describe('POST /avatar/upload', () => {
     expect(response.body.filename).toBe('avatar.jpg');
     expect(mockFsWriteFile).toHaveBeenCalledWith(
       expect.stringContaining('user-1'),
-      expect.any(Buffer)
+      Buffer.from('fake-image-data')
     );
   });
 

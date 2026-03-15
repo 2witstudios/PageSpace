@@ -1,7 +1,6 @@
 /**
- * @scaffold - Repository layer: ORM chain mocking is necessary because file-links IS
+ * @boundary-contract - Repository layer: ORM chain mocking is necessary because file-links IS
  * the lowest persistence seam. These tests characterize query composition behavior.
- * Suggested: add integration tests for join/query correctness.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -51,7 +50,7 @@ vi.mock('@pagespace/db', () => {
 import { db } from '@pagespace/db';
 import { ensureFileLinked, getLinksForFile, getFileDriveId, getLinkForPage } from '../file-links';
 
-/** @scaffold */
+/** @boundary-contract */
 describe('ensureFileLinked', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -65,7 +64,7 @@ describe('ensureFileLinked', () => {
     });
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
+    expect(typeof (db.transaction as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('function');
   });
 
   it('passes optional fields through transaction', async () => {
@@ -90,7 +89,7 @@ describe('ensureFileLinked', () => {
   });
 });
 
-/** @scaffold */
+/** @boundary-contract */
 describe('getLinksForFile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -155,7 +154,7 @@ describe('getFileDriveId', () => {
   });
 });
 
-/** @scaffold */
+/** @boundary-contract */
 describe('getLinkForPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
