@@ -122,7 +122,7 @@ import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
-import { broadcastTaskEvent, broadcastPageEvent } from '@/lib/websocket';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -686,10 +686,11 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
     expect(applyPageMutation).toHaveBeenCalledWith(expect.objectContaining({
-      pageId: expect.any(String),
+      pageId: 'linked-page-1',
       operation: 'update',
     }));
-    expect(broadcastPageEvent).toHaveBeenCalledWith(expect.anything());
+    expect(createPageEventPayload).toHaveBeenCalled();
+    expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
   });
 
   it('handles PageRevisionMismatchError with expectedRevision (409)', async () => {
@@ -1087,7 +1088,8 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       type: 'task_deleted',
       taskId: mockTaskId,
     }));
-    expect(broadcastPageEvent).toHaveBeenCalledWith(expect.anything());
+    expect(createPageEventPayload).toHaveBeenCalled();
+    expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
   });
 
   it('handles PageRevisionMismatchError on trash with expectedRevision (409)', async () => {

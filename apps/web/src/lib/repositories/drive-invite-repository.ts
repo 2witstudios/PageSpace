@@ -57,7 +57,7 @@ export const driveInviteRepository = {
   async createDriveMember(data: {
     driveId: string;
     userId: string;
-    role: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
     customRoleId: string | null;
     invitedBy: string;
     acceptedAt: Date;
@@ -71,7 +71,7 @@ export const driveInviteRepository = {
 
   async updateDriveMemberRole(
     memberId: string,
-    role: string,
+    role: 'OWNER' | 'ADMIN' | 'MEMBER',
     customRoleId: string | null
   ) {
     await db
