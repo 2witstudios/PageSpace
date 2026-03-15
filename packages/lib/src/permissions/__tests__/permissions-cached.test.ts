@@ -669,7 +669,7 @@ describe('getUserDriveAccess', () => {
 
       expect(result).toBe(false);
       expect(loggers.api.error).toHaveBeenCalledWith(
-        expect.any(String),
+        '[DRIVE_ACCESS] Error checking user drive access',
         expect.objectContaining({ error: '42' }),
       );
     });
@@ -916,7 +916,7 @@ describe('getUserDrivePermissions', () => {
 
       expect(result).toBeNull();
       expect(loggers.api.error).toHaveBeenCalledWith(
-        expect.any(String),
+        '[DRIVE_PERMISSIONS] Error checking drive permissions',
         expect.objectContaining({ error: 'unexpected' }),
       );
     });
@@ -1357,7 +1357,7 @@ describe('invalidateUserPermissions', () => {
     await invalidateUserPermissions(USER_ID);
 
     expect(loggers.security.error).toHaveBeenCalledWith(
-      expect.any(String),
+      '[PERMISSIONS] Failed to invalidate user cache \u2014 stale permissions may persist for up to 60s',
       expect.objectContaining({ error: 'unknown failure' }),
     );
   });
@@ -1398,7 +1398,7 @@ describe('invalidateDrivePermissions', () => {
     await invalidateDrivePermissions(DRIVE_ID);
 
     expect(loggers.security.error).toHaveBeenCalledWith(
-      expect.any(String),
+      '[PERMISSIONS] Failed to invalidate drive cache \u2014 stale permissions may persist for up to 60s',
       expect.objectContaining({ error: 'null' }),
     );
   });

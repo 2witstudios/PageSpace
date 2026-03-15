@@ -291,8 +291,8 @@ describe('logRequest', () => {
     const infoSpy = vi.spyOn(loggers.api, 'info').mockImplementation(() => {});
     logRequest(req);
     expect(infoSpy).toHaveBeenCalledWith(
-      expect.stringContaining('GET'),
-      expect.any(Object)
+      'GET /api/test',
+      { context: { endpoint: '/api/test', method: 'GET', ip: 'unknown', userAgent: undefined } }
     );
     infoSpy.mockRestore();
   });
@@ -302,8 +302,8 @@ describe('logRequest', () => {
     const infoSpy = vi.spyOn(loggers.api, 'info').mockImplementation(() => {});
     logRequest(req, { requestId: 'req-999' });
     expect(infoSpy).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ context: expect.objectContaining({ requestId: 'req-999' }) })
+      'POST /api/test',
+      { context: { endpoint: '/api/test', method: 'POST', ip: 'unknown', userAgent: undefined, requestId: 'req-999' } }
     );
     infoSpy.mockRestore();
   });
@@ -365,10 +365,9 @@ describe('logResponse', () => {
   it('merges additional context', () => {
     const req = makeNextRequest({ pathname: '/api/test', method: 'GET' });
     logResponse(req, 200, Date.now(), { userId: 'u-1' });
-    expect(apiInfoSpy).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ context: expect.objectContaining({ userId: 'u-1' }) })
-    );
+    const call = apiInfoSpy.mock.calls[0];
+    expect(call[0]).toContain('200');
+    expect((call[1] as { context: Record<string, unknown> }).context.userId).toBe('u-1');
   });
 });
 
@@ -413,25 +412,25 @@ describe('logDatabaseQuery', () => {
     const err = new Error('query failed');
     logDatabaseQuery('SELECT', 'users', 100, 0, err);
     expect(dbErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT'),
+      'Database error: SELECT users',
       err,
-      expect.any(Object)
+      { operation: 'SELECT', table: 'users', duration: 100, rowCount: 0 }
     );
   });
 
   it('logs warn for slow queries (>1000ms)', () => {
     logDatabaseQuery('SELECT', 'pages', 1500);
     expect(dbWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Slow query'),
-      expect.any(Object)
+      'Slow query: SELECT pages',
+      { operation: 'SELECT', table: 'pages', duration: 1500, rowCount: undefined }
     );
   });
 
   it('logs debug for normal queries', () => {
     logDatabaseQuery('INSERT', 'logs', 50, 1);
     expect(dbDebugSpy).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT'),
-      expect.any(Object)
+      'INSERT logs',
+      { operation: 'INSERT', table: 'logs', duration: 50, rowCount: 1 }
     );
   });
 
@@ -460,7 +459,7 @@ describe('logAuthEvent', () => {
     logAuthEvent('failed', 'u-1', 'user@example.com', '127.0.0.1', 'bad password');
     expect(authWarnSpy).toHaveBeenCalledWith(
       'Authentication failed',
-      expect.any(Object)
+      { event: 'failed', userId: 'u-1', email: 'us***@example.com', ip: '127.0.0.1', reason: 'bad password' }
     );
   });
 
@@ -468,7 +467,7 @@ describe('logAuthEvent', () => {
     logAuthEvent('login', 'u-1');
     expect(authInfoSpy).toHaveBeenCalledWith(
       'Authentication: login',
-      expect.any(Object)
+      { event: 'login', userId: 'u-1', email: undefined, ip: undefined, reason: undefined }
     );
   });
 
@@ -547,8 +546,8 @@ describe('logPerformance', () => {
     const perfInfoSpy = vi.spyOn(loggers.performance, 'info').mockImplementation(() => {});
     logPerformance('latency', 100);
     expect(perfInfoSpy).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ unit: 'ms' })
+      'Performance: latency',
+      { metric: 'latency', value: 100, unit: 'ms' }
     );
     perfInfoSpy.mockRestore();
   });
@@ -557,8 +556,8 @@ describe('logPerformance', () => {
     const perfInfoSpy = vi.spyOn(loggers.performance, 'info').mockImplementation(() => {});
     logPerformance('payload_size', 4096, 'bytes');
     expect(perfInfoSpy).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ unit: 'bytes' })
+      'Performance: payload_size',
+      { metric: 'payload_size', value: 4096, unit: 'bytes' }
     );
     perfInfoSpy.mockRestore();
   });

@@ -778,9 +778,10 @@ describe('Logger internal error handlers (catch callbacks)', () => {
 
   it('console write error catch logs to console.error', async () => {
     // Force writeToConsole to reject by making formatOutput throw
+    const formatError = new Error('format failed');
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(anyLogger, 'formatOutput').mockImplementation(() => {
-      throw new Error('format failed');
+      throw formatError;
     });
     anyLogger.config.destination = 'console';
     logger.info('trigger console catch');
@@ -788,23 +789,24 @@ describe('Logger internal error handlers (catch callbacks)', () => {
     await new Promise(r => setTimeout(r, 0));
     expect(consoleSpy).toHaveBeenCalledWith(
       '[Logger] Console write error:',
-      expect.any(Error)
+      formatError
     );
   });
 
   it('buffer flush error catch logs to console.error', async () => {
+    const flushError = new Error('flush failed');
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     // Set destination to database and a tiny batchSize so flush fires
     anyLogger.config.destination = 'database';
     anyLogger.config.batchSize = 1;
     anyLogger.buffer = [];
     // Make flush reject
-    vi.spyOn(anyLogger, 'flush').mockRejectedValueOnce(new Error('flush failed'));
+    vi.spyOn(anyLogger, 'flush').mockRejectedValueOnce(flushError);
     logger.info('trigger flush catch');
     await new Promise(r => setTimeout(r, 0));
     expect(consoleSpy).toHaveBeenCalledWith(
       '[Logger] Flush error:',
-      expect.any(Error)
+      flushError
     );
     anyLogger.config.batchSize = 100;
   });

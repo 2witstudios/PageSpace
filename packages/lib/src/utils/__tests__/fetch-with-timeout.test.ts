@@ -41,12 +41,10 @@ describe('fetch-with-timeout', () => {
       const response = await fetchWithTimeout('https://api.example.com/data');
 
       expect(response.status).toBe(200);
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://api.example.com/data',
-        expect.objectContaining({
-          signal: expect.any(AbortSignal),
-        })
-      );
+      const callArgs = vi.mocked(global.fetch).mock.calls[0];
+      expect(callArgs[0]).toBe('https://api.example.com/data');
+      const opts = callArgs[1] as RequestInit;
+      expect(opts.signal).toBeInstanceOf(AbortSignal);
     });
 
     it('given request options, should pass them through', async () => {
@@ -60,15 +58,13 @@ describe('fetch-with-timeout', () => {
         timeout: 10000,
       });
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://api.example.com/data',
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ test: true }),
-          signal: expect.any(AbortSignal),
-        })
-      );
+      const callArgs = vi.mocked(global.fetch).mock.calls[0];
+      expect(callArgs[0]).toBe('https://api.example.com/data');
+      const opts = callArgs[1] as RequestInit;
+      expect(opts.method).toBe('POST');
+      expect(opts.headers).toEqual({ 'Content-Type': 'application/json' });
+      expect(opts.body).toBe(JSON.stringify({ test: true }));
+      expect(opts.signal).toBeInstanceOf(AbortSignal);
     });
 
     it('given fetch error, should propagate the error', async () => {

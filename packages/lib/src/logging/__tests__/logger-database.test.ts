@@ -112,14 +112,15 @@ describe('writeLogsToDatabase', () => {
   });
 
   it('handles database error without throwing', async () => {
-    mockValues.mockRejectedValueOnce(new Error('DB error'));
+    const dbError = new Error('DB error');
+    mockValues.mockRejectedValueOnce(dbError);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       writeLogsToDatabase([makeLogEntry()] as Parameters<typeof writeLogsToDatabase>[0])
     ).resolves.toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[Logger] Failed to write logs'),
-      expect.any(Error),
+      dbError,
     );
     consoleSpy.mockRestore();
   });
@@ -355,7 +356,8 @@ describe('writeApiMetrics', () => {
   });
 
   it('handles database error without throwing', async () => {
-    mockValues.mockRejectedValueOnce(new Error('metrics insert fail'));
+    const metricsError = new Error('metrics insert fail');
+    mockValues.mockRejectedValueOnce(metricsError);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(writeApiMetrics({
       endpoint: '/api/fail',
@@ -365,7 +367,7 @@ describe('writeApiMetrics', () => {
     })).resolves.toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[Logger] Failed to write API metrics'),
-      expect.any(Error),
+      metricsError,
     );
     consoleSpy.mockRestore();
   });
@@ -478,14 +480,15 @@ describe('writeAiUsage', () => {
   });
 
   it('handles database error without throwing', async () => {
-    mockValues.mockRejectedValueOnce(new Error('ai usage insert fail'));
+    const aiError = new Error('ai usage insert fail');
+    mockValues.mockRejectedValueOnce(aiError);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       writeAiUsage({ userId: 'u-1', provider: 'openai', model: 'gpt-4' })
     ).resolves.toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[Logger] Failed to write AI usage'),
-      expect.any(Error),
+      aiError,
     );
     consoleSpy.mockRestore();
   });
@@ -534,14 +537,15 @@ describe('writeUserActivity', () => {
   });
 
   it('handles database error without throwing', async () => {
-    mockValues.mockRejectedValueOnce(new Error('activity insert fail'));
+    const activityError = new Error('activity insert fail');
+    mockValues.mockRejectedValueOnce(activityError);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       writeUserActivity({ userId: 'u-1', action: 'logout' })
     ).resolves.toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[Logger] Failed to write user activity'),
-      expect.any(Error),
+      activityError,
     );
     consoleSpy.mockRestore();
   });
@@ -597,14 +601,15 @@ describe('writeError', () => {
   });
 
   it('handles database error without throwing', async () => {
-    mockValues.mockRejectedValueOnce(new Error('error insert fail'));
+    const writeErrorInsertFail = new Error('error insert fail');
+    mockValues.mockRejectedValueOnce(writeErrorInsertFail);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       writeError({ name: 'Error', message: 'test' })
     ).resolves.toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[Logger] Failed to write error log'),
-      expect.any(Error),
+      writeErrorInsertFail,
     );
     consoleSpy.mockRestore();
   });

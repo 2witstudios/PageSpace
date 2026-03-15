@@ -393,8 +393,8 @@ describe('getUserAccessLevel', () => {
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
     expect(loggers.api.error).toHaveBeenCalledWith(
-      expect.stringContaining('Error'),
-      expect.any(Object),
+      '[PERMISSIONS] Error checking user access level',
+      { userId: VALID_USER, pageId: VALID_PAGE, error: 'DB error' },
     );
   });
 
@@ -900,8 +900,8 @@ describe('getUserDriveAccess', () => {
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
     expect(loggers.api.error).toHaveBeenCalledWith(
-      expect.stringContaining('Error'),
-      expect.any(Object),
+      '[DRIVE_ACCESS] Error checking user drive access',
+      { userId: VALID_USER, driveId: VALID_DRIVE, error: 'DB failure' },
     );
   });
 
