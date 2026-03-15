@@ -23,7 +23,7 @@ describe('processorLogger', () => {
     const consoleMock = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { processorLogger } = await import('../logger');
     processorLogger.info('test info message', { key: 'value' });
-    expect(consoleMock).toHaveBeenCalled();
+    expect(consoleMock).toHaveBeenCalledTimes(1);
     const loggedLine = consoleMock.mock.calls[0][0];
     const parsed = JSON.parse(loggedLine);
     expect(parsed.level).toBe('info');
@@ -37,7 +37,7 @@ describe('processorLogger', () => {
     const consoleMock = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { processorLogger } = await import('../logger');
     processorLogger.warn('test warn', { status: 'warn' });
-    expect(consoleMock).toHaveBeenCalled();
+    expect(consoleMock).toHaveBeenCalledTimes(1);
     const loggedLine = consoleMock.mock.calls[0][0];
     const parsed = JSON.parse(loggedLine);
     expect(parsed.level).toBe('warn');
@@ -48,7 +48,7 @@ describe('processorLogger', () => {
     const consoleMock = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { processorLogger } = await import('../logger');
     processorLogger.debug('debug message');
-    expect(consoleMock).toHaveBeenCalled();
+    expect(consoleMock).toHaveBeenCalledTimes(1);
     const loggedLine = consoleMock.mock.calls[0][0];
     const parsed = JSON.parse(loggedLine);
     expect(parsed.level).toBe('debug');
@@ -60,7 +60,7 @@ describe('processorLogger', () => {
     const { processorLogger } = await import('../logger');
     const err = new Error('test error');
     processorLogger.error('error occurred', err, { context: 'test' });
-    expect(consoleMock).toHaveBeenCalled();
+    expect(consoleMock).toHaveBeenCalledTimes(1);
     const loggedLine = consoleMock.mock.calls[0][0];
     const parsed = JSON.parse(loggedLine);
     expect(parsed.level).toBe('error');
@@ -73,7 +73,7 @@ describe('processorLogger', () => {
     const consoleMock = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { processorLogger } = await import('../logger');
     processorLogger.error('error occurred', null, { context: 'test' });
-    expect(consoleMock).toHaveBeenCalled();
+    expect(consoleMock).toHaveBeenCalledTimes(1);
     const loggedLine = consoleMock.mock.calls[0][0];
     const parsed = JSON.parse(loggedLine);
     expect(parsed.level).toBe('error');

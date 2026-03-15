@@ -1,14 +1,22 @@
 /**
- * index.ts Tests
+ * @scaffold - index.ts Tests
  *
  * Tests the main realtime server module: validateSocketToken, normalizeOrigin,
  * getAllowedOrigins, isOriginAllowed, validateWebSocketOrigin,
  * validateAndLogWebSocketOrigin, requestListener, populateUserMetadata,
  * the Socket.IO middleware, and the connection handler.
  *
+ * @REVIEW ORM chain mock (db.select().from().where().limit()) is used for
+ * DM conversation and user profile queries. index.ts directly uses the ORM
+ * with no repository seam. To fix: extract DB queries into a repository module.
+ *
  * Strategy: mock all external dependencies at module level, then use
  * dynamic import so the module-level side-effects use mocked modules.
  * Captured callbacks are invoked directly for testing.
+ *
+ * Suggested integration tests:
+ * - Socket.IO client integration test: full auth flow with real token validation
+ * - Socket.IO client integration test: broadcast request with signature verification
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -462,7 +470,7 @@ describe('requestListener - /api/kick', () => {
 
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(mockHandleKickRequest).toHaveBeenCalled();
+    expect(mockHandleKickRequest).toHaveBeenCalledWith(mockIo, body);
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
   });
 
@@ -518,7 +526,7 @@ describe('requestListener - 404', () => {
     capturedRequestListener!(req, res);
 
     expect(res.writeHead).toHaveBeenCalledWith(404);
-    expect(res.end).toHaveBeenCalled();
+    expect(res.end).toHaveBeenCalledTimes(1);
   });
 
   it('given GET /api/broadcast, should return 404 (only POST supported)', () => {
@@ -974,7 +982,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('given invalid pageId, should emit validation error', async () => {
@@ -983,7 +991,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_channel', 'invalid-id!');
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_channel', 'invalid Page ID format');
     });
 
     it('given getUserAccessLevel throws, should disconnect', async () => {
@@ -994,7 +1002,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1031,7 +1039,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_drive', 12345);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_drive', 'Drive ID must be a valid ID');
     });
 
     it('given getUserDriveAccess throws, should log error', async () => {
@@ -1042,7 +1050,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalled();
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining drive', expect.objectContaining({ message: 'DB error' }), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1077,7 +1085,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_dm_conversation', { not: 'a string' });
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_dm_conversation', 'Conversation ID must be a valid ID');
     });
 
     it('given DB error, should log error', async () => {
@@ -1088,7 +1096,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_dm_conversation', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalled();
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.objectContaining({ message: 'DB error' }), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1108,7 +1116,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('leave_dm_conversation', null);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_dm_conversation', 'Conversation ID must be a valid ID');
     });
   });
 
@@ -1129,7 +1137,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('leave_drive', 42);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_drive', 'Drive ID must be a valid ID');
     });
   });
 
@@ -1164,7 +1172,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_drive', null);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_activity_drive', 'Drive ID must be a valid ID');
     });
 
     it('given getUserDriveAccess throws, should log error', async () => {
@@ -1175,7 +1183,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_drive', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalled();
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity drive', expect.objectContaining({ message: 'DB error' }), { driveId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1215,7 +1223,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_page', null);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_activity_page', 'invalid Page ID format');
     });
 
     it('given getUserAccessLevel throws, should log error', async () => {
@@ -1226,7 +1234,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('join_activity_page', 'athmieqpwr4ax1t2e0i4lmor');
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalled();
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining activity page', expect.objectContaining({ message: 'DB error' }), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1246,7 +1254,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('leave_activity_drive', true);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_activity_drive', 'Drive ID must be a valid ID');
     });
   });
 
@@ -1266,7 +1274,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('leave_activity_page', null);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_activity_page', 'invalid Page ID format');
     });
   });
 
@@ -1288,8 +1296,13 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('presence:join_page', { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
 
-      expect(mockPresenceTracker.addViewer).toHaveBeenCalled();
-      expect(mockIo.to).toHaveBeenCalled();
+      expect(mockPresenceTracker.addViewer).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor', 'drive-1', {
+        userId: 'user-1',
+        socketId: 'socket-1',
+        name: 'Test',
+        avatarUrl: null,
+      });
+      expect(mockIo.to).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
     });
 
     it('given no access, should not add viewer', async () => {
@@ -1326,7 +1339,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('presence:join_page', null);
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'presence:join_page', 'Invalid payload: pageId required');
     });
 
     it('given error in presence join, should log error', async () => {
@@ -1337,7 +1350,7 @@ describe('Socket.IO connection handler', () => {
 
       await socket._trigger('presence:join_page', { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
 
-      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalled();
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining page presence', expect.objectContaining({ message: 'DB error' }), { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
     });
   });
 
@@ -1352,7 +1365,7 @@ describe('Socket.IO connection handler', () => {
       socket._trigger('presence:leave_page', { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
 
       expect(mockPresenceTracker.removeViewer).toHaveBeenCalledWith('socket-1', 'athmieqpwr4ax1t2e0i4lmor');
-      expect(mockIo.to).toHaveBeenCalled();
+      expect(mockIo.to).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
     });
 
     it('given no driveId cached, should only emit to page room', () => {
@@ -1364,7 +1377,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('presence:leave_page', { pageId: 'athmieqpwr4ax1t2e0i4lmor' });
 
-      expect(mockPresenceTracker.removeViewer).toHaveBeenCalled();
+      expect(mockPresenceTracker.removeViewer).toHaveBeenCalledWith('socket-1', 'athmieqpwr4ax1t2e0i4lmor');
       // io.to called only with the page id (not a drive room)
       expect(mockIo.to).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
     });
@@ -1375,7 +1388,7 @@ describe('Socket.IO connection handler', () => {
 
       socket._trigger('presence:leave_page', { noPageId: true });
 
-      expect(emitValidationError).toHaveBeenCalled();
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'presence:leave_page', 'Invalid payload: pageId required');
     });
   });
 
@@ -1431,12 +1444,12 @@ describe('Socket.IO connection handler', () => {
       const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
       capturedIoConnectionCallback!(socket);
 
-      expect(mockWithPerEventAuth).toHaveBeenCalledWith(
-        socket,
-        'document_update',
-        expect.any(Function),
-        expect.objectContaining({ pageIdExtractor: expect.any(Function) })
-      );
+      expect(mockWithPerEventAuth).toHaveBeenCalledTimes(1);
+      const [authSocket, eventName, handler, opts] = mockWithPerEventAuth.mock.calls[0];
+      expect(authSocket).toBe(socket);
+      expect(eventName).toBe('document_update');
+      expect(typeof handler).toBe('function');
+      expect(typeof opts.pageIdExtractor).toBe('function');
     });
 
     it('given document_update handler invoked, should forward to room', async () => {
@@ -1583,7 +1596,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     // Profile name takes precedence - socket data should be updated
     expect((socket.data.user as { name: string }).name).toBe('Profile Name');
   });
@@ -1609,7 +1622,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect((socket.data.user as { name: string }).name).toBe('User Name');
   });
 
@@ -1634,7 +1647,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect((socket.data.user as { name: string }).name).toBe('Unknown');
   });
 

@@ -143,14 +143,20 @@ describe('processOCR', () => {
   it('terminates worker after OCR', async () => {
     await processOCR({ contentHash: VALID_HASH, fileId: 'page-1' });
 
-    expect(mockWorkerTerminate).toHaveBeenCalled();
+    expect(mockWorkerTerminate).toHaveBeenCalledTimes(1);
   });
 
   it('writes OCR result to cache', async () => {
     await processOCR({ contentHash: VALID_HASH, fileId: 'page-1' });
 
-    expect(mockMkdir).toHaveBeenCalled();
-    expect(mockWriteFile).toHaveBeenCalled();
+    expect(mockMkdir).toHaveBeenCalledWith(
+      expect.stringContaining(VALID_HASH),
+      { recursive: true }
+    );
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining('ocr-text.txt'),
+      'OCR text result'
+    );
   });
 
   it('includes textLength in result', async () => {
@@ -177,7 +183,7 @@ describe('processOCR', () => {
 
     // ai-vision falls back to tesseract since it's not implemented
     expect(result.success).toBe(true);
-    expect(mockCreateWorker).toHaveBeenCalled();
+    expect(mockCreateWorker).toHaveBeenCalledWith('eng');
 
     delete process.env.ENABLE_EXTERNAL_OCR;
   });
@@ -192,7 +198,7 @@ describe('processOCR', () => {
     });
 
     expect(result.provider).toBe('tesseract');
-    expect(mockCreateWorker).toHaveBeenCalled();
+    expect(mockCreateWorker).toHaveBeenCalledWith('eng');
 
     delete process.env.ENABLE_EXTERNAL_OCR;
   });
@@ -206,7 +212,7 @@ describe('processOCR', () => {
       fileId: 'page-1',
       provider: 'ai-vision',
     });
-    // Second call immediately after - rate limiter delay code runs (lines 17-19)
+    // Second call immediately after — rate limiter delay code runs
     const secondCall = processOCR({
       contentHash: VALID_HASH,
       fileId: 'page-1',
@@ -223,8 +229,8 @@ describe('processOCR', () => {
   it('throws when performAIVisionOCR cannot find image on second getOriginal call', async () => {
     process.env.ENABLE_EXTERNAL_OCR = 'true';
 
-    // First getOriginal call (line 48) returns the image so we pass the null check
-    // Second getOriginal call (line 103, inside performAIVisionOCR) returns null
+    // First getOriginal call returns the image so we pass the null check
+    // Second getOriginal call (inside performAIVisionOCR) returns null
     mockGetOriginal
       .mockResolvedValueOnce(Buffer.from('image-data'))
       .mockResolvedValueOnce(null);

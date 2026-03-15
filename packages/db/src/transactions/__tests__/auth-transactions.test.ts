@@ -1,8 +1,7 @@
 /**
- * Auth Transactions Unit Tests (mocked DB)
- *
- * Tests atomic token operations without a real database connection.
- * All DB calls are mocked via vi.mock.
+ * @boundary-contract - Transaction layer: raw SQL tx.execute() mocking is necessary
+ * because auth-transactions IS the lowest persistence seam for atomic token operations.
+ * mockResolvedValueOnce ordering mirrors the SQL execution sequence within each transaction.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

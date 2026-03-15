@@ -1,11 +1,9 @@
+/**
+ * @boundary-contract - Database layer: pg Pool mocking is necessary because db.ts IS
+ * the lowest persistence seam (raw SQL over pg Pool). These tests characterize
+ * query composition and connection lifecycle (acquire → query → release).
+ */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-
-// Since db.ts uses require('pg') which is hard to mock in vitest,
-// we test the module's exported functions by mocking the module itself
-// in consumer tests. Here we verify the module structure and type safety.
-
-// For coverage on db.ts, we mock at the pg level using vi.hoisted + vi.mock
-// with the factory returning a constructor function.
 
 const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
 const mockRelease = vi.fn();
@@ -39,6 +37,8 @@ import {
   getPageForIngestion,
 } from '../db';
 
+const SET_PAGE_COMPLETED_SQL = 'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5';
+
 describe('db module', () => {
   beforeEach(() => {
     mockQuery.mockReset().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -55,13 +55,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['processing', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageProcessing('page-1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -72,37 +72,40 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         expect.arrayContaining(['extracted', 'completed']),
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should use default extraction method (text)', async () => {
       await setPageCompleted('page-1', 'content', null);
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['content', 'completed', 'text']),
+        SET_PAGE_COMPLETED_SQL,
+        ['content', 'completed', 'text', null, 'page-1'],
       );
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should pass null when metadata is null', async () => {
       await setPageCompleted('page-1', 'text', null, 'ocr');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
+        SET_PAGE_COMPLETED_SQL,
         ['text', 'completed', 'ocr', null, 'page-1'],
       );
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should stringify non-null metadata', async () => {
       await setPageCompleted('page-1', 'text', { key: 'val' }, 'text');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining([JSON.stringify({ key: 'val' })]),
+        SET_PAGE_COMPLETED_SQL,
+        ['text', 'completed', 'text', '{"key":"val"}', 'page-1'],
       );
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageCompleted('p', 'text', null)).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -113,13 +116,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['visual', 'visual', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageVisual('page-1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -130,13 +133,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['failed', 'Processing failed', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageFailed('page-1', 'err')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -146,38 +149,30 @@ describe('db module', () => {
       mockQuery.mockResolvedValueOnce({ rows: [row], rowCount: 1 });
       const result = await getPageForIngestion('p1');
       expect(result).toEqual(row);
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should return null when no rows', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       const result = await getPageForIngestion('missing');
       expect(result).toBeNull();
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(getPageForIngestion('p1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 });
 
-describe('getPool throws when DATABASE_URL is not set (lines 21-22)', () => {
+describe('getPool throws when DATABASE_URL is not set', () => {
   it('throws DATABASE_URL error when env var is missing at call time', async () => {
-    // The pool is a module-level singleton. Since we cannot reset it without vi.isolateModules,
-    // we test this path by verifying that the error message string is present in the source,
-    // and by testing it via a fresh module import with vi.resetModules.
-    // Note: this test runs AFTER the main test suite has already set up the pool singleton,
-    // so we verify the behavior by checking getPool() throws before pool is initialized.
-    // The throw at lines 21-22 reads: throw new Error('DATABASE_URL is not configured')
-    // We verify this by trying a fresh module in a way that doesn't break others.
     const savedUrl = process.env.DATABASE_URL;
     delete process.env.DATABASE_URL;
 
     vi.resetModules();
-    // Re-register pg mock so the fresh module load still has pg available
     vi.doMock('pg', () => {
       class MockPool {
         connect() { return Promise.resolve({ query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }), release: vi.fn() }); }
@@ -189,7 +184,6 @@ describe('getPool throws when DATABASE_URL is not set (lines 21-22)', () => {
     const freshDb = await import('../db');
     await expect(freshDb.setPageProcessing('page-1')).rejects.toThrow('DATABASE_URL is not configured');
 
-    // Restore
     if (savedUrl !== undefined) process.env.DATABASE_URL = savedUrl;
     vi.resetModules();
   });

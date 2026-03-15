@@ -1,8 +1,7 @@
-import { db, files, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions-cached';
 import type { EnforcedAuthContext, ResourceBinding } from '../middleware/auth';
-import { getLinksForFile, type FileLink } from './file-links';
+import { getLinksForFile, getFileDriveId, type FileLink } from './file-links';
 
 export type AccessRequirement = 'view' | 'edit';
 
@@ -209,15 +208,10 @@ export async function authorizeFileAccess(
   }
 
   // Step 2: Fetch file context
-  const [links, fileRecord] = await Promise.all([
+  const [links, fileDriveId] = await Promise.all([
     getLinksForFile(normalizedHash),
-    db.query.files.findFirst({
-      where: eq(files.id, normalizedHash),
-      columns: { driveId: true },
-    }),
+    getFileDriveId(normalizedHash),
   ]);
-
-  const fileDriveId = fileRecord?.driveId;
 
   // Step 3: Check binding
   const matchType = determineBindingMatchType(binding, normalizedHash, links, fileDriveId);

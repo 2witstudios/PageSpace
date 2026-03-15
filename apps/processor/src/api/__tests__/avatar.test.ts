@@ -187,7 +187,10 @@ describe('POST /avatar/upload', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.filename).toBe('avatar.jpg');
-    expect(mockFsWriteFile).toHaveBeenCalled();
+    expect(mockFsWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining('user-1'),
+      Buffer.from('fake-image-data')
+    );
   });
 
   it('deletes old avatar files before saving new one', async () => {
@@ -201,7 +204,7 @@ describe('POST /avatar/upload', () => {
     expect(mockFsUnlink).toHaveBeenCalledTimes(2);
   });
 
-  it('returns 400 when avatarsDir resolution fails (lines 77-82)', async () => {
+  it('returns 400 when avatarsDir resolution fails', async () => {
     // resolvePathWithin returns null for the userId directory
     mockResolvePathWithin.mockReturnValue(null);
     const app = createApp({ userId: 'user-1' }, createMockFile());
@@ -222,7 +225,7 @@ describe('POST /avatar/upload', () => {
     expect(response.body.error).toContain('Failed to upload avatar');
   });
 
-  it('returns 400 when filepath resolution fails after avatarsDir is set (lines 107-112)', async () => {
+  it('returns 400 when filepath resolution fails after avatarsDir is set', async () => {
     // avatarsDir resolves OK (first call), but filepath (second call for filename) returns null
     let callCount = 0;
     mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
@@ -303,7 +306,7 @@ describe('DELETE /avatar/:userId', () => {
     const response = await request(app).delete('/avatar/user-1');
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
-    expect(mockFsUnlink).toHaveBeenCalled();
+    expect(mockFsUnlink).toHaveBeenCalledWith(expect.stringContaining('avatar'));
   });
 
   it('returns success even when directory does not exist', async () => {
@@ -326,7 +329,7 @@ describe('DELETE /avatar/:userId', () => {
     expect(response.body.success).toBe(true);
   });
 
-  it('returns 400 when avatarsDir resolution fails in delete handler (lines 158-162)', async () => {
+  it('returns 400 when avatarsDir resolution fails in delete handler', async () => {
     // Make resolvePathWithin return null for the avatarsDir call inside the delete handler
     mockResolvePathWithin.mockReturnValue(null);
     const app = createApp({ userId: 'user-1' });
@@ -335,7 +338,7 @@ describe('DELETE /avatar/:userId', () => {
     expect(response.body.error).toContain('Invalid avatar path');
   });
 
-  it('returns 500 when outer catch is triggered in delete handler (lines 188-193)', async () => {
+  it('returns 500 when outer catch is triggered in delete handler', async () => {
     // Make normalizeIdentifier throw synchronously to trigger the outer catch block
     mockNormalizeIdentifier.mockImplementation(() => {
       throw new Error('Unexpected identifier error');
