@@ -110,7 +110,7 @@ function createMockFile(overrides: Partial<Express.Multer.File> = {}): Express.M
     path: '',
     size: 1024,
     buffer: Buffer.from('fake-image-data'),
-    stream: null as unknown as NodeJS.ReadableStream,
+    stream: null!,
     ...overrides,
   };
 }

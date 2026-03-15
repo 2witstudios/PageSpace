@@ -149,7 +149,7 @@ describe('hasAuthScope', () => {
     const { hasAuthScope } = await import('../auth');
     const mockAuth = { hasScope: vi.fn().mockReturnValue(true) } as unknown as Parameters<typeof hasAuthScope>[0];
     expect(hasAuthScope(mockAuth, 'files:write')).toBe(true);
-    expect(mockAuth.hasScope).toHaveBeenCalledWith('files:write');
+    expect(mockAuth!.hasScope).toHaveBeenCalledWith('files:write');
   });
 
   it('returns false when auth.hasScope returns false', async () => {
