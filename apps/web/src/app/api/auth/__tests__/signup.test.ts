@@ -15,31 +15,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../signup/route';
 
 // Mock all external dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email', id: 'id' },
-  drives: {},
-  userAiSettings: {},
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([
-          {
-            id: 'new-user-id',
-            name: 'New User',
-            email: 'new@example.com',
-            tokenVersion: 0,
-            role: 'user',
-          },
-        ]),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
+    createUser: vi.fn(),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -153,7 +139,8 @@ vi.mock('react', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import bcrypt from 'bcryptjs';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -173,7 +160,6 @@ import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/signup', () => {
   const validSignupPayload = {
     name: 'New User',
@@ -204,7 +190,15 @@ describe('/api/auth/signup', () => {
     vi.clearAllMocks();
 
     // Default: no existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+    // Default: user creation returns a user object
+    vi.mocked(authRepository.createUser).mockResolvedValue({
+      id: 'new-user-id',
+      name: 'New User',
+      email: 'new@example.com',
+      tokenVersion: 0,
+      role: 'user',
+    } as never);
     // Reset client IP mock
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
@@ -243,39 +237,16 @@ describe('/api/auth/signup', () => {
     });
 
     it('creates user with correct data', async () => {
-      interface CapturedUserData {
-        email?: string;
-        name?: string;
-        password?: string;
-      }
-      let capturedUserData: CapturedUserData | undefined;
-      const mockValues = vi.fn().mockImplementation((data: CapturedUserData) => {
-        if (!capturedUserData && data.email) {
-          capturedUserData = data;
-        }
-        return {
-          returning: vi.fn().mockResolvedValue([
-            {
-              id: 'new-user-id',
-              name: data.name || 'New User',
-              email: data.email || 'new@example.com',
-              tokenVersion: 0,
-              role: 'user',
-            },
-          ]),
-        };
-      });
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(capturedUserData).toBeDefined();
-      expect(capturedUserData!.email).toBe('new@example.com');
-      expect(capturedUserData!.name).toBe('New User');
-      expect(typeof capturedUserData!.password).toBe('string');
-      expect(capturedUserData!.password).not.toBe('ValidPass123!');
-      expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/);
+      expect(authRepository.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'new@example.com',
+          name: 'New User',
+          password: expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$/),
+        })
+      );
     });
 
     it('creates a personal drive for new user', async () => {
@@ -379,7 +350,7 @@ describe('/api/auth/signup', () => {
 
   describe('with duplicate email', () => {
     it('returns 409 when email already exists', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
       } as never);
@@ -394,7 +365,7 @@ describe('/api/auth/signup', () => {
 
     it('logs failed signup for duplicate email', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
       } as never);
@@ -663,9 +634,7 @@ describe('/api/auth/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(db.insert).mockImplementation(() => {
-        throw new Error('Database connection failed');
-      });
+      vi.mocked(authRepository.createUser).mockRejectedValueOnce(new Error('Database connection failed'));
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -764,20 +733,7 @@ describe('/api/auth/signup', () => {
 
   describe('session creation edge cases', () => {
     beforeEach(() => {
-      // Ensure db.insert is properly mocked for user creation
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([
-            {
-              id: 'new-user-id',
-              name: 'New User',
-              email: 'new@example.com',
-              tokenVersion: 0,
-              role: 'user',
-            },
-          ]),
-        }),
-      } as never);
+      // authRepository.createUser default mock is set in outer beforeEach
     });
 
     it('returns 500 when session validation fails after creation', async () => {

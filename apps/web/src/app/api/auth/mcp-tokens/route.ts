@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens, mcpTokenDrives, drives, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -61,38 +61,19 @@ export async function POST(req: NextRequest) {
 
     // Use transaction to ensure token and drive scopes are created atomically
     // If drive scope insertion fails, the token should not exist
-    const newToken = await db.transaction(async (tx) => {
-      // Store ONLY the hash in the database
-      // isScoped=true means if all scoped drives are deleted, deny access (not grant all)
-      const [token] = await tx.insert(mcpTokens).values({
-        userId,
-        tokenHash,
-        tokenPrefix,
-        name,
-        isScoped,
-      }).returning();
-
-      // If drive scopes are specified, create the junction table entries
-      if (driveIds.length > 0) {
-        await tx.insert(mcpTokenDrives).values(
-          driveIds.map(driveId => ({
-            tokenId: token.id,
-            driveId,
-          }))
-        );
-      }
-
-      return token;
+    const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
+      userId,
+      tokenHash,
+      tokenPrefix,
+      name,
+      isScoped,
+      driveIds,
     });
 
     // Fetch drive names for consistent response format with GET
     let driveScopes: { id: string; name: string }[] = [];
     if (driveIds.length > 0) {
-      const driveRecords = await db.query.drives.findMany({
-        where: inArray(drives.id, driveIds),
-        columns: { id: true, name: true },
-      });
-      driveScopes = driveRecords.map(d => ({ id: d.id, name: d.name }));
+      driveScopes = await sessionRepository.findDrivesByIds(driveIds);
     }
 
     // Log activity for audit trail (token creation is a security event)
@@ -129,52 +110,7 @@ export async function GET(req: NextRequest) {
   const userId = auth.userId;
 
   try {
-    // Fetch all non-revoked tokens for the user with their drive scopes
-    const tokens = await db.query.mcpTokens.findMany({
-      where: (tokens, { eq, isNull, and }) => and(
-        eq(tokens.userId, userId),
-        isNull(tokens.revokedAt)
-      ),
-      columns: {
-        id: true,
-        name: true,
-        lastUsed: true,
-        createdAt: true,
-        isScoped: true,
-      },
-      with: {
-        driveScopes: {
-          columns: {
-            driveId: true,
-          },
-          with: {
-            drive: {
-              columns: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Transform the response to include drive info
-    // Filter out any scopes where the drive may have been deleted
-    const tokensWithDrives = tokens.map(token => ({
-      id: token.id,
-      name: token.name,
-      lastUsed: token.lastUsed,
-      createdAt: token.createdAt,
-      isScoped: token.isScoped,
-      driveScopes: token.driveScopes
-        .filter(scope => scope.drive != null)
-        .map(scope => ({
-          id: scope.drive.id,
-          name: scope.drive.name,
-        })),
-    }));
-
+    const tokensWithDrives = await sessionRepository.findUserMcpTokensWithDrives(userId);
     return NextResponse.json(tokensWithDrives);
   } catch (error) {
     loggers.auth.error('Error fetching MCP tokens:', error as Error);

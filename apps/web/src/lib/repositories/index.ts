@@ -11,3 +11,5 @@ export * from './global-conversation-repository';
 export * from './ai-settings-repository';
 export * from './auth-repository';
 export * from './drive-invite-repository';
+export * from './oauth-repository';
+export * from './session-repository';

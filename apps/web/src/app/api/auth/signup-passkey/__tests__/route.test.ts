@@ -8,14 +8,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-// @scaffold - ORM chain mocks (db.insert().values())
-vi.mock('@pagespace/db', () => ({
-  db: {
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    }),
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
   },
-  userAiSettings: {},
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -75,7 +71,7 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   verifySignupRegistration,
   sessionService,
@@ -170,17 +166,10 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
     });
 
-    it('inserts default AI settings', async () => {
+    it('creates default AI settings for new user', async () => {
       await POST(createRequest());
 
-      expect(db.insert).toHaveBeenCalledWith(/** @scaffold */ expect.any(Object));
-      const insertValues = vi.mocked(db.insert).mock.results[0]?.value;
-      expect(insertValues.values).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-1',
-          provider: 'ollama',
-        }),
-      );
+      expect(oauthRepository.createDefaultAiSettings).toHaveBeenCalledWith('new-user-1');
     });
 
     it('logs auth events', async () => {
@@ -284,9 +273,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('continues when AI settings insertion fails', async () => {
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValueOnce(new Error('Insert error')),
-      } as never);
+      vi.mocked(oauthRepository.createDefaultAiSettings).mockRejectedValueOnce(new Error('Insert error'));
 
       const response = await POST(createRequest());
       const body = await response.json();

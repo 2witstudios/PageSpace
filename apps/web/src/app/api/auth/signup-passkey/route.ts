@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, userAiSettings } from '@pagespace/db';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   verifySignupRegistration,
   sessionService,
@@ -153,12 +153,7 @@ export async function POST(req: Request) {
 
     // Add default 'ollama' provider for the new user
     try {
-      await db.insert(userAiSettings).values({
-        userId,
-        provider: 'ollama',
-        baseUrl: 'http://host.docker.internal:11434',
-        updatedAt: new Date(),
-      });
+      await oauthRepository.createDefaultAiSettings(userId);
     } catch (error) {
       loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }

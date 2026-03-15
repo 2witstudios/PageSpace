@@ -7,7 +7,7 @@
  * Additional coverage:
  * - POST: Auth error handling (isAuthError returns true)
  * - POST: Drive scope validation (user lacks access to specified drives)
- * - POST: Transaction with drive scopes insertion
+ * - POST: Repository call with drive scopes
  * - POST: Drive name fetching for scoped tokens
  * - POST: Deduplicate drive IDs
  * - POST: isScoped flag (fail-closed security)
@@ -22,30 +22,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const mockDrivesFindMany = vi.hoisted(() => vi.fn());
-
-// @scaffold - ORM chain mocks (db.insert, db.transaction, db.query, db.update)
-vi.mock('@pagespace/db', () => ({
-  db: {
-    insert: vi.fn(),
-    transaction: vi.fn(),
-    query: {
-      mcpTokens: {
-        findMany: vi.fn(),
-        findFirst: vi.fn(),
-      },
-      drives: {
-        findMany: mockDrivesFindMany,
-      },
-    },
-    update: vi.fn(),
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    createMcpTokenWithDriveScopes: vi.fn(),
+    findDrivesByIds: vi.fn(),
+    findUserMcpTokensWithDrives: vi.fn(),
+    findMcpTokenByIdAndUser: vi.fn(),
+    revokeMcpToken: vi.fn(),
   },
-  mcpTokens: {},
-  mcpTokenDrives: {},
-  drives: { id: 'id' },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  and: vi.fn((...conditions: unknown[]) => conditions),
-  inArray: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -81,19 +65,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 import { POST, GET } from '../route';
-import { db } from '@pagespace/db';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth';
-
-const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  vi.mocked(db.transaction).mockImplementation((async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
-    const tx = { insert: insertMock };
-    return callback(tx);
-  }) as never);
-};
 
 describe('/api/auth/mcp-tokens (additional coverage)', () => {
   beforeEach(() => {
@@ -118,21 +95,15 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       hash: 'mockTokenHash123',
       tokenPrefix: 'mcp_randomBas',
     });
-    mockDrivesFindMany.mockResolvedValue([]);
 
-    // Default transaction mock
-    const defaultInsertMock = vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([
-          {
-            id: 'new-mcp-token-id',
-            name: 'Test Token',
-            createdAt: new Date(),
-          },
-        ]),
-      }),
-    });
-    setupTransactionMock(defaultInsertMock);
+    // Default repository mocks
+    vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
+      id: 'new-mcp-token-id',
+      name: 'Test Token',
+      createdAt: new Date(),
+    } as never);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([]);
+    vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
 
     // Default drive access mock
     vi.mocked(getDriveAccess).mockResolvedValue({
@@ -171,15 +142,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
           role: null,
         } as never);
 
-        const insertMock = vi.fn().mockReturnValue({
-          values: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([
-              { id: 'token-id', name: 'Token', createdAt: new Date() },
-            ]),
-          }),
-        });
-        setupTransactionMock(insertMock);
-
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -197,7 +159,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(body.error).toContain('You do not have access');
         expect(body.error).toContain('drive-1');
         expect(body.error).toContain('drive-2');
-        expect(insertMock).not.toHaveBeenCalled();
+        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
       });
 
       it('allows scoping to drives where user is member but not owner', async () => {
@@ -208,29 +170,9 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
           role: 'MEMBER',
         } as never);
 
-        mockDrivesFindMany.mockResolvedValue([
+        vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
           { id: 'drive-1', name: 'Shared Drive' },
         ]);
-
-        let callCount = 0;
-        const insertMock = vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            // First call: insert mcpTokens
-            return {
-              values: vi.fn().mockReturnValue({
-                returning: vi.fn().mockResolvedValue([
-                  { id: 'token-id', name: 'Token', createdAt: new Date() },
-                ]),
-              }),
-            };
-          }
-          // Second call: insert mcpTokenDrives (no .returning())
-          return {
-            values: vi.fn().mockResolvedValue(undefined),
-          };
-        });
-        setupTransactionMock(insertMock);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -254,35 +196,9 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
           role: 'OWNER',
         } as never);
 
-        mockDrivesFindMany.mockResolvedValue([
+        vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
           { id: 'drive-1', name: 'My Drive' },
         ]);
-
-        let capturedDriveScopes: Array<{ tokenId: string; driveId: string }> | undefined;
-        let dedupeCallCount = 0;
-        const insertMock = vi.fn().mockImplementation(() => {
-          dedupeCallCount++;
-          if (dedupeCallCount === 1) {
-            // First call: insert mcpTokens
-            return {
-              values: vi.fn().mockReturnValue({
-                returning: vi.fn().mockResolvedValue([
-                  { id: 'token-id', name: 'Token', createdAt: new Date() },
-                ]),
-              }),
-            };
-          }
-          // Second call: insert mcpTokenDrives
-          return {
-            values: vi.fn().mockImplementation((vals: unknown) => {
-              if (Array.isArray(vals)) {
-                capturedDriveScopes = vals;
-              }
-              return Promise.resolve();
-            }),
-          };
-        });
-        setupTransactionMock(insertMock);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -300,17 +216,18 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         // getDriveAccess should only be called once (deduplication)
         expect(getDriveAccess).toHaveBeenCalledTimes(1);
 
-        // Drive scopes should only have one entry (deduplication)
-        expect(capturedDriveScopes).toBeDefined();
-        expect(capturedDriveScopes).toEqual([
-          expect.objectContaining({ driveId: 'drive-1' }),
-        ]);
+        // Repository should be called with deduplicated driveIds
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
+          expect.objectContaining({ driveIds: ['drive-1'] })
+        );
       });
     });
 
     describe('error handling', () => {
       it('returns 500 on generic error', async () => {
-        vi.mocked(db.transaction).mockRejectedValueOnce(new Error('Transaction failed'));
+        vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockRejectedValueOnce(
+          new Error('Transaction failed')
+        );
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -355,7 +272,8 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
     describe('drive scope filtering', () => {
       it('filters out drive scopes where drive is null (deleted drive)', async () => {
-        vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([
+        // Repository already does the filtering; return pre-filtered data
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
           {
             id: 'token-1',
             name: 'Token 1',
@@ -363,8 +281,8 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             createdAt: new Date(),
             isScoped: true,
             driveScopes: [
-              { driveId: 'drive-1', drive: { id: 'drive-1', name: 'Active Drive' } },
-              { driveId: 'drive-2', drive: null }, // Deleted drive
+              { id: 'drive-1', name: 'Active Drive' },
+              // Deleted drive already filtered by repository
             ],
           },
         ] as never);
@@ -383,7 +301,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
 
       it('includes isScoped field in response', async () => {
-        vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
           {
             id: 'token-1',
             name: 'Scoped Token',
@@ -417,7 +335,9 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
     describe('error handling', () => {
       it('returns 500 on generic error', async () => {
-        vi.mocked(db.query.mcpTokens.findMany).mockRejectedValueOnce(new Error('DB error'));
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockRejectedValueOnce(
+          new Error('DB error')
+        );
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',

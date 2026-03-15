@@ -70,16 +70,18 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', image: 'image' },
-  db: {
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    updateUser: vi.fn().mockResolvedValue(undefined),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  createSessionCookie: vi.fn().mockReturnValue('mock-session-cookie'),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -100,7 +102,6 @@ import {
 import { sessionService } from '@pagespace/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/oauth/google/exchange', () => {
   const mockUserInfo = {
     provider: 'google',

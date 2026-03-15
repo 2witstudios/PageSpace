@@ -1,17 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/login/route';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -82,7 +75,7 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
 import {
   validateOrCreateDeviceToken,
@@ -98,7 +91,6 @@ import {
 import { securityAudit } from '@pagespace/lib/audit';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/login', () => {
   const mockUser = {
     id: 'qfh0haxfpzowht3oi213lgn1',
@@ -123,7 +115,7 @@ describe('/api/auth/mobile/login', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful login
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser as never);
     vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
   });
 
@@ -308,7 +300,7 @@ describe('/api/auth/mobile/login', () => {
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
       vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
@@ -353,7 +345,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('performs timing-safe comparison even for non-existent users', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -634,7 +626,7 @@ describe('/api/auth/mobile/login', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',

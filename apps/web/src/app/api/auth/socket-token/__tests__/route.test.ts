@@ -13,28 +13,23 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  *
  * Dependencies mocked at service seam:
  *   - @/lib/auth/auth-helpers: requireAuth, isAuthError
- *   - @pagespace/db: db.insert for token storage
+ *   - @/lib/repositories/session-repository: sessionRepository.createSocketToken
  *   - crypto is NOT mocked (pure utility, real implementation used)
  */
-
-// @scaffold - ORM chain mocks (db.insert().values())
-const mockInsertValues = vi.fn().mockResolvedValue(undefined);
-const mockInsert = vi.fn().mockReturnValue({ values: mockInsertValues });
 
 vi.mock('@/lib/auth/auth-helpers', () => ({
   requireAuth: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    insert: (...args: unknown[]) => mockInsert(...args),
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    createSocketToken: vi.fn().mockResolvedValue(undefined),
   },
-  socketTokens: Symbol('socketTokens'),
 }));
 
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { socketTokens } from '@pagespace/db';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { GET } from '../route';
 
 describe('/api/auth/socket-token', () => {
@@ -60,17 +55,14 @@ describe('/api/auth/socket-token', () => {
 
   describe('successful token creation', () => {
     it('GET_withValidSession_returns200WithTokenAndExpiry', async () => {
-      // Arrange
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
       });
 
-      // Act
       const response = await GET(request);
       const body = await response.json();
 
-      // Assert
       expect(response.status).toBe(200);
       expect(body.token).toMatch(/^ps_sock_/);
       expect(body.expiresAt).toBe(
@@ -78,56 +70,43 @@ describe('/api/auth/socket-token', () => {
       );
     });
 
-    it('GET_withValidSession_insertsHashedTokenInDB', async () => {
-      // Arrange
+    it('GET_withValidSession_storesHashedTokenViaRepository', async () => {
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
       });
 
-      // Act
       await GET(request);
 
-      // Assert: token hash is stored (not the plaintext token)
-      expect(mockInsert).toHaveBeenCalledWith(socketTokens);
-      expect(mockInsertValues).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'test-user-id',
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        })
-      );
-      // The stored hash should be a hex string (SHA-256 output), not the token itself
-      const storedValues = mockInsertValues.mock.calls[0][0];
-      expect(storedValues.tokenHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(sessionRepository.createSocketToken).toHaveBeenCalledWith({
+        tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        userId: 'test-user-id',
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      });
     });
 
     it('GET_withValidSession_storesHashNotPlaintext', async () => {
-      // Arrange
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
       });
 
-      // Act
       const response = await GET(request);
       const body = await response.json();
 
-      // Assert: the stored hash differs from the returned token
-      const storedValues = mockInsertValues.mock.calls[0][0];
-      expect(storedValues.tokenHash).not.toBe(body.token);
+      // The stored hash differs from the returned token
+      const storedCall = vi.mocked(sessionRepository.createSocketToken).mock.calls[0][0];
+      expect(storedCall.tokenHash).not.toBe(body.token);
     });
 
     it('GET_withValidSession_setsCacheControlHeaders', async () => {
-      // Arrange
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
       });
 
-      // Act
       const response = await GET(request);
 
-      // Assert
       expect(response.headers.get('Cache-Control')).toBe(
         'no-store, no-cache, must-revalidate'
       );
@@ -135,23 +114,19 @@ describe('/api/auth/socket-token', () => {
     });
 
     it('GET_withValidSession_callsRequireAuth', async () => {
-      // Arrange
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
       });
 
-      // Act
       await GET(request);
 
-      // Assert
       expect(requireAuth).toHaveBeenCalledWith(request);
     });
   });
 
   describe('authentication errors', () => {
     it('GET_withoutAuth_returns401', async () => {
-      // Arrange: requireAuth returns a NextResponse error
       const unauthorizedResponse = new Response('Unauthorized', {
         status: 401,
         headers: { 'Content-Type': 'text/plain' },
@@ -163,15 +138,12 @@ describe('/api/auth/socket-token', () => {
         method: 'GET',
       });
 
-      // Act
       const response = await GET(request);
 
-      // Assert
       expect(response.status).toBe(401);
     });
 
     it('GET_withInvalidSession_returns401AndSkipsInsert', async () => {
-      // Arrange: requireAuth returns an auth error response
       const unauthorizedResponse = new Response('Unauthorized', {
         status: 401,
         headers: { 'Content-Type': 'text/plain' },
@@ -184,12 +156,10 @@ describe('/api/auth/socket-token', () => {
         headers: { Cookie: 'session=invalid-token' },
       });
 
-      // Act
       const response = await GET(request);
 
-      // Assert
       expect(response.status).toBe(401);
-      expect(mockInsert).not.toHaveBeenCalled();
+      expect(sessionRepository.createSocketToken).not.toHaveBeenCalled();
     });
   });
 });

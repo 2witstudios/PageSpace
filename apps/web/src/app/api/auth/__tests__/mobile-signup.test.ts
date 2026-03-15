@@ -15,23 +15,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/signup/route';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email', id: 'id' },
-  drives: {},
-  userAiSettings: {},
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([]),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
+    createUser: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createPersonalDrive: vi.fn(),
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -116,7 +111,8 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
-import { db, drives, userAiSettings } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
@@ -131,7 +127,6 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/signup', () => {
   const mockNewUser = {
     id: 'pfh0haxfpzowht3oi213cqos',
@@ -166,30 +161,13 @@ describe('/api/auth/mobile/signup', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful signup
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never); // No existing user
-    vi.mocked(db.insert).mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([mockNewUser]),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(oauthRepository.createPersonalDrive).mockResolvedValue(mockDrive as never);
   });
 
   describe('successful mobile signup', () => {
     it('returns 201 with user data and tokens', async () => {
-      // Setup for drive creation - alternate between user and drive results
-      let insertCallCount = 0;
-      vi.mocked(db.insert).mockImplementation(() => ({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockImplementation(() => {
-            insertCallCount++;
-            if (insertCallCount === 1) {
-              return Promise.resolve([mockNewUser]);
-            }
-            return Promise.resolve([mockDrive]);
-          }),
-        }),
-      }) as never);
-
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -248,8 +226,7 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify drive creation targeted the drives table
-      expect(db.insert).toHaveBeenCalledWith(drives);
+      expect(oauthRepository.createPersonalDrive).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'pfh0haxfpzowht3oi213cqos' }));
     });
 
     it('sends verification email', async () => {
@@ -573,7 +550,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('existing user', () => {
     it('returns 409 when email already exists', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
       } as never);
@@ -592,7 +569,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('logs failed signup for existing email', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
       } as never);
@@ -707,7 +684,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on database error', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -783,8 +760,7 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify AI settings insert targeted the userAiSettings table
-      expect(db.insert).toHaveBeenCalledWith(userAiSettings);
+      expect(oauthRepository.createDefaultAiSettings).toHaveBeenCalledWith('pfh0haxfpzowht3oi213cqos');
     });
   });
 

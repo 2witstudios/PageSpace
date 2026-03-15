@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
-import { users, deviceTokens, db, eq } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,
@@ -78,13 +79,10 @@ export async function POST(req: Request) {
 
         // Update device record with correct deviceId (one-time migration)
         try {
-          const [updatedDevice] = await db
-            .update(deviceTokens)
-            .set({
-              deviceId: deviceId,
-            })
-            .where(eq(deviceTokens.id, deviceRecord.id))
-            .returning();
+          const updatedDevice = await sessionRepository.updateDeviceTokenDeviceId(
+            deviceRecord.id,
+            deviceId
+          );
 
           if (!updatedDevice) {
             loggers.auth.error('Failed to update device token deviceId', {
@@ -112,9 +110,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, deviceRecord.userId),
-    });
+    const user = await authRepository.findUserById(deviceRecord.userId);
 
     if (!user) {
       return Response.json({ error: 'User not found for device token.' }, { status: 404 });

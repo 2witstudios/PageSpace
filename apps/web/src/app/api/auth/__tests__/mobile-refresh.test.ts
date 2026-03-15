@@ -14,16 +14,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/refresh/route';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -85,7 +79,7 @@ vi.mock('@/lib/auth', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
@@ -99,7 +93,6 @@ import {
 import { sessionService } from '@pagespace/lib/auth';
 import { getClientIP } from '@/lib/auth';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/refresh', () => {
   const mockUser = {
     id: 'rfh0haxfpzowht3oi213ref1',
@@ -132,7 +125,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
     vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined);
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_refreshed-token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -347,7 +340,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('returns 401 when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',

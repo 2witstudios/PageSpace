@@ -24,21 +24,16 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// @scaffold - Deep ORM chain mocks (db.update().set().where().returning(), db.query.users.findFirst)
-// because the route directly calls Drizzle ORM with no service layer. The ORM IS the
-// system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  deviceTokens: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    updateDeviceTokenDeviceId: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -98,7 +93,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
@@ -151,7 +147,7 @@ describe('POST /api/auth/device/refresh', () => {
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
 
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
     vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined as never);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
@@ -270,13 +266,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'device-token-record-id', deviceId: 'device-123' }]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -294,13 +284,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: null,
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'device-token-record-id', deviceId: 'device-123' }]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -314,13 +298,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue(null);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -336,13 +314,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockRejectedValueOnce(new Error('DB error')),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -359,7 +331,7 @@ describe('POST /api/auth/device/refresh', () => {
 
   describe('user not found', () => {
     it('returns 404 when user is not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);

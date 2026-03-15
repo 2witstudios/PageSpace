@@ -1,28 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../device/refresh/route';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  deviceTokens: { id: 'id', deviceId: 'deviceId' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    }),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'device-token-id', deviceId: 'device-123' }]),
-        }),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    updateDeviceTokenDeviceId: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -80,7 +68,8 @@ vi.mock('@/lib/auth', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
@@ -92,7 +81,6 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/device/refresh', () => {
   const mockUser = {
     id: 'test-user-id',
@@ -124,7 +112,8 @@ describe('/api/auth/device/refresh', () => {
 
     // Default: valid device token flow
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
+    vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
     // Default: no rotation (token not near expiration)
     vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({ success: false });
   });
@@ -434,7 +423,7 @@ describe('/api/auth/device/refresh', () => {
   describe('user not found', () => {
     it('returns 404 when user is deleted but device token exists', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',

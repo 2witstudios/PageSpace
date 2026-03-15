@@ -4,40 +4,14 @@ import { DELETE } from '../mcp-tokens/[tokenId]/route';
 import { NextRequest } from 'next/server';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  db: {
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([
-          {
-            id: 'new-mcp-token-id',
-            name: 'Test Token',
-            token: 'mcp_generated-token',
-            createdAt: new Date(),
-          },
-        ]),
-      }),
-    }),
-    // Support for db.transaction() - executes callback with a mock tx object
-    transaction: vi.fn(),
-    query: {
-      mcpTokens: {
-        findMany: vi.fn(),
-        findFirst: vi.fn().mockResolvedValue({ id: 'token-123', name: 'Test Token' }),
-      },
-    },
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'token-id' }]),
-        }),
-      }),
-    }),
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    createMcpTokenWithDriveScopes: vi.fn(),
+    findDrivesByIds: vi.fn(),
+    findUserMcpTokensWithDrives: vi.fn(),
+    findMcpTokenByIdAndUser: vi.fn(),
+    revokeMcpToken: vi.fn(),
   },
-  mcpTokens: {},
-  mcpTokenDrives: {},
-  eq: vi.fn((field, value) => ({ field, value })),
-  and: vi.fn((...conditions) => conditions),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -77,19 +51,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
-import { db } from '@pagespace/db';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-// Helper to create a mock transaction that executes callback with a mock tx
-const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  vi.mocked(db.transaction).mockImplementation((async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
-    const tx = { insert: insertMock };
-    return callback(tx);
-  }) as never);
-};
-
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -104,41 +69,30 @@ describe('/api/auth/mcp-tokens', () => {
     } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Default transaction mock that returns a basic token
-    const defaultInsertMock = vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([
-          {
-            id: 'new-mcp-token-id',
-            name: 'Test Token',
-            createdAt: new Date(),
-          },
-        ]),
-      }),
-    });
-    setupTransactionMock(defaultInsertMock);
+    // Default repository mocks
+    vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
+      id: 'new-mcp-token-id',
+      name: 'Test Token',
+      createdAt: new Date(),
+    } as never);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([]);
+    vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue({
+      id: 'token-123',
+      name: 'Test Token',
+    } as never);
+    vi.mocked(sessionRepository.revokeMcpToken).mockResolvedValue(undefined);
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('successful token creation', () => {
       it('returns 200 with new token data', async () => {
-        // Arrange - capture the values passed to insert via transaction
-        let capturedValues: Record<string, unknown> | undefined;
-        const mockInsert = vi.fn().mockReturnValue({
-          values: vi.fn().mockImplementation((vals) => {
-            capturedValues = vals;
-            return {
-              returning: vi.fn().mockResolvedValue([
-                {
-                  id: 'new-mcp-token-id',
-                  name: vals.name,
-                  createdAt: new Date(),
-                },
-              ]),
-            };
-          }),
-        });
-        setupTransactionMock(mockInsert);
+        // Arrange
+        vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
+          id: 'new-mcp-token-id',
+          name: 'My API Token',
+          createdAt: new Date(),
+        } as never);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -157,14 +111,17 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert - verify response matches input
         expect(response.status).toBe(200);
         expect(body.id).toBe('new-mcp-token-id');
-        expect(body.name).toBe('My API Token'); // Should match input, not hardcoded mock
+        expect(body.name).toBe('My API Token');
         expect(body.token).toMatch(/^mcp_/); // Token should have mcp_ prefix
         expect(body.createdAt).toBeDefined();
 
-        // Assert - verify correct values were passed to insert
-        expect(capturedValues).toBeDefined();
-        expect(capturedValues!.name).toBe('My API Token');
-        expect(capturedValues!.userId).toBe('test-user-id');
+        // Assert - verify repository was called with correct params
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name: 'My API Token',
+            userId: 'test-user-id',
+          })
+        );
 
         // Assert - verify activity logging for token creation (boundary contract)
         expect(logTokenActivity).toHaveBeenCalledWith(
@@ -182,16 +139,6 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('generates token with mcp_ prefix', async () => {
-        // Arrange - mock transaction returns token
-        const mockInsert = vi.fn().mockReturnValue({
-          values: vi.fn().mockImplementation((vals) => ({
-            returning: vi.fn().mockResolvedValue([
-              { id: 'id', name: vals.name, createdAt: new Date() },
-            ]),
-          })),
-        });
-        setupTransactionMock(mockInsert);
-
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -207,26 +154,14 @@ describe('/api/auth/mcp-tokens', () => {
         const body = await response.json();
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
-        expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'My Token', userId: 'test-user-id' })
+        );
         expect(body.token).toBeDefined();
         expect(body.token).toMatch(/^mcp_/);
       });
 
       it('associates token with authenticated user', async () => {
-        // Arrange - capture userId via transaction mock
-        let capturedUserId: string | undefined;
-        const mockInsert = vi.fn().mockReturnValue({
-          values: vi.fn().mockImplementation((vals) => {
-            capturedUserId = vals.userId;
-            return {
-              returning: vi.fn().mockResolvedValue([
-                { id: 'id', name: vals.name, createdAt: new Date() },
-              ]),
-            };
-          }),
-        });
-        setupTransactionMock(mockInsert);
-
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
@@ -241,8 +176,9 @@ describe('/api/auth/mcp-tokens', () => {
         await POST(request);
 
         // Assert - verify token is associated with authenticated user
-        expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
-        expect(capturedUserId).toBe('test-user-id');
+        expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'test-user-id' })
+        );
       });
     });
 
@@ -364,19 +300,21 @@ describe('/api/auth/mcp-tokens', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     beforeEach(() => {
-      vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([
+      vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
         {
           id: 'token-1',
           name: 'Token 1',
           lastUsed: new Date(),
           createdAt: new Date(),
-          driveScopes: [{ driveId: 'drive-1', drive: { id: 'drive-1', name: 'Work Drive' } }],
+          isScoped: false,
+          driveScopes: [{ id: 'drive-1', name: 'Work Drive' }],
         },
         {
           id: 'token-2',
           name: 'Token 2',
           lastUsed: null,
           createdAt: new Date(),
+          isScoped: false,
           driveScopes: [],
         },
       ] as never);
@@ -447,7 +385,7 @@ describe('/api/auth/mcp-tokens', () => {
     describe('empty list', () => {
       it('returns empty array when user has no tokens', async () => {
         // Arrange
-        vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([]);
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
@@ -529,19 +467,8 @@ describe('/api/auth/mcp-tokens', () => {
         );
       });
 
-      it('sets revokedAt timestamp instead of deleting', async () => {
-        // Arrange - capture the values passed to set()
-        let capturedSetValues: Record<string, unknown> | undefined;
-        const mockSet = vi.fn().mockImplementation((vals) => {
-          capturedSetValues = vals;
-          return {
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: 'token-123' }]),
-            }),
-          };
-        });
-        vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
-
+      it('calls revokeMcpToken to revoke the token', async () => {
+        // Arrange
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',
           {
@@ -557,18 +484,15 @@ describe('/api/auth/mcp-tokens', () => {
         // Act
         await DELETE(request, context);
 
-        // Assert - verify update was called and revokedAt was set to a non-null Date
-        expect(db.update).toHaveBeenCalledWith(expect.any(Object));
-        expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ revokedAt: expect.any(Date) }));
-        expect(capturedSetValues).toBeDefined();
-        expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
+        // Assert - verify revokeMcpToken was called with the correct args
+        expect(sessionRepository.revokeMcpToken).toHaveBeenCalledWith('token-123', 'test-user-id');
       });
     });
 
     describe('token not found', () => {
       it('returns 404 when token does not exist', async () => {
-        // Arrange - findFirst returns undefined when token doesn't exist
-        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
+        // Arrange - findMcpTokenByIdAndUser returns null when token doesn't exist
+        vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValueOnce(null);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/nonexistent-token',
@@ -590,8 +514,8 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('returns 404 when token belongs to different user', async () => {
-        // Arrange - findFirst returns undefined when token doesn't match userId
-        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
+        // Arrange - findMcpTokenByIdAndUser returns null when token doesn't match userId
+        vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValueOnce(null);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/other-user-token',
