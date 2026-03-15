@@ -252,9 +252,10 @@ paths:
       expect(tool?.inputSchema.properties).toHaveProperty('name');
 
       // Execution config should use body param template
-      const execConfig = tool?.execution.config;
-      expect(execConfig?.bodyTemplate).toEqual({ $param: 'body' });
-      expect(execConfig?.bodyEncoding).toBe('json');
+      expect(tool?.execution.type).toBe('http');
+      const execConfig = tool?.execution as { type: 'http'; config: { bodyTemplate?: unknown; bodyEncoding?: string } };
+      expect(execConfig?.config?.bodyTemplate).toEqual({ $param: 'body' });
+      expect(execConfig?.config?.bodyEncoding).toBe('json');
     });
   });
 

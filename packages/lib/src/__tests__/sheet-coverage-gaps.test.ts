@@ -151,7 +151,7 @@ describe('formatDisplayValue edge cases', () => {
 // ============================================================
 describe('flattenValue edge cases', () => {
   it('flattens nested arrays', () => {
-    const result = flattenValue([1, [2, 3], 4]);
+    const result = flattenValue([1, [2, 3] as unknown as number, 4]);
     expect(result).toEqual([1, 2, 3, 4]);
   });
 

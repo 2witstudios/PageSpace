@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Mock @pagespace/db since version-resolver imports it
 vi.mock('@pagespace/db', () => ({
