@@ -69,9 +69,10 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { pageReorderService } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageTreeCache } from '@pagespace/lib/server';
+import { pageTreeCache, loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -107,13 +108,30 @@ const successResult: ReorderResult = {
 
 describe('PATCH /api/pages/reorder', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     // Default: validation passes
     vi.mocked(pageReorderService.validateMove).mockResolvedValue({ valid: true });
     // Default: reorder succeeds
     vi.mocked(pageReorderService.reorderPage).mockResolvedValue(successResult);
+    // Re-set up cache and websocket mocks
+    vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
+    // Re-set up db.select chain
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ parentId: null, position: 0 }]),
+        }),
+      }),
+    } as never);
   });
 
   describe('authentication', () => {
@@ -412,6 +430,134 @@ describe('PATCH /api/pages/reorder', () => {
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MCP support', () => {
+    it('passes MCP metadata when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      expect(pageReorderService.reorderPage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { source: 'mcp' },
+        })
+      );
+    });
+
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      expect(response.status).toBe(403);
+      expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('error handling edge cases', () => {
+    it('includes page title in broadcast when available', async () => {
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
+        success: true,
+        driveId: mockDriveId,
+        pageTitle: 'My Page',
+      });
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'moved',
+        expect.objectContaining({
+          title: 'My Page',
+        })
+      );
+    });
+
+    it('handles null pageTitle in broadcast', async () => {
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
+        success: true,
+        driveId: mockDriveId,
+        pageTitle: null,
+      });
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'moved',
+        expect.objectContaining({
+          title: undefined,
+        })
+      );
+    });
+
+    it('logs error details on non-Error exceptions', async () => {
+      vi.mocked(pageReorderService.reorderPage).mockRejectedValue('string error');
+
+      const response = await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to reorder page');
+    });
+
+    it('logs warning when page tree cache invalidation fails with Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Redis down'));
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails with non-Error', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+
+      await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 0,
+      }));
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
     });
   });
 });

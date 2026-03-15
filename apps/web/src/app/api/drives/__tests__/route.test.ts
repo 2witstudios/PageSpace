@@ -51,7 +51,7 @@ vi.mock('@/lib/auth', () => ({
 import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Helpers
@@ -480,6 +480,26 @@ describe('POST /api/drives', () => {
       await POST(request);
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error creating drive:', error);
+    });
+  });
+
+  describe('MCP scope check', () => {
+    it('should return scope error when scoped MCP token tries to create', async () => {
+      const scopeErrorResponse = NextResponse.json(
+        { error: 'Scoped tokens cannot create drives' },
+        { status: 403 }
+      );
+      vi.mocked(checkMCPCreateScope).mockReturnValue(scopeErrorResponse);
+
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'MCP Drive' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(403);
+      expect(createDrive).not.toHaveBeenCalled();
     });
   });
 });

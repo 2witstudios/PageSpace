@@ -72,9 +72,11 @@ vi.mock('@pagespace/lib/api-utils', () => ({
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { agentAwarenessCache, pageTreeCache, loggers } from '@pagespace/lib/server';
+import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { jsonResponse } from '@pagespace/lib/api-utils';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -134,9 +136,17 @@ describe('GET /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.getPage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
   });
 
   describe('authentication', () => {
@@ -194,6 +204,18 @@ describe('GET /api/pages/[pageId]', () => {
     });
   });
 
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await GET(createRequest(), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.getPage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
       vi.mocked(pageService.getPage).mockRejectedValue(new Error('Database error'));
@@ -227,9 +249,19 @@ describe('PATCH /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
+    vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockResolvedValue(undefined);
+    vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -278,6 +310,18 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
   });
 
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.updatePage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('service delegation', () => {
     it('passes correct parameters to service', async () => {
       await PATCH(
@@ -293,6 +337,58 @@ describe('PATCH /api/pages/[pageId]', () => {
           content: '<p>New content</p>',
         }),
         expect.objectContaining({ expectedRevision: undefined })
+      );
+    });
+
+    it('passes MCP context when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await PATCH(
+        createRequest({ title: 'MCP Update' }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        expect.objectContaining({ title: 'MCP Update' }),
+        expect.objectContaining({
+          context: expect.objectContaining({
+            metadata: { source: 'mcp' },
+          }),
+        })
+      );
+    });
+
+    it('passes changeGroupId in context when provided', async () => {
+      await PATCH(
+        createRequest({ title: 'Grouped', changeGroupId: 'group_123' }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        expect.objectContaining({ title: 'Grouped' }),
+        expect.objectContaining({
+          context: expect.objectContaining({
+            changeGroupId: 'group_123',
+          }),
+        })
+      );
+    });
+
+    it('passes expectedRevision for optimistic concurrency', async () => {
+      await PATCH(
+        createRequest({ title: 'Concurrent', expectedRevision: 5 }),
+        { params: mockParams }
+      );
+
+      expect(pageService.updatePage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        expect.objectContaining({ title: 'Concurrent' }),
+        expect.objectContaining({ expectedRevision: 5 })
       );
     });
   });
@@ -368,6 +464,128 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
     });
+
+    it('invalidates page tree cache on parentId change', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        ...successResult,
+        updatedFields: ['parentId'],
+      });
+
+      await PATCH(
+        createRequest({ parentId: 'new_parent' }),
+        { params: mockParams }
+      );
+
+      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
+    });
+
+    it('does NOT invalidate agent cache for non-AI_CHAT page title change', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: false,
+      });
+
+      await PATCH(createRequest({ title: 'Regular Doc' }), { params: mockParams });
+
+      expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
+    });
+
+    it('logs warning when agent awareness cache invalidation fails for AI_CHAT title change', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+
+      await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
+
+      // Allow microtask for .catch() handler to run
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails on title change', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      // Allow microtask for .catch() handler to run
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'Cache error', driveId: mockDriveId })
+      );
+    });
+
+    it('handles non-Error objects in agent awareness cache catch handler', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+
+      await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
+    });
+
+    it('handles non-Error objects in page tree cache catch handler', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
+    });
+
+    it('tracks page update operation', async () => {
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(trackPageOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'update',
+        mockPageId,
+        expect.objectContaining({
+          hasTitleUpdate: true,
+        })
+      );
+    });
+
+    it('passes Socket-ID header to broadcast', async () => {
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Socket-ID': 'socket_abc',
+        },
+        body: JSON.stringify({ title: 'Updated' }),
+      });
+
+      await PATCH(request, { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({
+          socketId: 'socket_abc',
+        })
+      );
+    });
   });
 
   describe('error handling', () => {
@@ -379,6 +597,36 @@ describe('PATCH /api/pages/[pageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toMatch(/failed/i);
+    });
+
+    it('returns 400 for Zod validation errors', async () => {
+      // Send a body with invalid type for a field that Zod validates
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPaginated: 'not-a-boolean' }),
+      });
+
+      const response = await PATCH(request, { params: mockParams });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns update failure with currentRevision info', async () => {
+      vi.mocked(pageService.updatePage).mockResolvedValue({
+        success: false,
+        error: 'Conflict',
+        status: 409,
+        currentRevision: 10,
+        expectedRevision: 5,
+      });
+
+      const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.currentRevision).toBe(10);
+      expect(body.expectedRevision).toBe(5);
     });
   });
 });
@@ -404,9 +652,19 @@ describe('DELETE /api/pages/[pageId]', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
+    vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
+    vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
+      driveId, pageId, type, ...data,
+    }));
+    vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockResolvedValue(undefined);
+    vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -523,6 +781,135 @@ describe('DELETE /api/pages/[pageId]', () => {
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('MCP scope check', () => {
+    it('returns scope error when MCP page scope check fails', async () => {
+      const scopeErrorResponse = NextResponse.json({ error: 'Scope denied' }, { status: 403 });
+      vi.mocked(checkMCPPageScope).mockResolvedValue(scopeErrorResponse);
+
+      const response = await DELETE(createRequest({}), { params: mockParams });
+
+      expect(response.status).toBe(403);
+      expect(pageService.trashPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('service delegation (MCP)', () => {
+    it('passes MCP metadata when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        expect.objectContaining({
+          metadata: { source: 'mcp' },
+        })
+      );
+    });
+  });
+
+  describe('empty body handling', () => {
+    it('handles request with no JSON body gracefully', async () => {
+      const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
+        method: 'DELETE',
+        // No body at all
+      });
+
+      const response = await DELETE(request, { params: mockParams });
+
+      expect(response.status).toBe(200);
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        expect.objectContaining({ trashChildren: false })
+      );
+    });
+  });
+
+  describe('activity tracking', () => {
+    it('tracks page trash operation', async () => {
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(trackPageOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'trash',
+        mockPageId,
+        expect.objectContaining({
+          trashChildren: false,
+          pageTitle: 'Test Page',
+          pageType: 'DOCUMENT',
+        })
+      );
+    });
+
+    it('does NOT invalidate agent cache for non-AI_CHAT page', async () => {
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
+    });
+
+    it('logs warning when agent awareness cache invalidation fails for AI_CHAT trash', async () => {
+      vi.mocked(pageService.trashPage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
+      );
+    });
+
+    it('logs warning when page tree cache invalidation fails on trash', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'Cache error', driveId: mockDriveId })
+      );
+    });
+
+    it('handles non-Error objects in DELETE agent cache catch handler', async () => {
+      vi.mocked(pageService.trashPage).mockResolvedValue({
+        ...successResult,
+        isAIChatPage: true,
+      });
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Agent awareness cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
+    });
+
+    it('handles non-Error objects in DELETE page tree cache catch handler', async () => {
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+
+      await DELETE(createRequest({}), { params: mockParams });
+
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Page tree cache invalidation failed',
+        expect.objectContaining({ error: 'string error' })
+      );
     });
   });
 

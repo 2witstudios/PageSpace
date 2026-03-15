@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, PATCH } from '../route';
+import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
 type DriveAccessResult = Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccess>>;
@@ -45,7 +45,54 @@ vi.mock('@/lib/websocket', () => ({
     event,
     data,
   })),
+  kickUserFromDrive: vi.fn().mockResolvedValue(undefined),
+  kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
+  kickUserFromPage: vi.fn().mockResolvedValue(undefined),
+  kickUserFromPageActivity: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({
+    actorEmail: 'test@example.com',
+    actorDisplayName: 'Test User',
+  }),
+  logMemberActivity: vi.fn(),
+  logPermissionActivity: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/activity-tracker', () => ({
+  trackDriveOperation: vi.fn(),
+}));
+
+// Mock database for DELETE handler's transaction
+vi.mock('@pagespace/db', () => {
+  const mockTx = {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    }),
+    delete: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(undefined),
+    }),
+  };
+  return {
+    db: {
+      transaction: vi.fn(async (callback) => callback(mockTx)),
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    },
+    driveMembers: { driveId: 'driveId', userId: 'userId' },
+    pagePermissions: { pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit', canShare: 'canShare', canDelete: 'canDelete', grantedBy: 'grantedBy', note: 'note' },
+    pages: { id: 'id', driveId: 'driveId', title: 'title' },
+    eq: vi.fn(),
+    and: vi.fn(),
+    inArray: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -58,11 +105,23 @@ import {
   getMemberPermissions,
   updateMemberRole,
   updateMemberPermissions,
+  invalidateUserPermissions,
+  invalidateDrivePermissions,
   loggers,
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import {
+  broadcastDriveMemberEvent,
+  createDriveMemberEventPayload,
+  kickUserFromDrive,
+  kickUserFromDriveActivity,
+  kickUserFromPage,
+  kickUserFromPageActivity,
+} from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { db } from '@pagespace/db';
 
 // ============================================================================
 // Test Fixtures
@@ -858,6 +917,351 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error updating member permissions:', error);
+    });
+  });
+});
+
+// ============================================================================
+// DELETE /api/drives/[driveId]/members/[userId] - Contract Tests
+// ============================================================================
+
+describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
+  const mockCurrentUserId = 'user_123';
+  const mockTargetUserId = 'user_456';
+  const mockDriveId = 'drive_abc';
+  const mockDriveOwnerId = 'owner_789';
+
+  // Helper to create a mockTx with configurable drivePages and permissions
+  function createMockTx(drivePages: { id: string; title: string }[] = [], existingPermissions: Record<string, unknown>[] = []) {
+    let selectCallCount = 0;
+    return {
+      select: vi.fn().mockImplementation(() => ({
+        from: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            // First select: drivePages, Second select: existingPermissions
+            return Promise.resolve(selectCallCount === 1 ? drivePages : existingPermissions);
+          }),
+        })),
+      })),
+      delete: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockCurrentUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: db.select for page kicks returns no pages
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    } as never);
+
+    // Re-set up db.transaction after resetAllMocks - default: empty drive (no pages)
+    // @ts-expect-error - partial mock data
+    vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const mockTx = createMockTx();
+      return callback(mockTx);
+    });
+
+    // Re-set up invalidation mocks
+    vi.mocked(invalidateUserPermissions).mockResolvedValue(undefined as never);
+    vi.mocked(invalidateDrivePermissions).mockResolvedValue(undefined as never);
+
+    // Re-set up activity logger mocks
+    vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' } as never);
+  });
+
+  const createDeleteRequest = () => {
+    return new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+      method: 'DELETE',
+    });
+  };
+
+  describe('authentication', () => {
+    it('should return 401 when not authenticated', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(401);
+    });
+
+    it('should require CSRF for write operations', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockDriveOwnerId }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+
+      const request = createDeleteRequest();
+      await DELETE(request, createContext(mockDriveId, mockTargetUserId));
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['session'], requireCSRF: true }
+      );
+    });
+  });
+
+  describe('authorization', () => {
+    it('should return 404 when drive not found', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Drive not found');
+    });
+
+    it('should return 403 when user is not owner or admin', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockDriveOwnerId }),
+      }));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Only drive owners and admins can remove members');
+    });
+
+    it('should return 400 when trying to remove the drive owner', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockTargetUserId }),
+      }));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Cannot remove the drive owner');
+    });
+
+    it('should return 400 when trying to remove yourself', async () => {
+      // Create context where the target user IS the current user
+      const selfContext = createContext(mockDriveId, mockCurrentUserId);
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockDriveOwnerId }),
+      }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockCurrentUserId}`, {
+        method: 'DELETE',
+      });
+
+      const response = await DELETE(request, selfContext);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Cannot remove yourself. Use leave drive instead.');
+    });
+
+    it('should return 404 when member not found', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockDriveOwnerId }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(null);
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toBe('Member not found');
+    });
+  });
+
+  describe('successful member removal', () => {
+    beforeEach(() => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test Drive', ownerId: mockDriveOwnerId }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+    });
+
+    it('should return success message on successful removal', async () => {
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Member removed successfully');
+    });
+
+    it('should execute removal in a transaction', async () => {
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(db.transaction).toHaveBeenCalled();
+    });
+
+    it('should track drive operation', async () => {
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(trackDriveOperation).toHaveBeenCalledWith(
+        mockCurrentUserId,
+        'remove_member',
+        mockDriveId,
+        expect.objectContaining({
+          targetUserId: mockTargetUserId,
+          role: 'MEMBER',
+        })
+      );
+    });
+
+    it('should broadcast member removal event', async () => {
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockTargetUserId,
+        'member_removed',
+        { driveName: 'Test Drive' }
+      );
+      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+    });
+
+    it('should kick user from drive rooms', async () => {
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(kickUserFromDrive).toHaveBeenCalledWith(
+        mockDriveId,
+        mockTargetUserId,
+        'member_removed',
+        'Test Drive'
+      );
+      expect(kickUserFromDriveActivity).toHaveBeenCalledWith(
+        mockDriveId,
+        mockTargetUserId,
+        'member_removed'
+      );
+    });
+
+    it('should kick user from page rooms when drive has pages', async () => {
+      // Drive has pages
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: 'page_1' },
+            { id: 'page_2' },
+          ]),
+        }),
+      } as never);
+
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(kickUserFromPage).toHaveBeenCalledWith('page_1', mockTargetUserId, 'member_removed');
+      expect(kickUserFromPage).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
+      expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_1', mockTargetUserId, 'member_removed');
+      expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
+    });
+
+    it('should invalidate permission caches', async () => {
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(invalidateUserPermissions).toHaveBeenCalledWith(mockTargetUserId);
+      expect(invalidateDrivePermissions).toHaveBeenCalledWith(mockDriveId);
+    });
+
+    it('should log permission revocations and delete permissions when drive has pages', async () => {
+      const drivePages = [
+        { id: 'page_1', title: 'Page One' },
+        { id: 'page_2', title: 'Page Two' },
+      ];
+      const existingPermissions = [
+        { pageId: 'page_1', canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: mockCurrentUserId, note: 'test' },
+        { pageId: 'page_2', canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: mockCurrentUserId, note: null },
+      ];
+
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx(drivePages, existingPermissions);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+
+      // logPermissionActivity should be called for each existing permission
+      expect(logPermissionActivity).toHaveBeenCalledTimes(2);
+      expect(logPermissionActivity).toHaveBeenCalledWith(
+        mockCurrentUserId,
+        'permission_revoke',
+        expect.objectContaining({ pageId: 'page_1', driveId: mockDriveId, targetUserId: mockTargetUserId, pageTitle: 'Page One' }),
+        expect.objectContaining({ reason: 'member_removal', previousValues: expect.objectContaining({ canView: true, canEdit: true }) })
+      );
+    });
+
+    it('should delete drive membership even when drive has no pages', async () => {
+      // Explicitly set empty drivePages
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx([], []);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      expect(db.transaction).toHaveBeenCalled();
+    });
+
+    it('should handle pages with no matching permissions gracefully', async () => {
+      const drivePages = [{ id: 'page_1', title: 'Page One' }];
+      // No existing permissions for this user
+      const existingPermissions: Record<string, unknown>[] = [];
+
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+        const mockTx = createMockTx(drivePages, existingPermissions);
+        return callback(mockTx);
+      });
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      // No permission revocations should be logged
+      expect(logPermissionActivity).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return 500 when service throws', async () => {
+      vi.mocked(checkDriveAccess).mockRejectedValue(new Error('Database error'));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to remove member');
+    });
+
+    it('should log error when service throws', async () => {
+      const error = new Error('Service failure');
+      vi.mocked(checkDriveAccess).mockRejectedValue(error);
+
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(loggers.api.error).toHaveBeenCalledWith('Error removing member:', error);
     });
   });
 });

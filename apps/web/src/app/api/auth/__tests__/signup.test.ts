@@ -95,6 +95,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
+
 // Mock distributed rate limiting (P1-T5)
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
@@ -671,6 +672,150 @@ describe('/api/auth/signup', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('An unexpected error occurred.');
+    });
+  });
+
+  describe('on-prem mode', () => {
+    it('returns 403 when on-prem mode is enabled', async () => {
+      const lib = await import('@pagespace/lib');
+      vi.spyOn(lib, 'isOnPrem').mockReturnValueOnce(true);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Self-registration is disabled');
+    });
+  });
+
+  describe('CSRF validation', () => {
+    it('returns 403 when CSRF header is missing', async () => {
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': 'login_csrf=valid-csrf-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF cookie is missing', async () => {
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({});
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF header does not match cookie', async () => {
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({ login_csrf: 'different-token' });
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+          'Cookie': 'login_csrf=different-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
+    });
+
+    it('returns 403 when CSRF token validation fails', async () => {
+      const { validateLoginCSRFToken } = await import('@/lib/auth');
+      vi.mocked(validateLoginCSRFToken).mockReturnValueOnce(false);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_INVALID');
+    });
+  });
+
+  describe('session creation edge cases', () => {
+    beforeEach(() => {
+      // Ensure db.insert is properly mocked for user creation
+      vi.mocked(db.insert).mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([
+            {
+              id: 'new-user-id',
+              name: 'New User',
+              email: 'new@example.com',
+              tokenVersion: 0,
+              role: 'user',
+            },
+          ]),
+        }),
+      } as never);
+    });
+
+    it('returns 500 when session validation fails after creation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to create session.');
+    });
+
+    it('logs warning when rate limit reset fails', async () => {
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+
+      const request = createSignupRequest(validSignupPayload);
+      await POST(request);
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful signup',
+        expect.objectContaining({ failureCount: expect.any(Number) })
+      );
+    });
+
+    it('redirects to /dashboard/driveId even when drive already existed', async () => {
+      // provisionGettingStartedDriveIfNeeded always returns a drive object
+      // The route uses the driveId for redirect regardless of created flag
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce({
+        driveId: 'existing-drive',
+        created: false,
+      } as never);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(303);
+      const location = response.headers.get('Location');
+      expect(location).toContain('/dashboard/existing-drive');
     });
   });
 });

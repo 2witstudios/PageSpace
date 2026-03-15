@@ -652,6 +652,40 @@ describe('/api/auth/mobile/signup', () => {
       expect(body.error).toContain('Too many signup attempts for this email');
     });
 
+    it('uses default Retry-After of 3600 when IP retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
+
+      const request = new Request('http://localhost/api/auth/mobile/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('3600');
+    });
+
+    it('uses default Retry-After of 3600 when email retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('3600');
+    });
+
     it('includes X-RateLimit headers on rate limit response', async () => {
       vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
@@ -750,6 +784,25 @@ describe('/api/auth/mobile/signup', () => {
 
       // Verify AI settings insert targeted the userAiSettings table
       expect(db.insert).toHaveBeenCalledWith(userAiSettings);
+    });
+  });
+
+  describe('session validation failure', () => {
+    it('returns 500 when newly created session fails validation', async () => {
+      const { sessionService } = await import('@pagespace/lib/auth');
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = new Request('http://localhost/api/auth/mobile/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to generate session');
     });
   });
 });

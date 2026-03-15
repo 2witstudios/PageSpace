@@ -824,4 +824,178 @@ describe('POST /api/auth/login', () => {
       expect(isAccountLockedByEmail).not.toHaveBeenCalled();
     });
   });
+
+  describe('CSRF validation', () => {
+    beforeEach(() => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
+    it('returns 403 when CSRF header is missing', async () => {
+      const request = new Request('http://localhost/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': 'login_csrf=valid-csrf-token',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF cookie is missing', async () => {
+      // Mock parse to return empty cookies
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({});
+
+      const request = new Request('http://localhost/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF header does not match cookie', async () => {
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({ login_csrf: 'different-token' });
+
+      const request = new Request('http://localhost/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+          'Cookie': 'login_csrf=different-token',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
+    });
+
+    it('returns 403 when CSRF token validation fails', async () => {
+      const { validateLoginCSRFToken } = await import('@/lib/auth');
+      vi.mocked(validateLoginCSRFToken).mockReturnValueOnce(false);
+
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_INVALID');
+    });
+  });
+
+  describe('session creation edge cases', () => {
+    beforeEach(() => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
+    it('returns 500 when session validation fails after creation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to create session.');
+    });
+
+    it('logs revoked sessions count when sessions exist', async () => {
+      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValueOnce(3);
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      const { loggers } = await import('@pagespace/lib/server');
+      expect(loggers.auth.info).toHaveBeenCalledWith(
+        'Revoked existing sessions on login',
+        expect.objectContaining({ userId: mockUser.id, count: 3 })
+      );
+    });
+
+    it('logs warning when rate limit reset fails', async () => {
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      const { loggers } = await import('@pagespace/lib/server');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful login',
+        expect.objectContaining({ failureCount: expect.any(Number) })
+      );
+    });
+  });
+
+  describe('drive provisioning', () => {
+    beforeEach(() => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: true,
+        attemptsRemaining: 4,
+        retryAfter: undefined,
+      });
+    });
+
+    it('includes redirectTo when a new drive is provisioned', async () => {
+      const { provisionGettingStartedDriveIfNeeded } = await import('@/lib/onboarding/getting-started-drive');
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce({
+        driveId: 'new-drive-123',
+        created: true,
+      });
+
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectTo).toBe('/dashboard/new-drive-123');
+    });
+
+    it('does not include redirectTo when drive already exists', async () => {
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectTo).toBeUndefined();
+    });
+
+    it('continues login when drive provisioning throws', async () => {
+      const { provisionGettingStartedDriveIfNeeded } = await import('@/lib/onboarding/getting-started-drive');
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
+        new Error('DB error')
+      );
+
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+    });
+  });
 });
