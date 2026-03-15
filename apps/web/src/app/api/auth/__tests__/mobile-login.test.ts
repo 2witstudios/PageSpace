@@ -600,7 +600,7 @@ describe('/api/auth/mobile/login', () => {
 
       await POST(request);
 
-      const auditArg = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as Record<string, unknown>;
+      const auditArg = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as unknown as Record<string, unknown>;
       expect((auditArg.details as Record<string, unknown>).email).toBe('te***@example.com');
     });
   });

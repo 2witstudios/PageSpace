@@ -515,7 +515,7 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      const logEventCall = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as { details: { email: string } };
+      const logEventCall = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as unknown as { details: { email: string } };
       expect(logEventCall.details.email).toBe('te***@example.com');
     });
   });

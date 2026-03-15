@@ -248,7 +248,7 @@ describe('/api/auth/mobile/signup', () => {
         userId: 'pfh0haxfpzowht3oi213cqos',
         type: 'email_verification',
       });
-      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as Record<string, unknown>;
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as unknown as Record<string, unknown>;
       expect(emailArg.to).toBe(validSignupPayload.email);
       expect(emailArg.subject).toBe('Verify your PageSpace email');
     });

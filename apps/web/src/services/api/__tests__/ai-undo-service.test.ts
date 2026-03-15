@@ -384,7 +384,7 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      const debugArgs = mockLoggers.api.debug.mock.calls.find(
+      const debugArgs = (mockLoggers.api.debug as ReturnType<typeof vi.fn>).mock.calls.find(
         (call: unknown[]) => call[0] === '[AiUndo:Execute] Soft-deleting from secondary table'
       );
       expect(debugArgs).toHaveLength(2);

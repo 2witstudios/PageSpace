@@ -264,7 +264,7 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       expect(createVerificationToken).toHaveBeenCalledWith({ userId: 'new-user-id', type: 'email_verification' });
-      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as Record<string, unknown>;
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as unknown as Record<string, unknown>;
       expect(emailArg.to).toBe('new@example.com');
       expect(emailArg.subject).toBe('Verify your PageSpace email');
     });
