@@ -137,6 +137,7 @@ tests/load/results/*.json
 tests/load/results/*.html
 
 ## Code coverage
+coverage/
 *.gcda
 *.gcno
 *.gcov

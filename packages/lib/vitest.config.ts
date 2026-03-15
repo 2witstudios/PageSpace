@@ -14,7 +14,24 @@ export default defineConfig({
       },
     },
     coverage: {
-      reporter: ['text', 'json', 'html'],
+      provider: 'v8',
+      reporter: ['text', 'json', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
+      exclude: [
+        '**/*.d.ts',
+        '**/*.config.*',
+        '**/dist/**',
+        '**/test/**',
+        '**/drizzle/**',
+        '**/node_modules/**',
+      ],
+      thresholds: {
+        lines: 66,
+        branches: 87,
+        functions: 66,
+        statements: 66,
+      },
     },
   },
 });

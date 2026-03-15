@@ -8,7 +8,23 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{js,ts}'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
+      exclude: [
+        '**/*.d.ts',
+        '**/*.config.*',
+        '**/dist/**',
+        '**/test/**',
+        '**/drizzle/**',
+        '**/node_modules/**',
+      ],
+      thresholds: {
+        lines: 75,
+        branches: 98,
+        functions: 85,
+        statements: 75,
+      },
     },
   },
   resolve: {
