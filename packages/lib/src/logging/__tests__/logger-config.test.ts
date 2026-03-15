@@ -329,25 +329,29 @@ describe('logResponse', () => {
   it('uses error level for 5xx status codes', () => {
     const req = makeNextRequest({ pathname: '/api/test', method: 'GET' });
     logResponse(req, 500, Date.now() - 50);
-    expect(apiErrorSpy).toHaveBeenCalled();
+    expect(apiErrorSpy).toHaveBeenCalledTimes(1);
+    expect(apiErrorSpy.mock.calls[0][0]).toContain('500');
   });
 
   it('uses warn level for 4xx status codes', () => {
     const req = makeNextRequest({ pathname: '/api/test', method: 'GET' });
     logResponse(req, 404, Date.now() - 10);
-    expect(apiWarnSpy).toHaveBeenCalled();
+    expect(apiWarnSpy).toHaveBeenCalledTimes(1);
+    expect(apiWarnSpy.mock.calls[0][0]).toContain('404');
   });
 
   it('uses info level for 2xx status codes', () => {
     const req = makeNextRequest({ pathname: '/api/test', method: 'GET' });
     logResponse(req, 200, Date.now() - 5);
-    expect(apiInfoSpy).toHaveBeenCalled();
+    expect(apiInfoSpy).toHaveBeenCalledTimes(1);
+    expect(apiInfoSpy.mock.calls[0][0]).toContain('200');
   });
 
   it('uses info level for 3xx status codes', () => {
     const req = makeNextRequest({ pathname: '/api/redirect', method: 'GET' });
     logResponse(req, 301, Date.now() - 5);
-    expect(apiInfoSpy).toHaveBeenCalled();
+    expect(apiInfoSpy).toHaveBeenCalledTimes(1);
+    expect(apiInfoSpy.mock.calls[0][0]).toContain('301');
   });
 
   it('message includes status code and duration', () => {
@@ -382,7 +386,8 @@ describe('logAIRequest', () => {
   it('handles optional parameters (no tokens, cost, duration)', () => {
     const aiInfoSpy = vi.spyOn(loggers.ai, 'info').mockImplementation(() => {});
     logAIRequest('ollama', 'llama3', 'user-456');
-    expect(aiInfoSpy).toHaveBeenCalled();
+    expect(aiInfoSpy).toHaveBeenCalledTimes(1);
+    expect(aiInfoSpy.mock.calls[0][0]).toContain('ollama/llama3');
     aiInfoSpy.mockRestore();
   });
 });
@@ -432,7 +437,7 @@ describe('logDatabaseQuery', () => {
 
   it('logs at exactly 1000ms as debug (not slow)', () => {
     logDatabaseQuery('UPDATE', 'sessions', 1000, 5);
-    expect(dbDebugSpy).toHaveBeenCalled();
+    expect(dbDebugSpy).toHaveBeenCalledTimes(1);
     expect(dbWarnSpy).not.toHaveBeenCalled();
   });
 });
@@ -469,22 +474,26 @@ describe('logAuthEvent', () => {
 
   it('logs info for "logout" event', () => {
     logAuthEvent('logout', 'u-2');
-    expect(authInfoSpy).toHaveBeenCalled();
+    expect(authInfoSpy).toHaveBeenCalledTimes(1);
+    expect(authInfoSpy.mock.calls[0][0]).toContain('logout');
   });
 
   it('logs info for "signup" event', () => {
     logAuthEvent('signup');
-    expect(authInfoSpy).toHaveBeenCalled();
+    expect(authInfoSpy).toHaveBeenCalledTimes(1);
+    expect(authInfoSpy.mock.calls[0][0]).toContain('signup');
   });
 
   it('logs info for "refresh" event', () => {
     logAuthEvent('refresh', 'u-3');
-    expect(authInfoSpy).toHaveBeenCalled();
+    expect(authInfoSpy).toHaveBeenCalledTimes(1);
+    expect(authInfoSpy.mock.calls[0][0]).toContain('refresh');
   });
 
   it('logs info for "magic_link_login" event', () => {
     logAuthEvent('magic_link_login', 'u-4');
-    expect(authInfoSpy).toHaveBeenCalled();
+    expect(authInfoSpy).toHaveBeenCalledTimes(1);
+    expect(authInfoSpy.mock.calls[0][0]).toContain('magic_link_login');
   });
 
   it('partially masks email (preserves first 2 chars and domain)', () => {
@@ -600,7 +609,7 @@ describe('withLogging', () => {
     const fn = vi.fn().mockResolvedValue(undefined);
     const wrapped = withLogging(fn, 'myFn');
     await wrapped();
-    expect(timerStop).toHaveBeenCalled();
+    expect(timerStop).toHaveBeenCalledTimes(1);
     expect(startTimerSpy).toHaveBeenCalledWith('myFn');
   });
 
@@ -627,7 +636,7 @@ describe('withLogging', () => {
     const fn = vi.fn().mockRejectedValue(new Error('fail'));
     const wrapped = withLogging(fn, 'failFn');
     await expect(wrapped()).rejects.toThrow();
-    expect(timerStop).toHaveBeenCalled();
+    expect(timerStop).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -735,8 +744,8 @@ describe('logPerformanceDecorator', () => {
     const svc = new MyService();
     await svc.doWork();
 
-    expect(logger.startTimer).toHaveBeenCalled();
-    expect(timerStop).toHaveBeenCalled();
+    expect(logger.startTimer).toHaveBeenCalledTimes(1);
+    expect(timerStop).toHaveBeenCalledTimes(1);
   });
 
   it('re-throws errors from the original method', async () => {
@@ -753,7 +762,7 @@ describe('logPerformanceDecorator', () => {
 
     const svc = new MyService();
     await expect(svc.doWork()).rejects.toThrow('service error');
-    expect(timerStop).toHaveBeenCalled();
+    expect(timerStop).toHaveBeenCalledTimes(1);
   });
 
   it('returns the modified descriptor', () => {

@@ -473,13 +473,15 @@ describe('BrowserSafeLogger log() method', () => {
   it('log() with INFO level routes to console.log', () => {
     const bsl = new BrowserSafeLogger({ level: LogLevel.TRACE });
     bsl.log(LogLevel.INFO, 'via log()');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('via log()');
   });
 
   it('log() with DEBUG level routes to console.debug', () => {
     const bsl = new BrowserSafeLogger({ level: LogLevel.TRACE });
     bsl.log(LogLevel.DEBUG, 'via log debug');
-    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleDebugSpy).toHaveBeenCalledTimes(1);
+    expect(consoleDebugSpy.mock.calls[0][0]).toContain('via log debug');
   });
 
   it('log() is filtered by shouldLog', () => {

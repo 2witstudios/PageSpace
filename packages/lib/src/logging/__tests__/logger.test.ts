@@ -156,7 +156,8 @@ describe('Logger shouldLog', () => {
   it('logs when level meets configured minimum', () => {
     anyLogger.config.level = LogLevel.INFO;
     logger.info('should appear');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('should appear');
   });
 
   it('SILENT level suppresses all logs including fatal', () => {
@@ -535,7 +536,7 @@ describe('Logger buffer / database destination', () => {
     anyLogger.config.level = LogLevel.TRACE;
     logger.info('flush test');
     await anyLogger.flush();
-    expect(writeLogsToDatabase).toHaveBeenCalled();
+    expect(writeLogsToDatabase).toHaveBeenCalledTimes(1);
   });
 
   it('flush with destination="console" writes each entry to console', async () => {
@@ -546,7 +547,8 @@ describe('Logger buffer / database destination', () => {
     const entry = anyLogger.createLogEntry(LogLevel.INFO, 'console flush test');
     anyLogger.buffer = [entry];
     await anyLogger.flush();
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy.mock.calls[0][0]).toContain('console flush test');
     anyLogger.config.format = 'pretty';
   });
 
@@ -558,8 +560,8 @@ describe('Logger buffer / database destination', () => {
     const entry = anyLogger.createLogEntry(LogLevel.INFO, 'both flush test');
     anyLogger.buffer = [entry];
     await anyLogger.flush();
-    expect(writeLogsToDatabase).toHaveBeenCalled();
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(writeLogsToDatabase).toHaveBeenCalledTimes(1);
+    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
     anyLogger.config.format = 'pretty';
   });
 
@@ -572,7 +574,7 @@ describe('Logger buffer / database destination', () => {
     const flushSpy = vi.spyOn(anyLogger, 'flush').mockResolvedValue(undefined);
     logger.info('first');
     logger.info('second'); // triggers flush at batchSize=2
-    expect(flushSpy).toHaveBeenCalled();
+    expect(flushSpy).toHaveBeenCalledTimes(1);
     flushSpy.mockRestore();
     anyLogger.config.batchSize = 100;
   });
@@ -598,7 +600,7 @@ describe('Logger buffer / database destination', () => {
     // Invoke the captured interval callback
     intervalCallback!();
 
-    // Let the microtask queue flush the .catch() handler
+    // REVIEW: setTimeout(0) flushes the .catch() microtask — consider process.nextTick if flaky on CI
     await new Promise(r => setTimeout(r, 0));
 
     expect(consoleSpy).toHaveBeenCalledWith('[Logger] Flush error:', flushError);
@@ -666,7 +668,7 @@ describe('Logger startFlushTimer signal handlers', () => {
     if (handlers['SIGINT'] && handlers['SIGINT'].length > 0) {
       const handler = handlers['SIGINT'][handlers['SIGINT'].length - 1];
       handler();
-      expect(flushSpy).toHaveBeenCalled();
+      expect(flushSpy).toHaveBeenCalledTimes(1);
       expect(exitSpy).toHaveBeenCalledWith(0);
     }
 
@@ -690,7 +692,7 @@ describe('Logger startFlushTimer signal handlers', () => {
     if (handlers['SIGTERM'] && handlers['SIGTERM'].length > 0) {
       const handler = handlers['SIGTERM'][handlers['SIGTERM'].length - 1];
       handler();
-      expect(flushSpy).toHaveBeenCalled();
+      expect(flushSpy).toHaveBeenCalledTimes(1);
       expect(exitSpy).toHaveBeenCalledWith(0);
     }
 
@@ -705,7 +707,7 @@ describe('Logger startFlushTimer signal handlers', () => {
     const clearSpy = vi.spyOn(global, 'clearInterval');
     const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process);
     anyLogger.startFlushTimer();
-    expect(clearSpy).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalledTimes(1);
     onSpy.mockRestore();
     clearSpy.mockRestore();
   });

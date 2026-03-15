@@ -31,7 +31,8 @@ describe('permission-mutations zero-trust', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>;
 
   beforeEach(async () => {
-    // Restore mocks first so spies from prior test don't interfere with setup
+    // Restore mocks first: singleFork pool shares one process across all test files,
+    // so spies installed by earlier files (e.g. logger mocks) can leak into this file's setup.
     vi.restoreAllMocks();
 
     // Delete in foreign key order to avoid deadlocks from cascade contention
