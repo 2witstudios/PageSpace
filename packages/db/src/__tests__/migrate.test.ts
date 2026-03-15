@@ -5,7 +5,7 @@
  * We mock out the migrator and the db to avoid any real database connections,
  * then dynamically import the module to trigger its top-level IIFE.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // Mock drizzle migrator before importing migrate.ts
 vi.mock('drizzle-orm/node-postgres/migrator', () => ({
@@ -42,15 +42,13 @@ vi.mock('../index', () => ({
 }));
 
 describe('migrate.ts', () => {
-  let processExitSpy: ReturnType<typeof vi.spyOn>;
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let processExitSpy: MockInstance;
+  let consoleLogSpy: MockInstance;
+  let consoleErrorSpy: MockInstance;
 
   beforeEach(() => {
     // Intercept process.exit so the test process doesn't actually exit
-    processExitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null | undefined) => {
-      return undefined as never;
-    });
+    processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -85,9 +83,10 @@ describe('migrate.ts', () => {
     const callArgs = vi.mocked(migrate).mock.calls[0];
     expect(callArgs).toBeDefined();
     // Second argument should be an object with migrationsFolder
-    expect(callArgs[1]).toHaveProperty('migrationsFolder');
-    expect(typeof callArgs[1].migrationsFolder).toBe('string');
-    expect(callArgs[1].migrationsFolder).toContain('drizzle');
+    const config = callArgs[1] as { migrationsFolder: string };
+    expect(config).toHaveProperty('migrationsFolder');
+    expect(typeof config.migrationsFolder).toBe('string');
+    expect(config.migrationsFolder).toContain('drizzle');
   });
 
   it('logs migration progress messages', async () => {

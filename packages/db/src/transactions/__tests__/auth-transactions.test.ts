@@ -45,7 +45,7 @@ const validateOpaqueToken = (t: string) => t.startsWith('ps_dev_') && t.length >
  */
 function setupTransaction() {
   const tx = { execute: mockExecute };
-  mockTransaction.mockImplementation(async (cb: (tx: typeof tx) => Promise<unknown>) => cb(tx));
+  mockTransaction.mockImplementation(async (cb: (t: { execute: typeof mockExecute }) => Promise<unknown>) => cb(tx));
   return tx;
 }
 

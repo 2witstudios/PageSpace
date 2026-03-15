@@ -12,7 +12,7 @@
  * Because each test exercises different mock behavior, we run each path in
  * a single describe that only imports the script once, using queued responses.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // Queued responses - the mock reads from these queues
 const selectFromQueue: Array<() => Promise<unknown>> = [];
@@ -99,9 +99,9 @@ vi.mock('../../src/schema/core', async () => {
 });
 
 describe('scripts/calculate-initial-storage.ts', () => {
-  let processExitSpy: ReturnType<typeof vi.spyOn>;
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let processExitSpy: MockInstance;
+  let consoleLogSpy: MockInstance;
+  let consoleErrorSpy: MockInstance;
 
   beforeEach(() => {
     // Clear queues before each test
@@ -110,9 +110,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     updateWhereQueue.length = 0;
     insertValuesQueue.length = 0;
 
-    processExitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null | undefined) => {
-      return undefined as never;
-    });
+    processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 

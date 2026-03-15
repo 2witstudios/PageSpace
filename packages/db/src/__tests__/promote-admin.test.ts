@@ -13,7 +13,7 @@
  * factories that expose their mocks so tests can configure them per-test.
  * We reset modules in afterEach and re-import for isolation.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // Shared mutable mock state - these are module-level so tests can configure them.
 // vi.mock() is hoisted, but the factory re-runs after vi.resetModules().
@@ -39,16 +39,14 @@ vi.mock('../index', () => ({
 }));
 
 describe('promote-admin.ts', () => {
-  let processExitSpy: ReturnType<typeof vi.spyOn>;
-  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let processExitSpy: MockInstance;
+  let consoleLogSpy: MockInstance;
+  let consoleErrorSpy: MockInstance;
   let originalArgv: string[];
 
   beforeEach(() => {
     originalArgv = [...process.argv];
-    processExitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null | undefined) => {
-      return undefined as never;
-    });
+    processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     // Reset mock call history between tests
