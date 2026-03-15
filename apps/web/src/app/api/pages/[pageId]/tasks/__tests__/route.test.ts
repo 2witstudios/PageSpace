@@ -40,6 +40,9 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
 let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
 
+// REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.transaction(tx => ...))
+// are used here because the route directly calls Drizzle ORM with no service layer.
+// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
 vi.mock('@pagespace/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({

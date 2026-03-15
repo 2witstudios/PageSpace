@@ -50,6 +50,9 @@ vi.mock('@pagespace/lib/monitoring', () => ({
   DeferredWorkflowTrigger: undefined,
 }));
 
+// REVIEW: Deep ORM chain mocks (db.update().set().where().returning(), db.transaction(tx => ...))
+// are used here because the route directly calls Drizzle ORM with no service layer.
+// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {

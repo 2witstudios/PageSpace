@@ -51,6 +51,9 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
+// REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.update().set().where())
+// are used here because the route directly calls Drizzle ORM with no service layer.
+// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
   db: {

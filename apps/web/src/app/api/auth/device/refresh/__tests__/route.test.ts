@@ -24,6 +24,9 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// REVIEW: Deep ORM chain mocks (db.update().set().where().returning()) are used here
+// because the route directly calls Drizzle ORM with no service layer. The ORM IS the
+// system boundary for this route. Extracting a service seam is a production refactor.
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id' },
   deviceTokens: { id: 'id' },
