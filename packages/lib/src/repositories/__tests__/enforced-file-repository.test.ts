@@ -530,5 +530,75 @@ describe('EnforcedFileRepository', () => {
         );
       });
     });
+
+    describe('given a token bound to a page and the file is not linked to that page', () => {
+      it('should throw ForbiddenError (resource binding mismatch in getFileForUpdate)', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read', 'files:write'],
+          resourceType: 'page',
+          resourceId: 'page-999',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(db.query.filePages.findFirst).mockResolvedValue(undefined);
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'Access denied'
+        );
+      });
+    });
+
+    describe('given a token with an unknown binding type', () => {
+      it('should deny access for getFile (unknown binding type defaults to deny)', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'unknown_type' as any,
+          resourceId: 'some-id',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+
+        const result = await repo.getFile('file-123');
+        expect(result).toBeNull();
+      });
+    });
+
+    describe('given an admin updating a file', () => {
+      it('should bypass drive permission check in updateFile', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read', 'files:write'],
+          userRole: 'admin',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile();
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        mockDbUpdate(mockFile);
+
+        const result = await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
+        expect(result).toEqual(mockFile);
+        expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('given updateFile where user is not a drive member', () => {
+      it('should throw ForbiddenError (getFileForUpdate returns null)', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'Access denied'
+        );
+      });
+    });
   });
 });
