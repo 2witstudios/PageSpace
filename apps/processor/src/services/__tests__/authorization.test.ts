@@ -379,7 +379,7 @@ describe('authorizeFileAccess', () => {
     });
   });
 
-  describe('checkDrivePermissions returns false when drivePerms is null (lines 179-180)', () => {
+  describe('checkDrivePermissions returns false when drivePerms is null', () => {
     it('denies view for orphan file when getUserDrivePermissions returns null', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
       mockGetFileDriveId.mockResolvedValue('drive-1');
@@ -408,7 +408,7 @@ describe('authorizeFileAccess', () => {
     });
   });
 
-  describe('scopedLinks is empty when file has links but none in scope (lines 284-296)', () => {
+  describe('scopedLinks is empty when file has links but none in scope', () => {
     it('denies page-bound token when file has links but none match the bound page', async () => {
       // File has links to page-2 and page-3, but token is bound to page-1
       mockGetLinksForFile.mockResolvedValue([
