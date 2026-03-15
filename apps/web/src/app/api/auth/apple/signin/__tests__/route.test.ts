@@ -206,7 +206,7 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'oauth:signin:ip:10.0.0.1',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: true }
       );
     });
 
@@ -310,10 +310,9 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('An unexpected error occurred.');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Apple OAuth signin error',
-        expect.any(Error)
-      );
+      expect(loggers.auth.error).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(loggers.auth.error).mock.calls[0][0]).toBe('Apple OAuth signin error');
+      expect(vi.mocked(loggers.auth.error).mock.calls[0][1]).toBeInstanceOf(Error);
     });
   });
 });
@@ -460,7 +459,7 @@ describe('GET /api/auth/apple/signin', () => {
       expect(location).toContain('/auth/signin?error=oauth_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Apple OAuth signin GET error',
-        expect.any(Error)
+        new Error('Unexpected')
       );
     });
 

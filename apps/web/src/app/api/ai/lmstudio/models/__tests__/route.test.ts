@@ -312,7 +312,7 @@ describe('GET /api/ai/lmstudio/models', () => {
       expect(body.success).toBe(false);
       expect(body.error).toBe('Failed to discover LM Studio models');
       expect(body.models).toEqual({});
-      expect(loggers.ai.error).toHaveBeenCalledWith('LM Studio models discovery error', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('LM Studio models discovery error', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
@@ -397,7 +397,10 @@ describe('GET /api/ai/lmstudio/models', () => {
         expect(response.status).toBe(200);
         expect(global.fetch).toHaveBeenCalledWith(
           `${baseUrl}/models`,
-          expect.any(Object)
+          expect.objectContaining({
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          })
         );
       }
     });

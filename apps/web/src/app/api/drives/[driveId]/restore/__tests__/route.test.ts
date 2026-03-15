@@ -99,7 +99,6 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
 // POST /api/drives/[driveId]/restore - Contract Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/drives/[driveId]/restore', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -200,7 +199,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
       });
       await POST(request, createContext(mockDriveId));
 
-      expect(db.update).toHaveBeenCalledWith(/** @scaffold */ expect.any(Object));
+      expect(db.update).toHaveBeenCalledWith({ id: 'drives.id', ownerId: 'drives.ownerId' });
       expect(mockSetFn).toHaveBeenCalledWith(
         expect.objectContaining({
           isTrashed: false,

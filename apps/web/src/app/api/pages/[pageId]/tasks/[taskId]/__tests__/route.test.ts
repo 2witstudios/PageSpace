@@ -222,7 +222,6 @@ function setupRelationsLookup(task: Record<string, unknown> | null = {
 
 // ---------- Tests ----------
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -775,7 +774,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     const response = await PATCH(createPatchRequest({ assigneeId: 'new-user' }), context);
     expect(response.status).toBe(200);
     expect(createTaskAssignedNotification).toHaveBeenCalledWith(
-      'new-user', mockTaskId, expect.any(String), mockPageId, mockUserId
+      'new-user', mockTaskId, 'Existing Task', mockPageId, mockUserId
     );
   });
 
@@ -811,7 +810,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     }), context);
     expect(response.status).toBe(200);
     expect(createTaskAssignedNotification).toHaveBeenCalledWith(
-      'brand-new-user', mockTaskId, expect.any(String), mockPageId, mockUserId
+      'brand-new-user', mockTaskId, 'Existing Task', mockPageId, mockUserId
     );
   });
 
@@ -979,7 +978,6 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   });
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1047,9 +1045,18 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     }));
     expect(logPageActivity).toHaveBeenCalledWith(
       mockUserId,
-      expect.any(String),
-      expect.objectContaining({ id: mockPageId }),
-      expect.any(Object),
+      'delete',
+      { id: mockPageId, title: 'Existing Task', driveId: 'drive-1' },
+      {
+        actorEmail: 'test@test.com',
+        actorDisplayName: 'Test User',
+        metadata: {
+          taskId: mockTaskId,
+          taskListId: mockTaskListId,
+          taskListPageId: mockPageId,
+          isConversationTask: true,
+        },
+      },
     );
   });
 

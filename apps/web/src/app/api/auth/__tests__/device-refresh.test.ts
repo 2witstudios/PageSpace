@@ -159,7 +159,10 @@ describe('/api/auth/device/refresh', () => {
       expect(body.token).toBeUndefined(); // No JWT for web - uses session cookie
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('valid-device-token');
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock-session-token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock-session-token');
     });
 
     it('creates new session for mobile/desktop', async () => {
@@ -262,12 +265,14 @@ describe('/api/auth/device/refresh', () => {
       const body = await response.json();
 
       // Assert
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'valid-device-token',
-        expect.objectContaining({ ipAddress: expect.any(String) }),
-        expect.any(Function),
-        expect.any(Function),
-        expect.any(Function),
+        expect.objectContaining({ ipAddress: '192.168.1.1' }),
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
       );
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
     });
@@ -355,7 +360,12 @@ describe('/api/auth/device/refresh', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Correcting device token deviceId from OAuth migration',
-        expect.any(Object)
+        {
+          deviceTokenId: 'device-token-record-id',
+          oldDeviceId: 'unknown',
+          newDeviceId: 'new-device-id',
+          userId: 'test-user-id',
+        }
       );
     });
 

@@ -100,7 +100,6 @@ const MOCK_DRIVE_ID = 'drive_abc';
 // GET /api/drives/[driveId]/integrations/audit/export
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/integrations/audit/export', () => {
   beforeEach(() => {
     vi.clearAllMocks();

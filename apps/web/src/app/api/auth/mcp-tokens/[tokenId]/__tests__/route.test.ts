@@ -147,7 +147,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     expect(body.error).toBe('Failed to revoke MCP token');
     expect(loggers.auth.error).toHaveBeenCalledWith(
       'Error revoking MCP token:',
-      expect.any(Error)
+      new Error('DB connection error')
     );
   });
 });

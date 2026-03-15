@@ -273,7 +273,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error updating conversation:', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Error updating conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -448,7 +448,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error deleting conversation:', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Error deleting conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

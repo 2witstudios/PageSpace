@@ -100,7 +100,6 @@ function mockDbSelectResult(result: unknown[]) {
   vi.mocked(db.select).mockReturnValue({ from } as never);
 }
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/reprocess', () => {
   beforeEach(() => {
     vi.clearAllMocks();

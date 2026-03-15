@@ -93,7 +93,6 @@ const mockPage = (overrides?: Partial<{
   isTrashed: false,
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/export/markdown', () => {
   const mockUserId = 'user_123';
   const mockPageId = 'page_123';

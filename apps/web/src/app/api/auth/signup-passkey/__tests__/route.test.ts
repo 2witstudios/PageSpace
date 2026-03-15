@@ -131,7 +131,10 @@ describe('POST /api/auth/signup-passkey', () => {
     it('sets session cookie and CSRF cookie', async () => {
       const response = await POST(createRequest());
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [sessionHeaders, sessionToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(sessionHeaders).toBeInstanceOf(Headers);
+      expect(sessionToken).toBe('ps_sess_mock_session_token');
       expect(response.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
 
       const cookies = response.headers.getSetCookie();
@@ -267,9 +270,9 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toBe('/dashboard?welcome=true');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', expect.any(Error), expect.objectContaining({
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', new Error('Drive error'), {
         userId: 'new-user-1',
-      }));
+      });
     });
 
     it('continues when AI settings insertion fails', async () => {
@@ -280,9 +283,9 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to insert default AI settings', expect.any(Error), expect.objectContaining({
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to insert default AI settings', new Error('Insert error'), {
         userId: 'new-user-1',
-      }));
+      });
     });
   });
 
@@ -490,8 +493,8 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(body.error).toBe('Internal server error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Passkey signup verification error',
-        expect.any(Error),
-        expect.objectContaining({ email: 'user@example.com', clientIP: '127.0.0.1' }),
+        new Error('Unexpected'),
+        { email: 'user@example.com', clientIP: '127.0.0.1' },
       );
     });
   });

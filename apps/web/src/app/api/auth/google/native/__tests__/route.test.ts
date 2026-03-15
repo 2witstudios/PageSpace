@@ -654,7 +654,11 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userUnverified.id, expect.objectContaining({ emailVerified: expect.any(Date) }));
+      expect(authRepository.updateUser).toHaveBeenCalledTimes(1);
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userUnverified.id);
+      expect(updateArgs[1]).toHaveProperty('emailVerified');
+      expect((updateArgs[1] as Record<string, unknown>).emailVerified).toBeInstanceOf(Date);
     });
 
     it('given existing user where no updates needed, should NOT call updateUser', async () => {

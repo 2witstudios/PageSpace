@@ -145,10 +145,9 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
 
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({ requireCSRF: true })
-      );
+      const callArgs = vi.mocked(authenticateRequestWithOptions).mock.calls[0];
+      expect(callArgs[0]).toBeInstanceOf(Request);
+      expect(callArgs[1]).toEqual({ allow: ['session'], requireCSRF: true });
     });
   });
 
@@ -326,7 +325,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         mockActivityId,
         mockUserId,
         'drive',
-        expect.objectContaining({ tx: expect.any(Object), force: false })
+        { tx: {}, force: false }
       );
     });
   });

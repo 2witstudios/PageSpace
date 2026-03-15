@@ -132,7 +132,6 @@ function setupDbChains(
 // GET /api/users/search
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/users/search', () => {
   beforeEach(() => {
     vi.clearAllMocks();

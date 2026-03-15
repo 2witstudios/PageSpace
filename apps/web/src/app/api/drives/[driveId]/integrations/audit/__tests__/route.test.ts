@@ -121,7 +121,6 @@ function setupDbMocks(countResult: { count: number }[], logs: unknown[]) {
 // GET /api/drives/[driveId]/integrations/audit
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/integrations/audit', () => {
   beforeEach(() => {
     vi.clearAllMocks();

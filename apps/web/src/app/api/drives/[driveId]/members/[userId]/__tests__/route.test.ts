@@ -205,7 +205,6 @@ const createContext = (driveId: string, userId: string) => ({
 // GET /api/drives/[driveId]/members/[userId] - Contract Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/members/[userId]', () => {
   const mockCurrentUserId = 'user_123';
   const mockTargetUserId = 'user_456';
@@ -1109,7 +1108,9 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
     it('should execute removal in a transaction', async () => {
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
-      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      const transactionCallback = vi.mocked(db.transaction).mock.calls[0][0];
+      expect(typeof transactionCallback).toBe('function');
     });
 
     it('should track drive operation', async () => {
@@ -1223,7 +1224,9 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
       expect(response.status).toBe(200);
-      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      const transactionCallback = vi.mocked(db.transaction).mock.calls[0][0];
+      expect(typeof transactionCallback).toBe('function');
     });
 
     it('should handle pages with no matching permissions gracefully', async () => {

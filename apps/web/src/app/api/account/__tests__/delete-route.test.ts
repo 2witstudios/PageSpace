@@ -351,7 +351,7 @@ describe('DELETE /api/account', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         expect.stringContaining('avatar'),
-        expect.any(Error)
+        expect.objectContaining({ message: 'Token creation failed' })
       );
     });
   });
@@ -397,7 +397,7 @@ describe('DELETE /api/account', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         expect.stringContaining('anonymize'),
-        expect.any(Error)
+        expect.objectContaining({ message: expect.stringContaining('Database connection lost') })
       );
       expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
     });
@@ -440,7 +440,7 @@ describe('DELETE /api/account', () => {
       expect(body.error).toBe('Failed to delete account');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         expect.stringContaining('Account deletion error'),
-        expect.any(Error)
+        expect.objectContaining({ message: 'Database connection lost' })
       );
     });
   });

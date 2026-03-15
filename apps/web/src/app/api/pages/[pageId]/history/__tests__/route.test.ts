@@ -122,14 +122,12 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('allows JWT and MCP auth', async () => {
-      await GET(createRequest(), { params: mockParams });
+      const request = createRequest();
+      await GET(request, { params: mockParams });
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          allow: ['session', 'mcp'],
-          requireCSRF: false,
-        })
+        request,
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -211,12 +209,17 @@ describe('GET /api/pages/[pageId]/history', () => {
         { params: mockParams }
       );
 
+      // startDate '2024-01-01' is before the 30-day retention cutoff,
+      // so the route clamps it to the retention boundary (2024-06-15 minus 30 days)
+      const retentionCutoff = new Date('2024-06-15T12:00:00Z');
+      retentionCutoff.setDate(retentionCutoff.getDate() - 30);
+
       expect(getPageVersionHistory).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
         expect.objectContaining({
-          startDate: expect.any(Date),
-          endDate: expect.any(Date),
+          startDate: retentionCutoff,
+          endDate: new Date('2024-12-31'),
         })
       );
     });

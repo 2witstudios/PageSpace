@@ -447,7 +447,7 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Unsafe returnUrl in OAuth callback - falling back to dashboard',
-        expect.any(Object)
+        { returnUrl: 'https://evil.com', hasState: true }
       );
     });
   });
@@ -600,7 +600,10 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userUnverified.id, expect.objectContaining({ emailVerified: expect.any(Date) }));
+      const updateCall = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateCall[0]).toBe(userUnverified.id);
+      expect(updateCall[1]).toHaveProperty('emailVerified');
+      expect(updateCall[1].emailVerified).toBeInstanceOf(Date);
     });
 
     it('does not update complete existing user', async () => {
@@ -679,8 +682,8 @@ describe('GET /api/auth/google/callback', () => {
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'google' })
+        new Error('DB error'),
+        { userId: mockNewUser.id, provider: 'google' }
       );
     });
   });
@@ -774,7 +777,10 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock_session_token');
     });
   });
 
@@ -860,7 +866,7 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       // resetDistributedRateLimit is called in both the main flow and the desktop flow
-      expect(resetDistributedRateLimit).toHaveBeenCalledWith(expect.any(String));
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('oauth:callback:ip:127.0.0.1');
     });
 
     it('logs warning when desktop rate limit reset fails', async () => {
@@ -1097,7 +1103,7 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('/auth/signin?error=oauth_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Google OAuth callback error',
-        expect.any(Error)
+        new Error('Network failure')
       );
     });
   });

@@ -118,7 +118,6 @@ const createRequest = (driveId = 'drive_abc', queryParams = '') =>
 // Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/permissions-tree', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';

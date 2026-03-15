@@ -379,8 +379,8 @@ describe('GET /api/drives/[driveId]/history', () => {
       expect(loggers.api.debug).toHaveBeenCalledWith(
         '[History:Route] GET drive history request',
         expect.objectContaining({
-          driveId: expect.any(String),
-          userId: expect.any(String),
+          driveId: '***_abc',
+          userId: '***_123',
         })
       );
       expect(loggers.api.debug).toHaveBeenCalledWith(

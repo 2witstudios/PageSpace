@@ -306,7 +306,7 @@ describe('POST /api/auth/apple/callback', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Apple OAuth state missing signature - using safe defaults',
-        expect.any(Object)
+        { hasData: true, hasSig: false }
       );
     });
 
@@ -323,7 +323,7 @@ describe('POST /api/auth/apple/callback', () => {
       expect(response.status).toBe(307);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Apple OAuth state parse failed - using safe defaults',
-        expect.any(Object)
+        { stateLength: 12 }
       );
     });
 
@@ -394,7 +394,7 @@ describe('POST /api/auth/apple/callback', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Unsafe returnUrl in Apple OAuth callback - falling back to dashboard',
-        expect.any(Object)
+        { returnUrl: 'https://evil.com', hasState: true }
       );
     });
   });
@@ -694,8 +694,8 @@ describe('POST /api/auth/apple/callback', () => {
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'apple' })
+        new Error('DB error'),
+        { userId: mockNewUser.id, provider: 'apple' }
       );
     });
   });
@@ -966,7 +966,10 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock_token');
     });
   });
 
@@ -1014,7 +1017,7 @@ describe('POST /api/auth/apple/callback', () => {
       expect(location).toContain('/auth/signin?error=oauth_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Apple OAuth callback error',
-        expect.any(Error)
+        new Error('Network failure')
       );
     });
   });

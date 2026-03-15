@@ -75,7 +75,6 @@ const createRequest = (body: Record<string, unknown>) =>
     body: JSON.stringify(body),
   });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/tree', () => {
   beforeEach(() => {
     vi.clearAllMocks();

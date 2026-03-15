@@ -82,7 +82,6 @@ const createRequest = () =>
 
 const mockParams = { params: Promise.resolve({ pageId: mockPageId }) };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,7 +147,7 @@ describe('POST /api/pages/[pageId]/view', () => {
     it('inserts the page view record via upsert', async () => {
       await POST(createRequest(), mockParams);
 
-      /** @scaffold */ expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
+      expect(db.insert).toHaveBeenCalledWith({ userId: 'userId', pageId: 'pageId' });
     });
   });
 

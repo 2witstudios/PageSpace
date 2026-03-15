@@ -194,7 +194,7 @@ describe('/api/auth/google/signin', () => {
 
         expect(loggers.auth.warn).toHaveBeenCalledWith(
           'Rejected unsafe returnUrl in OAuth signin',
-          expect.any(Object)
+          { returnUrl: 'https://evil.com', clientIP: '127.0.0.1' }
         );
       });
     });
@@ -321,7 +321,7 @@ describe('/api/auth/google/signin', () => {
         expect(body.error).toContain('unexpected error');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Google OAuth signin error',
-          expect.any(Error)
+          new Error('Redis error')
         );
       });
     });
@@ -426,7 +426,7 @@ describe('/api/auth/google/signin', () => {
         expect(location).toContain('/auth/signin?error=oauth_error');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Google OAuth signin GET error',
-          expect.any(Error)
+          new Error('Redis error')
         );
       });
 

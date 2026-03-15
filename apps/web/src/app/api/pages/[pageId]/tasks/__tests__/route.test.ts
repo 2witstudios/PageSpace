@@ -220,7 +220,6 @@ describe('Task API Routes', () => {
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      /** @scaffold - ORM chain mock until repository seam exists */
       expect(db.transaction).toHaveBeenCalledTimes(1);
       expect(response.status).toBe(200);
     });
@@ -301,7 +300,6 @@ describe('Task API Routes', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      /** @scaffold - ORM chain mock until repository seam exists */
       expect(db.insert).toHaveBeenCalledTimes(1);
     });
 

@@ -256,7 +256,10 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('does not match');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Device token mismatch detected - possible stolen token',
-        expect.any(Object)
+        expect.objectContaining({
+          tokenDeviceId: 'different-device',
+          providedDeviceId: 'device-123',
+        })
       );
     });
 
@@ -274,7 +277,12 @@ describe('POST /api/auth/device/refresh', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Correcting device token deviceId from OAuth migration',
-        expect.any(Object)
+        {
+          deviceTokenId: 'device-token-record-id',
+          oldDeviceId: 'unknown',
+          newDeviceId: 'device-123',
+          userId: 'user-123',
+        }
       );
     });
 
@@ -324,7 +332,7 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('Failed to update device');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Error correcting device token deviceId',
-        expect.any(Object)
+        expect.objectContaining({ error: expect.objectContaining({ message: 'DB error' }) })
       );
     });
   });
@@ -362,14 +370,16 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'ps_dev_valid_token',
         expect.objectContaining({
           ipAddress: '127.0.0.1',
         }),
-        expect.any(Function), // hashToken
-        expect.any(Function), // getTokenPrefix
-        expect.any(Function), // generateDeviceToken
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
       );
     });
 
@@ -507,10 +517,10 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('ps_dev_valid_token');
       expect(body.sessionToken).toBeUndefined();
-      expect(appendSessionCookie).toHaveBeenCalledWith(
-        expect.any(Headers),
-        'ps_sess_mock_session_token',
-      );
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [headers, token] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(headers).toBeInstanceOf(Headers);
+      expect(token).toBe('ps_sess_mock_session_token');
     });
 
     it('returns 500 when web session validation fails', async () => {
@@ -545,10 +555,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(
-        expect.any(Headers),
-        'ps_sess_mock_session_token',
-      );
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [headers, token] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(headers).toBeInstanceOf(Headers);
+      expect(token).toBe('ps_sess_mock_session_token');
     });
 
     it('returns 500 when desktop session validation fails', async () => {
@@ -573,10 +583,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(
-        expect.any(Headers),
-        'ps_sess_mock_session_token',
-      );
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [iosHeaders, iosToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(iosHeaders).toBeInstanceOf(Headers);
+      expect(iosToken).toBe('ps_sess_mock_session_token');
     });
   });
 
@@ -645,7 +655,7 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('unexpected error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Device token refresh error',
-        expect.any(Error)
+        new Error('DB error')
       );
     });
   });

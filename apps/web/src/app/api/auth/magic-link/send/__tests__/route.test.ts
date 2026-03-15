@@ -168,7 +168,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_csrf_mismatch',
-        expect.any(Object)
+        { ip: '127.0.0.1' }
       );
     });
 
@@ -240,7 +240,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_rate_limit_ip',
-        expect.any(Object)
+        { ip: '127.0.0.1' }
       );
     });
 
@@ -258,7 +258,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.retryAfter).toBe(300);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_rate_limit_email',
-        expect.any(Object)
+        { email: expect.stringMatching(/^te\*\*\*@example\.com$/), ip: '127.0.0.1' }
       );
     });
 
@@ -290,7 +290,7 @@ describe('POST /api/auth/magic-link/send', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'magic_link:email:test@example.com',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: false }
       );
     });
   });
@@ -321,7 +321,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(sendEmail).not.toHaveBeenCalled();
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_suspended_user',
-        expect.any(Object)
+        { email: expect.stringMatching(/^te\*\*\*@example\.com$/), ip: '127.0.0.1' }
       );
     });
 
@@ -354,7 +354,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.message).toContain('If an account exists');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link creation failed',
-        expect.any(Object)
+        { error: { code: 'DATABASE_ERROR', message: 'Connection failed' } }
       );
     });
   });
@@ -395,8 +395,8 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.message).toContain('If an account exists');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to send magic link email',
-        expect.any(Error),
-        expect.any(Object)
+        new Error('SMTP error'),
+        { email: expect.stringMatching(/^te\*\*\*@example\.com$/) }
       );
     });
   });
@@ -413,7 +413,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.error).toBe('An unexpected error occurred.');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link send error',
-        expect.any(Error)
+        new Error('Redis down')
       );
     });
   });

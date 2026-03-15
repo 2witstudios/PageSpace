@@ -238,7 +238,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Delete passkey error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Delete passkey error', new Error('Unexpected'));
     });
   });
 });
@@ -467,7 +467,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Update passkey error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Update passkey error', new Error('Unexpected'));
     });
   });
 });

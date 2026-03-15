@@ -109,7 +109,6 @@ const mockEvaluation = {
   errors: {},
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/export/csv', () => {
   const mockUserId = 'user_123';
   const mockPageId = 'page_123';

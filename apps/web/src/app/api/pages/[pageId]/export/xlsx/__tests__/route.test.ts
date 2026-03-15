@@ -109,7 +109,6 @@ const mockEvaluation = {
   errors: {},
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/export/xlsx', () => {
   const mockUserId = 'user_123';
   const mockPageId = 'page_123';
@@ -336,8 +335,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
 
       expect(generateExcel).toHaveBeenCalledWith(
         [['10', '20', '30']],
-        expect.any(String),
-        expect.any(String)
+        'Test Sheet',
+        'Test Sheet'
       );
     });
 
@@ -358,8 +357,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(response.status).toBe(200);
       expect(generateExcel).toHaveBeenCalledWith(
         [],
-        expect.any(String),
-        expect.any(String)
+        'Test Sheet',
+        'Test Sheet'
       );
     });
 

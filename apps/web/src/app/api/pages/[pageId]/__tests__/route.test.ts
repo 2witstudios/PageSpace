@@ -430,7 +430,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         mockDriveId,
         mockPageId,
         'content-updated',
-        expect.any(Object)
+        { title: 'Test Page', parentId: undefined, socketId: undefined }
       );
       expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });

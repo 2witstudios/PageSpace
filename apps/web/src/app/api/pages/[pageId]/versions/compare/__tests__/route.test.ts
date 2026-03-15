@@ -324,7 +324,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Version 1</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -345,7 +345,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Ref Content</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -369,7 +369,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Snapshot Fallback</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -443,13 +443,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          lineMode: true,
-          prettyPrint: true,
-          format: 'html',
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: true, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -460,12 +456,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          lineMode: false,
-          prettyPrint: true,
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -476,11 +469,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          format: 'html',
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 

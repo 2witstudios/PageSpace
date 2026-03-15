@@ -126,7 +126,6 @@ const mockUpdateChain = () => {
 // GET /api/account/devices
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/devices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -261,7 +260,6 @@ describe('GET /api/account/devices', () => {
 // DELETE /api/account/devices
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/devices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -367,19 +365,25 @@ describe('DELETE /api/account/devices', () => {
     });
 
     it('revokes old device token before creating new one', async () => {
-      const chain = mockUpdateChain();
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      await DELETE(
-        createDeleteRequest({ 'x-device-token': 'ps_dev_current_token' })
-      );
+      try {
+        const chain = mockUpdateChain();
 
-      // Should revoke old token
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          revokedAt: expect.any(Date),
+        await DELETE(
+          createDeleteRequest({ 'x-device-token': 'ps_dev_current_token' })
+        );
+
+        // Should revoke old token
+        expect(chain.set).toHaveBeenCalledWith({
+          revokedAt: frozenDate,
           revokedReason: 'user_action',
-        })
-      );
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('creates new token with incremented tokenVersion', async () => {

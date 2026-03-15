@@ -279,7 +279,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey signup options error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey signup options error', new Error('Unexpected'));
     });
   });
 });

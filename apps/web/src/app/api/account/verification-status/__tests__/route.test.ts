@@ -31,7 +31,6 @@ const mockSelectChain = (result: unknown[]) => {
   return chain;
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/verification-status', () => {
   beforeEach(() => {
     vi.clearAllMocks();

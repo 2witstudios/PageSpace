@@ -163,7 +163,7 @@ describe('GET /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch conversations');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching conversations:', expect.any(Error));
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching conversations:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -275,7 +275,7 @@ describe('POST /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create conversation');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error creating conversation:', expect.any(Error));
+      expect(loggers.api.error).toHaveBeenCalledWith('Error creating conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

@@ -63,7 +63,6 @@ const mockAuthError = (status = 401): AuthError => ({
 // GET /api/users/find
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/users/find', () => {
   const mockUserId = 'user_123';
 

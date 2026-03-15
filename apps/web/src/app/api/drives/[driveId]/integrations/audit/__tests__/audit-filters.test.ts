@@ -51,7 +51,6 @@ const VALID_CUID = 'clg8k9x0y000008l1d4hv8x0z';
 // parseAuditFilterParams
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('parseAuditFilterParams', () => {
   describe('with no params', () => {
     it('should return ok with all null filters', () => {
@@ -428,8 +427,8 @@ describe('buildAuditLogWhereClause', () => {
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.connectionId, 'conn-123');
     expect(and).toHaveBeenCalledWith(
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
+      { _type: 'eq', col: 'col_driveId', val: driveId },
+      { _type: 'eq', col: 'col_connectionId', val: 'conn-123' },
     );
   });
 
@@ -441,8 +440,8 @@ describe('buildAuditLogWhereClause', () => {
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.success, true);
     expect(and).toHaveBeenCalledWith(
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
+      { _type: 'eq', col: 'col_driveId', val: driveId },
+      { _type: 'eq', col: 'col_success', val: true },
     );
   });
 
@@ -508,13 +507,13 @@ describe('buildAuditLogWhereClause', () => {
 
     // 7 conditions total: driveId + 6 filters
     expect(and).toHaveBeenCalledWith(
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
-      /** @scaffold */ expect.any(Object),
+      { _type: 'eq', col: 'col_driveId', val: driveId },
+      { _type: 'eq', col: 'col_connectionId', val: 'conn-1' },
+      { _type: 'eq', col: 'col_success', val: false },
+      { _type: 'eq', col: 'col_agentId', val: 'agent-1' },
+      { _type: 'gte', col: 'col_createdAt', val: dateFrom },
+      { _type: 'lte', col: 'col_createdAt', val: dateTo },
+      { _type: 'eq', col: 'col_toolName', val: 'test_tool' },
     );
   });
 });

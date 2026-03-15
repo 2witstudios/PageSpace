@@ -228,7 +228,7 @@ describe('GET /api/ai/chat/messages', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to load messages');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error loading chat messages:', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Error loading chat messages:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

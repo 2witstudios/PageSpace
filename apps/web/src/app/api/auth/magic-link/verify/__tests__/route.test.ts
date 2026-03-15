@@ -311,8 +311,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to mark email as verified',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'test-user-id' })
+        new Error('DB error'),
+        { userId: 'test-user-id' }
       );
     });
   });
@@ -383,8 +383,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).not.toContain('provisioned');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'test-user-id' })
+        new Error('DB error'),
+        { userId: 'test-user-id' }
       );
     });
 
@@ -413,7 +413,10 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('sets session cookie', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [verifyHeaders, verifyToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(verifyHeaders).toBeInstanceOf(Headers);
+      expect(verifyToken).toBe('ps_sess_mock_token');
     });
 
     it('sets CSRF token cookie without Secure flag in non-production', async () => {
@@ -487,7 +490,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('error=server_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link verify error',
-        expect.any(Error)
+        new Error('Unexpected')
       );
     });
   });

@@ -90,7 +90,6 @@ const MOCK_OWNER_ID = 'owner_456';
 // GET /api/drives/[driveId]/assignees
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/assignees', () => {
   beforeEach(() => {
     vi.clearAllMocks();

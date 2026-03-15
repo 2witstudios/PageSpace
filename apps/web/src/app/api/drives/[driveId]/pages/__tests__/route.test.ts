@@ -127,7 +127,6 @@ const createRequest = (driveId = 'drive_abc') =>
 // Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/pages', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -232,7 +231,10 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalledWith(expect.any(Object));
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
     });
   });
 
@@ -251,7 +253,10 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalledWith(expect.any(Object));
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
     });
   });
 
@@ -297,8 +302,11 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalledWith(expect.any(Object));
-      expect(mockExecute).toHaveBeenCalledWith(expect.any(Object));
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+      expect(mockExecute).toHaveBeenCalledWith(expect.objectContaining({ type: 'sql' }));
     });
   });
 
@@ -377,7 +385,9 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(buildTree).toHaveBeenCalledWith(expect.any(Array));
+      expect(buildTree).toHaveBeenCalledWith([
+        { id: 'page_1', parentId: null, position: 0, isTaskLinked: false, hasChanges: false },
+      ]);
     });
   });
 

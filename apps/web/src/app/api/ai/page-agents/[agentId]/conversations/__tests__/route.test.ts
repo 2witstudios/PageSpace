@@ -250,7 +250,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to list conversations');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error listing conversations:', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Error listing conversations:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -369,7 +369,7 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create conversation');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Error creating conversation:', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Error creating conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

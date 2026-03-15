@@ -298,7 +298,7 @@ describe('Session Fixation Prevention - CSRF Validation', () => {
 
       await validateCSRF(request);
 
-      expect(mockGetSession).toHaveBeenCalledWith(expect.any(String));
+      expect(mockGetSession).toHaveBeenCalledWith('session=ps_sess_test');
       expect(mockValidateSession).toHaveBeenCalledWith('ps_sess_test');
     });
   });

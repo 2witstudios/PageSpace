@@ -98,7 +98,6 @@ const createDeleteRequest = () => {
   } as unknown as import('next/server').NextRequest;
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/avatar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -393,7 +392,6 @@ describe('POST /api/account/avatar', () => {
   });
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/avatar', () => {
   beforeEach(() => {
     vi.clearAllMocks();

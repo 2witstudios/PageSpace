@@ -371,7 +371,7 @@ describe('POST /api/auth/passkey/register', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration verification error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration verification error', new Error('Unexpected'));
     });
   });
 });

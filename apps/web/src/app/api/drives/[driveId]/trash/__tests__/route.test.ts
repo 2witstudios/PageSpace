@@ -88,7 +88,6 @@ const createDriveFixture = (overrides: { id: string; name?: string; ownerId?: st
 // GET /api/drives/[driveId]/trash - Contract Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/trash', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';

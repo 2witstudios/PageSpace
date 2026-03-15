@@ -226,12 +226,14 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         validRefreshPayload.deviceToken,
-        expect.objectContaining({ ipAddress: expect.any(String) }),
-        expect.any(Function),
-        expect.any(Function),
-        expect.any(Function),
+        expect.objectContaining({ ipAddress: '192.168.1.1' }),
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
       );
       expect(body.deviceToken).toBe('new-device-token');
     });
@@ -642,7 +644,7 @@ describe('/api/auth/mobile/refresh', () => {
       await POST(request);
 
       expect(updateDeviceTokenActivity).toHaveBeenCalledWith(
-        expect.any(String),
+        mockDeviceRecord.id,
         undefined
       );
     });

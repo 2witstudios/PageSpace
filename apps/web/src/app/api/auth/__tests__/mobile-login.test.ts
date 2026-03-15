@@ -770,11 +770,11 @@ describe('/api/auth/mobile/login', () => {
       // Assert - mobile login shares rate limit with web login
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         expect.stringMatching(/^login:ip:/),
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         expect.stringMatching(/^login:email:/),
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
   });

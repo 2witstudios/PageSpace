@@ -72,7 +72,6 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   drivePrompt: null,
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/drives-status', () => {
   const mockUserId = 'user_123';
 
@@ -263,7 +262,7 @@ describe('GET /api/account/drives-status', () => {
     expect(body.error).toBe('Failed to fetch drives status');
     expect(loggers.auth.error).toHaveBeenCalledWith(
       expect.stringContaining('Error fetching drives status'),
-      expect.any(Error)
+      expect.objectContaining({ message: 'Database connection lost' })
     );
   });
 

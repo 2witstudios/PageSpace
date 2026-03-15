@@ -699,7 +699,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed after successful OAuth',
-        expect.any(Object)
+        { failureCount: 1, reasons: ['Reset failed'] }
       );
     });
   });

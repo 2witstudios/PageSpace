@@ -158,7 +158,7 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     await response.json();
 
     expect(response.status).toBe(200);
-    /** @scaffold */ expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('given missing hotkeyId, should return 400', async () => {

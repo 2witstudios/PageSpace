@@ -322,16 +322,15 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.memberId).toBe('mem_new');
-      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-        expect.objectContaining({
-          driveId: mockDriveId,
-          userId: mockInvitedUserId,
-          role: 'MEMBER',
-          customRoleId: null,
-          invitedBy: mockUserId,
-          acceptedAt: expect.any(Date),
-        })
-      );
+      const createCall = vi.mocked(driveInviteRepository.createDriveMember).mock.calls[0][0];
+      expect(createCall).toEqual(expect.objectContaining({
+        driveId: mockDriveId,
+        userId: mockInvitedUserId,
+        role: 'MEMBER',
+        customRoleId: null,
+        invitedBy: mockUserId,
+      }));
+      expect(createCall.acceptedAt).toBeInstanceOf(Date);
     });
 
     it('should use default MEMBER role when not specified', async () => {
@@ -472,16 +471,15 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.permissionsGranted).toBe(1);
-      expect(driveInviteRepository.updatePagePermission).toHaveBeenCalledWith(
-        'perm_existing',
-        expect.objectContaining({
-          canView: true,
-          canEdit: false,
-          canShare: false,
-          grantedBy: mockUserId,
-          grantedAt: expect.any(Date),
-        })
-      );
+      const updateCall = vi.mocked(driveInviteRepository.updatePagePermission).mock.calls[0];
+      expect(updateCall[0]).toBe('perm_existing');
+      expect(updateCall[1]).toEqual(expect.objectContaining({
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        grantedBy: mockUserId,
+      }));
+      expect((updateCall[1] as Record<string, unknown>).grantedAt).toBeInstanceOf(Date);
     });
 
     it('should skip invalid page IDs and log warning', async () => {

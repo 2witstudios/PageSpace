@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, PUT } from '../route';
 
 /**
@@ -66,6 +66,17 @@ describe('/api/track', () => {
   });
 
   describe('successful tracking', () => {
+    const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('POST_withValidPageView_returns200', async () => {
       const request = createRequest({ event: 'page_view', data: { path: '/home' } });
       const response = await POST(request);
@@ -82,7 +93,11 @@ describe('/api/track', () => {
       expect(trackActivity).toHaveBeenCalledWith(
         undefined,
         'page_view',
-        expect.objectContaining({ ip: '127.0.0.1' })
+        {
+          metadata: { path: '/home', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
       );
     });
 
@@ -93,7 +108,7 @@ describe('/api/track', () => {
       expect(trackFeature).toHaveBeenCalledWith(
         undefined,
         'dark-mode',
-        expect.objectContaining({ feature: 'dark-mode' })
+        { feature: 'dark-mode', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -108,7 +123,7 @@ describe('/api/track', () => {
         undefined,
         'js',
         'Uncaught TypeError',
-        expect.any(Object)
+        { type: 'js', message: 'Uncaught TypeError', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -120,7 +135,11 @@ describe('/api/track', () => {
       expect(trackActivity).toHaveBeenCalledWith(
         undefined,
         'ui_click',
-        expect.any(Object)
+        {
+          metadata: { label: 'nav-button', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
       );
     });
 
@@ -132,7 +151,11 @@ describe('/api/track', () => {
       expect(trackActivity).toHaveBeenCalledWith(
         undefined,
         'search',
-        expect.any(Object)
+        {
+          metadata: { ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          ip: '127.0.0.1',
+          userAgent: 'unknown',
+        }
       );
     });
   });

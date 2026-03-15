@@ -282,7 +282,7 @@ describe('GET /api/ai/settings', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to retrieve settings');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to get AI settings', expect.any(Error));
+      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to get AI settings', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -471,7 +471,7 @@ describe('POST /api/ai/settings', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toContain('Failed to save');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to save openrouter API key', expect.any(Error), { provider: 'openrouter' });
+      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to save openrouter API key', expect.objectContaining({ message: 'Save failed' }), { provider: 'openrouter' });
     });
   });
 });
@@ -621,7 +621,7 @@ describe('PATCH /api/ai/settings', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update model selection');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to update model selection', expect.any(Error), { provider: 'pagespace', model: 'glm-4.5-air' });
+      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to update model selection', expect.objectContaining({ message: 'Update failed' }), { provider: 'pagespace', model: 'glm-4.5-air' });
     });
   });
 });
@@ -772,7 +772,7 @@ describe('DELETE /api/ai/settings', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toContain('Failed to delete');
-      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to delete openrouter API key', expect.any(Error), { provider: 'openrouter' });
+      expect(loggers.ai.error).toHaveBeenCalledWith('Failed to delete openrouter API key', expect.objectContaining({ message: 'Delete failed' }), { provider: 'openrouter' });
     });
   });
 });

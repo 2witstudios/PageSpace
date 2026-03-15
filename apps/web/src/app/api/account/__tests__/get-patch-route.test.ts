@@ -79,7 +79,6 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account', () => {
   const mockUserId = 'user_123';
 
@@ -191,7 +190,6 @@ describe('GET /api/account', () => {
   });
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('PATCH /api/account', () => {
   const mockUserId = 'user_123';
 
@@ -393,7 +391,7 @@ describe('PATCH /api/account', () => {
     expect(body.error).toBe('Failed to update profile');
     expect(loggers.auth.error).toHaveBeenCalledWith(
       expect.stringContaining('Profile update error'),
-      expect.any(Error)
+      expect.objectContaining({ message: 'DB error' })
     );
   });
 });

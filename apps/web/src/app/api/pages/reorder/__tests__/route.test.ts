@@ -124,7 +124,6 @@ describe('PATCH /api/pages/reorder', () => {
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
-    /** @scaffold - ORM chain mock until repository seam exists */
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({

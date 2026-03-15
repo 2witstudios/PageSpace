@@ -246,7 +246,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(body.error).toBe('Failed to create MCP token');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Error creating MCP token:',
-          expect.any(Error),
+          new Error('Transaction failed'),
         );
       });
     });
@@ -351,7 +351,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(body.error).toBe('Failed to fetch MCP tokens');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Error fetching MCP tokens:',
-          expect.any(Error),
+          new Error('DB error'),
         );
       });
     });

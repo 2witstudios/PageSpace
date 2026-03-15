@@ -246,7 +246,10 @@ describe('POST /api/auth/login', () => {
       );
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [loginHeaders, loginToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(loginHeaders).toBeInstanceOf(Headers);
+      expect(loginToken).toBe('ps_sess_mock_session_token');
     });
 
     it('generates CSRF token bound to session', async () => {
@@ -545,7 +548,7 @@ describe('POST /api/auth/login', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'login:ip:203.0.113.195',
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
 
@@ -560,7 +563,7 @@ describe('POST /api/auth/login', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'login:ip:192.168.1.100',
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
 
@@ -570,7 +573,7 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(checkDistributedRateLimit).toHaveBeenCalledWith('login:ip:unknown', expect.any(Object));
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith('login:ip:unknown', DISTRIBUTED_RATE_LIMITS.LOGIN);
     });
   });
 
@@ -631,7 +634,7 @@ describe('POST /api/auth/login', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'login:email:test@example.com',
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
     });
   });
@@ -948,7 +951,7 @@ describe('POST /api/auth/login', () => {
       const { loggers } = await import('@pagespace/lib/server');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed after successful login',
-        expect.objectContaining({ failureCount: expect.any(Number) })
+        { failureCount: 1, reasons: ['Redis down'] }
       );
     });
   });

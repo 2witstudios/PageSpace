@@ -236,7 +236,9 @@ describe('POST /api/auth/google/one-tap', () => {
           scopes: ['*'],
         })
       );
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
     });
 
     it('should generate CSRF token bound to session', async () => {
@@ -274,7 +276,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(resetDistributedRateLimit).toHaveBeenCalledWith(expect.any(String));
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('oauth:onetap:ip:127.0.0.1');
     });
   });
 

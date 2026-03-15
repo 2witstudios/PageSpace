@@ -186,7 +186,6 @@ function setupSuccessScenario() {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/bulk-move', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -463,7 +462,8 @@ describe('POST /api/pages/bulk-move', () => {
     it('runs move within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(typeof mockTransaction.mock.calls[0][0]).toBe('function');
     });
 
     it('updates children driveId when moving to a different drive', async () => {

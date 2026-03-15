@@ -184,7 +184,7 @@ describe('GET /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch conversation');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching conversation:', expect.any(Error));
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -280,7 +280,7 @@ describe('PATCH /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update conversation');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error updating conversation:', expect.any(Error));
+      expect(loggers.api.error).toHaveBeenCalledWith('Error updating conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });
@@ -367,7 +367,7 @@ describe('DELETE /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete conversation');
-      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting conversation:', expect.any(Error));
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting conversation:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

@@ -149,7 +149,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String), 'session_123', mockSessionExpiry, expect.any(String));
+      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, 'mock_fingerprint_hash_1234567890abcdef', 'session_123', mockSessionExpiry, 'svc_mock_opaque_token_12345');
       expect(markChallengeVerified).toHaveBeenCalledWith(mockClient);
     });
 

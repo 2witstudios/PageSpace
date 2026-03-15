@@ -226,7 +226,10 @@ describe('/api/auth/signup', () => {
       );
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [signupHeaders, signupToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(signupHeaders).toBeInstanceOf(Headers);
+      expect(signupToken).toBe('ps_sess_mock_session_token');
     });
 
     it('hashes password with bcrypt cost factor 12', async () => {
@@ -342,8 +345,8 @@ describe('/api/auth/signup', () => {
       expect(response.headers.get('Location')).not.toContain('/dashboard/new-drive-id');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'new-user-id' })
+        new Error('Database error'),
+        { userId: 'new-user-id' }
       );
     });
   });
@@ -623,11 +626,11 @@ describe('/api/auth/signup', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         expect.stringMatching(/^signup:ip:/),
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         expect.stringMatching(/^signup:email:/),
-        expect.any(Object)
+        DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
     });
   });
@@ -755,7 +758,7 @@ describe('/api/auth/signup', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed after successful signup',
-        expect.objectContaining({ failureCount: expect.any(Number) })
+        { failureCount: 1, reasons: ['Redis down'] }
       );
     });
 

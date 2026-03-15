@@ -379,7 +379,9 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
     });
 
     it('revokes existing sessions before creating new one', async () => {
@@ -592,8 +594,8 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'google-one-tap' })
+        new Error('DB error'),
+        { userId: 'user-123', provider: 'google-one-tap' }
       );
     });
   });
@@ -687,7 +689,7 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(body.error).toContain('unexpected error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Google One Tap error',
-        expect.any(Error)
+        new Error('Database error')
       );
     });
   });

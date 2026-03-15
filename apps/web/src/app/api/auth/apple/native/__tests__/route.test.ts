@@ -209,7 +209,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'oauth:apple:native:ip:10.0.0.5',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: true }
       );
     });
 
@@ -292,7 +292,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Apple sign-in not configured');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Missing Apple client ID',
-        expect.any(Object)
+        { hasAppleClientId: false, hasAppleServiceId: false }
       );
     });
   });
@@ -371,8 +371,8 @@ describe('POST /api/auth/apple/native', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'apple-native' })
+        new Error('DB error'),
+        { userId: 'new-user-id', provider: 'apple-native' }
       );
     });
   });
@@ -621,7 +621,9 @@ describe('POST /api/auth/apple/native', () => {
     it('sets session cookie in response headers', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_token');
     });
   });
 

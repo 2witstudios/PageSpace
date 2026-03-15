@@ -400,20 +400,28 @@ describe('Billing Address API', () => {
     });
 
     it('should save customer ID to database when creating customer', async () => {
-      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
-      mockStripeCustomersCreate.mockResolvedValue(mockCustomer({ id: 'cus_new' }));
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const request = new Request('https://example.com/api/stripe/billing-address', {
-        method: 'PUT',
-        body: JSON.stringify(validAddressBody),
-      }) as unknown as import('next/server').NextRequest;
+      try {
+        mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+        mockStripeCustomersCreate.mockResolvedValue(mockCustomer({ id: 'cus_new' }));
 
-      await PUT(request);
+        const request = new Request('https://example.com/api/stripe/billing-address', {
+          method: 'PUT',
+          body: JSON.stringify(validAddressBody),
+        }) as unknown as import('next/server').NextRequest;
 
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        stripeCustomerId: 'cus_new',
-        updatedAt: expect.any(Date),
-      });
+        await PUT(request);
+
+        expect(mockUpdateSet).toHaveBeenCalledWith({
+          stripeCustomerId: 'cus_new',
+          updatedAt: frozenDate,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should rollback and delete Stripe customer if DB update fails', async () => {

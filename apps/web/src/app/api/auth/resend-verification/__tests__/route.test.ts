@@ -141,8 +141,9 @@ describe('POST /api/auth/resend-verification', () => {
     it('passes correct auth options', async () => {
       await POST(createResendRequest());
 
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
+      expect(authenticateRequestWithOptions).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(authenticateRequestWithOptions).mock.calls[0][0]).toBeInstanceOf(Request);
+      expect(vi.mocked(authenticateRequestWithOptions).mock.calls[0][1]).toEqual(
         { allow: ['session'], requireCSRF: true }
       );
     });
@@ -185,7 +186,7 @@ describe('POST /api/auth/resend-verification', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'email-resend:test@example.com',
-        expect.any(Object)
+        { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false }
       );
     });
 
@@ -314,7 +315,7 @@ describe('POST /api/auth/resend-verification', () => {
       expect(body.error).toBe('Failed to send verification email');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Error resending verification email',
-        expect.any(Error)
+        new Error('Database down')
       );
     });
   });

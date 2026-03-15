@@ -137,7 +137,6 @@ const mockDocPage = {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/convert-content-mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();

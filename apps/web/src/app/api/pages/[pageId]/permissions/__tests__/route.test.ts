@@ -131,7 +131,6 @@ const mockPermission: PermissionEntry = {
   },
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/permissions', () => {
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
@@ -231,7 +230,6 @@ describe('GET /api/pages/[pageId]/permissions', () => {
   });
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/permissions', () => {
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
@@ -397,7 +395,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
         mockTargetUserId,
         mockPageId,
         'updated',
-        expect.any(Object),
+        { canView: true, canEdit: false, canShare: false, canDelete: false },
         mockUserId
       );
     });
@@ -521,7 +519,6 @@ describe('POST /api/pages/[pageId]/permissions', () => {
   });
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/pages/[pageId]/permissions', () => {
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {

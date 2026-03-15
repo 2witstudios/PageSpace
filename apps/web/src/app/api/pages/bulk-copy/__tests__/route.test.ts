@@ -208,7 +208,6 @@ function setupSuccessScenario() {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/bulk-copy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -458,13 +457,14 @@ describe('POST /api/pages/bulk-copy', () => {
     it('runs copy within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(typeof mockTransaction.mock.calls[0][0]).toBe('function');
     });
 
     it('creates page with (Copy) suffix in title', async () => {
       await POST(createRequest(validBody));
 
-      /** @scaffold */ expect(txInsert).toHaveBeenCalledWith(expect.any(Object));
+      expect(txInsert).toHaveBeenCalledWith({ id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' });
       const insertedValues = txInsertValues.mock.calls[0][0];
       expect(insertedValues.title).toBe('Source Page (Copy)');
     });

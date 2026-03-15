@@ -89,7 +89,6 @@ const mockPage = (overrides?: Partial<{
   isTrashed: false,
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/export/docx', () => {
   const mockUserId = 'user_123';
   const mockPageId = 'page_123';
@@ -218,7 +217,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
       await GET(createRequest(), { params: mockParams });
 
-      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', expect.any(String));
+      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', 'Test Document');
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {

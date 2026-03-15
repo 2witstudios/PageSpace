@@ -427,7 +427,7 @@ describe('POST /api/drives', () => {
       );
       expect(broadcastDriveEvent).toHaveBeenCalledWith(
         expect.objectContaining({ driveId: 'drive_broadcast', event: 'created' }),
-        expect.any(Array)
+        ['user_123']
       );
     });
 

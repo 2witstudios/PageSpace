@@ -96,7 +96,6 @@ const mockDriveMember = (overrides: {
   lastAccessedAt: null,
 });
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/handle-drive', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -409,7 +408,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.error).toBe('Failed to handle drive');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         expect.stringContaining('Error handling drive'),
-        expect.any(Error)
+        expect.objectContaining({ message: 'Database connection lost' })
       );
     });
 

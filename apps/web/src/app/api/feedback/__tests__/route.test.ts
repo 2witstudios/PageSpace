@@ -153,7 +153,7 @@ describe('/api/feedback', () => {
 
       await POST(request);
 
-      /** @scaffold */ expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.insert).toHaveBeenCalledTimes(1);
       const insertMock = vi.mocked(db.insert);
       const valuesMock = (insertMock.mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
@@ -421,7 +421,7 @@ describe('/api/feedback', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith(
         'Feedback submission error',
-        expect.any(Error)
+        expect.objectContaining({ message: 'Unexpected error' })
       );
     });
   });

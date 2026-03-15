@@ -293,7 +293,7 @@ describe('POST /api/auth/passkey/register/options', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration options error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration options error', new Error('Unexpected'));
     });
   });
 });

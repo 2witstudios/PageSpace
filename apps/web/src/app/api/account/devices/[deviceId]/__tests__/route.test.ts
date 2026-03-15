@@ -107,7 +107,6 @@ const mockDevice = (overrides: Record<string, unknown> = {}) => ({
 // DELETE /api/account/devices/[deviceId]
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/devices/[deviceId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -280,7 +279,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
           tokenName: 'My MacBook',
           deviceInfo: 'desktop - My MacBook',
         }),
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
       );
     });
 
@@ -299,7 +298,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
           tokenName: undefined,
           deviceInfo: 'desktop - Unknown',
         }),
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
       );
     });
 
@@ -317,7 +316,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
         expect.objectContaining({
           deviceInfo: 'Unknown - My MacBook',
         }),
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', email: 'test@example.com' })
       );
     });
   });

@@ -92,7 +92,6 @@ function _setupDbSelectChain(results: unknown[]) {
 // GET /api/drives/[driveId]/agents
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();

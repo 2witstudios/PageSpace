@@ -115,10 +115,10 @@ describe('/api/admin/users/[userId]/data', () => {
     expect(logUserActivity).toHaveBeenCalledWith(
       'admin-123',
       'account_delete',
-      expect.objectContaining({ targetUserId: 'user-1' }),
-      expect.any(Object)
+      { targetUserId: 'user-1', targetUserEmail: 'tar***@example.com' },
+      { email: 'admin@example.com', displayName: 'Admin' }
     );
-    expect(activityLogRepository.anonymizeForUser).toHaveBeenCalledWith('user-1', expect.any(String));
+    expect(activityLogRepository.anonymizeForUser).toHaveBeenCalledWith('user-1', 'deleted_user_c6c289e49e9c');
     expect(deleteAiUsageLogsForUser).toHaveBeenCalledWith('user-1');
     expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
   });

@@ -85,7 +85,6 @@ const mockDbUpdateChain = () => {
   return chain;
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/password', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -295,20 +294,26 @@ describe('POST /api/account/password', () => {
     });
 
     it('revokes all active device tokens', async () => {
-      const chain = mockDbUpdateChain();
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      await POST(createRequest({
-        currentPassword: 'oldPassword123',
-        newPassword: 'newPassword1234',
-      }));
+      try {
+        const chain = mockDbUpdateChain();
 
-      // Second db.update call should revoke device tokens
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          revokedAt: expect.any(Date),
+        await POST(createRequest({
+          currentPassword: 'oldPassword123',
+          newPassword: 'newPassword1234',
+        }));
+
+        // Second db.update call should revoke device tokens
+        expect(chain.set).toHaveBeenCalledWith({
+          revokedAt: frozenDate,
           revokedReason: 'token_version_bump_password_change',
-        })
-      );
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
