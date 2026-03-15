@@ -8,6 +8,7 @@ vi.mock('drizzle-orm', () => ({
 // Mock @pagespace/db
 const mockReturning = vi.fn();
 
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     delete: vi.fn(() => ({

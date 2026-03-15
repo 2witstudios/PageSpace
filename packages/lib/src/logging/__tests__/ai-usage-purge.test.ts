@@ -18,6 +18,7 @@ const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 const mockSet = vi.hoisted(() => vi.fn().mockReturnValue({ where: mockWhere }));
 
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     update: vi.fn().mockReturnValue({ set: mockSet }),

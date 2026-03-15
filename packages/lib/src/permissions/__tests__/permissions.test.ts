@@ -88,6 +88,7 @@ function mockValidators(userOk = true, pageOk = true) {
   }
 }
 
+/** @scaffold — ORM chain mock: db.select().from().leftJoin/innerJoin().where().limit() */
 function makeSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });

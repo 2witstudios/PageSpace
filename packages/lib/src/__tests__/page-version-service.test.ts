@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 
 // Mock the database before importing the service
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),

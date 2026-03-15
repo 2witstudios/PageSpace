@@ -23,6 +23,7 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold — ORM chain mock: db.update().set().where() */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });

@@ -52,6 +52,7 @@ const pageRow = {
   stateHash: null,
 };
 
+/** @scaffold — ORM chain mock: db.select().from().where().orderBy().limit() */
 function setupSelectChain(rows: unknown[]) {
   const orderByFn = vi.fn().mockResolvedValue(rows);
   const limitFn = vi.fn().mockResolvedValue(rows);
@@ -61,6 +62,7 @@ function setupSelectChain(rows: unknown[]) {
   return { whereFn, orderByFn, limitFn };
 }
 
+/** @scaffold — ORM chain mock: db.insert().values().returning() */
 function setupInsertChain(row: unknown) {
   const returningFn = vi.fn().mockResolvedValue([row]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -68,6 +70,7 @@ function setupInsertChain(row: unknown) {
   return { valuesFn, returningFn };
 }
 
+/** @scaffold — ORM chain mock: db.update().set().where().returning() */
 function setupUpdateChain(rows: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });

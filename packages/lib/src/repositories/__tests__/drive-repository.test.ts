@@ -37,6 +37,7 @@ const driveRecord = {
   trashedAt: null,
 };
 
+/** @scaffold — ORM chain mock: db.select().from().where() */
 function setupSelectChain(rows: unknown[]) {
   const whereFn = vi.fn().mockResolvedValue(rows);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -44,6 +45,7 @@ function setupSelectChain(rows: unknown[]) {
   return { whereFn };
 }
 
+/** @scaffold — ORM chain mock: db.update().set().where().returning() */
 function setupUpdateChain(returnValue: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });

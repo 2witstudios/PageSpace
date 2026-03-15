@@ -114,6 +114,7 @@ function buildValidChain(count: number): MockEntry[] {
 /**
  * db.query.activityLogs.findMany for paged batch retrieval.
  */
+/** @scaffold — ORM chain mock for db.query and db.insert patterns */
 function setupDbMocks(entries: MockEntry[]) {
   // Count query: db.select({count}).from(activityLogs).where(...)
   // Source uses: db.select({ count: count() }).from(activityLogs).where(...)

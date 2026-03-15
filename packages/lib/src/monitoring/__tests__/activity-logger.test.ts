@@ -28,6 +28,7 @@ const mockFindFirst = vi.hoisted(() =>
 );
 const mockUsersFindFirst = vi.hoisted(() => vi.fn());
 
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: mockInsert,

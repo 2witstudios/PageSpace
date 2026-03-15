@@ -10,6 +10,7 @@ vi.mock('drizzle-orm', () => ({
   isNotNull: vi.fn((col) => ({ operator: 'isNotNull', column: col })),
 }));
 
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
   verificationTokens: { id: 'vt.id', expiresAt: 'vt.expiresAt' },

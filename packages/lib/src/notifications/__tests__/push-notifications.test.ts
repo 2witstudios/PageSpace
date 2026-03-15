@@ -63,6 +63,7 @@ import * as crypto from 'crypto';
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** @scaffold — ORM chain mock: db.update().set().where() */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -70,6 +71,7 @@ function setupUpdateChain() {
   return { setFn, whereFn };
 }
 
+/** @scaffold — ORM chain mock: db.insert().values() */
 function setupInsertChain() {
   const valuesFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);

@@ -33,6 +33,7 @@ let mockLogEntries: Array<{
 }> = [];
 
 // Mock database
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {

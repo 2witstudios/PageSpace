@@ -19,6 +19,7 @@ import type { SessionClaims } from '../../auth/session-service';
 import type { DrivePermissionLevel } from '../../permissions/permissions-cached';
 
 // Mock @pagespace/db
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {

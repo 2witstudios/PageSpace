@@ -75,30 +75,16 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Also supports: db.select().from().where().limit() for detectAIErrorPatterns.
- * Also supports: db.select().from() → resolves to rows (no .where() call).
- *
- * Uses mockResolvedValue on terminal nodes so the chain is awaitable without
- * injecting thenable properties (then/catch/finally) on intermediate objects.
+ * @scaffold — ORM chain mock for db.select().from().where().limit()
+ * Also supports: db.select().from() → awaitable (no .where() call).
+ * Awaitable chain nodes use a plain thenable object (not Promise.resolve
+ * extension) so the mock stays a simple object graph.
  */
 function setupSelectChain(rows: unknown[]) {
-  const limitFn = vi.fn().mockResolvedValue(rows);
-
-  const whereFn = vi.fn().mockReturnValue({
-    limit: limitFn,
-  });
-  // Make where itself awaitable for code paths that await where() directly
-  whereFn.mockImplementation(() => {
-    const p = Promise.resolve(rows) as Promise<unknown[]> & { limit: ReturnType<typeof vi.fn> };
-    p.limit = limitFn;
-    return p;
-  });
-
-  const fromFn = vi.fn().mockImplementation(() => {
-    const p = Promise.resolve(rows) as Promise<unknown[]> & { where: typeof whereFn };
-    p.where = whereFn;
-    return p;
-  });
+  const resolve = (val: unknown) => ({ then: (fn: (v: unknown) => unknown) => Promise.resolve(fn(val)) });
+  const limitFn = vi.fn().mockImplementation(() => resolve(rows));
+  const whereFn = vi.fn().mockImplementation(() => ({ limit: limitFn, ...resolve(rows) }));
+  const fromFn = vi.fn().mockImplementation(() => ({ where: whereFn, ...resolve(rows) }));
 
   mockDbSelectFn.mockReturnValue({ from: fromFn });
   return { fromFn, whereFn, limitFn };
@@ -459,6 +445,7 @@ describe('detectAIErrorPatterns', () => {
     vi.clearAllMocks();
   });
 
+  /** @scaffold — ORM chain mock for db.select().from().where() error pattern */
   function setupErrorChain(rows: Array<{ error: string | null; provider: string; model: string }>) {
     const limitFn = vi.fn().mockResolvedValue(rows);
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });

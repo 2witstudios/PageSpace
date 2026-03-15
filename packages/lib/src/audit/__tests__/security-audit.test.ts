@@ -10,6 +10,7 @@ const { testState } = vi.hoisted(() => {
 });
 
 // Mock the database module
+// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => {
   // Create a mock transaction context that mirrors the main db interface
   const createMockTx = () => {

@@ -51,6 +51,7 @@ const agentRow = {
   stateHash: 'abc123',
 };
 
+/** @scaffold — ORM chain mock: db.select().from().where().limit() */
 function setupSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -60,6 +61,7 @@ function setupSelectChain(rows: unknown[]) {
   return { limitFn, whereFn };
 }
 
+/** @scaffold — ORM chain mock: db.update().set().where() */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });

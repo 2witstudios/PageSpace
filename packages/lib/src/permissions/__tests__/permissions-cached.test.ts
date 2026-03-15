@@ -99,6 +99,7 @@ const DRIVE_ID = 'drive-xyz';
  *
  * For sequential calls, pass an array of row-arrays — one per db.select() call.
  */
+/** @scaffold — ORM chain mock: db.select().from().leftJoin().where().limit() */
 function mockSelectChain(rowSets: unknown[][]) {
   for (const rows of rowSets) {
     const limitFn = vi.fn().mockResolvedValue(rows);
