@@ -20,14 +20,15 @@ const MCP_BEARER_PREFIX = 'Bearer mcp_';
 const SESSION_BEARER_PREFIX = 'Bearer ps_sess_';
 
 const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
+const IS_TENANT = process.env.DEPLOYMENT_MODE === 'tenant';
+const IS_BILLING_DISABLED = IS_ONPREM || IS_TENANT;
 
 /**
- * Routes blocked in on-prem mode. These return 404 to prevent probing.
+ * Routes blocked in on-prem and tenant modes. These return 404 to prevent probing.
  * Stripe, OAuth, magic-link, passkey, and self-registration routes are
- * all inaccessible on-prem - the middleware blocks them before any
- * route handler code executes.
+ * inaccessible - the middleware blocks them before any route handler executes.
  */
-const ONPREM_BLOCKED_ROUTE_PREFIXES = [
+const CLOUD_ONLY_ROUTE_PREFIXES = [
   '/api/stripe/',
   '/api/auth/google/',
   '/api/auth/apple/',
@@ -43,9 +44,9 @@ export async function middleware(req: NextRequest) {
     const isProduction = process.env.NODE_ENV === 'production';
     const isAPIRoute = pathname.startsWith('/api');
 
-    // On-prem route blocking (defense-in-depth)
+    // Non-cloud route blocking (defense-in-depth)
     // Runs before all other checks to prevent cloud-only routes from executing
-    if (IS_ONPREM && ONPREM_BLOCKED_ROUTE_PREFIXES.some(prefix => pathname.startsWith(prefix))) {
+    if (IS_BILLING_DISABLED && CLOUD_ONLY_ROUTE_PREFIXES.some(prefix => pathname.startsWith(prefix))) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return new NextResponse(null, { status: 404, headers: response.headers });
     }
