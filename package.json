@@ -30,6 +30,8 @@
     "knip": "knip",
     "knip:fix": "knip --fix",
     "changelog:generate": "npx tsx scripts/changelog/index.ts",
+    "test:infra": "cd infrastructure && npx vitest run",
+    "test:infra:runtime": "cd infrastructure && npx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
     "test:security": "./scripts/test-security.sh",
     "setup:admin": "tsx scripts/setup-onprem-admin.ts"
   },
@@ -52,7 +54,8 @@
     "tsx": "^4.21.0",
     "turbo": "^2.5.5",
     "typescript": "^5.8.3",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "yaml": "^2.8.2"
   },
   "packageManager": "pnpm@10.13.1",
   "pnpm": {
