@@ -347,7 +347,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
 
   describe('error handling', () => {
     it('returns 500 for unexpected errors', async () => {
-      mockAuthenticateRequest.mockRejectedValue(new Error('Unexpected'));
+      mockAuthenticateRequest.mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createGetRequest(), mockParams);
       const body = await response.json();
@@ -699,7 +699,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
   describe('revision mismatch', () => {
     it('returns 409 when expected revision does not match', async () => {
-      mockApplyPageMutation.mockRejectedValue(
+      mockApplyPageMutation.mockRejectedValueOnce(
         new MockPageRevisionMismatchError('Revision mismatch', 10, 5)
       );
 
@@ -716,7 +716,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('returns 428 when expectedRevision is undefined', async () => {
-      mockApplyPageMutation.mockRejectedValue(
+      mockApplyPageMutation.mockRejectedValueOnce(
         new MockPageRevisionMismatchError('Revision required', 10, undefined)
       );
 
@@ -774,7 +774,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('handles agent cache invalidation failure gracefully', async () => {
-      mockAgentAwarenessCacheInvalidate.mockRejectedValue(
+      mockAgentAwarenessCacheInvalidate.mockRejectedValueOnce(
         new Error('Cache error')
       );
 
@@ -819,7 +819,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
   describe('error handling', () => {
     it('returns 500 for unexpected errors', async () => {
-      mockAuthenticateRequest.mockRejectedValue(new Error('Unexpected'));
+      mockAuthenticateRequest.mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await PATCH(
         createPatchRequest({ systemPrompt: 'test' }),
@@ -832,7 +832,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('rethrows non-PageRevisionMismatchError from applyPageMutation', async () => {
-      mockApplyPageMutation.mockRejectedValue(new Error('DB error'));
+      mockApplyPageMutation.mockRejectedValueOnce(new Error('DB error'));
 
       const response = await PATCH(
         createPatchRequest({ systemPrompt: 'test' }),

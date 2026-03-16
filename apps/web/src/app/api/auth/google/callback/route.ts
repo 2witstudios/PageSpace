@@ -1,4 +1,3 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import {
@@ -16,6 +15,7 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required'),
@@ -139,12 +139,7 @@ export async function GET(req: Request) {
 
     const userName = name || email.split('@')[0] || 'User';
 
-    let user = await db.query.users.findFirst({
-      where: or(
-        eq(users.googleId, googleId),
-        eq(users.email, email)
-      ),
-    });
+    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
 
     if (user) {
       const resolvedImage = await resolveGoogleAvatarImage({
@@ -160,24 +155,20 @@ export async function GET(req: Request) {
         (email_verified && !user.emailVerified)
       ) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
-        await db.update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || userName,
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.password ? 'both' : 'google',
+          name: user.name || userName,
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
       }
     } else {
       loggers.auth.info('Creating new user via Google OAuth', { email });
-      const [newUser] = await db.insert(users).values({
+      user = await authRepository.createUser({
         id: createId(),
         name: userName,
         email,
@@ -189,9 +180,7 @@ export async function GET(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-
-      user = newUser;
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -200,9 +189,7 @@ export async function GET(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db.update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 

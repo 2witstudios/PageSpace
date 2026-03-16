@@ -156,7 +156,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for empty csrfToken', async () => {
@@ -232,14 +232,14 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest({ csrfToken: 'valid' }));
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth options error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth options error', new Error('Unexpected'));
     });
   });
 });

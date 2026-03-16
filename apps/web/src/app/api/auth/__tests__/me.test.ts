@@ -226,7 +226,7 @@ describe('GET /api/auth/me', () => {
 
       expect(response.status).toBe(200);
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[AUTH] User profile loaded:')
+        '[AUTH] User profile loaded: test@example.com (provider: email, id: test-user-id)'
       );
 
       consoleSpy.mockRestore();

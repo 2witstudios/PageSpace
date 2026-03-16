@@ -555,10 +555,10 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(200);
 
       // Admin role version mismatch should NOT be logged for successful auth
-      expect(logSecurityEvent).not.toHaveBeenCalledWith(
-        'admin_role_version_mismatch',
-        expect.anything()
+      const securityMismatchCalls = vi.mocked(logSecurityEvent).mock.calls.filter(
+        (call) => call[0] === 'admin_role_version_mismatch'
       );
+      expect(securityMismatchCalls).toHaveLength(0);
     });
   });
 });

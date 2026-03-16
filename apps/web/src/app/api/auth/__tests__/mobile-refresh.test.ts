@@ -14,16 +14,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/refresh/route';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -85,7 +79,7 @@ vi.mock('@/lib/auth', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
@@ -131,7 +125,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
     vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined);
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_refreshed-token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -165,7 +159,7 @@ describe('/api/auth/mobile/refresh', () => {
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_refreshed-token');
       expect(body.csrfToken).toBe('mock-csrf-token');
-      expect(body.deviceToken).toBeDefined();
+      expect(body.deviceToken).toBe(validRefreshPayload.deviceToken);
     });
 
     it('updates device token activity', async () => {
@@ -232,7 +226,18 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        validRefreshPayload.deviceToken,
+        {
+          userAgent: undefined,
+          ipAddress: '192.168.1.1',
+        },
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
+      );
       expect(body.deviceToken).toBe('new-device-token');
     });
 
@@ -340,7 +345,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('returns 401 when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -371,7 +376,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -388,7 +393,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -405,7 +410,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
 
     it('accepts empty deviceToken string with validation error', async () => {
@@ -423,7 +428,7 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Device token is required']);
     });
   });
 
@@ -495,13 +500,14 @@ describe('/api/auth/mobile/refresh', () => {
 
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-refresh',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        createdByService: 'mobile-refresh',
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('returns 500 when session validation fails', async () => {
@@ -523,7 +529,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('Database error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -554,15 +560,16 @@ describe('/api/auth/mobile/refresh', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Device token mismatch detected',
-        expect.objectContaining({
+        {
           tokenDeviceId: mockDeviceRecord.deviceId,
           providedDeviceId: 'mismatched-device',
-        })
+          userId: mockDeviceRecord.userId,
+        }
       );
     });
 
     it('handles rate limit reset failure gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(
         new Error('Redis error')
       );
 
@@ -642,7 +649,7 @@ describe('/api/auth/mobile/refresh', () => {
       await POST(request);
 
       expect(updateDeviceTokenActivity).toHaveBeenCalledWith(
-        expect.any(String),
+        mockDeviceRecord.id,
         undefined
       );
     });

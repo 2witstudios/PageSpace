@@ -181,7 +181,7 @@ describe('/api/auth/csrf', () => {
 
     it('GET_whenSessionValidationThrows_returns500', async () => {
       // Arrange: Session validation throws an error
-      vi.mocked(sessionService.validateSession).mockRejectedValue(
+      vi.mocked(sessionService.validateSession).mockRejectedValueOnce(
         new Error('Database connection failed')
       );
 

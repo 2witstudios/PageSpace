@@ -233,7 +233,7 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccessForRoles).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForRoles).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`);
       const response = await GET(request, createContext(mockDriveId, mockRoleId));
@@ -497,7 +497,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
       );
-      vi.mocked(updateDriveRole).mockRejectedValue(new Error('unique constraint'));
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new Error('unique constraint'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'PATCH',
@@ -518,7 +518,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
       );
-      vi.mocked(updateDriveRole).mockRejectedValue(new Error('Connection lost'));
+      vi.mocked(updateDriveRole).mockRejectedValueOnce(new Error('Connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'PATCH',
@@ -704,7 +704,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({ id: mockRoleId, name: 'ToDelete', driveId: mockDriveId })
       );
-      vi.mocked(deleteDriveRole).mockRejectedValue(new Error('Delete failed'));
+      vi.mocked(deleteDriveRole).mockRejectedValueOnce(new Error('Delete failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
         method: 'DELETE',

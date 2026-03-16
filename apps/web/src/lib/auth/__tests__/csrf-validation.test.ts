@@ -154,11 +154,9 @@ describe('csrf-validation', () => {
         expect(result).not.toBeNull();
         expect(result?.status).toBe(403);
         const body = await result?.json();
-        expect(body).toMatchObject({
-          error: 'CSRF token required',
-          code: 'CSRF_TOKEN_MISSING',
-          details: expect.stringContaining('X-CSRF-Token'),
-        });
+        expect(body.error).toBe('CSRF token required');
+        expect(body.code).toBe('CSRF_TOKEN_MISSING');
+        expect(body.details).toBe('Include X-CSRF-Token header with your request');
       });
 
       it('validateCSRF_POSTWithCSRFButNoSession_returns401WithCSRF_NO_SESSION', async () => {
@@ -226,7 +224,7 @@ describe('csrf-validation', () => {
         expect(body).toMatchObject({
           error: 'Invalid or expired CSRF token',
           code: 'CSRF_TOKEN_INVALID',
-          details: expect.any(String),
+          details: 'Your CSRF token is invalid or has expired. Refresh and try again.',
         });
       });
     });

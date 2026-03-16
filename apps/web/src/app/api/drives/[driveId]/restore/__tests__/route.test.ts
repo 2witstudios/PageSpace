@@ -199,7 +199,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
       });
       await POST(request, createContext(mockDriveId));
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith({ id: 'drives.id', ownerId: 'drives.ownerId' });
       expect(mockSetFn).toHaveBeenCalledWith(
         expect.objectContaining({
           isTrashed: false,
@@ -294,7 +294,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
 
   describe('error handling', () => {
     it('should return 500 when database throws', async () => {
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/restore`, {
         method: 'POST',
@@ -308,7 +308,7 @@ describe('POST /api/drives/[driveId]/restore', () => {
 
     it('should log error when database throws', async () => {
       const error = new Error('Restore failure');
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(error);
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/restore`, {
         method: 'POST',

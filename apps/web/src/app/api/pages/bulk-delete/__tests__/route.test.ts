@@ -195,7 +195,7 @@ describe('DELETE /api/pages/bulk-delete', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('At least one page ID is required');
     });
 
     it('returns 400 when pageIds is missing', async () => {
@@ -203,7 +203,7 @@ describe('DELETE /api/pages/bulk-delete', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected array, received undefined');
     });
 
     it('defaults trashChildren to true when not provided', async () => {
@@ -308,7 +308,8 @@ describe('DELETE /api/pages/bulk-delete', () => {
     it('runs trash within a transaction', async () => {
       await DELETE(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(typeof mockTransaction.mock.calls[0][0]).toBe('function');
     });
 
     it('trashes children recursively when trashChildren is true', async () => {
@@ -485,7 +486,12 @@ describe('DELETE /api/pages/bulk-delete', () => {
         mockUserId,
         'trash',
         expect.objectContaining({ title: undefined }),
-        expect.anything(),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+          actorDisplayName: 'Test User',
+          changeGroupId: 'change-group-123',
+          changeGroupType: 'user',
+        }),
       );
     });
   });

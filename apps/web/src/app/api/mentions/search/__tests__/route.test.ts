@@ -175,7 +175,7 @@ describe('GET /api/mentions/search', () => {
       // Should get 403, not an empty array that might indicate "no matches"
       expect(response.status).toBe(403);
       expect(body).not.toHaveProperty('length');
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
   });
 
@@ -248,7 +248,7 @@ describe('GET /api/mentions/search', () => {
       await GET(request);
 
       // getUserDriveAccess should be called
-      expect(getUserDriveAccess).toHaveBeenCalled();
+      expect(getUserDriveAccess).toHaveBeenCalledWith('user_123', 'drive_unauthorized');
 
       // But page queries should NOT be made since access was denied
       // The db.select call for pages should not happen after access denial

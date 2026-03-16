@@ -280,7 +280,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       await POST(createPostRequest({ mode: 'messages_only' }), { params: mockParams });
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
+        expect.objectContaining({ method: 'POST' }),
         expect.objectContaining({ requireCSRF: true })
       );
     });
@@ -382,7 +382,12 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
         mockMessageId,
         mockUserId,
         'messages_and_changes',
-        expect.any(Object),
+        expect.objectContaining({
+          source: 'page_chat',
+          pageId: mockPageId,
+          messagesAffected: 0,
+          activitiesAffected: [],
+        }),
         expect.objectContaining({ force: true })
       );
     });

@@ -100,7 +100,7 @@ describe('/api/contact', () => {
       const request = createRequest(validPayload);
       await POST(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledTimes(1);
       const valuesMock = (vi.mocked(db.insert).mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -292,7 +292,7 @@ describe('/api/contact', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith(
         'Contact form error',
-        expect.any(Error)
+        expect.objectContaining({ message: 'DB connection failed' })
       );
     });
   });

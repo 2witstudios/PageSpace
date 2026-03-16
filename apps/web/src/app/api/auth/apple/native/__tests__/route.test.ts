@@ -21,36 +21,13 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // Mock dependencies BEFORE imports
-vi.mock('@pagespace/db', () => ({
-  users: { appleId: 'appleId', email: 'email', id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{
-          id: 'new-user-id',
-          name: 'Test User',
-          email: 'test@example.com',
-          image: null,
-          emailVerified: new Date(),
-          tokenVersion: 0,
-          password: null,
-          appleId: 'apple-sub-123',
-        }]),
-      }),
-    }),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByAppleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn(),
-  or: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -127,7 +104,7 @@ vi.mock('@pagespace/lib/security', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { getClientIP } from '@/lib/auth';
@@ -155,6 +132,17 @@ const validPayload = {
   familyName: 'Doe',
 };
 
+const mockNewUser = {
+  id: 'new-user-id',
+  name: 'Test User',
+  email: 'test@example.com',
+  image: null,
+  emailVerified: new Date(),
+  tokenVersion: 0,
+  password: null,
+  appleId: 'apple-sub-123',
+};
+
 describe('POST /api/auth/apple/native', () => {
   const originalEnv = process.env;
 
@@ -162,7 +150,10 @@ describe('POST /api/auth/apple/native', () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv, APPLE_CLIENT_ID: 'com.example.app' };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 4,
@@ -206,7 +197,7 @@ describe('POST /api/auth/apple/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts');
+      expect(body.error).toBe('Too many login attempts. Please try again later.');
       expect(body.retryAfter).toBe(600);
       expect(response.headers.get('Retry-After')).toBe('600');
     });
@@ -218,7 +209,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'oauth:apple:native:ip:10.0.0.5',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: true }
       );
     });
 
@@ -246,7 +237,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request');
-      expect(body.details).toBeDefined();
+      expect(body.details.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 when platform is invalid', async () => {
@@ -301,7 +292,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Apple sign-in not configured');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Missing Apple client ID',
-        expect.any(Object)
+        { hasAppleClientId: false, hasAppleServiceId: false }
       );
     });
   });
@@ -320,7 +311,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Invalid signature');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Invalid Apple ID token',
-        expect.objectContaining({ platform: 'ios' })
+        { platform: 'ios', error: 'Invalid signature' }
       );
     });
 
@@ -344,7 +335,8 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(true);
-      expect(body.user).toBeDefined();
+      expect(body.user.id).toBe(mockNewUser.id);
+      expect(body.user.email).toBe(mockNewUser.email);
       expect(body.sessionToken).toBe('ps_sess_mock_token');
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('mock-device-token');
@@ -353,7 +345,7 @@ describe('POST /api/auth/apple/native', () => {
     it('builds name from givenName and familyName', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('uses email prefix as name when no name provided', async () => {
@@ -363,7 +355,7 @@ describe('POST /api/auth/apple/native', () => {
         deviceId: 'dev-123',
       }));
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('provisions getting started drive for new users', async () => {
@@ -373,15 +365,15 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('continues if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'apple-native' })
+        new Error('DB error'),
+        { userId: 'new-user-id', provider: 'apple-native' }
       );
     });
   });
@@ -399,43 +391,46 @@ describe('POST /api/auth/apple/native', () => {
     };
 
     it('updates existing user when appleId is missing', async () => {
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(false);
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).appleId).toBe('apple-sub-123');
     });
 
     it('updates existing user when name is missing', async () => {
       const userWithoutName = { ...existingUser, appleId: null, name: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutName as never)
-        .mockResolvedValueOnce({ ...userWithoutName, appleId: 'apple-sub-123', name: 'John Doe' } as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, appleId: 'apple-sub-123', name: 'John Doe' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).appleId).toBe('apple-sub-123');
+      expect((updateArgs[1] as Record<string, unknown>).name).toBe('John Doe');
     });
 
     it('does not update user when no update is needed', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
-      expect(db.update).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
     it('does not provision drive for existing users', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
 
       await POST(createNativeRequest(validPayload));
 
@@ -444,19 +439,19 @@ describe('POST /api/auth/apple/native', () => {
 
     it('sets provider to "both" for user with password', async () => {
       const userWithPassword = { ...existingUser, password: '$2a$12$hash', appleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, appleId: 'apple-sub-123' } as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, appleId: 'apple-sub-123' } as never);
 
       await POST(createNativeRequest(validPayload));
 
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).provider).toBe('both');
     });
 
     it('handles re-fetch returning null after update', async () => {
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce(null as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -474,7 +469,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Revoked existing sessions on native Apple OAuth login',
-        expect.objectContaining({ count: 2 })
+        { userId: 'new-user-id', count: 2, platform: 'ios' }
       );
     });
 
@@ -505,14 +500,13 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          type: 'user',
-          scopes: ['*'],
-          createdByIp: '192.168.1.1',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('omits createdByIp when client IP is unknown', async () => {
@@ -520,11 +514,13 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          createdByIp: undefined,
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: undefined,
+      });
     });
   });
 
@@ -532,14 +528,16 @@ describe('POST /api/auth/apple/native', () => {
     it('creates device token with correct parameters', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          deviceId: 'device-123',
-          platform: 'ios',
-          deviceName: 'iPhone 15',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('uses default device name for android', async () => {
@@ -549,11 +547,16 @@ describe('POST /api/auth/apple/native', () => {
         deviceName: undefined,
       }));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'Android App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'android',
+        tokenVersion: 0,
+        deviceName: 'Android App',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('uses default device name for ios when not provided', async () => {
@@ -562,11 +565,16 @@ describe('POST /api/auth/apple/native', () => {
         deviceName: undefined,
       }));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'iOS App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iOS App',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
   });
 
@@ -580,26 +588,26 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('handles rate limit reset failure gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed',
-        expect.objectContaining({ error: 'Redis down' })
+        { error: 'Redis down', ip: '127.0.0.1' }
       );
     });
 
     it('handles rate limit reset failure with non-Error object', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string error');
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed',
-        expect.objectContaining({ error: 'string error' })
+        { error: 'string error', ip: '127.0.0.1' }
       );
     });
   });
@@ -618,23 +626,28 @@ describe('POST /api/auth/apple/native', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
         'login',
-        expect.objectContaining({
+        {
+          email: 'test@example.com',
+          ip: '127.0.0.1',
           provider: 'apple-native',
           platform: 'ios',
-        })
+          userAgent: 'TestApp/1.0',
+        }
       );
     });
 
     it('sets session cookie in response headers', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_token');
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(verifyAppleIdToken).mockRejectedValue(new Error('Network error'));
+      vi.mocked(verifyAppleIdToken).mockRejectedValueOnce(new Error('Network error'));
 
       const response = await POST(createNativeRequest(validPayload));
       const body = await response.json();
@@ -644,7 +657,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('returns 401 for expired token errors', async () => {
-      vi.mocked(verifyAppleIdToken).mockRejectedValue(new Error('Token has expired'));
+      vi.mocked(verifyAppleIdToken).mockRejectedValueOnce(new Error('Token has expired'));
 
       const response = await POST(createNativeRequest(validPayload));
       const body = await response.json();

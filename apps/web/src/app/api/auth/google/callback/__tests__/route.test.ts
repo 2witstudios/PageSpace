@@ -51,22 +51,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-// REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.update().set().where())
-// are used here because the route directly calls Drizzle ORM with no service layer.
-// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -142,7 +133,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 }));
 
 import { GET } from '../route';
-import { db, users } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
@@ -276,26 +267,10 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])),
-          })),
-        } as never;
-      }
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -472,7 +447,7 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Unsafe returnUrl in OAuth callback - falling back to dashboard',
-        expect.any(Object)
+        { returnUrl: 'https://evil.com', hasState: true }
       );
     });
   });
@@ -541,7 +516,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('uses email prefix as name when Google name is not provided', async () => {
@@ -558,7 +533,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('updates new user avatar when resolvedImage differs from null', async () => {
@@ -568,7 +543,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      expect(db.update).toHaveBeenCalled();
+      expect(authRepository.updateUser).toHaveBeenCalledWith(mockNewUser.id, expect.objectContaining({ image: '/processed-avatar.jpg' }));
     });
 
     it('does not update new user avatar when resolvedImage matches initial null', async () => {
@@ -577,59 +552,66 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      // db.update should NOT be called since resolvedImage is null and user.image is null
-      expect(db.update).not.toHaveBeenCalled();
+      // updateUser should NOT be called since resolvedImage is null and user.image is null
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
   });
 
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId as never)
-        .mockResolvedValueOnce(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutGoogleId.id, expect.objectContaining({ googleId: 'google-id-123' }));
     });
 
     it('updates existing user without name', async () => {
       const userWithoutName = { ...mockExistingUser, name: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutName as never)
-        .mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutName.id, expect.objectContaining({ name: 'Test User' }));
     });
 
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithOldAvatar as never)
-        .mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithOldAvatar.id);
+      expect(updateArgs[1]).toEqual({
+        googleId: 'google-id-123',
+        provider: 'google',
+        name: 'Existing User',
+        image: '/new-avatar.jpg',
+        emailVerified: expect.any(Date),
+      });
     });
 
     it('updates existing user with unverified email when email_verified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userUnverified as never)
-        .mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      const updateCall = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateCall[0]).toBe(userUnverified.id);
+      expect(updateCall[1]).toHaveProperty('emailVerified');
+      expect(updateCall[1].emailVerified).toBeInstanceOf(Date);
     });
 
     it('does not update complete existing user', async () => {
@@ -640,31 +622,29 @@ describe('GET /api/auth/google/callback', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
     it('sets provider to both when existing user has password', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
     });
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {
       const existingUser = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce(null as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -702,7 +682,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -710,8 +690,8 @@ describe('GET /api/auth/google/callback', () => {
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ provider: 'google' })
+        new Error('DB error'),
+        { userId: mockNewUser.id, provider: 'google' }
       );
     });
   });
@@ -764,7 +744,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -777,7 +757,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('handles non-Error rate limit reset failure', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string-error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
@@ -805,7 +785,10 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock_session_token');
     });
   });
 
@@ -891,7 +874,7 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       // resetDistributedRateLimit is called in both the main flow and the desktop flow
-      expect(resetDistributedRateLimit).toHaveBeenCalled();
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('oauth:callback:ip:127.0.0.1');
     });
 
     it('logs warning when desktop rate limit reset fails', async () => {
@@ -1128,7 +1111,7 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('/auth/signin?error=oauth_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Google OAuth callback error',
-        expect.any(Error)
+        new Error('Network failure')
       );
     });
   });

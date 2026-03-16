@@ -193,7 +193,8 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     const body = await response.json();
     expect(body.success).toBe(true);
 
-    expect(db.transaction).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(typeof vi.mocked(db.transaction).mock.calls[0][0]).toBe('function');
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tasks_reordered',
       taskId: 'task-a',
@@ -256,8 +257,16 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(logPageActivity).toHaveBeenCalledWith(
       mockUserId,
       'reorder',
-      expect.objectContaining({ title: 'Task List' }),
-      expect.any(Object),
+      { id: mockPageId, title: 'Task List', driveId: 'drive-1' },
+      {
+        actorEmail: 'test@test.com',
+        actorDisplayName: 'Test User',
+        metadata: {
+          taskListId: mockTaskListId,
+          reorderedTaskIds: ['task-a'],
+          newPositions: [{ id: 'task-a', position: 0 }],
+        },
+      },
     );
   });
 

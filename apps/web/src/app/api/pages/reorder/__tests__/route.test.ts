@@ -124,7 +124,6 @@ describe('PATCH /api/pages/reorder', () => {
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
-    // Re-set up db.select chain
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
@@ -329,7 +328,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 500 when service throws unexpected error', async () => {
-      vi.mocked(pageReorderService.reorderPage).mockRejectedValue(new Error('Database connection failed'));
+      vi.mocked(pageReorderService.reorderPage).mockRejectedValueOnce(new Error('Database connection failed'));
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
@@ -339,7 +338,7 @@ describe('PATCH /api/pages/reorder', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Database connection failed');
       expect(broadcastPageEvent).not.toHaveBeenCalled();
     });
   });
@@ -513,7 +512,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('logs error details on non-Error exceptions', async () => {
-      vi.mocked(pageReorderService.reorderPage).mockRejectedValue('string error');
+      vi.mocked(pageReorderService.reorderPage).mockRejectedValueOnce('string error');
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
@@ -527,7 +526,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('logs warning when page tree cache invalidation fails with Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Redis down'));
 
       await PATCH(createRequest({
         pageId: mockPageId,
@@ -544,7 +543,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('logs warning when page tree cache invalidation fails with non-Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce('string error');
 
       await PATCH(createRequest({
         pageId: mockPageId,

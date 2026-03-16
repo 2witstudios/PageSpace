@@ -217,7 +217,7 @@ describe('GET /api/drives', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(listAccessibleDrives).mockRejectedValue(new Error('Database connection lost'));
+      vi.mocked(listAccessibleDrives).mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request('https://example.com/api/drives');
       const response = await GET(request);
@@ -229,7 +229,7 @@ describe('GET /api/drives', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(listAccessibleDrives).mockRejectedValue(error);
+      vi.mocked(listAccessibleDrives).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives');
       await GET(request);
@@ -425,7 +425,10 @@ describe('POST /api/drives', () => {
         'created',
         { name: 'Broadcast Drive', slug: 'broadcast-drive' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: 'drive_broadcast', event: 'created' }),
+        ['user_123']
+      );
     });
 
     it('should track drive creation for analytics', async () => {
@@ -454,7 +457,7 @@ describe('POST /api/drives', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(createDrive).mockRejectedValue(new Error('Insert failed'));
+      vi.mocked(createDrive).mockRejectedValueOnce(new Error('Insert failed'));
 
       const request = new Request('https://example.com/api/drives', {
         method: 'POST',
@@ -470,7 +473,7 @@ describe('POST /api/drives', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Creation failed');
-      vi.mocked(createDrive).mockRejectedValue(error);
+      vi.mocked(createDrive).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives', {
         method: 'POST',

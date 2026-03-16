@@ -484,10 +484,14 @@ describe('GET /api/drives/[driveId]/integrations/audit/export', () => {
 
       expect(buildAuditLogWhereClause).toHaveBeenCalledWith(
         MOCK_DRIVE_ID,
-        expect.objectContaining({
+        {
           connectionId: null,
           success: null,
-        })
+          agentId: null,
+          dateFrom: null,
+          dateTo: null,
+          toolName: null,
+        }
       );
     });
   });
@@ -505,7 +509,7 @@ describe('GET /api/drives/[driveId]/integrations/audit/export', () => {
         },
       });
       const error = new Error('DB failed');
-      vi.mocked(db.query.integrationAuditLog.findMany).mockRejectedValue(error);
+      vi.mocked(db.query.integrationAuditLog.findMany).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations/audit/export');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

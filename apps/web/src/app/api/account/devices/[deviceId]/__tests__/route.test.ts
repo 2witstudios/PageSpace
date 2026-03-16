@@ -86,6 +86,20 @@ const mockDevice = (overrides: Record<string, unknown> = {}) => ({
   platform: 'desktop',
   deviceName: 'My MacBook',
   tokenHash: 'hashed_device_token',
+  tokenPrefix: 'ps_dev_',
+  createdAt: new Date('2024-01-01'),
+  expiresAt: new Date('2025-01-01'),
+  tokenVersion: 0,
+  trustScore: 1.0,
+  suspiciousActivityCount: 0,
+  lastUsedAt: null,
+  revokedAt: null,
+  revokedReason: null,
+  userAgent: null,
+  ipAddress: null,
+  lastIpAddress: null,
+  location: null,
+  replacedByTokenId: null,
   ...overrides,
 });
 
@@ -256,17 +270,16 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
       await DELETE(createRequest(), createContext('device-1'));
 
       expect(getActorInfo).toHaveBeenCalledWith('user-1');
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          tokenId: 'device-1',
-          tokenType: 'device',
-          tokenName: 'My MacBook',
-          deviceInfo: 'desktop - My MacBook',
-        }),
-        expect.any(Object)
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: 'My MacBook',
+        deviceInfo: 'desktop - My MacBook',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
 
     it('uses undefined for tokenName when deviceName is null', async () => {
@@ -277,15 +290,16 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
       await DELETE(createRequest(), createContext('device-1'));
 
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          tokenName: undefined,
-          deviceInfo: 'desktop - Unknown',
-        }),
-        expect.any(Object)
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: undefined,
+        deviceInfo: 'desktop - Unknown',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
 
     it('uses Unknown for platform when platform is null', async () => {
@@ -296,20 +310,22 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
       await DELETE(createRequest(), createContext('device-1'));
 
-      expect(logTokenActivity).toHaveBeenCalledWith(
-        'user-1',
-        'token_revoke',
-        expect.objectContaining({
-          deviceInfo: 'Unknown - My MacBook',
-        }),
-        expect.any(Object)
-      );
+      const activityArgs = vi.mocked(logTokenActivity).mock.calls[0];
+      expect(activityArgs[0]).toBe('user-1');
+      expect(activityArgs[1]).toBe('token_revoke');
+      expect(activityArgs[2]).toEqual({
+        tokenId: 'device-1',
+        tokenType: 'device',
+        tokenName: 'My MacBook',
+        deviceInfo: 'Unknown - My MacBook',
+      });
+      expect(activityArgs[3]).toEqual({ userId: 'user-1', email: 'test@example.com' });
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockRejectedValue(
+      vi.mocked(db.query.deviceTokens.findFirst).mockRejectedValueOnce(
         new Error('DB error')
       );
 
@@ -323,7 +339,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
     it('returns 500 when revokeDeviceToken throws', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(secureCompare).mockReturnValue(false);
-      vi.mocked(revokeDeviceToken).mockRejectedValue(new Error('Revocation failed'));
+      vi.mocked(revokeDeviceToken).mockRejectedValueOnce(new Error('Revocation failed'));
 
       const response = await DELETE(createRequest(), createContext('device-1'));
       const body = await response.json();

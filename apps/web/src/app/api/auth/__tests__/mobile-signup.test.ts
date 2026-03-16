@@ -15,23 +15,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/signup/route';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email', id: 'id' },
-  drives: {},
-  userAiSettings: {},
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([]),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
+    createUser: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createPersonalDrive: vi.fn(),
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -116,7 +111,8 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
-import { db, drives, userAiSettings } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
@@ -165,30 +161,13 @@ describe('/api/auth/mobile/signup', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful signup
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never); // No existing user
-    vi.mocked(db.insert).mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([mockNewUser]),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(oauthRepository.createPersonalDrive).mockResolvedValue(mockDrive as never);
   });
 
   describe('successful mobile signup', () => {
     it('returns 201 with user data and tokens', async () => {
-      // Setup for drive creation - alternate between user and drive results
-      let insertCallCount = 0;
-      vi.mocked(db.insert).mockImplementation(() => ({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockImplementation(() => {
-            insertCallCount++;
-            if (insertCallCount === 1) {
-              return Promise.resolve([mockNewUser]);
-            }
-            return Promise.resolve([mockDrive]);
-          }),
-        }),
-      }) as never);
-
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -228,14 +207,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'pfh0haxfpzowht3oi213cqos',
-          deviceId: 'ios-device-456',
-          platform: 'ios',
-          deviceName: 'iPhone 15 Pro',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: null,
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        deviceId: 'ios-device-456',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15 Pro',
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
 
     it('creates Getting Started drive for new user', async () => {
@@ -247,8 +228,11 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify drive creation targeted the drives table
-      expect(db.insert).toHaveBeenCalledWith(drives);
+      expect(oauthRepository.createPersonalDrive).toHaveBeenCalledWith({
+        name: 'Getting Started',
+        slug: 'getting-started',
+        ownerId: 'pfh0haxfpzowht3oi213cqos',
+      });
     });
 
     it('sends verification email', async () => {
@@ -260,13 +244,13 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalled();
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: validSignupPayload.email,
-          subject: 'Verify your PageSpace email',
-        })
-      );
+      expect(createVerificationToken).toHaveBeenCalledWith({
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        type: 'email_verification',
+      });
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as unknown as Record<string, unknown>;
+      expect(emailArg.to).toBe(validSignupPayload.email);
+      expect(emailArg.subject).toBe('Verify your PageSpace email');
     });
 
     it('creates notification to verify email', async () => {
@@ -278,12 +262,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(createNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'pfh0haxfpzowht3oi213cqos',
-          type: 'EMAIL_VERIFICATION_REQUIRED',
-        })
-      );
+      expect(createNotification).toHaveBeenCalledWith({
+        userId: 'pfh0haxfpzowht3oi213cqos',
+        type: 'EMAIL_VERIFICATION_REQUIRED',
+        title: 'Please verify your email',
+        message: 'Check your inbox for a verification link. You can resend it from your account settings.',
+        metadata: {
+          email: validSignupPayload.email,
+          settingsUrl: '/settings/account',
+        },
+      });
     });
 
     it('resets rate limits on successful signup', async () => {
@@ -333,11 +321,14 @@ describe('/api/auth/mobile/signup', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'pfh0haxfpzowht3oi213cqos',
         'signup',
-        expect.objectContaining({
+        {
+          email: validSignupPayload.email,
+          name: validSignupPayload.name,
+          ip: '192.168.1.1',
+          userAgent: null,
           platform: 'ios',
           appVersion: '1.0.0',
-          email: validSignupPayload.email,
-        })
+        }
       );
     });
   });
@@ -396,11 +387,16 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform: 'ios',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: null,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: '192.168.1.1',
+      });
     });
   });
 
@@ -420,7 +416,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must be at least 12 characters long']);
     });
 
     it('returns 400 for password without uppercase', async () => {
@@ -438,7 +434,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one uppercase letter']);
     });
 
     it('returns 400 for password without lowercase', async () => {
@@ -456,7 +452,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one lowercase letter']);
     });
 
     it('returns 400 for password without number', async () => {
@@ -474,7 +470,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one number']);
     });
 
     it('returns 400 for mismatched passwords', async () => {
@@ -492,7 +488,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.confirmPassword).toBeDefined();
+      expect(body.errors.confirmPassword).toEqual(['Passwords do not match']);
     });
   });
 
@@ -513,7 +509,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.name).toBeDefined();
+      expect(body.errors.name).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid email', async () => {
@@ -530,7 +526,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid email address']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -549,7 +545,7 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -566,13 +562,13 @@ describe('/api/auth/mobile/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
   });
 
   describe('existing user', () => {
     it('returns 409 when email already exists', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
       } as never);
@@ -591,7 +587,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('logs failed signup for existing email', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
       } as never);
@@ -706,7 +702,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on database error', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -722,7 +718,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if email sending fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('Email service down'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('Email service down'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -737,7 +733,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if drive population fails', async () => {
-      vi.mocked(populateUserDrive).mockRejectedValue(new Error('Population failed'));
+      vi.mocked(populateUserDrive).mockRejectedValueOnce(new Error('Population failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -763,12 +759,14 @@ describe('/api/auth/mobile/signup', () => {
       await POST(request);
 
       const { sessionService } = await import('@pagespace/lib/auth');
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-signup',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockNewUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        createdByService: 'mobile-signup',
+        createdByIp: '192.168.1.1',
+      });
     });
   });
 
@@ -782,8 +780,7 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify AI settings insert targeted the userAiSettings table
-      expect(db.insert).toHaveBeenCalledWith(userAiSettings);
+      expect(oauthRepository.createDefaultAiSettings).toHaveBeenCalledWith('pfh0haxfpzowht3oi213cqos');
     });
   });
 

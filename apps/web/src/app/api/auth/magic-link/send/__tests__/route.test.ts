@@ -132,7 +132,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.code).toBe('LOGIN_CSRF_MISSING');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_csrf_missing',
-        expect.objectContaining({ hasHeader: false, hasCookie: true })
+        { ip: '127.0.0.1', hasHeader: false, hasCookie: true }
       );
     });
 
@@ -168,7 +168,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_csrf_mismatch',
-        expect.any(Object)
+        { ip: '127.0.0.1' }
       );
     });
 
@@ -210,7 +210,7 @@ describe('POST /api/auth/magic-link/send', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.email).toEqual(['Please enter a valid email address']);
     });
 
     it('returns 400 for missing email', async () => {
@@ -219,7 +219,7 @@ describe('POST /api/auth/magic-link/send', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.email).toEqual(['Please enter a valid email address']);
     });
   });
 
@@ -240,7 +240,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_rate_limit_ip',
-        expect.any(Object)
+        { ip: '127.0.0.1' }
       );
     });
 
@@ -258,7 +258,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.retryAfter).toBe(300);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_rate_limit_email',
-        expect.any(Object)
+        { email: 'te***@example.com', ip: '127.0.0.1' }
       );
     });
 
@@ -290,7 +290,7 @@ describe('POST /api/auth/magic-link/send', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'magic_link:email:test@example.com',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: false }
       );
     });
   });
@@ -321,7 +321,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(sendEmail).not.toHaveBeenCalled();
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'magic_link_suspended_user',
-        expect.any(Object)
+        { email: 'te***@example.com', ip: '127.0.0.1' }
       );
     });
 
@@ -354,7 +354,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.message).toContain('If an account exists');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link creation failed',
-        expect.any(Object)
+        { error: { code: 'DATABASE_ERROR', message: 'Connection failed' } }
       );
     });
   });
@@ -364,12 +364,9 @@ describe('POST /api/auth/magic-link/send', () => {
       const request = createMagicLinkRequest({ email: 'user@example.com' });
       await POST(request);
 
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'user@example.com',
-          subject: 'Sign in to PageSpace',
-        })
-      );
+      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
+      expect(sendArgs.to).toBe('user@example.com');
+      expect(sendArgs.subject).toBe('Sign in to PageSpace');
     });
 
     it('logs successful email send', async () => {
@@ -378,14 +375,16 @@ describe('POST /api/auth/magic-link/send', () => {
 
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Magic link email sent',
-        expect.objectContaining({
+        {
+          email: 'te***@example.com',
           isNewUser: false,
-        })
+          ip: '127.0.0.1',
+        }
       );
     });
 
     it('returns success even when email sending fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP error'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
 
       const request = createMagicLinkRequest();
       const response = await POST(request);
@@ -395,15 +394,15 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.message).toContain('If an account exists');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to send magic link email',
-        expect.any(Error),
-        expect.any(Object)
+        new Error('SMTP error'),
+        { email: 'te***@example.com' }
       );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const request = createMagicLinkRequest();
       const response = await POST(request);
@@ -413,7 +412,7 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.error).toBe('An unexpected error occurred.');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link send error',
-        expect.any(Error)
+        new Error('Redis down')
       );
     });
   });

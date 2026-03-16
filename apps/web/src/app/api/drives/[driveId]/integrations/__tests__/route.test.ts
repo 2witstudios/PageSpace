@@ -208,7 +208,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('DB failed');
-      vi.mocked(listDriveConnections).mockRejectedValue(error);
+      vi.mocked(listDriveConnections).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -322,7 +322,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Validation failed');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('should return 400 for missing providerId', async () => {
@@ -576,7 +576,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       await POST(request, createContext(MOCK_DRIVE_ID));
 
       expect(buildOAuthAuthorizationUrl).toHaveBeenCalledWith(
-        expect.anything(),
+        oauthProvider.config.authMethod.config,
         expect.objectContaining({
           redirectUri: 'https://nextauth.example.com/api/user/integrations/callback',
         })
@@ -599,7 +599,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       await POST(request, createContext(MOCK_DRIVE_ID));
 
       expect(buildOAuthAuthorizationUrl).toHaveBeenCalledWith(
-        expect.anything(),
+        oauthProvider.config.authMethod.config,
         expect.objectContaining({
           redirectUri: 'http://localhost:3000/api/user/integrations/callback',
         })
@@ -722,7 +722,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('Unexpected error');
-      vi.mocked(getProviderById).mockRejectedValue(error);
+      vi.mocked(getProviderById).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations', {
         method: 'POST',

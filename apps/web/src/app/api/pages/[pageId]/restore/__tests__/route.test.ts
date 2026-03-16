@@ -315,7 +315,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
 
       await POST(createRequest(), mockParams);
 
-      expect(deferredFn).toHaveBeenCalled();
+      expect(deferredFn).toHaveBeenCalledTimes(1);
     });
 
     it('includes MCP metadata when authenticated via MCP', async () => {
@@ -397,7 +397,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
           type: 'DOCUMENT',
         })
       );
-      expect(mockBroadcastPageEvent).toHaveBeenCalled();
+      expect(mockBroadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates page tree cache when drive exists', async () => {
@@ -433,7 +433,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
     });
 
     it('handles page tree cache invalidation failure gracefully', async () => {
-      mockPageTreeCacheInvalidate.mockRejectedValue(new Error('Cache error'));
+      mockPageTreeCacheInvalidate.mockRejectedValueOnce(new Error('Cache error'));
 
       const response = await POST(createRequest(), mockParams);
 
@@ -444,7 +444,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
 
   describe('error handling', () => {
     it('returns 500 with error message when an Error is thrown', async () => {
-      mockPagesFindFirst.mockRejectedValue(new Error('Database error'));
+      mockPagesFindFirst.mockRejectedValueOnce(new Error('Database error'));
 
       const response = await POST(createRequest(), mockParams);
       const body = await response.json();
@@ -454,7 +454,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
     });
 
     it('returns generic error message for non-Error exceptions', async () => {
-      mockPagesFindFirst.mockRejectedValue('string error');
+      mockPagesFindFirst.mockRejectedValueOnce('string error');
 
       const response = await POST(createRequest(), mockParams);
       const body = await response.json();

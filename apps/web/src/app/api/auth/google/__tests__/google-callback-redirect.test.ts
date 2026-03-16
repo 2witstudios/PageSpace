@@ -28,20 +28,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
-  and: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -141,7 +134,7 @@ vi.mock('crypto', async () => {
   };
 });
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -195,19 +188,10 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
-
-    vi.mocked(db.insert).mockImplementation(() => ({
-      values: vi.fn(() => ({
-        returning: vi.fn(() => Promise.resolve([mockExistingUser])),
-      })),
-    } as never));
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -229,22 +213,23 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockExistingUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockExistingUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '127.0.0.1',
+      });
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
 
       // Response should be a redirect
       expect(response.status).toBe(307);
 
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
+      const location = response.headers.get('location')!;
       expect(location).toContain('csrfToken=mock-csrf-token');
       expect(location).toContain('auth=success');
     });
@@ -305,8 +290,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
+      const location = response.headers.get('location')!;
       expect(location).toContain('/dashboard/my-drive');
     });
   });

@@ -10,13 +10,16 @@ import {
   deviceTokens,
   eq,
   and,
+  or,
   isNull,
   sql,
   type InferSelectModel,
+  type InferInsertModel,
 } from '@pagespace/db';
 
 // Types derived from Drizzle schema - ensures type safety without manual definitions
 export type User = InferSelectModel<typeof users>;
+export type NewUser = InferInsertModel<typeof users>;
 
 export const authRepository = {
   /**
@@ -72,6 +75,41 @@ export const authRepository = {
       .update(users)
       .set({ tokenVersion: newVersion })
       .where(eq(users.id, userId));
+  },
+
+  /**
+   * Find a user by Google ID or email (for OAuth login/signup)
+   */
+  async findUserByGoogleIdOrEmail(googleId: string, email: string): Promise<User | null> {
+    const user = await db.query.users.findFirst({
+      where: or(eq(users.googleId, googleId), eq(users.email, email)),
+    });
+    return user ?? null;
+  },
+
+  /**
+   * Find a user by Apple ID or email (for OAuth login/signup)
+   */
+  async findUserByAppleIdOrEmail(appleId: string, email: string): Promise<User | null> {
+    const user = await db.query.users.findFirst({
+      where: or(eq(users.appleId, appleId), eq(users.email, email)),
+    });
+    return user ?? null;
+  },
+
+  /**
+   * Create a new user and return the created record
+   */
+  async createUser(values: NewUser): Promise<User> {
+    const [newUser] = await db.insert(users).values(values).returning();
+    return newUser;
+  },
+
+  /**
+   * Update user fields by ID
+   */
+  async updateUser(userId: string, fields: Partial<NewUser>): Promise<void> {
+    await db.update(users).set(fields).where(eq(users.id, userId));
   },
 };
 

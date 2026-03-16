@@ -126,7 +126,9 @@ describe('POST /api/auth/apple/signin', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors).toBeDefined();
+      expect(body.errors.platform).toEqual([
+        'Invalid option: expected one of "web"|"desktop"|"ios"',
+      ]);
     });
 
     it('accepts valid optional fields', async () => {
@@ -149,7 +151,7 @@ describe('POST /api/auth/apple/signin', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.url).toBeDefined();
+      expect(body.url).toContain('https://appleid.apple.com/auth/authorize');
     });
   });
 
@@ -206,7 +208,7 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'oauth:signin:ip:10.0.0.1',
-        expect.any(Object)
+        { maxAttempts: 5, windowMs: 900000, progressiveDelay: true }
       );
     });
 
@@ -245,7 +247,8 @@ describe('POST /api/auth/apple/signin', () => {
       expect(url.searchParams.get('response_type')).toBe('code id_token');
       expect(url.searchParams.get('scope')).toBe('name email');
       expect(url.searchParams.get('response_mode')).toBe('form_post');
-      expect(url.searchParams.get('state')).toBeTruthy();
+      expect(typeof url.searchParams.get('state')).toBe('string');
+      expect(url.searchParams.get('state')!.length).toBeGreaterThan(0);
     });
 
     it('encodes state with signed HMAC', async () => {
@@ -257,8 +260,9 @@ describe('POST /api/auth/apple/signin', () => {
       const stateParam = url.searchParams.get('state')!;
       const decoded = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
 
-      expect(decoded.data).toBeDefined();
-      expect(decoded.sig).toBeDefined();
+      expect(typeof decoded.data).toBe('object');
+      expect(typeof decoded.sig).toBe('string');
+      expect(decoded.sig.length).toBeGreaterThan(0);
       expect(decoded.data.returnUrl).toBe('/settings');
       expect(decoded.data.platform).toBe('desktop');
     });
@@ -310,10 +314,9 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('An unexpected error occurred.');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Apple OAuth signin error',
-        expect.any(Error)
-      );
+      expect(loggers.auth.error).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(loggers.auth.error).mock.calls[0][0]).toBe('Apple OAuth signin error');
+      expect(vi.mocked(loggers.auth.error).mock.calls[0][1]).toBeInstanceOf(Error);
     });
   });
 });
@@ -433,7 +436,8 @@ describe('GET /api/auth/apple/signin', () => {
 
       expect(decoded.data.returnUrl).toBe('/dashboard');
       expect(decoded.data.platform).toBe('web');
-      expect(decoded.sig).toBeTruthy();
+      expect(typeof decoded.sig).toBe('string');
+      expect(decoded.sig.length).toBeGreaterThan(0);
     });
 
     it('includes all required OAuth parameters', async () => {
@@ -451,7 +455,7 @@ describe('GET /api/auth/apple/signin', () => {
 
   describe('error handling', () => {
     it('redirects to signin with oauth_error on unexpected error', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createGetRequest());
 
@@ -460,14 +464,14 @@ describe('GET /api/auth/apple/signin', () => {
       expect(location).toContain('/auth/signin?error=oauth_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Apple OAuth signin GET error',
-        expect.any(Error)
+        new Error('Unexpected')
       );
     });
 
     it('uses NEXTAUTH_URL fallback in error handler', async () => {
       delete process.env.WEB_APP_URL;
       process.env.NEXTAUTH_URL = 'https://next.example.com';
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Fail'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Fail'));
 
       const response = await GET(createGetRequest());
       const location = response.headers.get('Location')!;
@@ -477,7 +481,7 @@ describe('GET /api/auth/apple/signin', () => {
     it('uses localhost fallback in error handler when no env vars set', async () => {
       delete process.env.WEB_APP_URL;
       delete process.env.NEXTAUTH_URL;
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Fail'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Fail'));
 
       const response = await GET(createGetRequest());
       const location = response.headers.get('Location')!;

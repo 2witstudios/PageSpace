@@ -8,13 +8,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/db', () => ({
-  db: {
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    }),
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
   },
-  userAiSettings: {},
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -74,7 +71,7 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   verifySignupRegistration,
   sessionService,
@@ -134,7 +131,10 @@ describe('POST /api/auth/signup-passkey', () => {
     it('sets session cookie and CSRF cookie', async () => {
       const response = await POST(createRequest());
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [sessionHeaders, sessionToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(sessionHeaders).toBeInstanceOf(Headers);
+      expect(sessionToken).toBe('ps_sess_mock_session_token');
       expect(response.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
 
       const cookies = response.headers.getSetCookie();
@@ -169,10 +169,10 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
     });
 
-    it('inserts default AI settings', async () => {
+    it('creates default AI settings for new user', async () => {
       await POST(createRequest());
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(oauthRepository.createDefaultAiSettings).toHaveBeenCalledWith('new-user-1');
     });
 
     it('logs auth events', async () => {
@@ -262,7 +262,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('graceful degradation', () => {
     it('continues when drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('Drive error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -270,24 +270,22 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toBe('/dashboard?welcome=true');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', expect.any(Error), expect.objectContaining({
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', new Error('Drive error'), {
         userId: 'new-user-1',
-      }));
+      });
     });
 
     it('continues when AI settings insertion fails', async () => {
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('Insert error')),
-      } as never);
+      vi.mocked(oauthRepository.createDefaultAiSettings).mockRejectedValueOnce(new Error('Insert error'));
 
       const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to insert default AI settings', expect.any(Error), expect.objectContaining({
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to insert default AI settings', new Error('Insert error'), {
         userId: 'new-user-1',
-      }));
+      });
     });
   });
 
@@ -299,7 +297,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for invalid email format', async () => {
@@ -486,7 +484,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -495,8 +493,8 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(body.error).toBe('Internal server error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Passkey signup verification error',
-        expect.any(Error),
-        expect.objectContaining({ email: 'user@example.com', clientIP: '127.0.0.1' }),
+        new Error('Unexpected'),
+        { email: 'user@example.com', clientIP: '127.0.0.1' },
       );
     });
   });

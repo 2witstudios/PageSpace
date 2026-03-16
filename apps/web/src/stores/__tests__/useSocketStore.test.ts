@@ -361,9 +361,11 @@ describe('useSocketStore', () => {
 
       disconnect();
 
+      // Called twice: once during connect() (dedupe cleanup) and once during disconnect()
+      expect(windowEventMock.removeEventListener).toHaveBeenCalledTimes(2);
       expect(windowEventMock.removeEventListener).toHaveBeenCalledWith(
         'auth:refreshed',
-        expect.any(Function)
+        expect.any(Function),
       );
     });
 

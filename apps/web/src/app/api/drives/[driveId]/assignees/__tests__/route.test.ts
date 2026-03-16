@@ -648,7 +648,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
   describe('error handling', () => {
     it('should return 500 with error message when service throws Error', async () => {
       const error = new Error('DB connection lost');
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(error);
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/assignees');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -660,7 +660,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
     });
 
     it('should handle non-Error thrown values', async () => {
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue('string error');
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce('string error');
 
       const request = new Request('https://example.com/api/drives/d/assignees');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

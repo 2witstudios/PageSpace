@@ -220,7 +220,7 @@ describe('Task API Routes', () => {
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledTimes(1);
       expect(response.status).toBe(200);
     });
 
@@ -300,8 +300,7 @@ describe('Task API Routes', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      // db.insert should have been called to create default status configs
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledTimes(1);
     });
 
     it('swallows duplicate key errors during status config migration', async () => {
@@ -317,7 +316,7 @@ describe('Task API Routes', () => {
 
       // Simulate duplicate key error
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('unique constraint violation')),
+        values: vi.fn().mockRejectedValueOnce(new Error('unique constraint violation')),
       } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
@@ -338,7 +337,7 @@ describe('Task API Routes', () => {
 
       // Simulate a real error (not duplicate key)
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('connection refused')),
+        values: vi.fn().mockRejectedValueOnce(new Error('connection refused')),
       } as never);
 
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');
@@ -477,11 +476,10 @@ describe('Task API Routes', () => {
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
       expect(response.status).toBe(201);
-      expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'task_added',
-        taskId: 'new-task',
-        pageId: mockPageId,
-      }));
+      const eventArg = vi.mocked(broadcastTaskEvent).mock.calls[0][0];
+      expect(eventArg.type).toBe('task_added');
+      expect(eventArg.taskId).toBe('new-task');
+      expect(eventArg.pageId).toBe(mockPageId);
     });
 
     it('returns 404 when task list page not found', async () => {

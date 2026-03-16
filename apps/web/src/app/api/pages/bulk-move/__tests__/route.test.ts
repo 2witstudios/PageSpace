@@ -212,7 +212,7 @@ describe('POST /api/pages/bulk-move', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('At least one page ID is required');
     });
 
     it('returns 400 when pageIds is missing', async () => {
@@ -220,7 +220,7 @@ describe('POST /api/pages/bulk-move', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected array, received undefined');
     });
 
     it('returns 400 when targetDriveId is missing', async () => {
@@ -228,7 +228,7 @@ describe('POST /api/pages/bulk-move', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when targetDriveId is empty string', async () => {
@@ -236,7 +236,7 @@ describe('POST /api/pages/bulk-move', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Target drive ID is required');
     });
   });
 
@@ -462,7 +462,8 @@ describe('POST /api/pages/bulk-move', () => {
     it('runs move within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(typeof mockTransaction.mock.calls[0][0]).toBe('function');
     });
 
     it('updates children driveId when moving to a different drive', async () => {
@@ -632,12 +633,17 @@ describe('POST /api/pages/bulk-move', () => {
         mockUserId,
         'move',
         expect.objectContaining({ title: undefined }),
-        expect.anything(),
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+          actorDisplayName: 'Test User',
+          changeGroupId: 'change-group-123',
+          changeGroupType: 'user',
+        }),
       );
     });
 
     it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();

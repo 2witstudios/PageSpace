@@ -231,14 +231,14 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await DELETE(createDeleteRequest(), createContext());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Delete passkey error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Delete passkey error', new Error('Unexpected'));
     });
   });
 });
@@ -392,7 +392,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for empty name', async () => {
@@ -460,14 +460,14 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await PATCH(createPatchRequest({ name: 'Test' }), createContext());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Update passkey error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Update passkey error', new Error('Unexpected'));
     });
   });
 });

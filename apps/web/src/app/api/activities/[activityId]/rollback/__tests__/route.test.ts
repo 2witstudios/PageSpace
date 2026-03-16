@@ -145,10 +145,9 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
 
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({ requireCSRF: true })
-      );
+      const callArgs = vi.mocked(authenticateRequestWithOptions).mock.calls[0];
+      expect(callArgs[0]).toBeInstanceOf(Request);
+      expect(callArgs[1]).toEqual({ allow: ['session'], requireCSRF: true });
     });
   });
 
@@ -176,7 +175,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('returns 400 for invalid context value', async () => {
@@ -184,7 +183,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('accepts valid context values', async () => {
@@ -326,7 +325,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         mockActivityId,
         mockUserId,
         'drive',
-        expect.objectContaining({ tx: expect.any(Object), force: false })
+        { tx: {}, force: false }
       );
     });
   });

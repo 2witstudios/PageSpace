@@ -1,4 +1,3 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
@@ -16,6 +15,7 @@ import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDrive
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -114,9 +114,7 @@ export async function POST(req: Request) {
     const userName = name || email.split('@')[0] || 'User';
 
     // Check if user exists by Google ID or email
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.googleId, googleId), eq(users.email, email)),
-    });
+    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
 
     let isNewUser = false;
 
@@ -135,22 +133,16 @@ export async function POST(req: Request) {
         (email_verified && !user.emailVerified)
       ) {
         loggers.auth.info('Updating existing user via Google One Tap', { email });
-        await db
-          .update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || userName,
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.password ? 'both' : 'google',
+          name: user.name || userName,
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
         // Refetch the user to get updated data
-        user =
-          (await db.query.users.findFirst({
-            where: eq(users.id, user.id),
-          })) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google One Tap', {
           userId: user.id,
           name: user.name,
@@ -160,24 +152,19 @@ export async function POST(req: Request) {
       // Create new user
       isNewUser = true;
       loggers.auth.info('Creating new user via Google One Tap', { email });
-      const [newUser] = await db
-        .insert(users)
-        .values({
-          id: createId(),
-          name: userName,
-          email,
-          emailVerified: email_verified ? new Date() : null,
-          image: null,
-          googleId,
-          provider: 'google',
-          tokenVersion: 0,
-          role: 'user',
-          storageUsedBytes: 0,
-          subscriptionTier: 'free',
-        })
-        .returning();
-
-      user = newUser;
+      user = await authRepository.createUser({
+        id: createId(),
+        name: userName,
+        email,
+        emailVerified: email_verified ? new Date() : null,
+        image: null,
+        googleId,
+        provider: 'google',
+        tokenVersion: 0,
+        role: 'user',
+        storageUsedBytes: 0,
+        subscriptionTier: 'free',
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -186,10 +173,7 @@ export async function POST(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db
-          .update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 

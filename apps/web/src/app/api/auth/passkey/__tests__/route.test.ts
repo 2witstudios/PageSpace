@@ -120,24 +120,24 @@ describe('GET /api/auth/passkey', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to list passkeys');
-      expect(loggers.auth.warn).toHaveBeenCalledWith('Failed to list passkeys', expect.objectContaining({
+      expect(loggers.auth.warn).toHaveBeenCalledWith('Failed to list passkeys', {
         userId: 'user-1',
         error: 'DB_ERROR',
         ip: '127.0.0.1',
-      }));
+      });
     });
   });
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('List passkeys error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('List passkeys error', new Error('Unexpected'));
     });
   });
 });

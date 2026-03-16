@@ -372,7 +372,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
   describe('error handling', () => {
     it('should return 500 when an error is thrown', async () => {
-      vi.mocked(verifyAuth).mockRejectedValue(new Error('DB error'));
+      vi.mocked(verifyAuth).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
@@ -383,7 +383,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     it('should log error when an error is thrown', async () => {
       const error = new Error('DB error');
-      vi.mocked(verifyAuth).mockRejectedValue(error);
+      vi.mocked(verifyAuth).mockRejectedValueOnce(error);
 
       await GET(createRequest(), createContext(mockDriveId));
 

@@ -302,7 +302,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('continues login even if email verification fails', async () => {
-      vi.mocked(markEmailVerified).mockRejectedValue(new Error('DB error'));
+      vi.mocked(markEmailVerified).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
 
@@ -311,8 +311,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('/dashboard');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to mark email as verified',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'test-user-id' })
+        new Error('DB error'),
+        { userId: 'test-user-id' }
       );
     });
   });
@@ -374,7 +374,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -383,8 +383,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).not.toContain('provisioned');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'test-user-id' })
+        new Error('DB error'),
+        { userId: 'test-user-id' }
       );
     });
 
@@ -413,7 +413,10 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('sets session cookie', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [verifyHeaders, verifyToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(verifyHeaders).toBeInstanceOf(Headers);
+      expect(verifyToken).toBe('ps_sess_mock_token');
     });
 
     it('sets CSRF token cookie without Secure flag in non-production', async () => {
@@ -425,8 +428,9 @@ describe('GET /api/auth/magic-link/verify', () => {
         [response.headers.get('Set-Cookie')].filter(Boolean);
       const csrfCookie = setCookies.find((c: string) => c?.includes('csrf_token='));
 
-      expect(csrfCookie).toBeTruthy();
-      expect(csrfCookie).toContain('csrf_token=mock-csrf-token');
+      expect(csrfCookie).toBe(
+        'csrf_token=mock-csrf-token; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60'
+      );
       expect(csrfCookie).not.toContain('Secure');
     });
 
@@ -439,7 +443,9 @@ describe('GET /api/auth/magic-link/verify', () => {
         [response.headers.get('Set-Cookie')].filter(Boolean);
       const csrfCookie = setCookies.find((c: string) => c?.includes('csrf_token='));
 
-      expect(csrfCookie).toBeTruthy();
+      expect(csrfCookie).toBe(
+        'csrf_token=mock-csrf-token; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60; Secure'
+      );
       expect(csrfCookie).toContain('; Secure');
     });
 
@@ -478,7 +484,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
   describe('error handling', () => {
     it('redirects with server_error on unexpected exception', async () => {
-      vi.mocked(verifyMagicLinkToken).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(verifyMagicLinkToken).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createVerifyRequest('valid-token'));
 
@@ -487,7 +493,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('error=server_error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Magic link verify error',
-        expect.any(Error)
+        new Error('Unexpected')
       );
     });
   });

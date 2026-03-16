@@ -1,20 +1,9 @@
 /**
- * @scaffold - mocking ORM chains until repository seam is introduced
- *
  * Contract tests for ai-undo-service.ts
  *
  * Tests the AI undo service's observable contracts:
  * - previewAiUndo: message lookup -> preview of affected messages and activities
  * - executeAiUndo: message + mode -> soft-delete messages + optional rollbacks
- *
- * User stories:
- * - As a user in AI chat, I can undo from a message to remove all subsequent messages
- * - As a user, I can choose to also undo all AI tool side effects
- * - As a user, I see what will be affected before confirming
- *
- * Note: This test uses order-dependent ORM chain mocks (selectCallCount pattern)
- * which encode internal query order. Consider introducing a chat-message-repository
- * seam to improve testability and refactor-resistance.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -395,13 +384,13 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      expect(mockLoggers.api.debug).toHaveBeenCalledWith(
-        '[AiUndo:Execute] Soft-deleting from secondary table',
-        expect.objectContaining({
-          secondaryTable: 'messages',
-          conversationId: mockConversationId,
-        })
+      const debugArgs = (mockLoggers.api.debug as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => call[0] === '[AiUndo:Execute] Soft-deleting from secondary table'
       );
+      expect(debugArgs).toHaveLength(2);
+      const debugData = debugArgs![1] as Record<string, unknown>;
+      expect(debugData.secondaryTable).toBe('messages');
+      expect(debugData.conversationId).toBe(mockConversationId);
     });
 
     it('logs conversation undo with correct mode', async () => {
@@ -445,17 +434,15 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
-      expect(logConversationUndo).toHaveBeenCalledWith(
-        mockUserId,
-        mockConversationId,
-        mockMessageId,
-        expect.objectContaining({ actorEmail: 'test@example.com' }),
-        expect.objectContaining({
-          mode: 'messages_only',
-          messagesDeleted: 1,
-          activitiesRolledBack: 0,
-        })
-      );
+      const undoArgs = vi.mocked(logConversationUndo).mock.calls[0];
+      expect(undoArgs[0]).toBe(mockUserId);
+      expect(undoArgs[1]).toBe(mockConversationId);
+      expect(undoArgs[2]).toBe(mockMessageId);
+      expect(undoArgs[3]).toEqual({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' });
+      const undoOptions = undoArgs[4] as Record<string, unknown>;
+      expect(undoOptions.mode).toBe('messages_only');
+      expect(undoOptions.messagesDeleted).toBe(1);
+      expect(undoOptions.activitiesRolledBack).toBe(0);
     });
   });
 
@@ -734,17 +721,15 @@ describe('ai-undo-service', () => {
 
       await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes');
 
-      expect(logConversationUndo).toHaveBeenCalledWith(
-        mockUserId,
-        mockConversationId,
-        mockMessageId,
-        expect.any(Object),
-        expect.objectContaining({
-          mode: 'messages_and_changes',
-          activitiesRolledBack: 1,
-          rolledBackActivityIds: ['act_1'],
-        })
-      );
+      const undoArgs2 = vi.mocked(logConversationUndo).mock.calls[0];
+      expect(undoArgs2[0]).toBe(mockUserId);
+      expect(undoArgs2[1]).toBe(mockConversationId);
+      expect(undoArgs2[2]).toBe(mockMessageId);
+      expect(undoArgs2[3]).toEqual({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' });
+      const undoOptions2 = undoArgs2[4] as Record<string, unknown>;
+      expect(undoOptions2.mode).toBe('messages_and_changes');
+      expect(undoOptions2.activitiesRolledBack).toBe(1);
+      expect(undoOptions2.rolledBackActivityIds).toEqual(['act_1']);
     });
   });
 

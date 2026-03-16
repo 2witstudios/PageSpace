@@ -147,7 +147,9 @@ describe('/api/auth/google/signin', () => {
         const body = await response.json();
 
         expect(response.status).toBe(400);
-        expect(body.errors).toBeDefined();
+        expect(body.errors.platform).toEqual([
+          'Invalid option: expected one of "web"|"desktop"|"ios"',
+        ]);
       });
 
       it('accepts valid optional fields', async () => {
@@ -170,7 +172,7 @@ describe('/api/auth/google/signin', () => {
         const body = await response.json();
 
         expect(response.status).toBe(200);
-        expect(body.url).toBeDefined();
+        expect(body.url).toContain('https://accounts.google.com/o/oauth2/v2/auth');
       });
     });
 
@@ -194,7 +196,7 @@ describe('/api/auth/google/signin', () => {
 
         expect(loggers.auth.warn).toHaveBeenCalledWith(
           'Rejected unsafe returnUrl in OAuth signin',
-          expect.any(Object)
+          { returnUrl: 'https://evil.com', clientIP: '127.0.0.1' }
         );
       });
     });
@@ -263,12 +265,13 @@ describe('/api/auth/google/signin', () => {
 
         const url = new URL(body.url);
         const stateParam = url.searchParams.get('state');
-        expect(stateParam).toBeTruthy();
+        expect(typeof stateParam).toBe('string');
+        expect(stateParam!.length).toBeGreaterThan(0);
 
         // Decode and verify state structure
         const decoded = JSON.parse(Buffer.from(stateParam!, 'base64').toString('utf-8'));
-        expect(decoded.data).toBeDefined();
-        expect(decoded.sig).toBeDefined();
+        expect(typeof decoded.data).toBe('object');
+        expect(typeof decoded.sig).toBe('string');
         expect(decoded.data.returnUrl).toBe('/settings');
         expect(decoded.data.platform).toBe('desktop');
         expect(decoded.data.deviceId).toBe('dev-1');
@@ -311,7 +314,7 @@ describe('/api/auth/google/signin', () => {
 
     describe('error handling', () => {
       it('returns 500 on unexpected exception', async () => {
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createPostRequest({});
         const response = await POST(request);
@@ -321,7 +324,7 @@ describe('/api/auth/google/signin', () => {
         expect(body.error).toContain('unexpected error');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Google OAuth signin error',
-          expect.any(Error)
+          new Error('Redis error')
         );
       });
     });
@@ -416,7 +419,7 @@ describe('/api/auth/google/signin', () => {
 
     describe('error handling', () => {
       it('redirects with oauth_error on unexpected exception', async () => {
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createGetRequest();
         const response = await GET(request);
@@ -426,14 +429,14 @@ describe('/api/auth/google/signin', () => {
         expect(location).toContain('/auth/signin?error=oauth_error');
         expect(loggers.auth.error).toHaveBeenCalledWith(
           'Google OAuth signin GET error',
-          expect.any(Error)
+          new Error('Redis error')
         );
       });
 
       it('uses fallback URL when env vars not set on error', async () => {
         delete process.env.WEB_APP_URL;
         delete process.env.NEXTAUTH_URL;
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createGetRequest();
         const response = await GET(request);

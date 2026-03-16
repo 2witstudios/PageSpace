@@ -149,7 +149,7 @@ describe('Socket.IO Integration', () => {
       expect(useSocketStore.getState().connectionStatus).toBe('connected');
 
       // Step 3: Verify socket is available for room operations
-      expect(useSocketStore.getState().socket).toBeTruthy();
+      expect(useSocketStore.getState().socket).toBe(mockSocket);
       expect(useSocketStore.getState().isInitialized).toBe(true);
 
       // Verify auth:refreshed listener is registered
@@ -170,19 +170,16 @@ describe('Socket.IO Integration', () => {
       await broadcastPageEvent(payload);
 
       // Verify broadcast was sent
-      expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:3001/api/broadcast',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/json',
-            'X-Broadcast-Signature': expect.any(String),
-          }),
-        })
-      );
+      const fetchCall = vi.mocked(global.fetch).mock.calls[0];
+      expect(fetchCall[0]).toBe('http://localhost:3001/api/broadcast');
+      const fetchOpts = fetchCall[1] as Record<string, unknown>;
+      expect(fetchOpts.method).toBe('POST');
+      const headers = fetchOpts.headers as Record<string, string>;
+      expect(headers['Content-Type']).toBe('application/json');
+      expect(typeof headers['X-Broadcast-Signature']).toBe('string');
+      expect(headers['X-Broadcast-Signature'].length).toBeGreaterThan(0);
 
       // Verify channel routing
-      const fetchCall = vi.mocked(global.fetch).mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1]?.body as string);
       expect(requestBody.channelId).toBe('drive:drive-123');
       expect(requestBody.event).toBe('page:created');
@@ -257,10 +254,9 @@ describe('Socket.IO Integration', () => {
       expect(mockSocket.disconnect).toHaveBeenCalled();
 
       // Verify auth:refreshed listener removed
-      expect(windowEventMock.removeEventListener).toHaveBeenCalledWith(
-        'auth:refreshed',
-        expect.any(Function)
-      );
+      expect(windowEventMock.removeEventListener).toHaveBeenCalled();
+      expect(windowEventMock.removeEventListener.mock.calls[0][0]).toBe('auth:refreshed');
+      expect(typeof windowEventMock.removeEventListener.mock.calls[0][1]).toBe('function');
 
       // Verify store state reset
       expect(useSocketStore.getState().socket).toBeNull();

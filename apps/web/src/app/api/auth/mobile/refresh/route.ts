@@ -1,4 +1,4 @@
-import { users, db, eq } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
@@ -75,10 +75,7 @@ export async function POST(req: Request) {
     }
 
     // Fetch user
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, deviceRecord.userId),
-      columns: { id: true, tokenVersion: true, role: true }, // Only needed fields
-    });
+    const user = await authRepository.findUserById(deviceRecord.userId);
 
     if (!user) {
       return Response.json({ error: 'Invalid or expired device token.' }, { status: 401 });

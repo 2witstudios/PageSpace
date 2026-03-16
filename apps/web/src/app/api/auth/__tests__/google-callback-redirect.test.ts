@@ -24,19 +24,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -121,7 +115,7 @@ vi.mock('@/lib/auth', () => ({
   },
 }));
 
-import { db, users } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
@@ -135,38 +129,17 @@ describe('/api/auth/google/callback redirect', () => {
       created: true,
     });
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() =>
-              Promise.resolve([
-                {
-                  id: 'user-123',
-                  name: 'Test User',
-                  email: 'test@example.com',
-                  googleId: 'google-id',
-                  tokenVersion: 0,
-                  role: 'user',
-                },
-              ])
-            ),
-          })),
-        } as never;
-      }
-
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id',
+      tokenVersion: 0,
+      role: 'user',
     } as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
@@ -189,7 +162,7 @@ describe('/api/auth/google/callback redirect', () => {
       driveId: 'existing-drive',
       created: false,
     });
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',
       email: 'test@example.com',
@@ -210,7 +183,7 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',

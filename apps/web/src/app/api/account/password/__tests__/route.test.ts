@@ -284,36 +284,39 @@ describe('POST /api/account/password', () => {
       }));
 
       // First call updates users, second revokes device tokens
-      expect(chain.update).toHaveBeenCalled();
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          password: '$2a$12$newhash',
-          tokenVersion: 6,
-        })
-      );
+      expect(chain.update).toHaveBeenCalledTimes(2);
+      const setCallArgs = vi.mocked(chain.set).mock.calls[0][0];
+      expect(setCallArgs.password).toBe('$2a$12$newhash');
+      expect(setCallArgs.tokenVersion).toBe(6);
     });
 
     it('revokes all active device tokens', async () => {
-      const chain = mockDbUpdateChain();
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      await POST(createRequest({
-        currentPassword: 'oldPassword123',
-        newPassword: 'newPassword1234',
-      }));
+      try {
+        const chain = mockDbUpdateChain();
 
-      // Second db.update call should revoke device tokens
-      expect(chain.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          revokedAt: expect.any(Date),
+        await POST(createRequest({
+          currentPassword: 'oldPassword123',
+          newPassword: 'newPassword1234',
+        }));
+
+        // Second db.update call should revoke device tokens
+        expect(chain.set).toHaveBeenCalledWith({
+          revokedAt: frozenDate,
           revokedReason: 'token_version_bump_password_change',
-        })
-      );
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createRequest({
         currentPassword: 'oldPassword123',

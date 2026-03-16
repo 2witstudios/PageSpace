@@ -1,5 +1,4 @@
 import { OAuth2Client } from 'google-auth-library';
-import { users, db, eq, or } from '@pagespace/db';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
@@ -14,6 +13,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const client = new OAuth2Client();
 
@@ -92,9 +92,7 @@ export async function POST(req: Request) {
     const { sub: googleId, email, name, picture, email_verified } = payload;
 
     // Find or create user
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.googleId, googleId), eq(users.email, email)),
-    });
+    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
 
     let isNewUser = false;
     if (user) {
@@ -112,24 +110,20 @@ export async function POST(req: Request) {
         (email_verified && !user.emailVerified)
       ) {
         loggers.auth.info('Updating existing user via native Google OAuth', { email, platform });
-        await db.update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || name || email.split('@')[0],
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.password ? 'both' : 'google',
+          name: user.name || name || email.split('@')[0],
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
       }
     } else {
       isNewUser = true;
       loggers.auth.info('Creating new user via native Google OAuth', { email, platform });
-      const [newUser] = await db.insert(users).values({
+      user = await authRepository.createUser({
         id: createId(),
         name: name || email.split('@')[0],
         email,
@@ -141,8 +135,7 @@ export async function POST(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-      user = newUser;
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -151,9 +144,7 @@ export async function POST(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db.update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 

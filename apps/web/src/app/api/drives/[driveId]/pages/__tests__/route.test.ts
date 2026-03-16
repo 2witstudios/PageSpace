@@ -189,7 +189,9 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalled();
+      const scopeArgs = vi.mocked(checkMCPDriveScope).mock.calls[0];
+      expect(scopeArgs[0]).toEqual(mockWebAuth(mockUserId));
+      expect(scopeArgs[1]).toBe(mockDriveId);
     });
 
     it('should proceed when checkMCPDriveScope returns null', async () => {
@@ -228,7 +230,10 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalled();
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
     });
   });
 
@@ -247,7 +252,10 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalled();
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
     });
   });
 
@@ -293,8 +301,12 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(mockFindMany).toHaveBeenCalled();
-      expect(mockExecute).toHaveBeenCalled();
+      expect(mockFindMany).toHaveBeenCalledWith({
+        where: { type: 'and' },
+        orderBy: [{ type: 'asc' }],
+      });
+      const executeArgs = mockExecute.mock.calls[0];
+      expect(executeArgs[0]).toHaveProperty('type', 'sql');
     });
   });
 
@@ -373,7 +385,9 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const response = await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(buildTree).toHaveBeenCalled();
+      expect(buildTree).toHaveBeenCalledWith([
+        { id: 'page_1', parentId: null, position: 0, isTaskLinked: false, hasChanges: false },
+      ]);
     });
   });
 
@@ -381,7 +395,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
   describe('error handling', () => {
     it('should return 500 when an error is thrown', async () => {
-      mockFindFirst.mockRejectedValue(new Error('Database failure'));
+      mockFindFirst.mockRejectedValueOnce(new Error('Database failure'));
 
       const response = await GET(createRequest() as never, createContext(mockDriveId));
       const body = await response.json();
@@ -392,7 +406,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
 
     it('should log error when an error is thrown', async () => {
       const error = new Error('Database failure');
-      mockFindFirst.mockRejectedValue(error);
+      mockFindFirst.mockRejectedValueOnce(error);
 
       await GET(createRequest() as never, createContext(mockDriveId));
 

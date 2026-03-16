@@ -212,7 +212,7 @@ describe('DELETE /api/account', () => {
       expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_solo');
       expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Auto-deleted 1 solo drives')
+        `Auto-deleted 1 solo drives for user ${mockUserId}`
       );
     });
 
@@ -234,7 +234,7 @@ describe('DELETE /api/account', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.error).toContain('must transfer ownership or delete');
+      expect(body.error).toBe('You must transfer ownership or delete all drives with other members before deleting your account');
       expect(body.multiMemberDrives).toContain('Team Drive');
       expect(mockAccountRepo.deleteUser).not.toHaveBeenCalled();
     });
@@ -262,7 +262,7 @@ describe('DELETE /api/account', () => {
       expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_2');
       expect(mockAccountRepo.deleteDrive).toHaveBeenCalledWith('drive_3');
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Auto-deleted 3 solo drives')
+        `Auto-deleted 3 solo drives for user ${mockUserId}`
       );
     });
   });
@@ -297,13 +297,13 @@ describe('DELETE /api/account', () => {
 
       // Assert - verify fetch called with correct payload
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/avatar/'),
-        expect.objectContaining({
+        `http://processor:3003/api/avatar/${mockUserId}`,
+        {
           method: 'DELETE',
-          headers: expect.objectContaining({
+          headers: {
             Authorization: `Bearer ${mockToken}`,
-          }),
-        })
+          },
+        }
       );
     });
 
@@ -337,7 +337,7 @@ describe('DELETE /api/account', () => {
         image: '/avatars/user_123.jpg',
       });
 
-      vi.mocked(createUserServiceToken).mockRejectedValue(new Error('Token creation failed'));
+      vi.mocked(createUserServiceToken).mockRejectedValueOnce(new Error('Token creation failed'));
 
       const request = new Request('https://example.com/api/account', {
         method: 'DELETE',
@@ -350,8 +350,8 @@ describe('DELETE /api/account', () => {
       // Assert - should still succeed despite avatar deletion failure
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        expect.stringContaining('avatar'),
-        expect.any(Error)
+        'Could not delete user avatar during account deletion:',
+        expect.objectContaining({ message: 'Token creation failed' })
       );
     });
   });
@@ -371,10 +371,10 @@ describe('DELETE /api/account', () => {
       expect(response.status).toBe(200);
       expect(mockActivityLogRepo.anonymizeForUser).toHaveBeenCalledWith(
         mockUserId,
-        expect.stringMatching(/^deleted_user_[a-f0-9]+$/)
+        'deleted_user_80fba0ae1c48'
       );
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('Anonymized activity logs')
+        `Anonymized activity logs for user ${mockUserId}`
       );
     });
 
@@ -396,8 +396,8 @@ describe('DELETE /api/account', () => {
       // Assert - should still succeed
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        expect.stringContaining('anonymize'),
-        expect.any(Error)
+        'Could not anonymize activity logs during account deletion:',
+        new Error('Database connection lost')
       );
       expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
     });
@@ -418,13 +418,13 @@ describe('DELETE /api/account', () => {
       expect(response.status).toBe(200);
       expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
       expect(loggers.auth.info).toHaveBeenCalledWith(
-        expect.stringContaining('User account deleted')
+        `User account deleted: ${mockUserId}`
       );
     });
 
     it('should handle database errors gracefully', async () => {
       // Arrange
-      mockAccountRepo.deleteUser.mockRejectedValue(new Error('Database connection lost'));
+      mockAccountRepo.deleteUser.mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request('https://example.com/api/account', {
         method: 'DELETE',
@@ -438,7 +438,10 @@ describe('DELETE /api/account', () => {
       // Assert
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete account');
-      expect(loggers.auth.error).toHaveBeenCalled();
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Account deletion error:',
+        expect.objectContaining({ message: 'Database connection lost' })
+      );
     });
   });
 });

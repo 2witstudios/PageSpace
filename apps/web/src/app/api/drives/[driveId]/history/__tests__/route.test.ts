@@ -172,7 +172,7 @@ describe('GET /api/drives/[driveId]/history', () => {
 
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.error).toBeDefined();
+      expect(typeof body.error).toBe('string');
     });
 
     it('should return 400 for limit exceeding max (100)', async () => {
@@ -379,8 +379,8 @@ describe('GET /api/drives/[driveId]/history', () => {
       expect(loggers.api.debug).toHaveBeenCalledWith(
         '[History:Route] GET drive history request',
         expect.objectContaining({
-          driveId: expect.any(String),
-          userId: expect.any(String),
+          driveId: '***_abc',
+          userId: '***_123',
         })
       );
       expect(loggers.api.debug).toHaveBeenCalledWith(

@@ -120,7 +120,9 @@ describe('GET /api/drives/[driveId]/agents', () => {
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalled();
+      const scopeArgs = vi.mocked(checkMCPDriveScope).mock.calls[0];
+      expect(scopeArgs[0]).toEqual(mockWebAuth(MOCK_USER_ID));
+      expect(scopeArgs[1]).toBe(MOCK_DRIVE_ID);
     });
   });
 
@@ -229,7 +231,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       // Default: tools included, systemPrompt as preview only
       expect(body.agents[0].enabledTools).toEqual(['search', 'create']);
       expect(body.agents[0].enabledToolsCount).toBe(2);
-      expect(body.agents[0].systemPromptPreview).toBeDefined();
+      expect(typeof body.agents[0].systemPromptPreview).toBe('string');
       expect(body.agents[0].systemPrompt).toBeUndefined();
     });
 
@@ -541,9 +543,12 @@ describe('GET /api/drives/[driveId]/agents', () => {
         withSystemPrompt: 0,
         withTools: 0,
       });
-      expect(body.nextSteps).toEqual(expect.arrayContaining([
-        expect.stringContaining('No agents found'),
-      ]));
+      expect(body.nextSteps).toEqual([
+        'No agents found - consider creating one',
+        'Use update_agent_config to modify agent settings',
+        'Use ask_agent to consult with specific agents',
+        'Drive: Drive (drive_abc)',
+      ]);
     });
 
     it('should return next steps with read_page suggestion when agents exist', async () => {
@@ -609,13 +614,13 @@ describe('GET /api/drives/[driveId]/agents', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Listed agents in drive',
-        expect.objectContaining({
+        {
           driveId: MOCK_DRIVE_ID,
           driveName: 'Test Drive',
           totalAgents: 0,
           accessibleAgents: 0,
           userId: MOCK_USER_ID,
-        })
+        }
       );
     });
   });
@@ -626,7 +631,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
       vi.mocked(isAuthError).mockReturnValue(false);
       vi.mocked(checkMCPDriveScope).mockReturnValue(null);
-      vi.mocked(getUserDriveAccess).mockRejectedValue(error);
+      vi.mocked(getUserDriveAccess).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -642,7 +647,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
     });
 
     it('should handle non-Error thrown values', async () => {
-      vi.mocked(getUserDriveAccess).mockRejectedValue('string error');
+      vi.mocked(getUserDriveAccess).mockRejectedValueOnce('string error');
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

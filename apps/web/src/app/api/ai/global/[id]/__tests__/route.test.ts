@@ -184,7 +184,10 @@ describe('GET /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const fetchErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(fetchErrorArgs[0]).toBe('Error fetching conversation:');
+      expect(fetchErrorArgs[1]).toBeInstanceOf(Error);
+      expect((fetchErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -280,7 +283,10 @@ describe('PATCH /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to update conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const updateErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(updateErrorArgs[0]).toBe('Error updating conversation:');
+      expect(updateErrorArgs[1]).toBeInstanceOf(Error);
+      expect((updateErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -367,7 +373,10 @@ describe('DELETE /api/ai/global/[id]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const deleteErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(deleteErrorArgs[0]).toBe('Error deleting conversation:');
+      expect(deleteErrorArgs[1]).toBeInstanceOf(Error);
+      expect((deleteErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });

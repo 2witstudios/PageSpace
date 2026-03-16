@@ -226,7 +226,15 @@ describe('POST /api/auth/passkey/register', () => {
     });
 
     it('skips CSRF validation when sessionId is null', async () => {
-      vi.mocked(isSessionAuthResult).mockReturnValue(false);
+      vi.mocked(isSessionAuthResult).mockReturnValue(true);
+      vi.mocked(authenticateSessionRequest).mockResolvedValue({
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        tokenType: 'session',
+        sessionId: undefined as unknown as string,
+      });
       vi.mocked(verifyRegistration).mockResolvedValue({
         ok: true,
         data: { passkeyId: 'pk-new-1' },
@@ -243,6 +251,7 @@ describe('POST /api/auth/passkey/register', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
+      expect(validateCSRFToken).not.toHaveBeenCalled();
     });
   });
 
@@ -274,7 +283,7 @@ describe('POST /api/auth/passkey/register', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request body');
-      expect(body.details).toBeDefined();
+      expect(typeof body.details).toBe('object');
     });
 
     it('returns 400 for empty expectedChallenge', async () => {
@@ -355,14 +364,14 @@ describe('POST /api/auth/passkey/register', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration verification error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration verification error', new Error('Unexpected'));
     });
   });
 });

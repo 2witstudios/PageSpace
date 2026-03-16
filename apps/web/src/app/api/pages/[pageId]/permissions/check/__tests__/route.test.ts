@@ -167,7 +167,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
 
   describe('error handling', () => {
     it('returns 500 when getUserAccessLevel throws', async () => {
-      vi.mocked(getUserAccessLevel).mockRejectedValue(new Error('Database error'));
+      vi.mocked(getUserAccessLevel).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

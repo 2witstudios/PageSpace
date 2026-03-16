@@ -24,21 +24,16 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// REVIEW: Deep ORM chain mocks (db.update().set().where().returning()) are used here
-// because the route directly calls Drizzle ORM with no service layer. The ORM IS the
-// system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  deviceTokens: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    updateDeviceTokenDeviceId: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -98,7 +93,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
@@ -151,7 +147,7 @@ describe('POST /api/auth/device/refresh', () => {
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
 
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
     vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined as never);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
@@ -173,7 +169,7 @@ describe('POST /api/auth/device/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty deviceToken', async () => {
@@ -189,7 +185,7 @@ describe('POST /api/auth/device/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for empty deviceId', async () => {
@@ -260,7 +256,10 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('does not match');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Device token mismatch detected - possible stolen token',
-        expect.any(Object)
+        expect.objectContaining({
+          tokenDeviceId: 'different-device',
+          providedDeviceId: 'device-123',
+        })
       );
     });
 
@@ -270,13 +269,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'device-token-record-id', deviceId: 'device-123' }]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -284,7 +277,12 @@ describe('POST /api/auth/device/refresh', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Correcting device token deviceId from OAuth migration',
-        expect.any(Object)
+        {
+          deviceTokenId: 'device-token-record-id',
+          oldDeviceId: 'unknown',
+          newDeviceId: 'device-123',
+          userId: 'user-123',
+        }
       );
     });
 
@@ -294,13 +292,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: null,
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'device-token-record-id', deviceId: 'device-123' }]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -314,13 +306,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue(null);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -336,13 +322,7 @@ describe('POST /api/auth/device/refresh', () => {
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(db.update).mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockRejectedValue(new Error('DB error')),
-          }),
-        }),
-      } as never);
+      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -352,14 +332,14 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('Failed to update device');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Error correcting device token deviceId',
-        expect.any(Object)
+        expect.objectContaining({ error: expect.objectContaining({ message: 'DB error' }) })
       );
     });
   });
 
   describe('user not found', () => {
     it('returns 404 when user is not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -390,7 +370,17 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        'ps_dev_valid_token',
+        expect.objectContaining({
+          ipAddress: '127.0.0.1',
+        }),
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
+      );
     });
 
     it('returns 401 when rotation fails', async () => {
@@ -487,7 +477,7 @@ describe('POST /api/auth/device/refresh', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -500,7 +490,7 @@ describe('POST /api/auth/device/refresh', () => {
     });
 
     it('handles non-Error rate limit reset failure', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string-error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
 
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
@@ -527,7 +517,10 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('ps_dev_valid_token');
       expect(body.sessionToken).toBeUndefined();
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [headers, token] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(headers).toBeInstanceOf(Headers);
+      expect(token).toBe('ps_sess_mock_session_token');
     });
 
     it('returns 500 when web session validation fails', async () => {
@@ -562,7 +555,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [headers, token] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(headers).toBeInstanceOf(Headers);
+      expect(token).toBe('ps_sess_mock_session_token');
     });
 
     it('returns 500 when desktop session validation fails', async () => {
@@ -587,7 +583,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [iosHeaders, iosToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(iosHeaders).toBeInstanceOf(Headers);
+      expect(iosToken).toBe('ps_sess_mock_session_token');
     });
   });
 
@@ -646,7 +645,7 @@ describe('POST /api/auth/device/refresh', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected exception', async () => {
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('DB error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -656,7 +655,7 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.error).toContain('unexpected error');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Device token refresh error',
-        expect.any(Error)
+        new Error('DB error')
       );
     });
   });

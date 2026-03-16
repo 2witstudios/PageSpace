@@ -174,7 +174,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
 
     it('returns 400 for missing targetMode', async () => {
@@ -182,7 +182,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
   });
 
@@ -368,14 +368,16 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
         'content-updated',
         expect.objectContaining({ title: 'Test Document' })
       );
-      expect(mockBroadcastPageEvent).toHaveBeenCalled();
+      expect(mockBroadcastPageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, pageId: mockPageId, type: 'content-updated' })
+      );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 for unexpected errors', async () => {
       mockPagesFindFirst.mockReset();
-      mockCanUserEditPage.mockRejectedValue(new Error('DB failure'));
+      mockCanUserEditPage.mockRejectedValueOnce(new Error('DB failure'));
 
       const response = await POST(
         createRequest({ targetMode: 'markdown' }),
@@ -395,7 +397,7 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(Array.isArray(body.error)).toBe(true);
     });
   });
 });

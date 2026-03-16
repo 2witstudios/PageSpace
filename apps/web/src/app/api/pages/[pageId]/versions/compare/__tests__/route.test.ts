@@ -224,7 +224,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when v2 is missing', async () => {
@@ -235,7 +235,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when both v1 and v2 are missing', async () => {
@@ -243,7 +243,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined. Invalid input: expected string, received undefined');
     });
   });
 
@@ -324,7 +324,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Version 1</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -345,7 +345,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Ref Content</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -358,7 +358,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
           contentSnapshot: '<h1>Snapshot Fallback</h1>',
         })
         .mockResolvedValueOnce(mockActivity2);
-      mockReadPageContent.mockRejectedValue(new Error('Read failed'));
+      mockReadPageContent.mockRejectedValueOnce(new Error('Read failed'));
 
       const response = await GET(
         createRequest({ v1: 'v1_id', v2: 'v2_id' }),
@@ -369,7 +369,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       expect(mockDiffContent).toHaveBeenCalledWith(
         '<h1>Snapshot Fallback</h1>',
         '<h1>Version 2</h1>',
-        expect.any(Object)
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -422,7 +422,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
           contentSnapshot: '<h1>Fallback</h1>',
         })
         .mockResolvedValueOnce(mockActivity2);
-      mockReadPageContent.mockRejectedValue('string error');
+      mockReadPageContent.mockRejectedValueOnce('string error');
 
       const response = await GET(
         createRequest({ v1: 'v1_id', v2: 'v2_id' }),
@@ -443,13 +443,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          lineMode: true,
-          prettyPrint: true,
-          format: 'html',
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: true, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -460,12 +456,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          lineMode: false,
-          prettyPrint: true,
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 
@@ -476,11 +469,9 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
       );
 
       expect(mockDiffContent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.objectContaining({
-          format: 'html',
-        })
+        '<h1>Version 1</h1>',
+        '<h1>Version 2</h1>',
+        { lineMode: false, prettyPrint: true, format: 'html' }
       );
     });
 

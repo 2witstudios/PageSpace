@@ -197,8 +197,9 @@ describe('GET /api/pages/[pageId]/permissions', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.owner).toBeDefined();
       expect(body.owner.id).toBe('owner_123');
+      expect(body.owner.name).toBe('Owner');
+      expect(body.owner.email).toBe('owner@example.com');
       expect(body.permissions).toHaveLength(1);
     });
 
@@ -219,7 +220,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValue(new Error('Service error'));
+      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -395,7 +396,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
         mockTargetUserId,
         mockPageId,
         'updated',
-        expect.any(Object),
+        { canView: true, canEdit: false, canShare: false, canDelete: false },
         mockUserId
       );
     });
@@ -505,7 +506,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      vi.mocked(grantPagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(grantPagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await POST(
         createRequest({ userId: mockTargetUserId, canView: true }),
@@ -726,7 +727,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      vi.mocked(revokePagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(revokePagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await DELETE(
         createRequest({ userId: mockTargetUserId }),

@@ -199,14 +199,14 @@ describe('POST /api/permissions/batch', () => {
       const request = createPostRequest({ pageIds: ['page_1'] });
       await POST(request as never);
 
-      expect(loggers.api.debug).toHaveBeenCalledWith(
-        'Batch permission check completed',
-        expect.objectContaining({
-          userId: mockUserId,
-          requestedPages: 1,
-          accessiblePages: 0,
-        })
-      );
+      const debugCallArgs = vi.mocked(loggers.api.debug).mock.calls[0];
+      expect(debugCallArgs[0]).toBe('Batch permission check completed');
+      const debugPayload = debugCallArgs[1] as Record<string, unknown>;
+      expect(debugPayload.userId).toBe(mockUserId);
+      expect(debugPayload.requestedPages).toBe(1);
+      expect(debugPayload.accessiblePages).toBe(0);
+      expect(debugPayload).toHaveProperty('processingTimeMs');
+      expect(debugPayload).toHaveProperty('avgTimePerPage');
     });
 
     it('should log warning when processing takes over 500ms', async () => {
@@ -223,19 +223,19 @@ describe('POST /api/permissions/batch', () => {
       const request = createPostRequest({ pageIds: ['page_1'] });
       await POST(request as never);
 
-      expect(loggers.api.warn).toHaveBeenCalledWith(
-        'Slow batch permission check',
-        expect.objectContaining({
-          userId: mockUserId,
-          pageCount: 1,
-        })
-      );
+      const warnCallArgs = vi.mocked(loggers.api.warn).mock.calls[0];
+      expect(warnCallArgs[0]).toBe('Slow batch permission check');
+      const warnPayload = warnCallArgs[1] as Record<string, unknown>;
+      expect(warnPayload.userId).toBe(mockUserId);
+      expect(warnPayload.pageCount).toBe(1);
+      expect(warnPayload).toHaveProperty('duration');
+      expect(warnPayload).toHaveProperty('stats');
     });
   });
 
   describe('error handling', () => {
     it('should return 500 when service throws an Error', async () => {
-      mockGetBatchPagePermissions.mockRejectedValue(new Error('Database failure'));
+      mockGetBatchPagePermissions.mockRejectedValueOnce(new Error('Database failure'));
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       const response = await POST(request as never);
@@ -247,7 +247,7 @@ describe('POST /api/permissions/batch', () => {
     });
 
     it('should return "Unknown error" when service throws non-Error', async () => {
-      mockGetBatchPagePermissions.mockRejectedValue('string-error');
+      mockGetBatchPagePermissions.mockRejectedValueOnce('string-error');
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       const response = await POST(request as never);
@@ -260,7 +260,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Permission service down');
-      mockGetBatchPagePermissions.mockRejectedValue(error);
+      mockGetBatchPagePermissions.mockRejectedValueOnce(error);
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       await POST(request as never);

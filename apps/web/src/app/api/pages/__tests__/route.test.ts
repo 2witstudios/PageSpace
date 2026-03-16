@@ -166,7 +166,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -179,7 +179,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid option: expected one of "FOLDER"|"DOCUMENT"|"CHANNEL"|"AI_CHAT"|"CANVAS"|"SHEET"|"TASK_LIST"|"CODE"');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -192,7 +192,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -211,7 +211,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Title too long. Invalid characters in title');
     });
 
     it('returns 400 when AI chat tool validation fails', async () => {
@@ -419,7 +419,7 @@ describe('POST /api/pages', () => {
           parentId: 'parent_123',  // From result.page.parentId
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates page tree cache', async () => {
@@ -558,7 +558,7 @@ describe('POST /api/pages', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.createPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.createPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await POST(createRequest({
         title: 'Test Page',
@@ -578,7 +578,7 @@ describe('POST /api/pages', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce(new Error('Redis down'));
 
       await POST(createRequest({
         title: 'AI Chat',
@@ -599,7 +599,7 @@ describe('POST /api/pages', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce('string error');
 
       await POST(createRequest({
         title: 'AI Chat',
@@ -616,7 +616,7 @@ describe('POST /api/pages', () => {
     });
 
     it('logs warning when page tree cache invalidation fails with Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       await POST(createRequest({
         title: 'Test Page',
@@ -633,7 +633,7 @@ describe('POST /api/pages', () => {
     });
 
     it('logs warning when page tree cache invalidation fails with non-Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce('string error');
 
       await POST(createRequest({
         title: 'Test Page',

@@ -592,7 +592,7 @@ describe('POST /api/stripe/webhook', () => {
       // Should not try to update stripeCustomerId
       expect(mockUpdateSet).not.toHaveBeenCalledWith(
         expect.objectContaining({
-          stripeCustomerId: expect.any(String),
+          stripeCustomerId: 'cus_123',
         })
       );
     });
@@ -621,25 +621,33 @@ describe('POST /api/stripe/webhook', () => {
 
   describe('Event Processing', () => {
     it('should mark event as processed successfully', async () => {
-      const event = mockStripeEvent('invoice.paid', mockInvoice());
-      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const request = new Request('https://example.com/api/stripe/webhook', {
-        method: 'POST',
-        body: JSON.stringify(event),
-        headers: {
-          'stripe-signature': 'valid_signature',
-        },
-      }) as unknown as import('next/server').NextRequest;
+      try {
+        const event = mockStripeEvent('invoice.paid', mockInvoice());
+        mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
-      await POST(request);
+        const request = new Request('https://example.com/api/stripe/webhook', {
+          method: 'POST',
+          body: JSON.stringify(event),
+          headers: {
+            'stripe-signature': 'valid_signature',
+          },
+        }) as unknown as import('next/server').NextRequest;
 
-      // Should update stripeEvents with processedAt
-      expect(mockUpdateSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          processedAt: expect.any(Date),
-        })
-      );
+        await POST(request);
+
+        // Should update stripeEvents with processedAt
+        expect(mockUpdateSet).toHaveBeenCalledWith(
+          expect.objectContaining({
+            processedAt: frozenDate,
+          })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should record event ID for idempotency', async () => {

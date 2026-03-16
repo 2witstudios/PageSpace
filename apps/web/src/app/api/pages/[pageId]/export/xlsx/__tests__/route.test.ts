@@ -208,13 +208,13 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(parseSheetContent).toHaveBeenCalled();
+      expect(parseSheetContent).toHaveBeenCalledWith(mockPage().content);
       expect(evaluateSheet).toHaveBeenCalledWith(
         mockSheetData,
-        expect.objectContaining({
+        {
           pageId: mockPageId,
           pageTitle: 'Test Sheet',
-        })
+        }
       );
       expect(generateExcel).toHaveBeenCalledWith(
         mockEvaluation.display,
@@ -270,10 +270,10 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'xlsx',
           pageTitle: 'Test Sheet',
-        })
+        }
       );
     });
   });
@@ -304,7 +304,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -335,8 +335,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
 
       expect(generateExcel).toHaveBeenCalledWith(
         [['10', '20', '30']],
-        expect.any(String),
-        expect.any(String)
+        'Test Sheet',
+        'Test Sheet'
       );
     });
 
@@ -357,8 +357,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(response.status).toBe(200);
       expect(generateExcel).toHaveBeenCalledWith(
         [],
-        expect.any(String),
-        expect.any(String)
+        'Test Sheet',
+        'Test Sheet'
       );
     });
 

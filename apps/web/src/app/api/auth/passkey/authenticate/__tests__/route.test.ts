@@ -116,7 +116,9 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('sets session cookie and CSRF cookie', async () => {
       const response = await POST(createRequest());
 
-      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
       expect(response.headers.get('Cache-Control')).toBe('no-store, no-cache, must-revalidate');
 
       // Check Set-Cookie contains CSRF token
@@ -154,7 +156,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
       expect(loggers.auth.info).not.toHaveBeenCalledWith(
         'Revoked existing sessions on passkey login',
-        expect.anything(),
+        expect.objectContaining({ userId: 'user-1' }),
       );
     });
 
@@ -365,14 +367,14 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth verification error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth verification error', new Error('Unexpected'));
     });
   });
 });

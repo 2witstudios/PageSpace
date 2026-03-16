@@ -177,7 +177,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('calls applyPageMutation with correct parameters', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(applyPageMutation).toHaveBeenCalledWith(expect.objectContaining({
+      expect(applyPageMutation).toHaveBeenCalledWith({
         pageId: mockPageId,
         operation: 'update',
         updates: {
@@ -193,7 +193,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
           metadata: { source: 'reprocess' },
         },
         source: 'system',
-      }));
+      });
     });
 
     it('creates service token with correct parameters', async () => {
@@ -210,13 +210,12 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('calls processor enqueue endpoint with service token', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining(`/api/ingest/by-page/${mockPageId}`),
-        expect.objectContaining({
-          method: 'POST',
-          headers: { Authorization: 'Bearer service-token-123' },
-        })
-      );
+      const fetchArgs = vi.mocked(mockFetch).mock.calls[0];
+      expect(fetchArgs[0]).toContain(`/api/ingest/by-page/${mockPageId}`);
+      expect(fetchArgs[1]).toEqual({
+        method: 'POST',
+        headers: { Authorization: 'Bearer service-token-123' },
+      });
     });
   });
 
@@ -237,7 +236,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('returns 500 when processor responds with error (non-JSON body)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
-        json: vi.fn().mockRejectedValue(new Error('Not JSON')),
+        json: vi.fn().mockRejectedValueOnce(new Error('Not JSON')),
       });
 
       const response = await POST(createRequest(), mockContext);
@@ -250,7 +249,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      const limit = vi.fn().mockRejectedValue(new Error('DB error'));
+      const limit = vi.fn().mockRejectedValueOnce(new Error('DB error'));
       const where = vi.fn().mockReturnValue({ limit });
       const from = vi.fn().mockReturnValue({ where });
       vi.mocked(db.select).mockReturnValue({ from } as never);
@@ -263,7 +262,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     });
 
     it('returns 500 when applyPageMutation throws', async () => {
-      vi.mocked(applyPageMutation).mockRejectedValue(new Error('Mutation failed'));
+      vi.mocked(applyPageMutation).mockRejectedValueOnce(new Error('Mutation failed'));
 
       const response = await POST(createRequest(), mockContext);
       const body = await response.json();
@@ -273,7 +272,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     });
 
     it('returns 500 when fetch throws', async () => {
-      mockFetch.mockRejectedValue(new Error('Network error'));
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
       const response = await POST(createRequest(), mockContext);
       const body = await response.json();

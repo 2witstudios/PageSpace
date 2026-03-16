@@ -242,7 +242,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
       );
       expect(globalConversationRepository.updateMessageContent).toHaveBeenCalledWith(
         mockMessageId,
-        expect.any(String)
+        'Updated'
       );
     });
 
@@ -254,7 +254,11 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Global Assistant message edited successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          conversationId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -273,7 +277,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to edit message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error editing Global Assistant message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
@@ -450,7 +454,11 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Global Assistant message deleted successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          conversationId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -469,7 +477,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting Global Assistant message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 

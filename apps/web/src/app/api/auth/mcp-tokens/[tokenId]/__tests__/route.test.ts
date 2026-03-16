@@ -14,22 +14,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      mcpTokens: {
-        findFirst: vi.fn(),
-      },
-    },
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    }),
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    createMcpTokenWithDriveScopes: vi.fn(),
+    findDrivesByIds: vi.fn(),
+    findUserMcpTokensWithDrives: vi.fn(),
+    findMcpTokenByIdAndUser: vi.fn(),
+    revokeMcpToken: vi.fn(),
   },
-  mcpTokens: {},
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  and: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -53,7 +45,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { DELETE } from '../route';
-import { db } from '@pagespace/db';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -80,16 +72,12 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
 
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com' } as never);
 
-    vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue({
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue({
       id: 'token-123',
       name: 'Test Token',
-    } as never);
+    });
 
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(sessionRepository.revokeMcpToken).mockResolvedValue(undefined);
   });
 
   it('returns auth error when not authenticated', async () => {
@@ -108,7 +96,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
   });
 
   it('returns 404 when token not found', async () => {
-    vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(undefined as never);
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue(null);
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/nonexistent', {
       method: 'DELETE',
@@ -136,10 +124,13 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
 
     expect(response.status).toBe(200);
     expect(body.message).toBe('Token revoked successfully');
+    expect(sessionRepository.revokeMcpToken).toHaveBeenCalledWith('token-123', 'test-user-id');
   });
 
   it('returns 500 when db throws an error', async () => {
-    vi.mocked(db.query.mcpTokens.findFirst).mockRejectedValue(new Error('DB connection error'));
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockRejectedValueOnce(
+      new Error('DB connection error')
+    );
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'DELETE',
@@ -156,7 +147,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     expect(body.error).toBe('Failed to revoke MCP token');
     expect(loggers.auth.error).toHaveBeenCalledWith(
       'Error revoking MCP token:',
-      expect.any(Error)
+      new Error('DB connection error')
     );
   });
 });

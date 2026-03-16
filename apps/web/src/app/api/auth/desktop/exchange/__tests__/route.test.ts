@@ -188,12 +188,18 @@ describe('/api/auth/desktop/exchange', () => {
       await POST(request);
 
       // Assert
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Invalid exchange request',
-        expect.objectContaining({
-          errors: expect.any(Array),
-        })
-      );
+      expect(loggers.auth.warn).toHaveBeenCalledTimes(1);
+      const warnArgs = vi.mocked(loggers.auth.warn).mock.calls[0];
+      expect(warnArgs[0]).toBe('Invalid exchange request');
+      expect(warnArgs[1]).toHaveProperty('errors');
+      expect(Array.isArray((warnArgs[1] as Record<string, unknown>).errors)).toBe(true);
+      const errors = (warnArgs[1] as Record<string, unknown>).errors as Array<Record<string, unknown>>;
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({
+        code: 'too_small',
+        message: 'Exchange code is required',
+        path: ['code'],
+      });
     });
 
     it('POST_withNonStringCode_returns400', async () => {
@@ -256,7 +262,7 @@ describe('/api/auth/desktop/exchange', () => {
   describe('error handling (500)', () => {
     it('POST_whenConsumeExchangeCodeThrows_returns500', async () => {
       // Arrange
-      vi.mocked(consumeExchangeCode).mockRejectedValue(
+      vi.mocked(consumeExchangeCode).mockRejectedValueOnce(
         new Error('Redis connection failed')
       );
 
@@ -295,7 +301,7 @@ describe('/api/auth/desktop/exchange', () => {
     it('POST_whenInternalErrorOccurs_logsError', async () => {
       // Arrange
       const error = new Error('Something went wrong');
-      vi.mocked(consumeExchangeCode).mockRejectedValue(error);
+      vi.mocked(consumeExchangeCode).mockRejectedValueOnce(error);
 
       const request = new Request('http://localhost/api/auth/desktop/exchange', {
         method: 'POST',

@@ -146,7 +146,9 @@ describe('usePageTree', () => {
       });
 
       /** @boundary-contract Optimistic update: mutate with functional updater and revalidate=false */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify the updater function produces correct tree
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -173,7 +175,9 @@ describe('usePageTree', () => {
       });
 
       /** @boundary-contract Optimistic update: no refetch for nested updates */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify the updater function produces correct nested tree
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -194,7 +198,9 @@ describe('usePageTree', () => {
       }).not.toThrow();
 
       // mutate is called with functional updater, but the function returns unchanged data
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
       const updaterFn = mockMutate.mock.calls[0][0];
       const updatedTree = updaterFn(mockTree);
       expect(updatedTree).toBe(mockTree); // Same reference, unchanged
@@ -243,10 +249,14 @@ describe('usePageTree', () => {
       });
 
       // Observable: API was called to fetch children (with AbortController signal for timeout)
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+      expect(mockFetchWithAuth.mock.calls[0][0]).toBe('/api/pages/parent/children');
+      expect(mockFetchWithAuth.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
 
       /** @boundary-contract Optimistic merge: update tree without refetch */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(typeof mockMutate.mock.calls[0][0]).toBe('function');
+      expect(mockMutate.mock.calls[0][1]).toEqual({ revalidate: false });
 
       // Observable: verify updater merges children using current cache data
       const updaterFn = mockMutate.mock.calls[0][0];
@@ -300,7 +310,7 @@ describe('usePageTree', () => {
 
       expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(consoleLog).toHaveBeenCalledWith(
-        expect.stringContaining('Skipping tree revalidation')
+        '⏸️ Skipping tree revalidation - document editing in progress'
       );
       consoleLog.mockRestore();
     });

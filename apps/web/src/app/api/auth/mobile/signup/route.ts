@@ -1,4 +1,5 @@
-import { users, drives, userAiSettings, db, eq } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
@@ -109,9 +110,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const existingUser = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
+    const existingUser = await authRepository.findUserByEmail(email);
 
     if (existingUser) {
       logAuthEvent('failed', undefined, email, clientIP, 'Email already exists');
@@ -120,25 +119,23 @@ export async function POST(req: Request) {
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
 
-    const user = await db.insert(users).values({
+    const user = await authRepository.createUser({
       id: createId(),
       name,
       email,
       password: hashedPassword,
-      // Storage tracking (quota/tier computed from subscriptionTier)
       storageUsedBytes: 0,
       subscriptionTier: 'free',
-    }).returning().then(res => res[0]);
+    });
 
     // Create a personal drive for the new user
     const driveName = 'Getting Started';
     const driveSlug = slugify(driveName);
-    const newDrive = await db.insert(drives).values({
+    const newDrive = await oauthRepository.createPersonalDrive({
       name: driveName,
       slug: driveSlug,
       ownerId: user.id,
-      updatedAt: new Date(),
-    }).returning().then(res => res[0]);
+    });
 
     if (newDrive) {
       try {
@@ -152,14 +149,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // Add default 'ollama' provider for the new user with Docker-compatible URL
-    // This enables local AI models via Ollama for users with local deployments
-    await db.insert(userAiSettings).values({
-      userId: user.id,
-      provider: 'ollama',
-      baseUrl: 'http://host.docker.internal:11434', // Default Docker networking URL
-      updatedAt: new Date(),
-    });
+    // Add default 'ollama' provider for the new user
+    await oauthRepository.createDefaultAiSettings(user.id);
 
     // Log successful signup
     logAuthEvent('signup', user.id, email, clientIP);

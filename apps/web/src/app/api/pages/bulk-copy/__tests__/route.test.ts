@@ -234,7 +234,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('At least one page ID is required');
     });
 
     it('returns 400 when pageIds is missing', async () => {
@@ -242,7 +242,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected array, received undefined');
     });
 
     it('returns 400 when targetDriveId is missing', async () => {
@@ -250,7 +250,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Invalid input: expected string, received undefined');
     });
 
     it('returns 400 when targetDriveId is empty string', async () => {
@@ -258,7 +258,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBeDefined();
+      expect(body.error).toBe('Target drive ID is required');
     });
 
     it('defaults includeChildren to true when not provided', async () => {
@@ -457,13 +457,14 @@ describe('POST /api/pages/bulk-copy', () => {
     it('runs copy within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(typeof mockTransaction.mock.calls[0][0]).toBe('function');
     });
 
     it('creates page with (Copy) suffix in title', async () => {
       await POST(createRequest(validBody));
 
-      expect(txInsert).toHaveBeenCalled();
+      expect(txInsert).toHaveBeenCalledWith({ id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' });
       const insertedValues = txInsertValues.mock.calls[0][0];
       expect(insertedValues.title).toBe('Source Page (Copy)');
     });
@@ -575,7 +576,9 @@ describe('POST /api/pages/bulk-copy', () => {
     it('broadcasts page created event', async () => {
       await POST(createRequest(validBody));
 
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId })
+      );
     });
 
     it('logs activity for each copied page', async () => {
@@ -618,7 +621,7 @@ describe('POST /api/pages/bulk-copy', () => {
     });
 
     it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();

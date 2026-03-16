@@ -244,7 +244,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('DB failed');
-      vi.mocked(getConnectionWithProvider).mockRejectedValue(error);
+      vi.mocked(getConnectionWithProvider).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations/c');
       const response = await GET(request, createContext(MOCK_DRIVE_ID, MOCK_CONNECTION_ID));
@@ -399,12 +399,12 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
       expect(deleteConnection).toHaveBeenCalledWith('mock-db', MOCK_CONNECTION_ID);
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Drive integration connection deleted',
-        expect.objectContaining({
+        {
           connectionId: MOCK_CONNECTION_ID,
           driveId: MOCK_DRIVE_ID,
           connectionName: 'My Connection',
           deletedBy: MOCK_USER_ID,
-        })
+        }
       );
     });
   });
@@ -415,7 +415,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('Delete failed');
-      vi.mocked(getConnectionById).mockRejectedValue(error);
+      vi.mocked(getConnectionById).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations/c', { method: 'DELETE' });
       const response = await DELETE(request, createContext(MOCK_DRIVE_ID, MOCK_CONNECTION_ID));

@@ -147,13 +147,13 @@ describe('POST /api/pages/[pageId]/view', () => {
     it('inserts the page view record via upsert', async () => {
       await POST(createRequest(), mockParams);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith({ userId: 'userId', pageId: 'pageId' });
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when database throws', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createRequest(), mockParams);
       const body = await response.json();
@@ -163,7 +163,7 @@ describe('POST /api/pages/[pageId]/view', () => {
     });
 
     it('returns 500 when insert throws', async () => {
-      const onConflictDoUpdate = vi.fn().mockRejectedValue(new Error('Insert failed'));
+      const onConflictDoUpdate = vi.fn().mockRejectedValueOnce(new Error('Insert failed'));
       const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
       vi.mocked(db.insert).mockReturnValue({ values } as never);
 

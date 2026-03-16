@@ -176,11 +176,22 @@ describe('POST /api/auth/passkey/register/options', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.options).toBeDefined();
+      expect(typeof body.options).toBe('object');
     });
 
-    it('skips CSRF validation when sessionId is null', async () => {
+    it('skips CSRF validation when auth result has no session (e.g. MCP token)', async () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(false);
+      vi.mocked(authenticateSessionRequest).mockResolvedValue({
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        tokenType: 'mcp',
+        scopes: ['*'],
+        tokenId: 'token-1',
+        allowedDriveIds: [],
+        isScoped: false,
+      } as never);
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
         // @ts-expect-error - partial mock data
@@ -195,7 +206,8 @@ describe('POST /api/auth/passkey/register/options', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.options).toBeDefined();
+      expect(typeof body.options).toBe('object');
+      expect(validateCSRFToken).not.toHaveBeenCalled();
     });
   });
 
@@ -277,14 +289,14 @@ describe('POST /api/auth/passkey/register/options', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration options error', expect.any(Error));
+      expect(loggers.auth.error).toHaveBeenCalledWith('Passkey registration options error', new Error('Unexpected'));
     });
   });
 });

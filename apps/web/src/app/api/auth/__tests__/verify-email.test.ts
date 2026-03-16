@@ -181,7 +181,7 @@ describe('/api/auth/verify-email', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(verifyToken).mockRejectedValue(new Error('Database error'));
+      vi.mocked(verifyToken).mockRejectedValueOnce(new Error('Database error'));
 
       const url = new URL('http://localhost/api/auth/verify-email?token=valid-token');
       const request = new NextRequest(url);
@@ -198,7 +198,7 @@ describe('/api/auth/verify-email', () => {
     it('logs errors', async () => {
       // Arrange
       const error = new Error('Database error');
-      vi.mocked(verifyToken).mockRejectedValue(error);
+      vi.mocked(verifyToken).mockRejectedValueOnce(error);
 
       const url = new URL('http://localhost/api/auth/verify-email?token=valid-token');
       const request = new NextRequest(url);
