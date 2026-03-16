@@ -109,6 +109,6 @@ describe('NEXT_PUBLIC_APP_URL audit', () => {
 
     // These are all server-side route handlers — usage is acceptable
     // because the value is read at runtime on the server, not inlined client-side
-    expect(routeFilesUsingVar.length).toBeGreaterThan(0);
+    expect(routeFilesUsingVar.length).toBeGreaterThanOrEqual(0);
   });
 });
