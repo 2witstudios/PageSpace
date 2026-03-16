@@ -33,7 +33,7 @@ COPY --from=deps /app .
 # Accept build arguments for Next.js environment variables
 # NEXT_PUBLIC_* vars must be available at build time for Next.js to inline them
 # Note: Stripe keys are hardcoded in stripe-config.ts to simplify Docker builds
-ARG NEXT_PUBLIC_REALTIME_URL
+ARG NEXT_PUBLIC_REALTIME_URL=""
 ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
 ARG NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
