@@ -62,8 +62,26 @@ describe('deployment-mode', () => {
   });
 
   describe('isOnPrem', () => {
+    it('given DEPLOYMENT_MODE=onprem, should return true', async () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+      const { isOnPrem } = await loadModule();
+      expect(isOnPrem()).toBe(true);
+    });
+
     it('given DEPLOYMENT_MODE=tenant, should return false', async () => {
       vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+      const { isOnPrem } = await loadModule();
+      expect(isOnPrem()).toBe(false);
+    });
+
+    it('given DEPLOYMENT_MODE=cloud, should return false', async () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+      const { isOnPrem } = await loadModule();
+      expect(isOnPrem()).toBe(false);
+    });
+
+    it('given DEPLOYMENT_MODE is unset, should return false', async () => {
+      vi.stubEnv('DEPLOYMENT_MODE', '');
       const { isOnPrem } = await loadModule();
       expect(isOnPrem()).toBe(false);
     });

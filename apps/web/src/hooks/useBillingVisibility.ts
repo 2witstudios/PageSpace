@@ -1,13 +1,13 @@
 'use client';
 
 import { useCapacitor } from './useCapacitor';
-import { isOnPrem } from '@/lib/deployment-mode';
+import { isBillingEnabled } from '@/lib/deployment-mode';
 
 /**
  * Hook to determine billing UI visibility based on platform and deployment mode.
  *
  * Billing is hidden on iOS Capacitor apps (Apple App Store compliance)
- * and on-prem deployments (no Stripe).
+ * and non-cloud deployments (on-prem, tenant — no in-app Stripe).
  *
  * @example
  * ```tsx
@@ -25,8 +25,8 @@ import { isOnPrem } from '@/lib/deployment-mode';
 export function useBillingVisibility() {
   const { isIOS, isReady } = useCapacitor();
 
-  // On-prem: always hide billing, immediately ready
-  if (isOnPrem()) {
+  // Non-cloud (on-prem, tenant): always hide billing, immediately ready
+  if (!isBillingEnabled()) {
     return { showBilling: false, hideBilling: true, isReady: true };
   }
 

@@ -9,7 +9,7 @@ export const BILLING_PATHS = ['/settings/billing', '/settings/plan'] as const;
 
 /**
  * Determines whether billing UI should be shown.
- * Returns false for iOS Capacitor apps and on-prem deployments.
+ * Returns false for iOS Capacitor apps, on-prem, and tenant deployments.
  *
  * Use this for non-React contexts. For React components, use `useBillingVisibility` hook.
  */
