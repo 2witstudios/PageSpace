@@ -1,0 +1,26 @@
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
+import fp from 'fastify-plugin'
+import { timingSafeEqual } from 'node:crypto'
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+}
+
+async function apiKeyAuthPlugin(app: FastifyInstance) {
+  app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (request.url === '/api/health') return
+
+    const apiKey = process.env.CONTROL_PLANE_API_KEY
+    if (!apiKey) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+
+    const provided = request.headers['x-api-key'] as string | undefined
+    if (!provided || !safeCompare(provided, apiKey)) {
+      return reply.status(401).send({ error: 'Unauthorized' })
+    }
+  })
+}
+
+export const apiKeyAuth = fp(apiKeyAuthPlugin, { name: 'api-key-auth' })
