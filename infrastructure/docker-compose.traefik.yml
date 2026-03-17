@@ -34,6 +34,8 @@ services:
       - "traefik.http.routers.dashboard.rule=Host(`traefik.pagespace.ai`)"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=le"
+      - "traefik.http.routers.dashboard.tls.domains[0].main=pagespace.ai"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.pagespace.ai"
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
       - "traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"

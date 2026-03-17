@@ -112,6 +112,17 @@ describe('Traefik docker-compose configuration', () => {
     });
   });
 
+  describe('wildcard TLS certificate', () => {
+    it('given the dashboard router, should request a wildcard cert for *.pagespace.ai', () => {
+      const labels = compose.services.traefik.labels ?? [];
+      const labelsArr = Array.isArray(labels) ? labels : Object.entries(labels).map(([k, v]) => `${k}=${v}`);
+      const hasMain = labelsArr.some((l: string) => l.includes('tls.domains[0].main=pagespace.ai'));
+      const hasSans = labelsArr.some((l: string) => l.includes('tls.domains[0].sans=*.pagespace.ai'));
+      expect(hasMain).toBe(true);
+      expect(hasSans).toBe(true);
+    });
+  });
+
   describe('environment', () => {
     it('given the traefik container, should pass CF_DNS_API_TOKEN via environment', () => {
       const env = compose.services.traefik.environment;
