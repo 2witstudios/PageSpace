@@ -1,0 +1,41 @@
+# Traefik v3 static configuration for PageSpace tenant routing
+# Wildcard subdomain routing with auto-TLS via Let's Encrypt DNS-01
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+
+  websecure:
+    address: ":443"
+
+certificatesResolvers:
+  le:
+    acme:
+      email: admin@pagespace.ai
+      storage: /letsencrypt/acme.json
+      # Uncomment for testing against LE staging:
+      # caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+
+providers:
+  docker:
+    watch: true
+    network: traefik
+    exposedByDefault: false
+    endpoint: unix:///var/run/docker.sock
+
+api:
+  dashboard: true
+  insecure: false
+
+log:
+  level: INFO
