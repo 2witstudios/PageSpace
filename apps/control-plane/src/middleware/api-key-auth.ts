@@ -13,11 +13,13 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
 
     const apiKey = process.env.CONTROL_PLANE_API_KEY
     if (!apiKey) {
+      request.log.warn('CONTROL_PLANE_API_KEY not configured')
       return reply.status(401).send({ error: 'Unauthorized' })
     }
 
     const provided = request.headers['x-api-key'] as string | undefined
     if (!provided || !safeCompare(provided, apiKey)) {
+      request.log.warn({ ip: request.ip }, 'auth failure: invalid API key')
       return reply.status(401).send({ error: 'Unauthorized' })
     }
   })

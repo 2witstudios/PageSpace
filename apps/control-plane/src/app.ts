@@ -1,13 +1,11 @@
 import Fastify from 'fastify'
 import { healthRoute, tenantRoutes } from './routes'
 import { apiKeyAuth } from './middleware/api-key-auth'
+import type { TenantRouteDeps } from './routes/tenants'
 
 export type AppDeps = {
   logger?: boolean
-  repo?: any
-  provisioningEngine?: any
-  lifecycle?: any
-}
+} & Partial<TenantRouteDeps>
 
 export function createApp({ logger = false, repo, provisioningEngine, lifecycle }: AppDeps = {}) {
   const app = Fastify({ logger })
@@ -15,7 +13,7 @@ export function createApp({ logger = false, repo, provisioningEngine, lifecycle 
   app.register(apiKeyAuth)
   app.register(healthRoute)
 
-  if (repo) {
+  if (repo && provisioningEngine && lifecycle) {
     app.register(tenantRoutes, { repo, provisioningEngine, lifecycle })
   }
 

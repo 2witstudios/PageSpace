@@ -33,16 +33,9 @@ Protect all control plane endpoints with API key authentication.
 - ✅ Given the API key, should use timing-safe comparison to prevent timing attacks
 - ✅ Given the middleware, should be applied to all routes except `GET /api/health`
 
-**TDD Approach**:
-- ✅ Write auth tests (`apps/control-plane/src/middleware/__tests__/api-key-auth.test.ts`) — 7 tests
-- ✅ Given valid key, should call next/allow request
-- ✅ Given missing key, should return 401
-- ✅ Given wrong key, should return 401
-- ✅ Given health endpoint, should not require auth
-- ✅ Given missing server config (no env var), should return 401
-
-**Key files created**:
+**Key files**:
 - `apps/control-plane/src/middleware/api-key-auth.ts`
+- `apps/control-plane/src/middleware/__tests__/api-key-auth.test.ts` — 7 tests
 
 ---
 
@@ -51,7 +44,7 @@ Protect all control plane endpoints with API key authentication.
 REST endpoints for tenant lifecycle management.
 
 **Requirements**:
-- ✅ Given POST `/api/tenants` with `{ slug, name, ownerEmail, tier }`, should validate input, create tenant, trigger async provisioning, return 202 with tenant object
+- ✅ Given POST `/api/tenants` with `{ slug, name, ownerEmail, tier }`, should validate input, trigger async provisioning, return 202
 - ✅ Given GET `/api/tenants`, should return list of all tenants with status, health, and basic info
 - ✅ Given GET `/api/tenants?status=active`, should filter by status
 - ✅ Given GET `/api/tenants/:slug`, should return full tenant details including 20 most recent events
@@ -63,52 +56,78 @@ REST endpoints for tenant lifecycle management.
 - ✅ Given invalid input (bad slug format, missing fields), should return 400 with validation errors
 - ✅ Given a conflict (duplicate slug, invalid status transition), should return 409
 
-**TDD Approach**:
-- ✅ Write route tests (`apps/control-plane/src/routes/__tests__/tenants.test.ts`) — 23 tests
-- ✅ Use `createApp()` factory with mocked provisioning engine and repository
-- ✅ Given POST with valid body and auth, should return 202 and call provisioning engine
-- ✅ Given POST with duplicate slug, should return 409
-- ✅ Given GET list with no auth, should return 401
-- ✅ Given POST suspend on active tenant, should return 200
-- ✅ Given POST suspend on suspended tenant, should return 409
-- ✅ Given DELETE, should return 202 and trigger async destroy
-- ✅ Given GET /:slug for nonexistent slug, should return 404
-
-**Key files created**:
+**Key files**:
 - `apps/control-plane/src/routes/tenants.ts`
 - `apps/control-plane/src/routes/index.ts`
+- `apps/control-plane/src/routes/__tests__/tenants.test.ts` — 23 tests
 
 ---
 
 ## Request/Response Schemas ✅
 
-Fastify JSON schemas for input validation and response serialization.
+Input validation uses the existing `validateSlug`, `validateEmail`, `validateTier` functions from `validation/tenant-validation.ts` rather than Fastify JSON Schema. Tested implicitly through route tests.
 
-**Requirements**:
-- ✅ Given POST `/api/tenants` body, should validate: slug (required, string), name (required, string), ownerEmail (required, email format), tier (required, enum)
-- ✅ Given list response, should include: tenants array with id, slug, name, status, healthStatus, tier, createdAt
-- ✅ Given detail response, should include: full tenant object + recentEvents array
-- ✅ Given error responses, should use consistent shape: `{ error: string, details?: object }`
+---
 
-**TDD Approach**:
-- ✅ Schema validation is tested implicitly through route tests (invalid input returns 400)
-- No separate test file needed — route tests cover this
+## Review Fixes
 
-**Implementation note**: Input validation uses the existing `validateSlug`, `validateEmail`, `validateTier` functions from `validation/tenant-validation.ts` rather than Fastify JSON Schema. This reuses battle-tested validators and provides clearer error messages.
+Issues found during code review. Each must be addressed before merge.
+
+### [P1] Wire production deps in index.ts ✅
+
+**Problem**: `src/index.ts` called `createApp({ logger: true })` with no repo/engine/lifecycle, so all `/api/tenants*` routes 404'd in the live process.
+
+**Fix**: Wired real Drizzle DB connection, tenant repository, provisioning engine, and lifecycle into `createApp()`. Requires `CONTROL_PLANE_DATABASE_URL` env var. Config paths read from env with sensible defaults.
+
+### [P1] Don't double-create tenant in POST route ✅
+
+**Problem**: The route called `repo.createTenant()` then fired `provision()` in background. The real provisioning engine also calls `repo.createTenant()`, so it would hit the duplicate-slug check.
+
+**Fix**: Removed `repo.createTenant()` from the route. The engine owns tenant creation. Route validates input, checks for duplicate slug (fast-path 409), fires provision, returns 202 with `{ slug, name, ownerEmail, tier, status: 'provisioning' }`.
+
+### [P2] Make DELETE async (fire-and-forget) ✅
+
+**Problem**: DELETE awaited `lifecycle.destroy()` which does backup + docker compose down, blocking the response.
+
+**Fix**: Route validates tenant exists and can transition to `destroying` (using repo + `canTransition`), then fires `lifecycle.destroy()` in background with `.catch()`, returns 202 immediately.
+
+### [P2] Map Invalid slug errors to 400 ✅
+
+**Problem**: `classifyError()` didn't recognize `Invalid slug` pattern, falling through to 500.
+
+**Fix**: Added `Invalid slug` pattern to `classifyError()` → 400. Test added for invalid slug on suspend.
+
+### [P2] Validate status query param ✅
+
+**Problem**: `GET /api/tenants?status=bogus` passed raw value to Postgres enum → 500.
+
+**Fix**: Validate against `VALID_STATUSES` set before querying. Return 400 for invalid values. Test added.
+
+### [Medium] Replace `any` types ✅
+
+**Problem**: `AppDeps` and `TenantRouteDeps` used `any` for all dependency types.
+
+**Fix**: Defined proper typed interfaces (`TenantRouteRepo`, `ProvisioningEngine`, `Lifecycle`). `AppDeps` reuses `TenantRouteDeps` via `Partial<>`. TypeScript strict check passes.
+
+### [Low] Use Fastify-idiomatic query parsing ✅
+
+**Fix**: Replaced `new URL(request.url, ...)` with `request.query as Record<string, string>`.
+
+### [Low] Auth failure logging ✅
+
+**Fix**: Added `request.log.warn()` on auth rejection with IP address.
+
+### [Low] Unused imports in auth test ✅
+
+**Fix**: Removed `beforeEach` and `vi` from auth test imports.
 
 ---
 
 ## Evaluation Gate
 
 Before moving to Epic 7:
-1. ✅ Can you create a tenant via curl with an API key? — POST /api/tenants returns 202
-2. ✅ Can you list, get, suspend, resume, upgrade, and destroy tenants? — All routes implemented and tested
-3. ✅ Are all error cases returning correct HTTP status codes? — 400, 401, 404, 409 all tested
-4. ✅ Is the API contract documented enough for Epic 7 (Stripe webhooks) and Epic 9 (operational tooling) to build against? — Route signatures and response shapes are explicit in tests
-
-## Test Summary
-
-- **192 total tests** across 11 test files (30 new tests added)
-- `middleware/__tests__/api-key-auth.test.ts` — 7 tests
-- `routes/__tests__/tenants.test.ts` — 23 tests
-- All pre-existing tests continue to pass
+1. Can you create a tenant via curl with an API key?
+2. Can you list, get, suspend, resume, upgrade, and destroy tenants?
+3. Are all error cases returning correct HTTP status codes?
+4. Does `index.ts` wire real production deps so routes work at runtime?
+5. Is the API contract documented enough for Epic 7 and Epic 9?

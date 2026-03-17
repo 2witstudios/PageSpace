@@ -1,14 +1,37 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { validateSlug, validateEmail, validateTier } from '../validation/tenant-validation'
+import { canTransition, type TenantStatus } from '../validation/status-transitions'
 
-type TenantRouteDeps = {
-  repo: any
-  provisioningEngine: any
-  lifecycle: any
+const VALID_STATUSES: ReadonlySet<string> = new Set<string>([
+  'provisioning', 'active', 'suspended', 'destroying', 'destroyed', 'failed',
+])
+
+type ProvisioningEngine = {
+  provision(request: { slug: string; ownerEmail: string; tier: string }): Promise<unknown>
+}
+
+type Lifecycle = {
+  suspend(slug: string): Promise<void>
+  resume(slug: string): Promise<void>
+  upgrade(slug: string, imageTag: string): Promise<void>
+  destroy(slug: string): Promise<void>
+}
+
+type TenantRouteRepo = {
+  getTenantBySlug(slug: string): Promise<Record<string, unknown> | null>
+  listTenants(options: { status?: TenantStatus }): Promise<unknown[]>
+  getRecentEvents(tenantId: string, limit: number): Promise<unknown[]>
+}
+
+export type TenantRouteDeps = {
+  repo: TenantRouteRepo
+  provisioningEngine: ProvisioningEngine
+  lifecycle: Lifecycle
 }
 
 function classifyError(error: Error): { status: number; error: string } {
   const msg = error.message
+  if (msg.includes('Invalid slug')) return { status: 400, error: msg }
   if (msg.includes('not found')) return { status: 404, error: msg }
   if (msg.includes('Cannot transition') || msg.includes('conflict') || msg.includes('already exists')) {
     return { status: 409, error: msg }
@@ -19,14 +42,13 @@ function classifyError(error: Error): { status: number; error: string } {
 export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) {
   const { repo, provisioningEngine, lifecycle } = deps
 
-  // POST /api/tenants — create + trigger async provisioning
+  // POST /api/tenants — validate input + fire-and-forget provisioning
   app.post('/api/tenants', async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Record<string, string> | undefined
     if (!body) return reply.status(400).send({ error: 'Request body is required' })
 
     const { slug, name, ownerEmail, tier } = body
 
-    // Validate all fields
     const errors: string[] = []
     if (!slug) errors.push('slug is required')
     if (!name) errors.push('name is required')
@@ -46,29 +68,30 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     const tierResult = validateTier(tier)
     if (!tierResult.valid) return reply.status(400).send({ error: tierResult.error })
 
-    // Check for duplicate slug
+    // Fast-path duplicate check
     const existing = await repo.getTenantBySlug(slug)
     if (existing) {
       return reply.status(409).send({ error: `Tenant slug "${slug}" already exists` })
     }
 
-    // Create the tenant record
-    const tenant = await repo.createTenant({ slug, name, ownerEmail, tier })
-
-    // Fire-and-forget provisioning
+    // Fire-and-forget: engine owns tenant creation + provisioning
     provisioningEngine.provision({ slug, ownerEmail, tier }).catch(() => {
       // Provisioning errors are recorded by the engine itself
     })
 
-    return reply.status(202).send(tenant)
+    return reply.status(202).send({ slug, name, ownerEmail, tier, status: 'provisioning' })
   })
 
   // GET /api/tenants — list
   app.get('/api/tenants', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { searchParams } = new URL(request.url, 'http://localhost')
-    const status = searchParams.get('status') ?? undefined
+    const query = request.query as Record<string, string>
+    const status = query.status
 
-    const tenantList = await repo.listTenants({ status })
+    if (status && !VALID_STATUSES.has(status)) {
+      return reply.status(400).send({ error: `Invalid status "${status}". Must be one of: ${[...VALID_STATUSES].join(', ')}` })
+    }
+
+    const tenantList = await repo.listTenants({ status: status as TenantStatus | undefined })
     return reply.send({ tenants: tenantList })
   })
 
@@ -79,7 +102,7 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     const tenant = await repo.getTenantBySlug(slug)
     if (!tenant) return reply.status(404).send({ error: `Tenant "${slug}" not found` })
 
-    const recentEvents = await repo.getRecentEvents(tenant.id, 20)
+    const recentEvents = await repo.getRecentEvents(tenant.id as string, 20)
     return reply.send({ ...tenant, recentEvents })
   })
 
@@ -132,16 +155,27 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     }
   })
 
-  // DELETE /api/tenants/:slug
+  // DELETE /api/tenants/:slug — validate then fire-and-forget destroy
   app.delete('/api/tenants/:slug', async (request: FastifyRequest, reply: FastifyReply) => {
     const { slug } = request.params as { slug: string }
 
-    try {
-      await lifecycle.destroy(slug)
-      return reply.status(202).send({ message: `Destruction of "${slug}" initiated` })
-    } catch (error) {
-      const classified = classifyError(error as Error)
-      return reply.status(classified.status).send({ error: classified.error })
+    // Validate existence and transition before firing async destroy
+    const tenant = await repo.getTenantBySlug(slug)
+    if (!tenant) {
+      return reply.status(404).send({ error: `Tenant "${slug}" not found` })
     }
+
+    if (!canTransition(tenant.status as TenantStatus, 'destroying')) {
+      return reply.status(409).send({
+        error: `Cannot transition from ${tenant.status} to destroying`,
+      })
+    }
+
+    // Fire-and-forget: destroy runs backup + teardown in background
+    lifecycle.destroy(slug).catch(() => {
+      // Destruction errors are recorded by lifecycle itself
+    })
+
+    return reply.status(202).send({ message: `Destruction of "${slug}" initiated` })
   })
 }

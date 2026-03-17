@@ -79,15 +79,13 @@ describe('tenant routes', () => {
   })
 
   // ──────────────────────────────────────────────
-  // POST /api/tenants — create + provision
+  // POST /api/tenants — validate + fire provision
   // ──────────────────────────────────────────────
   describe('POST /api/tenants', () => {
-    it('given valid input, should return 202 with tenant and trigger async provisioning', async () => {
+    it('given valid input, should return 202 and trigger async provisioning', async () => {
       const mocks = makeMocks()
-      const tenant = makeTenant({ status: 'provisioning' })
-      mocks.repo.createTenant.mockResolvedValue(tenant)
       mocks.repo.getTenantBySlug.mockResolvedValue(null)
-      mocks.provisioningEngine.provision.mockResolvedValue({ tenantId: tenant.id })
+      mocks.provisioningEngine.provision.mockResolvedValue({ tenantId: 'new-id' })
 
       const { app } = buildApp(mocks)
 
@@ -106,7 +104,10 @@ describe('tenant routes', () => {
       expect(response.statusCode).toBe(202)
       const body = response.json()
       expect(body.slug).toBe('acme-corp')
+      expect(body.name).toBe('Acme Corp')
       expect(body.status).toBe('provisioning')
+      // Route should NOT create tenant — engine owns that
+      expect(mocks.repo.createTenant).not.toHaveBeenCalled()
       // Provisioning should be triggered (fire-and-forget)
       expect(mocks.provisioningEngine.provision).toHaveBeenCalledWith({
         slug: 'acme-corp',
@@ -264,6 +265,19 @@ describe('tenant routes', () => {
       )
     })
 
+    it('given invalid status query param, should return 400', async () => {
+      const { app } = buildApp()
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/tenants?status=bogus',
+        headers: authHeaders(),
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json().error).toMatch(/invalid status/i)
+    })
+
     it('given no auth, should return 401', async () => {
       const { app } = buildApp()
 
@@ -326,7 +340,6 @@ describe('tenant routes', () => {
     it('given an active tenant, should suspend and return 200', async () => {
       const mocks = makeMocks()
       mocks.lifecycle.suspend.mockResolvedValue(undefined)
-      // Route re-fetches tenant after lifecycle.suspend completes
       const suspended = makeTenant({ status: 'suspended' })
       mocks.repo.getTenantBySlug.mockResolvedValue(suspended)
 
@@ -374,6 +387,21 @@ describe('tenant routes', () => {
 
       expect(response.statusCode).toBe(404)
     })
+
+    it('given an invalid slug format, should return 400', async () => {
+      const mocks = makeMocks()
+      mocks.lifecycle.suspend.mockRejectedValue(new Error('Invalid slug: "AB"'))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/tenants/AB/suspend',
+        headers: authHeaders(),
+      })
+
+      expect(response.statusCode).toBe(400)
+    })
   })
 
   // ──────────────────────────────────────────────
@@ -383,7 +411,6 @@ describe('tenant routes', () => {
     it('given a suspended tenant, should resume and return 200', async () => {
       const mocks = makeMocks()
       mocks.lifecycle.resume.mockResolvedValue(undefined)
-      // Route re-fetches tenant after lifecycle.resume completes
       const resumed = makeTenant({ status: 'active' })
       mocks.repo.getTenantBySlug.mockResolvedValue(resumed)
 
@@ -472,12 +499,13 @@ describe('tenant routes', () => {
   })
 
   // ──────────────────────────────────────────────
-  // DELETE /api/tenants/:slug
+  // DELETE /api/tenants/:slug — async destruction
   // ──────────────────────────────────────────────
   describe('DELETE /api/tenants/:slug', () => {
-    it('given an existing tenant, should return 202 and trigger async destruction', async () => {
+    it('given an active tenant, should validate, fire-and-forget destroy, return 202', async () => {
       const mocks = makeMocks()
       mocks.repo.getTenantBySlug.mockResolvedValue(makeTenant({ status: 'active' }))
+      // destroy is fire-and-forget so mock it but don't await it in route
       mocks.lifecycle.destroy.mockResolvedValue(undefined)
 
       const { app } = buildApp(mocks)
@@ -495,7 +523,6 @@ describe('tenant routes', () => {
     it('given nonexistent slug, should return 404', async () => {
       const mocks = makeMocks()
       mocks.repo.getTenantBySlug.mockResolvedValue(null)
-      mocks.lifecycle.destroy.mockRejectedValue(new Error('Tenant "nope" not found'))
 
       const { app } = buildApp(mocks)
 
@@ -506,12 +533,13 @@ describe('tenant routes', () => {
       })
 
       expect(response.statusCode).toBe(404)
+      // destroy should NOT be called when tenant doesn't exist
+      expect(mocks.lifecycle.destroy).not.toHaveBeenCalled()
     })
 
     it('given a destroyed tenant, should return 409', async () => {
       const mocks = makeMocks()
       mocks.repo.getTenantBySlug.mockResolvedValue(makeTenant({ status: 'destroyed' }))
-      mocks.lifecycle.destroy.mockRejectedValue(new Error('Cannot transition from destroyed to destroying'))
 
       const { app } = buildApp(mocks)
 
@@ -522,6 +550,8 @@ describe('tenant routes', () => {
       })
 
       expect(response.statusCode).toBe(409)
+      // destroy should NOT be called when transition is invalid
+      expect(mocks.lifecycle.destroy).not.toHaveBeenCalled()
     })
   })
 })
