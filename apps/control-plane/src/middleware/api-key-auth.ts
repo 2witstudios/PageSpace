@@ -3,8 +3,10 @@ import fp from 'fastify-plugin'
 import { timingSafeEqual } from 'node:crypto'
 
 function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+  const aBuffer = Buffer.from(a)
+  const bBuffer = Buffer.from(b)
+  if (aBuffer.length !== bBuffer.length) return false
+  return timingSafeEqual(aBuffer, bBuffer)
 }
 
 async function apiKeyAuthPlugin(app: FastifyInstance) {

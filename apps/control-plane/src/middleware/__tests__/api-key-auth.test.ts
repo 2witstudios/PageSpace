@@ -102,6 +102,21 @@ describe('apiKeyAuth middleware', () => {
     })
   })
 
+  describe('multi-byte character keys', () => {
+    it('given a multi-byte API key with wrong key of same char length, should return 401', async () => {
+      const multiByteKey = 'key-café-123'
+      const app = buildApp(multiByteKey)
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/tenants',
+        headers: { 'x-api-key': 'key-wrong-123' },
+      })
+
+      expect(response.statusCode).toBe(401)
+    })
+  })
+
   describe('POST routes', () => {
     it('given POST with valid API key, should allow the request', async () => {
       const app = buildApp(TEST_API_KEY)

@@ -36,7 +36,15 @@ function classifyError(error: Error): { status: number; error: string } {
   if (msg.includes('Cannot transition') || msg.includes('conflict') || msg.includes('already exists')) {
     return { status: 409, error: msg }
   }
-  return { status: 500, error: msg }
+  return { status: 500, error: 'Internal server error' }
+}
+
+function handleRouteError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
+  const classified = classifyError(error as Error)
+  if (classified.status === 500) {
+    request.log.error({ err: error }, 'unhandled route error')
+  }
+  return reply.status(classified.status).send({ error: classified.error })
 }
 
 export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) {
@@ -50,10 +58,10 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     const { slug, name, ownerEmail, tier } = body
 
     const errors: string[] = []
-    if (!slug) errors.push('slug is required')
-    if (!name) errors.push('name is required')
-    if (!ownerEmail) errors.push('ownerEmail is required')
-    if (!tier) errors.push('tier is required')
+    if (typeof slug !== 'string' || slug.length === 0) errors.push('slug is required')
+    if (typeof name !== 'string' || name.length === 0) errors.push('name is required')
+    if (typeof ownerEmail !== 'string' || ownerEmail.length === 0) errors.push('ownerEmail is required')
+    if (typeof tier !== 'string' || tier.length === 0) errors.push('tier is required')
 
     if (errors.length > 0) {
       return reply.status(400).send({ error: errors.join(', ') })
@@ -115,8 +123,7 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
       const tenant = await repo.getTenantBySlug(slug)
       return reply.send(tenant)
     } catch (error) {
-      const classified = classifyError(error as Error)
-      return reply.status(classified.status).send({ error: classified.error })
+      return handleRouteError(error, request, reply)
     }
   })
 
@@ -129,8 +136,7 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
       const tenant = await repo.getTenantBySlug(slug)
       return reply.send(tenant)
     } catch (error) {
-      const classified = classifyError(error as Error)
-      return reply.status(classified.status).send({ error: classified.error })
+      return handleRouteError(error, request, reply)
     }
   })
 
@@ -150,8 +156,7 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
       const tenant = await repo.getTenantBySlug(slug)
       return reply.send(tenant)
     } catch (error) {
-      const classified = classifyError(error as Error)
-      return reply.status(classified.status).send({ error: classified.error })
+      return handleRouteError(error, request, reply)
     }
   })
 
