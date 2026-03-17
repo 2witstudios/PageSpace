@@ -1,6 +1,14 @@
 import { describe, test, expect, vi } from 'vitest'
 import { createProvisioningEngine, type ProvisioningDeps } from '../provisioning-engine'
 
+const REALISTIC_ENV = [
+  'TENANT_SLUG=acme',
+  'POSTGRES_DB=pagespace',
+  'POSTGRES_USER=pagespace',
+  'POSTGRES_PASSWORD=abc123secret',
+  'DEPLOYMENT_MODE=tenant',
+].join('\n')
+
 function makeMockRepo() {
   return {
     getTenantBySlug: vi.fn().mockResolvedValue(null),
@@ -19,7 +27,7 @@ function makeMockRepo() {
 
 function makeMockExecutor() {
   return {
-    exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }),
+    exec: vi.fn().mockResolvedValue({ stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }),
     history: [] as Array<{ command: string; exitCode: number }>,
   }
 }
@@ -28,7 +36,7 @@ function makeMockFs() {
   return {
     mkdir: vi.fn().mockResolvedValue(undefined),
     writeFile: vi.fn().mockResolvedValue(undefined),
-    readFile: vi.fn().mockResolvedValue('DATABASE_URL=postgres://localhost/ps_acme'),
+    readFile: vi.fn().mockResolvedValue(REALISTIC_ENV),
   }
 }
 
@@ -172,6 +180,58 @@ describe('ProvisioningEngine', () => {
     })
   })
 
+  describe('DATABASE_URL construction', () => {
+    test('given generated env with POSTGRES_* vars, should build DATABASE_URL for seeder', async () => {
+      const deps = makeDeps()
+      const engine = createProvisioningEngine(deps)
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.seeder.seed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: 'postgresql://pagespace:abc123secret@postgres:5432/pagespace',
+        })
+      )
+    })
+
+    test('given env without POSTGRES_* vars, should use pagespace defaults', async () => {
+      const deps = makeDeps()
+      ;(deps.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue('DEPLOYMENT_MODE=tenant')
+      const engine = createProvisioningEngine(deps)
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.seeder.seed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: 'postgresql://pagespace:@postgres:5432/pagespace',
+        })
+      )
+    })
+  })
+
+  describe('slug validation', () => {
+    test('given an invalid slug, should reject without calling shell', async () => {
+      const deps = makeDeps()
+      const engine = createProvisioningEngine(deps)
+
+      await expect(
+        engine.provision({ slug: '; rm -rf /', ownerEmail: 'owner@acme.com', tier: 'business' })
+      ).rejects.toThrow('Invalid slug')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+      expect(deps.repo.getTenantBySlug).not.toHaveBeenCalled()
+    })
+
+    test('given a reserved slug, should reject', async () => {
+      const deps = makeDeps()
+      const engine = createProvisioningEngine(deps)
+
+      await expect(
+        engine.provision({ slug: 'admin', ownerEmail: 'owner@acme.com', tier: 'business' })
+      ).rejects.toThrow('Invalid slug')
+    })
+  })
+
   describe('duplicate slug rejection', () => {
     test('given a slug that already exists, should reject with conflict error', async () => {
       const deps = makeDeps()
@@ -213,7 +273,7 @@ describe('ProvisioningEngine', () => {
     test('given docker compose up failure, should attempt cleanup with docker compose down', async () => {
       const deps = makeDeps()
       ;(deps.executor.exec as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ stdout: 'env-output', stderr: '', exitCode: 0 }) // env gen
+        .mockResolvedValueOnce({ stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }) // env gen
         .mockResolvedValueOnce({ stdout: '', stderr: 'compose error', exitCode: 1 }) // compose up fails
         .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 }) // compose down cleanup
       const engine = createProvisioningEngine(deps)
@@ -240,6 +300,23 @@ describe('ProvisioningEngine', () => {
       ).rejects.toThrow('health check timeout')
 
       expect(deps.repo.updateTenantStatus).toHaveBeenCalledWith('tenant-123', 'failed')
+    })
+
+    test('given health poll timeout after compose up, should attempt cleanup', async () => {
+      const deps = makeDeps()
+      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('health check timeout')
+      )
+      const engine = createProvisioningEngine(deps)
+
+      await expect(
+        engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+      ).rejects.toThrow()
+
+      const downCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('down --volumes')
+      )
+      expect(downCall).toBeDefined()
     })
 
     test('given seeder failure, should update status to failed', async () => {
@@ -283,7 +360,7 @@ describe('ProvisioningEngine', () => {
         exec: vi.fn().mockImplementation(async (cmd: string) => {
           if (cmd.includes('generate-tenant-env')) callOrder.push('generate-env')
           if (cmd.includes('up -d')) callOrder.push('compose-up')
-          return { stdout: 'env-data', stderr: '', exitCode: 0 }
+          return { stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }
         }),
         history: [],
       }
@@ -291,7 +368,7 @@ describe('ProvisioningEngine', () => {
       const fs = {
         mkdir: vi.fn().mockImplementation(async () => { callOrder.push('mkdir') }),
         writeFile: vi.fn().mockImplementation(async () => { callOrder.push('write-env') }),
-        readFile: vi.fn().mockResolvedValue('DATABASE_URL=postgres://localhost/ps_acme'),
+        readFile: vi.fn().mockResolvedValue(REALISTIC_ENV),
       }
 
       const seeder = {

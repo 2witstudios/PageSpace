@@ -6,7 +6,7 @@ function makeTenant(overrides: Record<string, unknown> = {}) {
     id: 'tenant-123',
     slug: 'acme',
     name: 'acme',
-    status: 'active',
+    status: 'active' as const,
     tier: 'business',
     ownerEmail: 'owner@acme.com',
     ...overrides,
@@ -45,7 +45,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): LifecycleDeps {
 
 describe('TenantLifecycle', () => {
   describe('suspend', () => {
-    test('given an active tenant, should stop web, realtime, and processor containers', async () => {
+    test('given an active tenant, should stop web, realtime, processor, and cron containers', async () => {
       const deps = makeDeps()
       const lifecycle = createTenantLifecycle(deps)
 
@@ -56,7 +56,7 @@ describe('TenantLifecycle', () => {
       )
       expect(stopCall).toBeDefined()
       expect(stopCall![0]).toContain('ps-acme')
-      for (const svc of ['web', 'realtime', 'processor']) {
+      for (const svc of ['web', 'realtime', 'processor', 'cron']) {
         expect(stopCall![0]).toContain(svc)
       }
     })
@@ -70,8 +70,8 @@ describe('TenantLifecycle', () => {
       const stopCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
         (call: unknown[]) => (call[0] as string).includes('stop')
       )
-      expect(stopCall![0]).not.toContain('postgres')
-      expect(stopCall![0]).not.toContain('redis')
+      expect(stopCall![0]).not.toMatch(/\bpostgres\b/)
+      expect(stopCall![0]).not.toMatch(/\bredis\b/)
     })
 
     test('given an active tenant, should update status to suspended', async () => {
@@ -94,17 +94,14 @@ describe('TenantLifecycle', () => {
       )
     })
 
-    test('given an already suspended tenant, should throw conflict error', async () => {
+    test('given an already suspended tenant, should throw transition error', async () => {
       const deps = makeDeps({
         repo: makeMockRepo(makeTenant({ status: 'suspended' })),
       })
-      // Make updateTenantStatus throw for invalid transition
-      ;(deps.repo.updateTenantStatus as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error('Invalid transition: suspended -> suspended')
-      )
       const lifecycle = createTenantLifecycle(deps)
 
-      await expect(lifecycle.suspend('acme')).rejects.toThrow('Invalid transition')
+      await expect(lifecycle.suspend('acme')).rejects.toThrow('Cannot transition')
+      expect(deps.executor.exec).not.toHaveBeenCalled()
     })
 
     test('given a nonexistent tenant, should throw not found error', async () => {
@@ -117,6 +114,25 @@ describe('TenantLifecycle', () => {
       const lifecycle = createTenantLifecycle(deps)
 
       await expect(lifecycle.suspend('ghost')).rejects.toThrow('not found')
+    })
+
+    test('given an invalid slug, should reject without calling shell', async () => {
+      const deps = makeDeps()
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.suspend('INVALID!')).rejects.toThrow('Invalid slug')
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+      expect(deps.repo.getTenantBySlug).not.toHaveBeenCalled()
+    })
+
+    test('given docker compose stop fails, should throw error', async () => {
+      const deps = makeDeps()
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        stdout: '', stderr: 'compose error', exitCode: 1,
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.suspend('acme')).rejects.toThrow('suspend failed')
     })
   })
 
@@ -170,10 +186,32 @@ describe('TenantLifecycle', () => {
         'tenant-123', 'resumed', expect.any(Object)
       )
     })
+
+    test('given an active tenant, should throw transition error', async () => {
+      const deps = makeDeps({
+        repo: makeMockRepo(makeTenant({ status: 'active' })),
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.resume('acme')).rejects.toThrow('Cannot transition')
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given docker compose start fails, should throw error', async () => {
+      const deps = makeDeps({
+        repo: makeMockRepo(makeTenant({ status: 'suspended' })),
+      })
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        stdout: '', stderr: 'start error', exitCode: 1,
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.resume('acme')).rejects.toThrow('resume failed')
+    })
   })
 
   describe('upgrade', () => {
-    test('given an active tenant and image tag, should pull new images', async () => {
+    test('given an active tenant and image tag, should pull new images including cron', async () => {
       const deps = makeDeps()
       const lifecycle = createTenantLifecycle(deps)
 
@@ -183,9 +221,10 @@ describe('TenantLifecycle', () => {
         (call: unknown[]) => (call[0] as string).includes('pull')
       )
       expect(pullCall).toBeDefined()
+      expect(pullCall![0]).toContain('cron')
     })
 
-    test('given an active tenant, should recreate containers one at a time (rolling)', async () => {
+    test('given an active tenant, should recreate all 4 app services with rolling deploy', async () => {
       const deps = makeDeps()
       const lifecycle = createTenantLifecycle(deps)
 
@@ -194,7 +233,19 @@ describe('TenantLifecycle', () => {
       const upCalls = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.filter(
         (call: unknown[]) => (call[0] as string).includes('up -d') && (call[0] as string).includes('--no-deps')
       )
-      expect(upCalls.length).toBeGreaterThanOrEqual(3) // web, realtime, processor
+      expect(upCalls).toHaveLength(4)
+    })
+
+    test('given an upgrade, should pass IMAGE_TAG env to all exec calls', async () => {
+      const deps = makeDeps()
+      const lifecycle = createTenantLifecycle(deps)
+
+      await lifecycle.upgrade('acme', 'v1.2.3')
+
+      const calls = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls
+      for (const call of calls) {
+        expect(call[1]).toEqual(expect.objectContaining({ env: { IMAGE_TAG: 'v1.2.3' } }))
+      }
     })
 
     test('given an upgrade, should record an upgraded event', async () => {
@@ -206,6 +257,28 @@ describe('TenantLifecycle', () => {
       expect(deps.repo.recordEvent).toHaveBeenCalledWith(
         'tenant-123', 'upgraded', expect.objectContaining({ imageTag: 'v1.2.3' })
       )
+    })
+
+    test('given docker compose pull fails, should throw error', async () => {
+      const deps = makeDeps()
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        stdout: '', stderr: 'pull error', exitCode: 1,
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.upgrade('acme', 'v1.2.3')).rejects.toThrow('upgrade-pull failed')
+    })
+
+    test('given a destroyed tenant, should throw not found', async () => {
+      const deps = makeDeps({
+        repo: {
+          ...makeMockRepo(),
+          getTenantBySlug: vi.fn().mockResolvedValue(null),
+        },
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.upgrade('ghost', 'v1.0.0')).rejects.toThrow('not found')
     })
   })
 
@@ -224,6 +297,20 @@ describe('TenantLifecycle', () => {
 
       expect(callOrder[0]).toBe('backup')
       expect(callOrder).toContain('down')
+    })
+
+    test('given an active tenant, should use composePath and pagespace user for backup', async () => {
+      const deps = makeDeps()
+      const lifecycle = createTenantLifecycle(deps)
+
+      await lifecycle.destroy('acme')
+
+      const backupCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('pg_dump')
+      )
+      expect(backupCall![0]).toContain('-f /opt/infrastructure/docker-compose.tenant.yml')
+      expect(backupCall![0]).toContain('-U pagespace')
+      expect(backupCall![0]).toContain('-d pagespace')
     })
 
     test('given an active tenant, should stop all containers and remove volumes', async () => {
@@ -271,6 +358,50 @@ describe('TenantLifecycle', () => {
       const lifecycle = createTenantLifecycle(deps)
 
       await expect(lifecycle.destroy('ghost')).rejects.toThrow('not found')
+    })
+
+    test('given backup failure, should throw and NOT proceed to down --volumes', async () => {
+      const deps = makeDeps()
+      const callOrder: string[] = []
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+        if (cmd.includes('pg_dump')) {
+          callOrder.push('backup')
+          return { stdout: '', stderr: 'pg_dump: error', exitCode: 1 }
+        }
+        if (cmd.includes('down --volumes')) callOrder.push('down')
+        return { stdout: '', stderr: '', exitCode: 0 }
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.destroy('acme')).rejects.toThrow('backup failed')
+      expect(callOrder).not.toContain('down')
+    })
+
+    test('given docker compose down fails, should throw error', async () => {
+      const deps = makeDeps()
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+        if (cmd.includes('down --volumes')) {
+          return { stdout: '', stderr: 'down error', exitCode: 1 }
+        }
+        return { stdout: '', stderr: '', exitCode: 0 }
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.destroy('acme')).rejects.toThrow('destroy failed')
+    })
+
+    test('given a suspended tenant, should be destroyable', async () => {
+      const deps = makeDeps({
+        repo: makeMockRepo(makeTenant({ status: 'suspended' })),
+      })
+      const lifecycle = createTenantLifecycle(deps)
+
+      // suspended -> destroying is a valid transition (suspended -> destroying via active path)
+      // Actually: suspended -> destroying is valid per the transition matrix
+      await lifecycle.destroy('acme')
+
+      const statusCalls = (deps.repo.updateTenantStatus as ReturnType<typeof vi.fn>).mock.calls
+      expect(statusCalls[0]).toEqual(['tenant-123', 'destroying'])
     })
   })
 })

@@ -53,7 +53,7 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
         const hashedPassword = await bcrypt.hash(temporaryPassword, 12)
 
         await db.query(
-          'INSERT INTO users (email, password_hash, role, name) VALUES ($1, $2, $3, $4) RETURNING id, email, role',
+          'INSERT INTO users (email, password, role, name) VALUES ($1, $2, $3, $4) RETURNING id, email, role',
           [input.ownerEmail, hashedPassword, 'admin', 'Admin']
         )
 

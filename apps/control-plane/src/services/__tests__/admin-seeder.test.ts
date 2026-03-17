@@ -65,7 +65,7 @@ describe('AdminSeeder', () => {
       expect(bcrypt.hash).toHaveBeenCalledWith('MyPass!', 12)
     })
 
-    test('given a new user, should insert into db with hashed password', async () => {
+    test('given a new user, should insert into db with hashed password in password column', async () => {
       const db = makeMockDb(null)
       const bcrypt = makeMockBcrypt('$2a$12$hashed')
       const generatePassword = makeMockPasswordGenerator()
@@ -82,6 +82,8 @@ describe('AdminSeeder', () => {
         (call: unknown[]) => (call[0] as string).includes('INSERT')
       )
       expect(insertCall).toBeDefined()
+      expect(insertCall![0]).toContain('password')
+      expect(insertCall![0]).not.toContain('password_hash')
       expect(insertCall![1]).toContain('$2a$12$hashed')
     })
 

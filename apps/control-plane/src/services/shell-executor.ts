@@ -30,7 +30,7 @@ export function createShellExecutor(): ShellExecutor {
     history,
     async exec(command: string, options: ExecOptions = {}): Promise<ExecResult> {
       return new Promise((resolve) => {
-        const child = cpExec(command, {
+        cpExec(command, {
           cwd: options.cwd,
           timeout: options.timeout,
           env: options.env ? { ...process.env, ...options.env } : undefined,

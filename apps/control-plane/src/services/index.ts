@@ -2,3 +2,4 @@ export { createShellExecutor, createMockExecutor, type ShellExecutor, type ExecR
 export { createAdminSeeder, type TenantDbConnection, type SeedInput, type SeedResult } from './admin-seeder'
 export { createProvisioningEngine, type ProvisioningDeps } from './provisioning-engine'
 export { createTenantLifecycle, type LifecycleDeps } from './tenant-lifecycle'
+export type { Tenant, TenantRepo } from './types'

@@ -1,11 +1,6 @@
 import type { ShellExecutor } from './shell-executor'
-
-type TenantRepo = {
-  getTenantBySlug(slug: string): Promise<unknown | null>
-  createTenant(input: { slug: string; name: string; ownerEmail: string; tier: string }): Promise<{ id: string; slug: string }>
-  updateTenantStatus(id: string, status: string): Promise<unknown>
-  recordEvent(tenantId: string, eventType: string, metadata?: unknown): Promise<void>
-}
+import type { TenantRepo } from './types'
+import { validateSlug } from '../validation/tenant-validation'
 
 type FsLike = {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>
@@ -38,18 +33,29 @@ type ProvisionRequest = {
   tier: string
 }
 
+function getEnvVar(envContent: string, name: string): string | undefined {
+  const match = envContent.match(new RegExp(`^${name}=(.+)$`, 'm'))
+  return match?.[1]
+}
+
 export function createProvisioningEngine(deps: ProvisioningDeps) {
   const { repo, executor, fs, seeder, pollHealth, basePath, scriptsPath, composePath } = deps
 
   return {
     async provision(request: ProvisionRequest) {
-      // Step 1: Check for duplicate slug
+      // Step 1: Validate slug (defense-in-depth)
+      const slugResult = validateSlug(request.slug)
+      if (!slugResult.valid) {
+        throw new Error(`Invalid slug: ${slugResult.error}`)
+      }
+
+      // Step 2: Check for duplicate slug
       const existing = await repo.getTenantBySlug(request.slug)
       if (existing) {
         throw new Error(`Tenant slug "${request.slug}" conflict: already exists`)
       }
 
-      // Step 2: Create tenant record with provisioning status
+      // Step 3: Create tenant record with provisioning status
       const tenant = await repo.createTenant({
         slug: request.slug,
         name: request.slug,
@@ -57,10 +63,10 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
         tier: request.tier,
       })
 
-      let composedUp = false
+      let composeStarted = false
 
       try {
-        // Step 3: Generate env file via shell script
+        // Step 4: Generate env file via shell script
         const envResult = await executor.exec(
           `${scriptsPath}/generate-tenant-env.sh ${request.slug}`,
           { cwd: scriptsPath }
@@ -69,27 +75,29 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           throw Object.assign(new Error(`Env generation failed: ${envResult.stderr}`), { step: 'generate-env' })
         }
 
-        // Step 4: Write env to tenants/{slug}/.env
+        // Step 5: Write env to tenants/{slug}/.env
         const tenantDir = `${basePath}/${request.slug}`
         await fs.mkdir(tenantDir, { recursive: true })
         await fs.writeFile(`${tenantDir}/.env`, envResult.stdout)
 
-        // Step 5: Docker compose up
+        // Step 6: Docker compose up
         const composeCmd = `docker compose -p ps-${request.slug} -f ${composePath} --env-file ${tenantDir}/.env up -d`
         const composeResult = await executor.exec(composeCmd, { cwd: basePath })
         if (composeResult.exitCode !== 0) {
-          composedUp = true
+          composeStarted = true
           throw Object.assign(new Error(`Docker compose up failed: ${composeResult.stderr}`), { step: 'compose-up' })
         }
-        composedUp = true
+        composeStarted = true
 
-        // Step 6: Poll health
+        // Step 7: Poll health
         await pollHealth(request.slug)
 
-        // Step 7: Seed admin user
+        // Step 8: Seed admin user
         const envContent = await fs.readFile(`${tenantDir}/.env`)
-        const dbUrlMatch = envContent.match(/DATABASE_URL=(.+)/)
-        const databaseUrl = dbUrlMatch ? dbUrlMatch[1] : `postgres://localhost/ps_${request.slug}`
+        const pgUser = getEnvVar(envContent, 'POSTGRES_USER') ?? 'pagespace'
+        const pgPassword = getEnvVar(envContent, 'POSTGRES_PASSWORD') ?? ''
+        const pgDb = getEnvVar(envContent, 'POSTGRES_DB') ?? 'pagespace'
+        const databaseUrl = `postgresql://${pgUser}:${pgPassword}@postgres:5432/${pgDb}`
 
         const seedResult = await seeder.seed({
           slug: request.slug,
@@ -97,10 +105,10 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           databaseUrl,
         })
 
-        // Step 8: Update status to active
+        // Step 9: Update status to active
         await repo.updateTenantStatus(tenant.id, 'active')
 
-        // Step 9: Record provisioned event
+        // Step 10: Record provisioned event
         await repo.recordEvent(tenant.id, 'provisioned', {
           ownerEmail: request.ownerEmail,
           tier: request.tier,
@@ -112,7 +120,6 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           temporaryPassword: seedResult.temporaryPassword,
         }
       } catch (error) {
-        // On failure: update status to failed, record error event
         const step = (error as { step?: string }).step ?? 'unknown'
         const message = (error as Error).message
 
@@ -123,8 +130,7 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           // Best-effort status update
         }
 
-        // If compose was started, attempt cleanup
-        if (composedUp) {
+        if (composeStarted) {
           try {
             await executor.exec(
               `docker compose -p ps-${request.slug} -f ${composePath} down --volumes`,

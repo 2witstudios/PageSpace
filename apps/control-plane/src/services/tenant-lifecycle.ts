@@ -1,19 +1,10 @@
-import type { ShellExecutor } from './shell-executor'
-
-type Tenant = {
-  id: string
-  slug: string
-  status: string
-}
-
-type LifecycleRepo = {
-  getTenantBySlug(slug: string): Promise<Tenant | null>
-  updateTenantStatus(id: string, status: string): Promise<unknown>
-  recordEvent(tenantId: string, eventType: string, metadata?: unknown): Promise<void>
-}
+import type { ShellExecutor, ExecOptions, ExecResult } from './shell-executor'
+import type { Tenant, TenantRepo } from './types'
+import { canTransition, type TenantStatus } from '../validation/status-transitions'
+import { validateSlug } from '../validation/tenant-validation'
 
 export type LifecycleDeps = {
-  repo: LifecycleRepo
+  repo: TenantRepo
   executor: ShellExecutor
   pollHealth: (slug: string) => Promise<{ healthy: boolean }>
   composePath: string
@@ -26,22 +17,42 @@ export function createTenantLifecycle(deps: LifecycleDeps) {
   const { repo, executor, pollHealth, composePath, basePath } = deps
 
   async function requireTenant(slug: string): Promise<Tenant> {
+    const slugResult = validateSlug(slug)
+    if (!slugResult.valid) {
+      throw new Error(`Invalid slug: "${slug}"`)
+    }
     const tenant = await repo.getTenantBySlug(slug)
     if (!tenant) throw new Error(`Tenant "${slug}" not found`)
     return tenant
+  }
+
+  function requireTransition(tenant: Tenant, to: TenantStatus) {
+    if (!canTransition(tenant.status, to)) {
+      throw new Error(`Cannot transition from ${tenant.status} to ${to}`)
+    }
   }
 
   function composeCmd(slug: string, action: string): string {
     return `docker compose -p ps-${slug} -f ${composePath} --env-file ${basePath}/${slug}/.env ${action}`
   }
 
+  async function execOrFail(command: string, step: string, options?: ExecOptions): Promise<ExecResult> {
+    const result = await executor.exec(command, options)
+    if (result.exitCode !== 0) {
+      throw new Error(`${step} failed (exit ${result.exitCode}): ${result.stderr}`)
+    }
+    return result
+  }
+
   return {
     async suspend(slug: string) {
       const tenant = await requireTenant(slug)
+      requireTransition(tenant, 'suspended')
 
       const services = APP_SERVICES.join(' ')
-      await executor.exec(
+      await execOrFail(
         composeCmd(slug, `stop ${services}`),
+        'suspend',
         { cwd: basePath }
       )
 
@@ -51,10 +62,12 @@ export function createTenantLifecycle(deps: LifecycleDeps) {
 
     async resume(slug: string) {
       const tenant = await requireTenant(slug)
+      requireTransition(tenant, 'active')
 
       const services = APP_SERVICES.join(' ')
-      await executor.exec(
+      await execOrFail(
         composeCmd(slug, `start ${services}`),
+        'resume',
         { cwd: basePath }
       )
 
@@ -66,16 +79,16 @@ export function createTenantLifecycle(deps: LifecycleDeps) {
     async upgrade(slug: string, imageTag: string) {
       const tenant = await requireTenant(slug)
 
-      // Pull new images
-      await executor.exec(
-        composeCmd(slug, 'pull web realtime processor'),
+      await execOrFail(
+        composeCmd(slug, 'pull web realtime processor cron'),
+        'upgrade-pull',
         { cwd: basePath, env: { IMAGE_TAG: imageTag } }
       )
 
-      // Rolling recreate: one service at a time
-      for (const service of ['processor', 'web', 'realtime']) {
-        await executor.exec(
+      for (const service of ['processor', 'web', 'realtime', 'cron']) {
+        await execOrFail(
           composeCmd(slug, `up -d --no-deps ${service}`),
+          `upgrade-recreate-${service}`,
           { cwd: basePath, env: { IMAGE_TAG: imageTag } }
         )
       }
@@ -85,23 +98,22 @@ export function createTenantLifecycle(deps: LifecycleDeps) {
 
     async destroy(slug: string) {
       const tenant = await requireTenant(slug)
+      requireTransition(tenant, 'destroying')
 
-      // Transition to destroying
       await repo.updateTenantStatus(tenant.id, 'destroying')
 
-      // Backup database first
-      await executor.exec(
-        `docker compose -p ps-${slug} exec -T postgres pg_dump -U postgres > ${basePath}/${slug}/backup.sql`,
+      await execOrFail(
+        `${composeCmd(slug, 'exec -T postgres pg_dump -U pagespace -d pagespace')} > ${basePath}/${slug}/backup.sql`,
+        'backup',
         { cwd: basePath }
       )
 
-      // Stop all containers and remove volumes
-      await executor.exec(
+      await execOrFail(
         composeCmd(slug, 'down --volumes'),
+        'destroy',
         { cwd: basePath }
       )
 
-      // Transition to destroyed
       await repo.updateTenantStatus(tenant.id, 'destroyed')
       await repo.recordEvent(tenant.id, 'destroyed', { slug })
     },
