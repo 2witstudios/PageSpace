@@ -1,6 +1,6 @@
 # Decouple NEXT_PUBLIC_ Build-Time Vars Epic
 
-**Status**: PLANNED
+**Status**: COMPLETE (PR #796, merged 2026-03-17)
 **Goal**: Build web image once, run it with any tenant's config via runtime env vars only
 
 ## Overview

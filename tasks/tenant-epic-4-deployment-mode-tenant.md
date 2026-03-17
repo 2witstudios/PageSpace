@@ -1,6 +1,6 @@
 # DEPLOYMENT_MODE=tenant App Changes Epic
 
-**Status**: PLANNED
+**Status**: COMPLETE (PR #795, merged 2026-03-17)
 **Goal**: Minimal app code changes to support tenant-mode instances where billing is external and all users get max-tier features
 
 ## Overview

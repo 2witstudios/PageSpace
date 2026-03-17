@@ -1,6 +1,6 @@
 # Docker Image Registry & CI Builds Epic
 
-**Status**: PLANNED
+**Status**: COMPLETE (PR #797, merged 2026-03-17)
 **Goal**: Reusable, tagged Docker images for all PageSpace services in a container registry
 
 ## Overview
