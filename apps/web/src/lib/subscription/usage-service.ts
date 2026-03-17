@@ -1,6 +1,6 @@
 import { db, eq, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { isOnPrem } from '@pagespace/lib';
+import { isBillingEnabled } from '@pagespace/lib';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';
 
@@ -15,7 +15,7 @@ const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.e
  * Returns -1 (unlimited) for on-prem deployments.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
-  if (isOnPrem()) return -1;
+  if (!isBillingEnabled()) return -1;
 
   if (providerType === 'standard') {
     // Standard AI calls per day by tier
