@@ -16,6 +16,7 @@ describe('tenantStatusEnum', () => {
       'suspended',
       'destroying',
       'destroyed',
+      'failed',
     ])
   })
 })
