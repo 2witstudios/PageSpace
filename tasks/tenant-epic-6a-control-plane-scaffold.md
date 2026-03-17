@@ -1,6 +1,6 @@
 # Control Plane Scaffold & Schema Epic
 
-**Status**: PLANNED
+**Status**: COMPLETE
 **Goal**: A new `apps/control-plane/` app in the monorepo with Drizzle schema, migrations, and a health check endpoint
 
 ## Overview
