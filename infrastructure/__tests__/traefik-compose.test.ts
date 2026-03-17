@@ -14,6 +14,8 @@ interface ComposeService {
   labels?: string[] | Record<string, string>;
   restart?: string;
   command?: string | string[];
+  security_opt?: string[];
+  deploy?: { resources?: { limits?: { memory?: string } } };
 }
 
 interface ComposeFile {
@@ -87,6 +89,18 @@ describe('Traefik docker-compose configuration', () => {
     it('given the network definition, traefik network should be external', () => {
       expect(compose.networks?.traefik).toBeDefined();
       expect(compose.networks!.traefik.external).toBe(true);
+    });
+  });
+
+  describe('container hardening', () => {
+    it('given the traefik container, should prevent privilege escalation', () => {
+      const securityOpt = compose.services.traefik.security_opt ?? [];
+      expect(securityOpt).toContain('no-new-privileges:true');
+    });
+
+    it('given the traefik container, should enforce a memory limit', () => {
+      const memLimit = compose.services.traefik.deploy?.resources?.limits?.memory;
+      expect(memLimit).toBeDefined();
     });
   });
 

@@ -11,6 +11,12 @@ services:
   traefik:
     image: traefik:v3.3
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     ports:
       - "80:80"
       - "443:443"

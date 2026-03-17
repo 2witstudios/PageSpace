@@ -83,5 +83,9 @@ describe('Traefik static configuration', () => {
     it('given the Traefik dashboard, should be enabled', () => {
       expect(config.api?.dashboard).toBe(true);
     });
+
+    it('given the Traefik API, should not expose insecure HTTP dashboard', () => {
+      expect(config.api?.insecure).toBe(false);
+    });
   });
 });
