@@ -8,11 +8,21 @@ When working on an epic or task plan, you MUST NOT defer work that is explicitly
 
 ## Rules
 
+### 0. The plan is a living document — revise it as you go
+
+The task plan file (`tasks/*.md`) is the source of truth. As you implement, you WILL discover that some requirements need to change — a different approach is more pragmatic, a requirement is impossible as written, or you find a better solution. This is expected and good.
+
+**When you deviate from the plan, you MUST update the plan file BEFORE declaring the task complete.** Explain what changed and why. The plan should always reflect what was actually built, not what was originally imagined.
+
+Never silently substitute a different approach. If the plan says "spin up containers and curl them" but you validate YAML labels instead, update the plan to say that and explain the trade-off. Future readers (and auditors) need to understand what was delivered and why it differs from the original spec.
+
 ### 1. In-scope work must be completed
 
 If a requirement is written in the epic/task plan file (`tasks/*.md`), it must be implemented. You cannot mark it as "future work," "Phase 2," "manual test needed," or "deferred" and declare the task complete.
 
-If you cannot implement a requirement, you must provide a concrete technical reason why it's blocked (e.g., "requires infrastructure from Epic 5 that doesn't exist yet").
+If you cannot implement a requirement, you must either:
+- Provide a concrete technical reason why it's blocked (e.g., "requires infrastructure from Epic 5 that doesn't exist yet")
+- OR revise the plan with a better approach and explain the rationale
 
 ### 2. Pattern propagation is your responsibility
 
