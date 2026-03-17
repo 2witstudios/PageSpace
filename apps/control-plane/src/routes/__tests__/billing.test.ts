@@ -15,6 +15,7 @@ function makeMocks() {
       updateHealthStatus: vi.fn(),
       deleteTenant: vi.fn(),
       recordEvent: vi.fn(),
+      updateTenantStripeIds: vi.fn(),
       getRecentEvents: vi.fn().mockResolvedValue([]),
     },
     provisioningEngine: {
@@ -50,11 +51,16 @@ function makeMocks() {
   }
 }
 
-function buildApp(mocks = makeMocks()) {
+const DEFAULT_PRICE_MAP: Record<string, string> = {
+  pro: 'price_real_pro_123',
+  enterprise: 'price_real_ent_456',
+}
+
+function buildApp(mocks = makeMocks(), priceMap = DEFAULT_PRICE_MAP) {
   process.env.CONTROL_PLANE_API_KEY = API_KEY
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test'
   return {
-    app: createApp({ logger: false, ...mocks }),
+    app: createApp({ logger: false, ...mocks, priceMap }),
     ...mocks,
   }
 }
@@ -105,7 +111,7 @@ describe('billing routes', () => {
       expect(body.sessionId).toBe('cs_test_123')
     })
 
-    it('given valid input, should pass correct params to Stripe', async () => {
+    it('given valid input, should pass real price ID and correct params to Stripe', async () => {
       const mocks = makeMocks()
       mocks.repo.getTenantBySlug.mockResolvedValue(null)
 
@@ -125,8 +131,44 @@ describe('billing routes', () => {
           metadata: expect.objectContaining({ slug: 'acme-corp', tier: 'pro' }),
           success_url: 'https://acme-corp.pagespace.ai',
           cancel_url: 'https://pagespace.ai',
+          line_items: [{ price: 'price_real_pro_123', quantity: 1 }],
         })
       )
+    })
+
+    it('given tier with no configured price, should return 400', async () => {
+      const mocks = makeMocks()
+      mocks.repo.getTenantBySlug.mockResolvedValue(null)
+
+      const { app } = buildApp(mocks, { enterprise: 'price_ent_only' })
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/billing/checkout',
+        headers: authHeaders(),
+        payload: { slug: 'acme-corp', email: 'owner@acme.com', tier: 'pro' },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json().error).toMatch(/no.*price.*configured/i)
+      expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled()
+    })
+
+    it('given Stripe checkout.sessions.create throws, should return 502', async () => {
+      const mocks = makeMocks()
+      mocks.repo.getTenantBySlug.mockResolvedValue(null)
+      mocks.stripe.checkout.sessions.create.mockRejectedValue(new Error('Stripe API error'))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/billing/checkout',
+        headers: authHeaders(),
+        payload: { slug: 'acme-corp', email: 'owner@acme.com', tier: 'pro' },
+      })
+
+      expect(response.statusCode).toBe(502)
     })
 
     it('given duplicate slug, should return 409 without calling Stripe', async () => {
@@ -299,6 +341,23 @@ describe('billing routes', () => {
       })
 
       expect(response.statusCode).toBe(400)
+    })
+
+    it('given Stripe billingPortal.sessions.create throws, should return 502', async () => {
+      const mocks = makeMocks()
+      mocks.repo.getTenantBySlug.mockResolvedValue(makeTenant())
+      mocks.stripe.billingPortal.sessions.create.mockRejectedValue(new Error('Stripe down'))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/billing/portal',
+        headers: authHeaders(),
+        payload: { tenantSlug: 'acme-corp' },
+      })
+
+      expect(response.statusCode).toBe(502)
     })
 
     it('given no auth, should return 401', async () => {

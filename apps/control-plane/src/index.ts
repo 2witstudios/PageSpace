@@ -84,12 +84,21 @@ async function start() {
     ? new Stripe(stripeSecretKey, { apiVersion: '2025-12-15.clover' })
     : undefined
 
+  // Map tier names to real Stripe price IDs from environment
+  const priceMap: Record<string, string> = {}
+  if (process.env.STRIPE_PRICE_FREE) priceMap.free = process.env.STRIPE_PRICE_FREE
+  if (process.env.STRIPE_PRICE_PRO) priceMap.pro = process.env.STRIPE_PRICE_PRO
+  if (process.env.STRIPE_PRICE_BUSINESS) priceMap.business = process.env.STRIPE_PRICE_BUSINESS
+  if (process.env.STRIPE_PRICE_ENTERPRISE) priceMap.enterprise = process.env.STRIPE_PRICE_ENTERPRISE
+  if (process.env.STRIPE_PRICE_STANDARD) priceMap.standard = process.env.STRIPE_PRICE_STANDARD
+
   const app = createApp({
     logger: true,
     repo,
     provisioningEngine,
     lifecycle,
     stripe,
+    priceMap,
   })
 
   // Verify database connectivity before accepting traffic

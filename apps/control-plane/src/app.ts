@@ -28,12 +28,13 @@ type WebhookRepo = {
 export type AppDeps = {
   logger?: boolean
   stripe?: StripeClient
+  priceMap?: Record<string, string>
   repo?: TenantRouteDeps['repo'] & Partial<WebhookRepo>
   provisioningEngine?: TenantRouteDeps['provisioningEngine']
   lifecycle?: TenantRouteDeps['lifecycle']
 }
 
-export function createApp({ logger = false, repo, provisioningEngine, lifecycle, stripe }: AppDeps = {}) {
+export function createApp({ logger = false, repo, provisioningEngine, lifecycle, stripe, priceMap }: AppDeps = {}) {
   const app = Fastify({ logger })
 
   app.register(apiKeyAuth)
@@ -50,6 +51,7 @@ export function createApp({ logger = false, repo, provisioningEngine, lifecycle,
         app.register(billingRoutes, {
           stripe: stripe as Required<Pick<StripeClient, 'checkout' | 'billingPortal'>>,
           repo,
+          priceMap: priceMap ?? {},
         })
       }
     }
