@@ -35,7 +35,7 @@ describe('export-utils', () => {
   describe('generateDOCX', () => {
     it('converts HTML to DOCX when result is an ArrayBuffer', async () => {
       const mockBuffer = new ArrayBuffer(8);
-      (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockResolvedValue(mockBuffer);
+      vi.mocked(HTMLtoDOCX).mockResolvedValue(mockBuffer as unknown as Buffer);
 
       const result = await generateDOCX('<p>Hello</p>', 'Test Doc');
 
@@ -50,7 +50,7 @@ describe('export-utils', () => {
 
     it('converts HTML to DOCX when result is a Blob', async () => {
       const mockBlob = new Blob(['docx content'], { type: 'application/octet-stream' });
-      (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockResolvedValue(mockBlob);
+      vi.mocked(HTMLtoDOCX).mockResolvedValue(mockBlob as unknown as Buffer);
 
       const result = await generateDOCX('<p>Hello</p>', 'Test Doc');
 
@@ -59,7 +59,7 @@ describe('export-utils', () => {
 
     it('returns result directly if already a Buffer-like type', async () => {
       const bufferData = Buffer.from('some data');
-      (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockResolvedValue(bufferData);
+      vi.mocked(HTMLtoDOCX).mockResolvedValue(bufferData);
 
       const result = await generateDOCX('<h1>Title</h1>', 'My Title');
 
@@ -68,7 +68,7 @@ describe('export-utils', () => {
 
     it('throws an error when html-to-docx fails', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('conversion failed'));
+      vi.mocked(HTMLtoDOCX).mockRejectedValue(new Error('conversion failed'));
 
       await expect(generateDOCX('<p>bad</p>', 'Fail')).rejects.toThrow('Failed to generate DOCX');
       expect(consoleSpy).toHaveBeenCalledWith('Error generating DOCX:', expect.objectContaining({ message: 'conversion failed' }));

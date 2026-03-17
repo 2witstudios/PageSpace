@@ -11,6 +11,20 @@ When a team upgrades to isolated infrastructure, their existing data (drives, pa
 
 ---
 
+## Standards & Rules
+
+Read and follow these before writing any code. They apply to every task in this epic.
+
+- **TDD Process** (`.claude/rules/tdd.mdc`): Write the test FIRST. Run it. Watch it fail. Then implement ONLY the code needed to make it pass. Repeat for each requirement. Do not write implementation before tests.
+- **Test Rubric** (`.pu/templates/rubric-review.md`): Score each test file against the rubric before committing. Tests must be contract-first, mock only at boundaries, and assert observable outcomes.
+- **Deferred Work Policy** (`.claude/rules/deferred-work-policy.mdc`): Complete all requirements. Update this plan if you deviate. No silent substitutions.
+- **Commit Convention** (`.claude/rules/commit.mdc`): Use conventional commits (`feat:`, `fix:`, `test:`, `chore:`).
+- **Pre-Merge Audit** (`.claude/rules/pre-merge-audit.mdc`): Before opening a PR, audit every requirement in this plan against your diff.
+
+**Note on test approach**: The export script's TDD approach mentions using a test database seeded with known data. Per the rubric, this is correct — migration correctness (joins, FK handling, row counts) must be validated against a real DB, not mocked. Use a separate test database (`pagespace_test`) and seed it in test setup. These are integration tests, not unit tests, and should be labeled clearly.
+
+---
+
 ## Export Script
 
 Create a script that exports a team's complete data from the shared instance.
