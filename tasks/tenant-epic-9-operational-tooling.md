@@ -7,7 +7,7 @@
 
 Running 10-20 isolated tenant stacks requires operational automation. This epic builds the tools that the control plane uses for ongoing management: per-tenant backups, health polling, rolling upgrades across all tenants, and alerting when things go wrong. These are the tools that prevent 3am pager duty.
 
-**Dependencies**: Epic 6 (control plane with tenant registry)
+**Dependencies**: Epic 6d (control plane REST API)
 
 ---
 

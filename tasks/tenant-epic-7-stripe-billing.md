@@ -7,7 +7,7 @@
 
 Isolated infrastructure customers pay via Stripe at the control plane level, not inside their tenant app. This epic connects Stripe webhooks to the control plane's provisioning engine so that purchasing a plan auto-provisions a tenant, cancellation auto-suspends, and payment failure triggers warnings. The tenant app itself has billing disabled (Epic 4).
 
-**Dependencies**: Epic 6 (control plane API)
+**Dependencies**: Epic 6d (control plane REST API)
 
 ---
 
