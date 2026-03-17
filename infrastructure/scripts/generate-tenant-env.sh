@@ -7,6 +7,10 @@ IMAGE_TAG="latest"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image-tag)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "Error: --image-tag requires a value" >&2
+        exit 1
+      fi
       IMAGE_TAG="$2"
       shift 2
       ;;

@@ -130,10 +130,11 @@ describe('Tenant docker-compose configuration', () => {
       expect(deps?.['redis-sessions']?.condition).toBe('service_healthy');
     });
 
-    it('given the processor service, should depend on migrate completed, postgres healthy, processor-permissions completed, redis-sessions healthy', () => {
+    it('given the processor service, should depend on migrate completed, postgres healthy, redis healthy, processor-permissions completed, redis-sessions healthy', () => {
       const deps = compose.services.processor.depends_on;
       expect(deps?.migrate?.condition).toBe('service_completed_successfully');
       expect(deps?.postgres?.condition).toBe('service_healthy');
+      expect(deps?.redis?.condition).toBe('service_healthy');
       expect(deps?.['processor-permissions']?.condition).toBe('service_completed_successfully');
       expect(deps?.['redis-sessions']?.condition).toBe('service_healthy');
     });

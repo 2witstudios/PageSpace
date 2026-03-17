@@ -61,10 +61,18 @@ IMAGE_TAG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env-file)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "Error: --env-file requires a value" >&2
+        exit 1
+      fi
       ENV_FILE="$2"
       shift 2
       ;;
     --image-tag)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "Error: --image-tag requires a value" >&2
+        exit 1
+      fi
       IMAGE_TAG="$2"
       shift 2
       ;;
@@ -102,7 +110,7 @@ case "$COMMAND" in
   health)
     WEB_URL="https://${SLUG}.pagespace.ai"
     echo "Checking health for ${SLUG}..."
-    if curl -sf "${WEB_URL}/api/health" > /dev/null 2>&1; then
+    if curl -fsS --connect-timeout 5 --max-time 15 "${WEB_URL}/api/health" > /dev/null; then
       echo "Healthy: ${WEB_URL}"
     else
       echo "Unhealthy or unreachable: ${WEB_URL}" >&2

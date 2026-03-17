@@ -134,8 +134,8 @@ describe('generate-tenant-env.sh', () => {
 
   describe('uniqueness across runs', () => {
     it('given two runs, should produce different secrets', () => {
-      const env1 = parseEnv(runScript('unique-test-1').stdout);
-      const env2 = parseEnv(runScript('unique-test-2').stdout);
+      const env1 = parseEnv(runScript('unique-test').stdout);
+      const env2 = parseEnv(runScript('unique-test').stdout);
       // At minimum JWT_SECRET (128 hex chars) should differ
       expect(env1.get('JWT_SECRET')).not.toBe(env2.get('JWT_SECRET'));
     });
