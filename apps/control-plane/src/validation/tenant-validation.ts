@@ -9,8 +9,8 @@ const RESERVED_SLUGS = new Set([
 
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
-export const VALID_TIERS = new Set(['free', 'pro', 'business', 'enterprise'] as const)
 export type Tier = 'free' | 'pro' | 'business' | 'enterprise'
+export const VALID_TIERS: ReadonlySet<string> = new Set<string>(['free', 'pro', 'business', 'enterprise'])
 
 export const validateSlug = (slug: string): ValidationResult => {
   if (slug.length < 3 || slug.length > 63) {
