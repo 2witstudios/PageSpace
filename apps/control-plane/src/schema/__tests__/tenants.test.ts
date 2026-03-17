@@ -43,6 +43,7 @@ describe('backupStatusEnum', () => {
 })
 
 describe('tenants table', () => {
+  /** @scaffold - suite-shape: verifying schema column presence */
   it('should have all required columns', () => {
     const columns = getTableColumns(tenants)
     const columnNames = Object.keys(columns)
@@ -88,6 +89,7 @@ describe('tenants table', () => {
 })
 
 describe('tenantEvents table', () => {
+  /** @scaffold - suite-shape: verifying schema column presence */
   it('should have all required columns', () => {
     const columns = getTableColumns(tenantEvents)
     const columnNames = Object.keys(columns)
@@ -107,6 +109,7 @@ describe('tenantEvents table', () => {
 })
 
 describe('tenantBackups table', () => {
+  /** @scaffold - suite-shape: verifying schema column presence */
   it('should have all required columns', () => {
     const columns = getTableColumns(tenantBackups)
     const columnNames = Object.keys(columns)
