@@ -40,12 +40,15 @@ export const COOKIE_CONFIG = {
 /**
  * Get common cookie options based on environment
  */
-function getCommonOptions() {
+function getCommonOptions(httpOnly = true) {
   const isProduction = process.env.NODE_ENV === 'production';
+  // Use 'lax' when COOKIE_DOMAIN is set (multi-tenant subdomain sharing).
+  // Existing CSRF token validation covers POST protection independently of sameSite.
+  const sameSite = (isProduction && process.env.COOKIE_DOMAIN) ? 'lax' as const : 'strict' as const;
   return {
-    httpOnly: true,
+    httpOnly,
     secure: isProduction,
-    sameSite: 'strict' as const,
+    sameSite,
     ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   };
 }
@@ -74,14 +77,10 @@ export function createSessionCookie(token: string): string {
  * rotation). Never use it to gate access -- only for UI hints.
  */
 export function createLoggedInIndicatorCookie(): string {
-  const isProduction = process.env.NODE_ENV === 'production';
   return serialize(COOKIE_CONFIG.loggedIn.name, COOKIE_CONFIG.loggedIn.value, {
-    httpOnly: false,
-    secure: isProduction,
-    sameSite: 'strict' as const,
+    ...getCommonOptions(false),
     path: COOKIE_CONFIG.loggedIn.path,
     maxAge: COOKIE_CONFIG.loggedIn.maxAge,
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
@@ -89,14 +88,10 @@ export function createLoggedInIndicatorCookie(): string {
  * Create a cookie that clears the logged-in indicator
  */
 export function createClearLoggedInIndicatorCookie(): string {
-  const isProduction = process.env.NODE_ENV === 'production';
   return serialize(COOKIE_CONFIG.loggedIn.name, '', {
-    httpOnly: false,
-    secure: isProduction,
-    sameSite: 'strict' as const,
+    ...getCommonOptions(false),
     path: COOKIE_CONFIG.loggedIn.path,
     expires: new Date(0),
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
