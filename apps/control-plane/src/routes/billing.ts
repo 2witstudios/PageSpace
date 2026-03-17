@@ -4,7 +4,7 @@ import { validateSlug, validateEmail, validateTier } from '../validation/tenant-
 type StripeCheckout = {
   checkout: {
     sessions: {
-      create: (params: Record<string, unknown>) => Promise<{ id: string; url: string }>
+      create: (params: Record<string, unknown>) => Promise<{ id: string; url: string | null }>
     }
   }
   billingPortal: {

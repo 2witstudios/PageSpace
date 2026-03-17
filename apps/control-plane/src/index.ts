@@ -1,6 +1,7 @@
 import { createApp } from './app'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import Stripe from 'stripe'
 import { createTenantRepository, type TenantDb } from './repositories/tenant-repository'
 import { createProvisioningEngine, createTenantLifecycle, createShellExecutor, createAdminSeeder } from './services'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
@@ -77,11 +78,18 @@ async function start() {
     composePath, basePath,
   })
 
+  // Stripe client — optional, only if STRIPE_SECRET_KEY is configured
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY
+  const stripe = stripeSecretKey
+    ? new Stripe(stripeSecretKey, { apiVersion: '2025-12-15.clover' })
+    : undefined
+
   const app = createApp({
     logger: true,
     repo,
     provisioningEngine,
     lifecycle,
+    stripe,
   })
 
   // Verify database connectivity before accepting traffic
