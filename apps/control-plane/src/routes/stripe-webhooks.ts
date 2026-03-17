@@ -12,7 +12,7 @@ type StripeWebhookDeps = {
     updateTenantStripeIds(id: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<unknown>
   }
   provisioningEngine: {
-    provision(request: { slug: string; name?: string; ownerEmail: string; tier: string }): Promise<{ tenantId: string }>
+    provision(request: { slug: string; name?: string; ownerEmail: string; tier: string }): Promise<unknown>
   }
   lifecycle: {
     suspend(slug: string): Promise<void>
@@ -114,7 +114,7 @@ export async function stripeWebhookRoute(app: FastifyInstance, deps: StripeWebho
       name: slug,
       ownerEmail: email,
       tier: tier || 'pro',
-    })
+    }) as { tenantId: string }
 
     await repo.updateTenantStripeIds(
       result.tenantId,
