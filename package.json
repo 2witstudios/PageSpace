@@ -3,7 +3,7 @@
   "private": true,
   "license": "AGPL-3.0",
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --filter=!control-plane",
     "dev:atlas": "pnpm --filter atlas dev",
     "dev:db": "docker compose up postgres migrate seed -d",
     "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis processor realtime -d",
