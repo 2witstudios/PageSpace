@@ -161,6 +161,38 @@ describe('useSocketStore', () => {
     });
   });
 
+  describe('socket URL resolution', () => {
+    it('given NEXT_PUBLIC_REALTIME_URL is undefined, should pass undefined as first arg to io()', async () => {
+      delete process.env.NEXT_PUBLIC_REALTIME_URL;
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is set, should pass that URL as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = 'https://rt.example.com';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBe('https://rt.example.com');
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is empty string, should pass undefined as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = '';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+  });
+
   describe('connection creation', () => {
     it('given valid token available, should create Socket.IO client with auth.token', async () => {
       const mockToken = 'ps_sock_test-token';

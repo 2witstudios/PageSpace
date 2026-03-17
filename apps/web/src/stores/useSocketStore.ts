@@ -56,7 +56,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     if (!socket || forceReconnect) {
       set({ connectionStatus: 'connecting' });
 
-      const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
+      const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL || undefined;
 
       // Extract auth token - different sources for desktop vs web
       let authToken: string | undefined;
