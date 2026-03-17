@@ -335,4 +335,27 @@ describe('createTenantRepository', () => {
       expect(db._chain.limit).toHaveBeenCalledWith(50)
     })
   })
+
+  describe('getTenantByStripeSubscription', () => {
+    test('given an existing subscription id, should return the tenant', async () => {
+      const expected = makeTenant({ stripeSubscriptionId: 'sub_abc123' })
+      const db = createMockDb([expected])
+      const repo = createTenantRepository(db as never)
+
+      const result = await repo.getTenantByStripeSubscription('sub_abc123')
+
+      expect(result).toEqual(expected)
+      expect(db.select).toHaveBeenCalled()
+      expect(db._chain.where).toHaveBeenCalled()
+    })
+
+    test('given a nonexistent subscription id, should return null', async () => {
+      const db = createMockDb([])
+      const repo = createTenantRepository(db as never)
+
+      const result = await repo.getTenantByStripeSubscription('sub_missing')
+
+      expect(result).toBeNull()
+    })
+  })
 })

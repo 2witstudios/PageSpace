@@ -100,6 +100,11 @@ export function createTenantRepository(db: TenantDb) {
       await db.insert(tenantEvents).values({ tenantId, eventType, metadata })
     },
 
+    async getTenantByStripeSubscription(subscriptionId: string) {
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.stripeSubscriptionId, subscriptionId))
+      return tenant ?? null
+    },
+
     async getRecentEvents(tenantId: string, limit = 50) {
       return db.select().from(tenantEvents)
         .where(eq(tenantEvents.tenantId, tenantId))
