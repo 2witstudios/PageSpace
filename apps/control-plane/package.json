@@ -1,0 +1,29 @@
+{
+  "name": "control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@pagespace/lib": "workspace:*",
+    "dotenv": "^17.2.0",
+    "drizzle-orm": "^0.32.2",
+    "fastify": "^5.3.3",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.23.2",
+    "tsx": "^4.16.2",
+    "typescript": "^5.8.3"
+  }
+}
