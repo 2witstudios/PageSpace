@@ -29,6 +29,7 @@ export type ProvisioningDeps = {
 
 type ProvisionRequest = {
   slug: string
+  name?: string
   ownerEmail: string
   tier: string
 }
@@ -58,7 +59,7 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
       // Step 3: Create tenant record with provisioning status
       const tenant = await repo.createTenant({
         slug: request.slug,
-        name: request.slug,
+        name: request.name ?? request.slug,
         ownerEmail: request.ownerEmail,
         tier: request.tier,
       })
