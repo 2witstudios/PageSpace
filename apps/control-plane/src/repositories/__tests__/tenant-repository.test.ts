@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 import { createTenantRepository } from '../tenant-repository'
 
 // Factory for tenant test data
@@ -35,16 +35,18 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
   }
 }
 
-// Creates a chainable mock that mimics Drizzle's builder pattern
+// Creates a chainable mock that mimics Drizzle's builder pattern.
+// Uses a real Promise as the base so the chain is natively thenable.
 function createChainMock(resolvedValue: unknown[] = []) {
-  const chain: Record<string, unknown> = {}
+  const promise = Promise.resolve(resolvedValue)
+  const chain: Record<string, unknown> = {
+    then: promise.then.bind(promise),
+    catch: promise.catch.bind(promise),
+  }
   for (const method of ['from', 'where', 'set', 'values', 'orderBy', 'limit', 'offset']) {
     chain[method] = vi.fn().mockReturnValue(chain)
   }
   chain.returning = vi.fn().mockResolvedValue(resolvedValue)
-  // Make chain thenable so `await db.select().from(...).where(...)` resolves
-  chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(resolvedValue).then(resolve, reject)
   return chain
 }
 
@@ -64,7 +66,7 @@ describe('createTenantRepository', () => {
     test('given valid tenant data, should return tenant with status provisioning', async () => {
       const expected = makeTenant()
       const db = createMockDb([expected])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.createTenant({
         slug: 'test-tenant',
@@ -80,7 +82,7 @@ describe('createTenantRepository', () => {
     test('given valid tenant data, should call db.insert', async () => {
       const expected = makeTenant()
       const db = createMockDb([expected])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.createTenant({
         slug: 'test-tenant',
@@ -99,7 +101,7 @@ describe('createTenantRepository', () => {
     test('given an existing slug, should return the tenant', async () => {
       const expected = makeTenant({ slug: 'acme' })
       const db = createMockDb([expected])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.getTenantBySlug('acme')
 
@@ -108,7 +110,7 @@ describe('createTenantRepository', () => {
 
     test('given a nonexistent slug, should return null', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.getTenantBySlug('ghost')
 
@@ -120,7 +122,7 @@ describe('createTenantRepository', () => {
     test('given an existing id, should return the tenant', async () => {
       const expected = makeTenant({ id: 'abc-123' })
       const db = createMockDb([expected])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.getTenantById('abc-123')
 
@@ -129,7 +131,7 @@ describe('createTenantRepository', () => {
 
     test('given a nonexistent id, should return null', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.getTenantById('missing')
 
@@ -141,7 +143,7 @@ describe('createTenantRepository', () => {
     test('given no filters, should call db.select and return tenants', async () => {
       const tenants = [makeTenant({ slug: 'one' }), makeTenant({ slug: 'two' })]
       const db = createMockDb(tenants)
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.listTenants()
 
@@ -151,7 +153,7 @@ describe('createTenantRepository', () => {
 
     test('given status filter, should call where on the chain', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.listTenants({ status: 'active' })
 
@@ -160,7 +162,7 @@ describe('createTenantRepository', () => {
 
     test('given tier filter, should call where on the chain', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.listTenants({ tier: 'enterprise' })
 
@@ -169,7 +171,7 @@ describe('createTenantRepository', () => {
 
     test('given limit and offset, should apply pagination', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.listTenants({ limit: 10, offset: 20 })
 
@@ -191,7 +193,7 @@ describe('createTenantRepository', () => {
         insert: vi.fn(),
         delete: vi.fn(),
       }
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.updateTenantStatus('test-id-123', 'active')
 
@@ -208,7 +210,7 @@ describe('createTenantRepository', () => {
         insert: vi.fn(),
         delete: vi.fn(),
       }
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await expect(repo.updateTenantStatus('test-id-123', 'active'))
         .rejects.toThrow('Invalid transition')
@@ -222,7 +224,7 @@ describe('createTenantRepository', () => {
         insert: vi.fn(),
         delete: vi.fn(),
       }
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await expect(repo.updateTenantStatus('missing', 'active'))
         .rejects.toThrow('Tenant not found')
@@ -233,7 +235,7 @@ describe('createTenantRepository', () => {
     test('given a valid health status, should return updated tenant', async () => {
       const updated = makeTenant({ healthStatus: 'healthy', lastHealthCheck: new Date() })
       const db = createMockDb([updated])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.updateHealthStatus('test-id-123', 'healthy')
 
@@ -243,7 +245,7 @@ describe('createTenantRepository', () => {
 
     test('given a health update, should set lastHealthCheck', async () => {
       const db = createMockDb([makeTenant()])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.updateHealthStatus('test-id-123', 'unhealthy')
 
@@ -252,12 +254,20 @@ describe('createTenantRepository', () => {
       expect(setArg).toHaveProperty('healthStatus', 'unhealthy')
       expect(setArg).toHaveProperty('lastHealthCheck')
     })
+
+    test('given a nonexistent tenant, should throw', async () => {
+      const db = createMockDb([])
+      const repo = createTenantRepository(db as never)
+
+      await expect(repo.updateHealthStatus('missing', 'healthy'))
+        .rejects.toThrow('Tenant not found')
+    })
   })
 
   describe('deleteTenant', () => {
     test('given a tenant id, should call db.delete', async () => {
       const db = createMockDb()
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.deleteTenant('test-id-123')
 
@@ -269,7 +279,7 @@ describe('createTenantRepository', () => {
   describe('recordEvent', () => {
     test('given event data, should call db.insert', async () => {
       const db = createMockDb()
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.recordEvent('test-id-123', 'provisioned', { duration: 30 })
 
@@ -279,7 +289,7 @@ describe('createTenantRepository', () => {
 
     test('given event data, should pass correct tenantId and eventType', async () => {
       const db = createMockDb()
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.recordEvent('tenant-abc', 'status_changed', { from: 'active', to: 'suspended' })
 
@@ -298,7 +308,7 @@ describe('createTenantRepository', () => {
         makeEvent({ eventType: 'older' }),
       ]
       const db = createMockDb(events)
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       const result = await repo.getRecentEvents('test-id-123')
 
@@ -309,7 +319,7 @@ describe('createTenantRepository', () => {
 
     test('given a limit, should apply it to the query', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.getRecentEvents('test-id-123', 5)
 
@@ -318,7 +328,7 @@ describe('createTenantRepository', () => {
 
     test('given no limit, should default to 50', async () => {
       const db = createMockDb([])
-      const repo = createTenantRepository(db as any)
+      const repo = createTenantRepository(db as never)
 
       await repo.getRecentEvents('test-id-123')
 

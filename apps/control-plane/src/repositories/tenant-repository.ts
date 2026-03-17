@@ -10,13 +10,22 @@ type CreateTenantInput = {
 }
 
 type ListTenantsOptions = {
-  status?: string
+  status?: TenantStatus
   tier?: string
   limit?: number
   offset?: number
 }
 
-export function createTenantRepository(db: any) {
+// Minimal interface for the Drizzle db methods used by the repository.
+// Keeps the factory testable with mock objects without importing full Drizzle types.
+export interface TenantDb {
+  select: (...args: unknown[]) => any
+  insert: (...args: unknown[]) => any
+  update: (...args: unknown[]) => any
+  delete: (...args: unknown[]) => any
+}
+
+export function createTenantRepository(db: TenantDb) {
   return {
     async createTenant(input: CreateTenantInput) {
       const [tenant] = await db.insert(tenants).values({
@@ -42,7 +51,7 @@ export function createTenantRepository(db: any) {
       const { status, tier, limit = 50, offset = 0 } = options
       const conditions = []
 
-      if (status) conditions.push(eq(tenants.status, status as any))
+      if (status) conditions.push(eq(tenants.status, status))
       if (tier) conditions.push(eq(tenants.tier, tier))
 
       let query = db.select().from(tenants)
@@ -64,10 +73,13 @@ export function createTenantRepository(db: any) {
         throw new Error(`Invalid transition: ${current.status} -> ${newStatus}`)
       }
 
+      // Optimistic lock: only update if status hasn't changed since we read it
       const [updated] = await db.update(tenants).set({
         status: newStatus,
         updatedAt: new Date(),
-      }).where(eq(tenants.id, id)).returning()
+      }).where(and(eq(tenants.id, id), eq(tenants.status, current.status))).returning()
+
+      if (!updated) throw new Error('Concurrent status change detected')
       return updated
     },
 
@@ -76,6 +88,7 @@ export function createTenantRepository(db: any) {
         healthStatus,
         lastHealthCheck: new Date(),
       }).where(eq(tenants.id, id)).returning()
+      if (!updated) throw new Error('Tenant not found')
       return updated
     },
 
