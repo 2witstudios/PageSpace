@@ -1,0 +1,86 @@
+# Compose file for image runtime env verification tests.
+# Starts services from pre-built images with minimal runtime env vars
+# to validate that containers boot correctly without baked-in secrets.
+#
+# Usage:
+#   IMAGE_TAG=latest docker compose -f infrastructure/docker-compose.test.yml up -d
+
+services:
+  postgres-test:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: pagespace_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d pagespace_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-test:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  processor-test:
+    image: ${IMAGE_PREFIX:-ghcr.io/2witstudios/pagespace}-processor:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://test:test@postgres-test:5432/pagespace_test
+      FILE_STORAGE_PATH: /data/files
+      CACHE_PATH: /data/cache
+      PORT: "3003"
+      NODE_ENV: production
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web-test:
+    image: ${IMAGE_PREFIX:-ghcr.io/2witstudios/pagespace}-web:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://test:test@postgres-test:5432/pagespace_test
+      WEB_APP_URL: https://test.example.com
+      PORT: "3000"
+      NODE_ENV: production
+      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-testing
+      JWT_ISSUER: pagespace-test
+      JWT_AUDIENCE: pagespace-test-users
+      CSRF_SECRET: test-csrf-secret-minimum-32-characters-long-for-testing
+      ENCRYPTION_KEY: test-encryption-key-32-chars-minimum-required-xxxx
+      REDIS_URL: redis://redis-test:6379
+      REDIS_SESSION_URL: redis://redis-test:6379/0
+      REDIS_RATE_LIMIT_URL: redis://redis-test:6379/1
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+
+  realtime-test:
+    image: ${IMAGE_PREFIX:-ghcr.io/2witstudios/pagespace}-realtime:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://test:test@postgres-test:5432/pagespace_test
+      CORS_ORIGIN: https://test.example.com
+      PORT: "3001"
+      NODE_ENV: production
+      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-testing
+      JWT_ISSUER: pagespace-test
+      JWT_AUDIENCE: pagespace-test-users
+      REDIS_URL: redis://redis-test:6379
+      REDIS_SESSION_URL: redis://redis-test:6379/0
+      REDIS_RATE_LIMIT_URL: redis://redis-test:6379/1
+      REALTIME_BROADCAST_SECRET: test-realtime-broadcast-secret-32-chars-minimum-xxxx
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
