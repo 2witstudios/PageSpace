@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../deployment-mode', () => ({
   isOnPrem: vi.fn(() => false),
+  isTenantMode: vi.fn(() => false),
 }));
 
 import {
@@ -11,12 +12,13 @@ import {
   subscriptionAllows,
   formatBytes,
 } from '../subscription-utils';
-import { isOnPrem } from '../../deployment-mode';
+import { isOnPrem, isTenantMode } from '../../deployment-mode';
 
 describe('subscription-utils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isOnPrem).mockReturnValue(false);
+    vi.mocked(isTenantMode).mockReturnValue(false);
   });
 
   describe('getStorageTierFromSubscription', () => {
@@ -60,6 +62,14 @@ describe('subscription-utils', () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
       const config = getStorageConfigFromSubscription('free');
       expect(config.tier).toBe('business');
+      expect(config.maxConcurrentUploads).toBe(10);
+    });
+
+    it('should return business config for tenant mode regardless of tier', () => {
+      vi.mocked(isTenantMode).mockReturnValue(true);
+      const config = getStorageConfigFromSubscription('free');
+      expect(config.tier).toBe('business');
+      expect(config.quotaBytes).toBe(50 * 1024 * 1024 * 1024);
       expect(config.maxConcurrentUploads).toBe(10);
     });
 

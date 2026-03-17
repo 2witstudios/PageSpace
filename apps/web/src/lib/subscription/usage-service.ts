@@ -1,6 +1,6 @@
 import { db, eq, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { isOnPrem } from '@pagespace/lib';
+import { isBillingEnabled } from '@pagespace/lib';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';
 
@@ -12,10 +12,10 @@ const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.e
 
 /**
  * Get usage limits based on subscription tier.
- * Returns -1 (unlimited) for on-prem deployments.
+ * Returns -1 (unlimited) when billing is disabled.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
-  if (isOnPrem()) return -1;
+  if (!isBillingEnabled()) return -1;
 
   if (providerType === 'standard') {
     // Standard AI calls per day by tier
@@ -78,7 +78,7 @@ export async function incrementUsage(
     });
   }
 
-  // Unlimited (on-prem)
+  // Unlimited (billing disabled)
   if (limit === -1) {
     return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }
@@ -142,7 +142,7 @@ export async function getCurrentUsage(
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
-  // Unlimited (on-prem)
+  // Unlimited (billing disabled)
   if (limit === -1) {
     return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }
