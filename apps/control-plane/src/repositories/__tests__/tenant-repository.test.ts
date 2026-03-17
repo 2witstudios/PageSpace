@@ -61,6 +61,7 @@ function createMockDb(resolvedValue: unknown[] = []) {
   }
 }
 
+/** @scaffold - characterizing repository behavior via ORM chain mocks; replace with integration tests against real DB */
 describe('createTenantRepository', () => {
   describe('createTenant', () => {
     test('given valid tenant data, should return tenant with status provisioning', async () => {
@@ -91,9 +92,9 @@ describe('createTenantRepository', () => {
         tier: 'pro',
       })
 
-      expect(db.insert).toHaveBeenCalled()
-      expect(db._chain.values).toHaveBeenCalled()
-      expect(db._chain.returning).toHaveBeenCalled()
+      expect(db.insert).toHaveBeenCalled() // @scaffold
+      expect(db._chain.values).toHaveBeenCalled() // @scaffold
+      expect(db._chain.returning).toHaveBeenCalled() // @scaffold
     })
   })
 
@@ -148,25 +149,27 @@ describe('createTenantRepository', () => {
       const result = await repo.listTenants()
 
       expect(result).toEqual(tenants)
-      expect(db.select).toHaveBeenCalled()
+      expect(db.select).toHaveBeenCalled() // @scaffold
     })
 
-    test('given status filter, should call where on the chain', async () => {
+    // @scaffold - characterizing ORM chain behavior for filter application
+    test('given status filter, should apply where clause to query chain', async () => {
       const db = createMockDb([])
       const repo = createTenantRepository(db as never)
 
       await repo.listTenants({ status: 'active' })
 
-      expect(db._chain.where).toHaveBeenCalled()
+      expect(db._chain.where).toHaveBeenCalled() // @scaffold
     })
 
-    test('given tier filter, should call where on the chain', async () => {
+    // @scaffold - characterizing ORM chain behavior for filter application
+    test('given tier filter, should apply where clause to query chain', async () => {
       const db = createMockDb([])
       const repo = createTenantRepository(db as never)
 
       await repo.listTenants({ tier: 'enterprise' })
 
-      expect(db._chain.where).toHaveBeenCalled()
+      expect(db._chain.where).toHaveBeenCalled() // @scaffold
     })
 
     test('given limit and offset, should apply pagination', async () => {
@@ -175,8 +178,8 @@ describe('createTenantRepository', () => {
 
       await repo.listTenants({ limit: 10, offset: 20 })
 
-      expect(db._chain.limit).toHaveBeenCalledWith(10)
-      expect(db._chain.offset).toHaveBeenCalledWith(20)
+      expect(db._chain.limit).toHaveBeenCalledWith(10) // @scaffold
+      expect(db._chain.offset).toHaveBeenCalledWith(20) // @scaffold
     })
   })
 
@@ -198,7 +201,7 @@ describe('createTenantRepository', () => {
       const result = await repo.updateTenantStatus('test-id-123', 'active')
 
       expect(result.status).toBe('active')
-      expect(db.update).toHaveBeenCalled()
+      expect(db.update).toHaveBeenCalled() // @scaffold
     })
 
     test('given an invalid transition (destroyed -> active), should throw', async () => {
@@ -240,7 +243,7 @@ describe('createTenantRepository', () => {
       const result = await repo.updateHealthStatus('test-id-123', 'healthy')
 
       expect(result.healthStatus).toBe('healthy')
-      expect(db.update).toHaveBeenCalled()
+      expect(db.update).toHaveBeenCalled() // @scaffold
     })
 
     test('given a health update, should set lastHealthCheck', async () => {
@@ -249,7 +252,7 @@ describe('createTenantRepository', () => {
 
       await repo.updateHealthStatus('test-id-123', 'unhealthy')
 
-      expect(db._chain.set).toHaveBeenCalled()
+      expect(db._chain.set).toHaveBeenCalled() // @scaffold
       const setArg = (db._chain.set as ReturnType<typeof vi.fn>).mock.calls[0][0]
       expect(setArg).toHaveProperty('healthStatus', 'unhealthy')
       expect(setArg).toHaveProperty('lastHealthCheck')
@@ -271,8 +274,8 @@ describe('createTenantRepository', () => {
 
       await repo.deleteTenant('test-id-123')
 
-      expect(db.delete).toHaveBeenCalled()
-      expect(db._chain.where).toHaveBeenCalled()
+      expect(db.delete).toHaveBeenCalled() // @scaffold
+      expect(db._chain.where).toHaveBeenCalled() // @scaffold
     })
   })
 
@@ -283,8 +286,8 @@ describe('createTenantRepository', () => {
 
       await repo.recordEvent('test-id-123', 'provisioned', { duration: 30 })
 
-      expect(db.insert).toHaveBeenCalled()
-      expect(db._chain.values).toHaveBeenCalled()
+      expect(db.insert).toHaveBeenCalled() // @scaffold
+      expect(db._chain.values).toHaveBeenCalled() // @scaffold
     })
 
     test('given event data, should pass correct tenantId and eventType', async () => {
@@ -313,8 +316,8 @@ describe('createTenantRepository', () => {
       const result = await repo.getRecentEvents('test-id-123')
 
       expect(result).toEqual(events)
-      expect(db.select).toHaveBeenCalled()
-      expect(db._chain.orderBy).toHaveBeenCalled()
+      expect(db.select).toHaveBeenCalled() // @scaffold
+      expect(db._chain.orderBy).toHaveBeenCalled() // @scaffold
     })
 
     test('given a limit, should apply it to the query', async () => {
@@ -323,7 +326,7 @@ describe('createTenantRepository', () => {
 
       await repo.getRecentEvents('test-id-123', 5)
 
-      expect(db._chain.limit).toHaveBeenCalledWith(5)
+      expect(db._chain.limit).toHaveBeenCalledWith(5) // @scaffold
     })
 
     test('given no limit, should default to 50', async () => {
@@ -332,7 +335,7 @@ describe('createTenantRepository', () => {
 
       await repo.getRecentEvents('test-id-123')
 
-      expect(db._chain.limit).toHaveBeenCalledWith(50)
+      expect(db._chain.limit).toHaveBeenCalledWith(50) // @scaffold
     })
   })
 })
