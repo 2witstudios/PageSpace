@@ -1,7 +1,6 @@
 import Fastify from 'fastify'
-import { healthRoute } from './routes/health'
+import { healthRoute, tenantRoutes } from './routes'
 import { apiKeyAuth } from './middleware/api-key-auth'
-import { tenantRoutes } from './routes/tenants'
 
 export type AppDeps = {
   logger?: boolean
