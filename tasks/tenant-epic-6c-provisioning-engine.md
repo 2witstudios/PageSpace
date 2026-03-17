@@ -1,6 +1,6 @@
 # Provisioning Engine & Admin Seeder Epic
 
-**Status**: PLANNED
+**Status**: COMPLETE
 **Goal**: Core orchestration that provisions, suspends, resumes, and destroys tenant stacks
 
 ## Overview
