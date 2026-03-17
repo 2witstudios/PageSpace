@@ -22,6 +22,7 @@ type StripeClient = {
 type WebhookRepo = {
   getTenantByStripeSubscription(subscriptionId: string): Promise<Record<string, unknown> | null>
   recordEvent(tenantId: string, eventType: string, metadata?: unknown): Promise<void>
+  updateTenantStripeIds(id: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<unknown>
 }
 
 export type AppDeps = {
@@ -41,7 +42,7 @@ export function createApp({ logger = false, repo, provisioningEngine, lifecycle,
   if (repo && provisioningEngine && lifecycle) {
     app.register(tenantRoutes, { repo, provisioningEngine, lifecycle })
 
-    if (stripe && repo.getTenantByStripeSubscription && repo.recordEvent) {
+    if (stripe && repo.getTenantByStripeSubscription && repo.recordEvent && repo.updateTenantStripeIds) {
       const webhookRepo = repo as TenantRouteDeps['repo'] & WebhookRepo
       app.register(stripeWebhookRoute, { stripe, repo: webhookRepo, provisioningEngine, lifecycle })
 

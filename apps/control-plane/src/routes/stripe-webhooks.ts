@@ -9,9 +9,10 @@ type StripeWebhookDeps = {
   repo: {
     getTenantByStripeSubscription(subscriptionId: string): Promise<Record<string, unknown> | null>
     recordEvent(tenantId: string, eventType: string, metadata?: unknown): Promise<void>
+    updateTenantStripeIds(id: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<unknown>
   }
   provisioningEngine: {
-    provision(request: { slug: string; name?: string; ownerEmail: string; tier: string }): Promise<unknown>
+    provision(request: { slug: string; name?: string; ownerEmail: string; tier: string }): Promise<{ tenantId: string }>
   }
   lifecycle: {
     suspend(slug: string): Promise<void>
@@ -74,64 +75,89 @@ export async function stripeWebhookRoute(app: FastifyInstance, deps: StripeWebho
       return reply.status(400).send({ error: 'Invalid webhook signature' })
     }
 
-    switch (event.type) {
-      case 'checkout.session.completed':
-        await handleCheckoutCompleted(event.data.object as CheckoutSession)
-        break
-      case 'customer.subscription.deleted':
-        await handleSubscriptionDeleted(event.data.object as Subscription)
-        break
-      case 'invoice.payment_failed':
-        await handlePaymentFailed(event.data.object as Invoice)
-        break
-      case 'customer.subscription.updated':
-        await handleSubscriptionUpdated(event.data.object as Subscription)
-        break
-      default:
-        // Unknown event — acknowledge and ignore
-        break
+    try {
+      switch (event.type) {
+        case 'checkout.session.completed':
+          await handleCheckoutCompleted(event.data.object as CheckoutSession, request)
+          break
+        case 'customer.subscription.deleted':
+          await handleSubscriptionDeleted(event.data.object as Subscription, request)
+          break
+        case 'invoice.payment_failed':
+          await handlePaymentFailed(event.data.object as Invoice, request)
+          break
+        case 'customer.subscription.updated':
+          await handleSubscriptionUpdated(event.data.object as Subscription, request)
+          break
+        default:
+          break
+      }
+    } catch (error) {
+      request.log.error({ err: error, eventType: event.type }, 'webhook handler failed')
+      return reply.status(500).send({ error: 'Webhook processing failed' })
     }
 
     return reply.status(200).send({ received: true })
   })
 
-  async function handleCheckoutCompleted(session: CheckoutSession) {
+  async function handleCheckoutCompleted(session: CheckoutSession, request: FastifyRequest) {
     const { slug, tier } = session.metadata
     const email = session.customer_email
 
-    if (!slug || !email) return
+    if (!slug || !email) {
+      request.log.warn({ metadata: session.metadata }, 'checkout missing slug or email')
+      return
+    }
 
-    provisioningEngine.provision({
+    const result = await provisioningEngine.provision({
       slug,
       name: slug,
       ownerEmail: email,
       tier: tier || 'pro',
-    }).catch(() => {
-      // Provisioning errors are recorded by the engine itself
     })
+
+    await repo.updateTenantStripeIds(
+      result.tenantId,
+      session.customer,
+      session.subscription,
+    )
+
+    request.log.info({ slug, tenantId: result.tenantId }, 'tenant provisioned via checkout')
   }
 
-  async function handleSubscriptionDeleted(subscription: Subscription) {
+  async function handleSubscriptionDeleted(subscription: Subscription, request: FastifyRequest) {
     const tenant = await repo.getTenantByStripeSubscription(subscription.id)
     if (!tenant) return
 
+    if (tenant.status === 'suspended' || tenant.status === 'destroyed') {
+      request.log.info({ slug: tenant.slug }, 'subscription.deleted: already suspended/destroyed, skipping')
+      return
+    }
+
     await lifecycle.suspend(tenant.slug as string)
+    request.log.info({ slug: tenant.slug }, 'tenant suspended via subscription deletion')
   }
 
-  async function handlePaymentFailed(invoice: Invoice) {
+  async function handlePaymentFailed(invoice: Invoice, request: FastifyRequest) {
     const tenant = await repo.getTenantByStripeSubscription(invoice.subscription)
     if (!tenant) return
 
     if (invoice.attempt_count >= 3) {
+      if (tenant.status === 'suspended') {
+        request.log.info({ slug: tenant.slug }, 'payment_failed: already suspended, skipping')
+        return
+      }
       await lifecycle.suspend(tenant.slug as string)
+      request.log.info({ slug: tenant.slug, attemptCount: invoice.attempt_count }, 'tenant suspended via payment failure')
     } else {
       await repo.recordEvent(tenant.id as string, 'payment_failed', {
         attemptCount: invoice.attempt_count,
       })
+      request.log.info({ slug: tenant.slug, attemptCount: invoice.attempt_count }, 'payment failure recorded')
     }
   }
 
-  async function handleSubscriptionUpdated(subscription: Subscription) {
+  async function handleSubscriptionUpdated(subscription: Subscription, request: FastifyRequest) {
     if (subscription.status !== 'active') return
 
     const tenant = await repo.getTenantByStripeSubscription(subscription.id)
@@ -139,6 +165,7 @@ export async function stripeWebhookRoute(app: FastifyInstance, deps: StripeWebho
 
     if (tenant.status === 'suspended') {
       await lifecycle.resume(tenant.slug as string)
+      request.log.info({ slug: tenant.slug }, 'tenant resumed via subscription recovery')
     }
   }
 }

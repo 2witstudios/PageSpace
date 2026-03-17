@@ -16,6 +16,7 @@ function makeMocks() {
       updateHealthStatus: vi.fn(),
       deleteTenant: vi.fn(),
       recordEvent: vi.fn(),
+      updateTenantStripeIds: vi.fn(),
       getRecentEvents: vi.fn().mockResolvedValue([]),
     },
     provisioningEngine: {
@@ -184,11 +185,10 @@ describe('stripe webhook route', () => {
   // checkout.session.completed
   // ──────────────────────────────────────────────
   describe('checkout.session.completed', () => {
-    it('given valid metadata, should call provisioning engine with slug and email', async () => {
+    it('given valid metadata, should await provisioning and return 200', async () => {
       const mocks = makeMocks()
       const event = makeCheckoutEvent()
       mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
-      mocks.repo.getTenantBySlug.mockResolvedValue(null)
 
       const { app } = buildApp(mocks)
 
@@ -207,6 +207,47 @@ describe('stripe webhook route', () => {
           tier: 'pro',
         })
       )
+    })
+
+    it('given valid checkout, should persist Stripe customer and subscription IDs', async () => {
+      const mocks = makeMocks()
+      const event = makeCheckoutEvent()
+      mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
+      mocks.provisioningEngine.provision.mockResolvedValue({ tenantId: 'tenant-new' })
+
+      const { app } = buildApp(mocks)
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/stripe',
+        headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+        payload: '{}',
+      })
+
+      expect(mocks.repo.updateTenantStripeIds).toHaveBeenCalledWith(
+        'tenant-new',
+        'cus_abc123',
+        'sub_abc123',
+      )
+    })
+
+    it('given provisioning failure, should return 500 so Stripe retries', async () => {
+      const mocks = makeMocks()
+      const event = makeCheckoutEvent()
+      mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
+      mocks.provisioningEngine.provision.mockRejectedValue(new Error('Docker failed'))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/stripe',
+        headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+        payload: '{}',
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(mocks.repo.updateTenantStripeIds).not.toHaveBeenCalled()
     })
 
     it('given missing slug in metadata, should return 200 but not provision', async () => {
@@ -258,6 +299,44 @@ describe('stripe webhook route', () => {
       const event = makeSubscriptionDeletedEvent('sub_unknown')
       mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
       mocks.repo.getTenantByStripeSubscription.mockResolvedValue(null)
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/stripe',
+        headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+        payload: '{}',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mocks.lifecycle.suspend).not.toHaveBeenCalled()
+    })
+
+    it('given tenant already suspended (idempotent replay), should return 200 without calling suspend', async () => {
+      const mocks = makeMocks()
+      const event = makeSubscriptionDeletedEvent()
+      mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
+      mocks.repo.getTenantByStripeSubscription.mockResolvedValue(makeTenant({ status: 'suspended' }))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/stripe',
+        headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+        payload: '{}',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mocks.lifecycle.suspend).not.toHaveBeenCalled()
+    })
+
+    it('given tenant already destroyed, should return 200 without calling suspend', async () => {
+      const mocks = makeMocks()
+      const event = makeSubscriptionDeletedEvent()
+      mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
+      mocks.repo.getTenantByStripeSubscription.mockResolvedValue(makeTenant({ status: 'destroyed' }))
 
       const { app } = buildApp(mocks)
 
@@ -340,6 +419,25 @@ describe('stripe webhook route', () => {
       expect(response.statusCode).toBe(200)
       expect(mocks.lifecycle.suspend).not.toHaveBeenCalled()
       expect(mocks.repo.recordEvent).toHaveBeenCalled()
+    })
+
+    it('given attempt_count >= 3 but tenant already suspended (idempotent), should return 200 without calling suspend', async () => {
+      const mocks = makeMocks()
+      const event = makePaymentFailedEvent(3)
+      mocks.stripe.webhooks.constructEvent.mockReturnValue(event)
+      mocks.repo.getTenantByStripeSubscription.mockResolvedValue(makeTenant({ status: 'suspended' }))
+
+      const { app } = buildApp(mocks)
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/stripe',
+        headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+        payload: '{}',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mocks.lifecycle.suspend).not.toHaveBeenCalled()
     })
   })
 
