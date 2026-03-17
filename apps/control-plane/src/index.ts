@@ -55,7 +55,9 @@ async function start() {
     const delayMs = 2000
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const res = await fetch(`http://ps-${slug}-web:3000/api/health`)
+        const res = await fetch(`http://ps-${slug}-web:3000/api/health`, {
+          signal: AbortSignal.timeout(5000),
+        })
         if (res.ok) return { healthy: true }
       } catch {
         // Service not ready yet
@@ -81,6 +83,9 @@ async function start() {
     provisioningEngine,
     lifecycle,
   })
+
+  // Verify database connectivity before accepting traffic
+  await sql`SELECT 1`
 
   await app.listen({ port: PORT, host: '0.0.0.0' })
   console.log(`Control plane listening on port ${PORT}`)

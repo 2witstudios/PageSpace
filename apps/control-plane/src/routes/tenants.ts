@@ -7,7 +7,7 @@ const VALID_STATUSES: ReadonlySet<string> = new Set<string>([
 ])
 
 type ProvisioningEngine = {
-  provision(request: { slug: string; ownerEmail: string; tier: string }): Promise<unknown>
+  provision(request: { slug: string; name?: string; ownerEmail: string; tier: string }): Promise<unknown>
 }
 
 type Lifecycle = {
@@ -83,7 +83,7 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     }
 
     // Fire-and-forget: engine owns tenant creation + provisioning
-    provisioningEngine.provision({ slug, ownerEmail, tier }).catch(() => {
+    provisioningEngine.provision({ slug, name, ownerEmail, tier }).catch(() => {
       // Provisioning errors are recorded by the engine itself
     })
 
@@ -177,8 +177,8 @@ export async function tenantRoutes(app: FastifyInstance, deps: TenantRouteDeps) 
     }
 
     // Fire-and-forget: destroy runs backup + teardown in background
-    lifecycle.destroy(slug).catch(() => {
-      // Destruction errors are recorded by lifecycle itself
+    lifecycle.destroy(slug).catch((error) => {
+      app.log.error({ err: error, slug }, 'tenant destruction failed')
     })
 
     return reply.status(202).send({ message: `Destruction of "${slug}" initiated` })

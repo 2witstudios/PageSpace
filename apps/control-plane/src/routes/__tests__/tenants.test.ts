@@ -111,6 +111,7 @@ describe('tenant routes', () => {
       // Provisioning should be triggered (fire-and-forget)
       expect(mocks.provisioningEngine.provision).toHaveBeenCalledWith({
         slug: 'acme-corp',
+        name: 'Acme Corp',
         ownerEmail: 'admin@acme.com',
         tier: 'pro',
       })
