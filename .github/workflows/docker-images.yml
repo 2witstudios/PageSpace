@@ -4,6 +4,12 @@ on:
   push:
     branches: [master]
     tags: ['v*.*.*']
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'docker/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/docker-images.yml'
 
 env:
   REGISTRY: ghcr.io
