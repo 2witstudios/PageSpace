@@ -1,4 +1,5 @@
-import { pgTable, uuid, varchar, timestamp, jsonb, pgEnum } from 'drizzle-orm/pg-core'
+import { pgTable, text, varchar, timestamp, jsonb, pgEnum } from 'drizzle-orm/pg-core'
+import { createId } from '@paralleldrive/cuid2'
 
 export const tenantStatusEnum = pgEnum('tenant_status', [
   'provisioning',
@@ -15,7 +16,7 @@ export const healthStatusEnum = pgEnum('health_status', [
 ])
 
 export const tenants = pgTable('tenants', {
-  id: uuid('id').defaultRandom().primaryKey(),
+  id: text('id').primaryKey().$defaultFn(() => createId()),
   slug: varchar('slug', { length: 63 }).notNull().unique(),
   name: varchar('name', { length: 255 }).notNull(),
   status: tenantStatusEnum('status').notNull().default('provisioning'),

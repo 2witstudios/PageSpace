@@ -15,6 +15,7 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^2.2.2",
     "@pagespace/lib": "workspace:*",
     "dotenv": "^17.2.0",
     "drizzle-orm": "^0.32.2",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "drizzle-kit": "^0.23.2",
     "tsx": "^4.16.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.0"
   }
 }

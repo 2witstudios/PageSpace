@@ -17,8 +17,8 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "tenant_backups" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"tenant_id" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"tenant_id" text NOT NULL,
 	"backup_path" varchar(1024) NOT NULL,
 	"size_bytes" bigint,
 	"status" "backup_status" DEFAULT 'pending' NOT NULL,
@@ -27,15 +27,15 @@ CREATE TABLE IF NOT EXISTS "tenant_backups" (
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "tenant_events" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"tenant_id" uuid NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"tenant_id" text NOT NULL,
 	"event_type" varchar(100) NOT NULL,
 	"metadata" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "tenants" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
 	"slug" varchar(63) NOT NULL,
 	"name" varchar(255) NOT NULL,
 	"status" "tenant_status" DEFAULT 'provisioning' NOT NULL,
@@ -65,3 +65,7 @@ DO $$ BEGIN
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "tenant_backups_tenant_id_idx" ON "tenant_backups" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "tenant_events_tenant_id_idx" ON "tenant_events" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "tenant_events_created_at_idx" ON "tenant_events" USING btree ("created_at");

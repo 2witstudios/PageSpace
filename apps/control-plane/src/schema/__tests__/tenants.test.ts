@@ -64,10 +64,10 @@ describe('tenants table', () => {
     expect(columnNames).toContain('healthStatus')
   })
 
-  it('should use uuid for id column', () => {
+  it('should use text for id column (CUID2)', () => {
     const columns = getTableColumns(tenants)
     expect(columns.id.dataType).toBe('string')
-    expect(columns.id.columnType).toBe('PgUUID')
+    expect(columns.id.columnType).toBe('PgText')
   })
 
   it('should have slug as unique', () => {
@@ -98,10 +98,10 @@ describe('tenantEvents table', () => {
     expect(columnNames).toContain('createdAt')
   })
 
-  it('should use uuid for id column', () => {
+  it('should use text for id column (CUID2)', () => {
     const columns = getTableColumns(tenantEvents)
     expect(columns.id.dataType).toBe('string')
-    expect(columns.id.columnType).toBe('PgUUID')
+    expect(columns.id.columnType).toBe('PgText')
   })
 })
 
@@ -119,10 +119,10 @@ describe('tenantBackups table', () => {
     expect(columnNames).toContain('completedAt')
   })
 
-  it('should use uuid for id column', () => {
+  it('should use text for id column (CUID2)', () => {
     const columns = getTableColumns(tenantBackups)
     expect(columns.id.dataType).toBe('string')
-    expect(columns.id.columnType).toBe('PgUUID')
+    expect(columns.id.columnType).toBe('PgText')
   })
 
   it('should default backup status to pending', () => {

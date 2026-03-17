@@ -1,5 +1,5 @@
 {
-  "id": "b44c690f-66da-419f-8e75-2c05977d5b45",
+  "id": "ac5d8118-cbc9-4dc3-8ac5-2295a778afcc",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -10,14 +10,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
+          "notNull": true
         },
         "tenant_id": {
           "name": "tenant_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -55,7 +54,23 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "tenant_backups_tenant_id_idx": {
+          "name": "tenant_backups_tenant_id_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "tenant_backups_tenant_id_tenants_id_fk": {
           "name": "tenant_backups_tenant_id_tenants_id_fk",
@@ -80,14 +95,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
+          "notNull": true
         },
         "tenant_id": {
           "name": "tenant_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -111,7 +125,38 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "tenant_events_tenant_id_idx": {
+          "name": "tenant_events_tenant_id_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "tenant_events_created_at_idx": {
+          "name": "tenant_events_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "tenant_events_tenant_id_tenants_id_fk": {
           "name": "tenant_events_tenant_id_tenants_id_fk",
@@ -136,10 +181,9 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
+          "notNull": true
         },
         "slug": {
           "name": "slug",
