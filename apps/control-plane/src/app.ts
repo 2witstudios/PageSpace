@@ -46,14 +46,14 @@ export function createApp({ logger = false, repo, provisioningEngine, lifecycle,
     if (stripe && repo.getTenantByStripeSubscription && repo.recordEvent && repo.updateTenantStripeIds) {
       const webhookRepo = repo as TenantRouteDeps['repo'] & WebhookRepo
       app.register(stripeWebhookRoute, { stripe, repo: webhookRepo, provisioningEngine, lifecycle })
+    }
 
-      if (stripe.checkout && stripe.billingPortal) {
-        app.register(billingRoutes, {
-          stripe: stripe as Required<Pick<StripeClient, 'checkout' | 'billingPortal'>>,
-          repo,
-          priceMap: priceMap ?? {},
-        })
-      }
+    if (stripe?.checkout && stripe.billingPortal && repo) {
+      app.register(billingRoutes, {
+        stripe: stripe as Required<Pick<StripeClient, 'checkout' | 'billingPortal'>>,
+        repo,
+        priceMap: priceMap ?? {},
+      })
     }
   }
 

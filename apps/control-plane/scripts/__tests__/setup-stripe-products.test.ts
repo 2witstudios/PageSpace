@@ -71,7 +71,7 @@ describe('setupStripeProducts', () => {
     expect(standardCall![0]).toMatchObject({
       currency: 'usd',
       recurring: { interval: 'month' },
-      metadata: expect.objectContaining({ tier: 'standard' }),
+      metadata: expect.objectContaining({ tier: 'pro' }),
     })
 
     expect(enterpriseCall).toBeDefined()
@@ -82,11 +82,11 @@ describe('setupStripeProducts', () => {
     })
   })
 
-  test('given existing price for standard tier, should skip that tier and create only enterprise', async () => {
+  test('given existing price for pro tier, should skip that tier and create only enterprise', async () => {
     const existingPrice = {
       id: 'price_existing',
       unit_amount: 19900,
-      metadata: { tier: 'standard' },
+      metadata: { tier: 'pro' },
     }
     const stripe = makeStripeClient()
     stripe.prices.list = vi.fn().mockResolvedValue({ data: [existingPrice] })
@@ -101,7 +101,7 @@ describe('setupStripeProducts', () => {
 
   test('given all prices exist, should skip all price creation', async () => {
     const existingPrices = [
-      { id: 'price_std', unit_amount: 19900, metadata: { tier: 'standard' } },
+      { id: 'price_std', unit_amount: 19900, metadata: { tier: 'pro' } },
       { id: 'price_ent', unit_amount: 49900, metadata: { tier: 'enterprise' } },
     ]
     const stripe = makeStripeClient()

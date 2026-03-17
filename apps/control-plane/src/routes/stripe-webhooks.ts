@@ -143,8 +143,8 @@ export async function stripeWebhookRoute(app: FastifyInstance, deps: StripeWebho
     if (!tenant) return
 
     if (invoice.attempt_count >= 3) {
-      if (tenant.status === 'suspended') {
-        request.log.info({ slug: tenant.slug }, 'payment_failed: already suspended, skipping')
+      if (tenant.status === 'suspended' || tenant.status === 'destroyed') {
+        request.log.info({ slug: tenant.slug }, 'payment_failed: already suspended/destroyed, skipping')
         return
       }
       await lifecycle.suspend(tenant.slug as string)

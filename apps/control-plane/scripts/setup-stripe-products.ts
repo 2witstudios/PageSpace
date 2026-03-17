@@ -19,7 +19,7 @@ const PRODUCT_NAME = 'PageSpace Isolated Infrastructure'
 const PRODUCT_METADATA = { product_type: 'tenant_infrastructure' }
 
 const PRICE_TIERS: PriceTier[] = [
-  { tier: 'standard', amount: 19900, nickname: 'Standard ($199/mo)' },
+  { tier: 'pro', amount: 19900, nickname: 'Pro ($199/mo)' },
   { tier: 'enterprise', amount: 49900, nickname: 'Enterprise ($499/mo)' },
 ]
 

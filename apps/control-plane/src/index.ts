@@ -90,7 +90,6 @@ async function start() {
   if (process.env.STRIPE_PRICE_PRO) priceMap.pro = process.env.STRIPE_PRICE_PRO
   if (process.env.STRIPE_PRICE_BUSINESS) priceMap.business = process.env.STRIPE_PRICE_BUSINESS
   if (process.env.STRIPE_PRICE_ENTERPRISE) priceMap.enterprise = process.env.STRIPE_PRICE_ENTERPRISE
-  if (process.env.STRIPE_PRICE_STANDARD) priceMap.standard = process.env.STRIPE_PRICE_STANDARD
 
   const app = createApp({
     logger: true,
