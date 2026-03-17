@@ -1,0 +1,44 @@
+---
+description: Policy for handling deferred work in epics and tasks. Prevents agents from incorrectly marking in-scope work as deferred.
+alwaysApply: true
+---
+# Deferred Work Policy
+
+When working on an epic or task plan, you MUST NOT defer work that is explicitly in the plan.
+
+## Rules
+
+### 1. In-scope work must be completed
+
+If a requirement is written in the epic/task plan file (`tasks/*.md`), it must be implemented. You cannot mark it as "future work," "Phase 2," "manual test needed," or "deferred" and declare the task complete.
+
+If you cannot implement a requirement, you must provide a concrete technical reason why it's blocked (e.g., "requires infrastructure from Epic 5 that doesn't exist yet").
+
+### 2. Pattern propagation is your responsibility
+
+If your changes modify a pattern (e.g., replacing `isOnPrem()` with `!isBillingEnabled()`), you must audit the ENTIRE codebase for all instances of the old pattern and update every instance that falls within your epic's scope.
+
+```bash
+# After changing isOnPrem() to !isBillingEnabled() in one file:
+grep -rn "isOnPrem()" --include="*.ts" --include="*.tsx" apps/ packages/ | grep -v __tests__ | grep -v node_modules
+```
+
+### 3. Manual tests supplement unit tests, not replace them
+
+"Manual test needed" or "verify in production" is acceptable ONLY when accompanied by unit tests that cover the same logic. If the requirement says "Given X, should Y," there must be a test assertion for it.
+
+### 4. Genuinely blocked work must be tracked
+
+If work is genuinely blocked by a dependency (needs code/infrastructure from a later epic):
+- State which epic blocks it
+- Verify the blocking epic's plan accounts for it
+- If the blocking epic does NOT account for it, add the requirement to the blocking epic's task file before declaring your work complete
+
+### 5. Pre-completion checklist
+
+Before declaring an epic complete, answer these questions:
+1. Have I read every requirement line in the task plan file?
+2. For each requirement, can I point to the code that implements it?
+3. For each requirement, can I point to the test that validates it?
+4. If I changed a pattern in one file, did I audit all other files for the same pattern?
+5. Do error messages and UX still make sense in the new mode/context?
