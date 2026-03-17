@@ -71,7 +71,10 @@ export function createTenantLifecycle(deps: LifecycleDeps) {
         { cwd: basePath }
       )
 
-      await pollHealth(slug)
+      const healthResult = await pollHealth(slug)
+      if (!healthResult.healthy) {
+        throw new Error(`Resume failed: services not healthy after starting`)
+      }
       await repo.updateTenantStatus(tenant.id, 'active')
       await repo.recordEvent(tenant.id, 'resumed', { slug })
     },

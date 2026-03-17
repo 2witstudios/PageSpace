@@ -319,6 +319,19 @@ describe('ProvisioningEngine', () => {
       expect(downCall).toBeDefined()
     })
 
+    test('given health poll returns unhealthy, should update status to failed and not seed', async () => {
+      const deps = makeDeps()
+      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockResolvedValue({ healthy: false })
+      const engine = createProvisioningEngine(deps)
+
+      await expect(
+        engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+      ).rejects.toThrow()
+
+      expect(deps.repo.updateTenantStatus).toHaveBeenCalledWith('tenant-123', 'failed')
+      expect(deps.seeder.seed).not.toHaveBeenCalled()
+    })
+
     test('given seeder failure, should update status to failed', async () => {
       const deps = makeDeps()
       ;(deps.seeder.seed as ReturnType<typeof vi.fn>).mockRejectedValue(

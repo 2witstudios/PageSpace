@@ -90,7 +90,10 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
         composeStarted = true
 
         // Step 7: Poll health
-        await pollHealth(request.slug)
+        const healthResult = await pollHealth(request.slug)
+        if (!healthResult.healthy) {
+          throw Object.assign(new Error('Health check failed: services not healthy'), { step: 'poll-health' })
+        }
 
         // Step 8: Seed admin user
         const envContent = await fs.readFile(`${tenantDir}/.env`)

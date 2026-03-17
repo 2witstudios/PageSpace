@@ -187,6 +187,17 @@ describe('TenantLifecycle', () => {
       )
     })
 
+    test('given health poll returns unhealthy, should throw and not mark active', async () => {
+      const deps = makeDeps({
+        repo: makeMockRepo(makeTenant({ status: 'suspended' })),
+      })
+      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockResolvedValue({ healthy: false })
+      const lifecycle = createTenantLifecycle(deps)
+
+      await expect(lifecycle.resume('acme')).rejects.toThrow()
+      expect(deps.repo.updateTenantStatus).not.toHaveBeenCalled()
+    })
+
     test('given an active tenant, should throw transition error', async () => {
       const deps = makeDeps({
         repo: makeMockRepo(makeTenant({ status: 'active' })),

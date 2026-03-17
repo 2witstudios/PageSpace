@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
 import { hash as bcryptHash } from 'bcryptjs'
+import { createId } from '@paralleldrive/cuid2'
 
 export type TenantDbConnection = {
   query(sql: string, params?: unknown[]): Promise<unknown[]>
@@ -51,10 +52,11 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
 
         const temporaryPassword = generatePassword()
         const hashedPassword = await bcrypt.hash(temporaryPassword, 12)
+        const id = createId()
 
         await db.query(
-          'INSERT INTO users (email, password, role, name) VALUES ($1, $2, $3, $4) RETURNING id, email, role',
-          [input.ownerEmail, hashedPassword, 'admin', 'Admin']
+          'INSERT INTO users (id, email, password, role, name) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, role',
+          [id, input.ownerEmail, hashedPassword, 'admin', 'Admin']
         )
 
         return { email: input.ownerEmail, temporaryPassword, alreadyExisted: false }

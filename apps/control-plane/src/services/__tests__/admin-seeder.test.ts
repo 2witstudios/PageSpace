@@ -120,6 +120,30 @@ describe('AdminSeeder', () => {
     })
   })
 
+  describe('CUID2 id generation', () => {
+    test('given a new user, should include id column in INSERT with a generated CUID2', async () => {
+      const db = makeMockDb(null)
+      const bcrypt = makeMockBcrypt()
+      const generatePassword = makeMockPasswordGenerator()
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ bcrypt, generatePassword, connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'owner@acme.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall![0]).toContain('id')
+      expect(insertCall![1]).toHaveLength(5) // id, email, password, role, name
+      expect(typeof insertCall![1][0]).toBe('string')
+      expect(insertCall![1][0].length).toBeGreaterThan(0)
+    })
+  })
+
   describe('idempotent seeding', () => {
     test('given an existing user with that email, should skip insert and return existing info', async () => {
       const existingUser = { id: 'existing-id', email: 'owner@acme.com', role: 'admin' }
