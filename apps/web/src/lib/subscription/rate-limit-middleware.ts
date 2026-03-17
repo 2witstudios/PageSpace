@@ -90,7 +90,7 @@ export function createRateLimitResponse(
 
 /**
  * Check if provider requires Pro subscription.
- * On-prem: no subscription gating.
+ * Billing-disabled deployments (on-prem and tenant) bypass subscription gating via isBillingEnabled().
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
   if (!isBillingEnabled()) return false;

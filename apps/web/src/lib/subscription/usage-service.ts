@@ -12,7 +12,7 @@ const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.e
 
 /**
  * Get usage limits based on subscription tier.
- * Returns -1 (unlimited) for on-prem deployments.
+ * Returns -1 (unlimited) when billing is disabled.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
   if (!isBillingEnabled()) return -1;
@@ -78,7 +78,7 @@ export async function incrementUsage(
     });
   }
 
-  // Unlimited (on-prem)
+  // Unlimited (billing disabled)
   if (limit === -1) {
     return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }
@@ -142,7 +142,7 @@ export async function getCurrentUsage(
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
-  // Unlimited (on-prem)
+  // Unlimited (billing disabled)
   if (limit === -1) {
     return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }

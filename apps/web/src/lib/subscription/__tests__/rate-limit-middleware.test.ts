@@ -17,11 +17,14 @@ describe('Rate Limit Middleware', () => {
       expect(requiresProSubscription('pagespace', 'pro-model', 'free')).toBe(false);
     });
 
-    it('should require pro subscription for free tier in cloud mode', () => {
+    it('should not require pro subscription for non-pro model in cloud mode', () => {
       vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
-      // requiresProSubscription checks model tier via getPageSpaceModelTier
-      // For non-pro models, it returns false regardless of subscription
       expect(requiresProSubscription('pagespace', undefined, 'free')).toBe(false);
+    });
+
+    it('should require pro subscription for pro model with free tier in cloud mode', () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+      expect(requiresProSubscription('pagespace', 'glm-5', 'free')).toBe(true);
     });
 
     it('should not require pro subscription for business tier in cloud mode', () => {
