@@ -5,12 +5,21 @@
 ### 1.1. Core Technology Stack
 
 - **Full-Stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
-- **Database**: PostgreSQL + Drizzle ORM (local deployment via Docker)
+- **Database**: PostgreSQL + Drizzle ORM
 - **AI**: Ollama (local models) + Vercel AI SDK + OpenRouter + Google AI SDK
-- **Auth**: Custom JWT-based authentication (local user management)
+- **Auth**: Custom JWT-based authentication
 - **File Storage**: Local filesystem with metadata in PostgreSQL
 - **Real-time**: Socket.IO for live collaboration
-- **Deployment**: Docker containers on Mac Studio (local deployment)
+- **Deployment**: Docker Compose on VPS (pagespace.ai), images built and pushed to GHCR (`ghcr.io/2witstudios/`), reverse proxy via Caddy
+- **Deploy Repo**: Compose file, Caddyfile, and deploy scripts live in a separate repo at `/Users/jono/production/PageSpace-Deploy/`
+
+#### Deployment Modes
+
+The application supports three deployment modes via the `DEPLOYMENT_MODE` env var (see `packages/lib/src/deployment-mode.ts`):
+
+- **`cloud`** (default) — SaaS at pagespace.ai. Stripe billing, OAuth, self-registration enabled.
+- **`onprem`** — Self-hosted. Disables Stripe, OAuth, and self-registration; uses password auth, local AI providers, and admin-managed accounts.
+- **`tenant`** — Managed multi-tenant. Billing handled by the control plane; all users get business-tier features. Cloud-only routes (Stripe, OAuth) are blocked like on-prem.
 
 ### 1.2. Monorepo Architecture
 
