@@ -26,6 +26,7 @@ The application supports three deployment modes via the `DEPLOYMENT_MODE` env va
 This project uses a pnpm workspace with Turbo build system with the following structure:
 
 - `apps/web`: The main Next.js 15 frontend and backend application
+- `apps/marketing`: Marketing site (pagespace.ai landing pages)
 - `apps/realtime`: A dedicated Socket.IO service for real-time communication
 - `apps/processor`: File processing service for uploads, image optimization, and content extraction
 - `packages/db`: The centralized Drizzle ORM package containing database schema, migrations, and query logic
@@ -226,6 +227,7 @@ Use the Task tool to launch domain experts; each agent advertises its own capabi
 PageSpace/
 ├── apps/
 │   ├── web/              # Next.js 15 App Router main application
+│   ├── marketing/        # Marketing site (pagespace.ai)
 │   ├── realtime/         # Socket.IO service (port 3001)
 │   ├── processor/        # File processing service (port 3003)
 │   └── desktop/          # Electron desktop app wrapper
