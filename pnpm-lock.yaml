@@ -162,6 +162,9 @@ importers:
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2
+      bcryptjs:
+        specifier: ^3.0.2
+        version: 3.0.2
       dotenv:
         specifier: ^17.2.0
         version: 17.2.2
@@ -175,6 +178,9 @@ importers:
         specifier: ^3.4.5
         version: 3.4.8
     devDependencies:
+      '@types/bcryptjs':
+        specifier: ^2.4.6
+        version: 2.4.6
       drizzle-kit:
         specifier: ^0.23.2
         version: 0.23.2
@@ -326,7 +332,7 @@ importers:
         version: 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@remotion/tailwind':
         specifier: ^4.0.421
-        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
+        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -903,7 +909,7 @@ importers:
         version: 8.18.1
       copy-webpack-plugin:
         specifier: ^12.0.2
-        version: 12.0.2(webpack@5.105.0(esbuild@0.19.12))
+        version: 12.0.2(webpack@5.105.0)
       eslint:
         specifier: ^9
         version: 9.36.0(jiti@2.6.0)
@@ -15496,7 +15502,7 @@ snapshots:
       remotion: 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       source-map: 0.7.3
       style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
     transitivePeerDependencies:
       - '@swc/core'
       - bufferutil
@@ -15645,13 +15651,13 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))':
+  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0)':
     dependencies:
       '@remotion/bundler': 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       autoprefixer: 10.4.20(postcss@8.4.47)
       css-loader: 5.2.7(webpack@5.105.0(esbuild@0.25.0))
       postcss: 8.4.47
-      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
+      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0)
       postcss-preset-env: 8.5.1(postcss@8.4.47)
       style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
       tailwindcss: 3.4.13(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))
@@ -17808,7 +17814,7 @@ snapshots:
 
   cookiejar@2.1.4: {}
 
-  copy-webpack-plugin@12.0.2(webpack@5.105.0(esbuild@0.19.12)):
+  copy-webpack-plugin@12.0.2(webpack@5.105.0):
     dependencies:
       fast-glob: 3.3.3
       glob-parent: 6.0.2
@@ -17816,7 +17822,7 @@ snapshots:
       normalize-path: 3.0.0
       schema-utils: 4.3.2
       serialize-javascript: 6.0.2
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
 
   core-util-is@1.0.2:
     optional: true
@@ -17915,7 +17921,7 @@ snapshots:
       postcss-value-parser: 4.2.0
       schema-utils: 3.3.0
       semver: 7.7.2
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
 
   css-prefers-color-scheme@8.0.2(postcss@8.4.47):
     dependencies:
@@ -22243,13 +22249,13 @@ snapshots:
       postcss: 8.5.6
       ts-node: 10.9.2(@types/node@20.19.17)(typescript@5.9.2)
 
-  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12)):
+  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0):
     dependencies:
       cosmiconfig: 8.3.6(typescript@5.9.2)
       jiti: 1.21.7
       postcss: 8.4.47
       semver: 7.7.2
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
     transitivePeerDependencies:
       - typescript
 
@@ -23869,7 +23875,7 @@ snapshots:
 
   style-loader@4.0.0(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
 
   style-to-js@1.1.17:
     dependencies:
@@ -24019,16 +24025,16 @@ snapshots:
       mkdirp: 0.5.6
       rimraf: 2.6.3
 
-  terser-webpack-plugin@5.3.16(esbuild@0.19.12)(webpack@5.105.0(esbuild@0.25.0)):
+  terser-webpack-plugin@5.3.16(esbuild@0.25.0)(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.3
       serialize-javascript: 6.0.2
       terser: 5.44.0
-      webpack: 5.105.0(esbuild@0.19.12)
+      webpack: 5.105.0(esbuild@0.25.0)
     optionalDependencies:
-      esbuild: 0.19.12
+      esbuild: 0.25.0
 
   terser@5.44.0:
     dependencies:
@@ -24736,7 +24742,7 @@ snapshots:
 
   webpack-sources@3.3.3: {}
 
-  webpack@5.105.0(esbuild@0.19.12):
+  webpack@5.105.0(esbuild@0.25.0):
     dependencies:
       '@types/eslint-scope': 3.7.7
       '@types/estree': 1.0.8
@@ -24760,7 +24766,7 @@ snapshots:
       neo-async: 2.6.2
       schema-utils: 4.3.3
       tapable: 2.3.0
-      terser-webpack-plugin: 5.3.16(esbuild@0.19.12)(webpack@5.105.0(esbuild@0.25.0))
+      terser-webpack-plugin: 5.3.16(esbuild@0.25.0)(webpack@5.105.0(esbuild@0.25.0))
       watchpack: 2.5.1
       webpack-sources: 3.3.3
     transitivePeerDependencies:
