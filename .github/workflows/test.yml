@@ -95,41 +95,6 @@ jobs:
             packages/*/coverage/coverage-summary.json
           retention-days: 30
 
-      - name: Coverage PR comment
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: packages/lib/coverage/coverage-summary.json
-          name: packages/lib
-
-      - name: Coverage PR comment (web)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/web/coverage/coverage-summary.json
-          name: apps/web
-
-      - name: Coverage PR comment (realtime)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/realtime/coverage/coverage-summary.json
-          name: apps/realtime
-
-      - name: Coverage PR comment (processor)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: apps/processor/coverage/coverage-summary.json
-          name: apps/processor
-
-      - name: Coverage PR comment (db)
-        if: github.event_name == 'pull_request'
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          json-summary-path: packages/db/coverage/coverage-summary.json
-          name: packages/db
-
   lint:
     name: Lint & TypeScript Check
     runs-on: ubuntu-latest
