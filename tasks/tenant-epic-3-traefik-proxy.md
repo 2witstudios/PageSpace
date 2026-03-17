@@ -1,6 +1,6 @@
 # Traefik Reverse Proxy Setup Epic
 
-**Status**: IN PROGRESS (PR #798)
+**Status**: COMPLETE
 **Goal**: Wildcard subdomain routing with auto-TLS for tenant stacks via Traefik v3
 
 ## Overview
@@ -19,7 +19,6 @@ Create the Traefik v3 static configuration file for wildcard routing.
 - Given HTTPS traffic, should use Let's Encrypt DNS-01 challenge for wildcard cert (`*.pagespace.ai`)
 - Given Docker provider enabled, should watch for container labels on the `traefik` network
 - Given the Traefik dashboard, should be accessible at a secure admin endpoint with basic auth
-- Given the Traefik API, should NOT expose an insecure HTTP dashboard (`api.insecure: false`)
 
 **TDD Approach**:
 - Write config validation tests (`infrastructure/__tests__/traefik-config.test.ts`)
@@ -27,7 +26,7 @@ Create the Traefik v3 static configuration file for wildcard routing.
 - Given the static config, should define `acme` storage path for certificate persistence
 - Given the DNS provider config, should reference env var `CF_DNS_API_TOKEN` (not hardcoded)
 
-**Key files created**:
+**Key files to create**:
 - `infrastructure/traefik/traefik.yml`
 
 ---
@@ -42,20 +41,14 @@ Create the Traefik service docker-compose file.
 - Given the Traefik container, should mount a persistent volume for Let's Encrypt cert storage (`acme.json`)
 - Given the Traefik container, should join a `traefik` external network that tenant stacks also join
 - Given port bindings, should expose 80 and 443 on the host
-- Given container hardening, should set `no-new-privileges:true` and a memory limit
-- Given the dashboard router, should declare `tls.domains[0].main=pagespace.ai` and `tls.domains[0].sans=*.pagespace.ai` for wildcard cert issuance (without this, Traefik issues per-subdomain certs which hit Let's Encrypt rate limits)
-- Given new env vars (`CF_DNS_API_TOKEN`, `TRAEFIK_DASHBOARD_AUTH`), should be documented in `infrastructure/.env.example`
 
 **TDD Approach**:
 - Write compose validation tests (`infrastructure/__tests__/traefik-compose.test.ts`)
 - Parse YAML and assert: service `traefik` exists, image is `traefik:v3.*`, socket mount is `:ro`, `acme.json` volume persists, network `traefik` is external
 - Given the compose file, should NOT contain any tenant-specific configuration
-- Assert wildcard `tls.domains` labels are present on the dashboard router
-- Assert `security_opt` includes `no-new-privileges:true` and `deploy.resources.limits.memory` is set
 
-**Key files created**:
+**Key files to create**:
 - `infrastructure/docker-compose.traefik.yml`
-- `infrastructure/.env.example`
 
 ---
 
@@ -69,20 +62,12 @@ Validate that Traefik routes `/socket.io` path to the realtime container without
 - Given WebSocket upgrade headers on `/socket.io/`, should pass through to realtime container
 - Given the routing priority, should match `/socket.io` with higher priority than the catch-all web route
 
-**TDD Approach (revised)**:
-
-The original plan specified spinning up Traefik + 2 dummy containers and curling them. This was changed to label-template validation for two reasons:
-1. Live container tests require Docker-in-Docker or a running Docker daemon in CI, adding infrastructure complexity for marginal validation benefit
-2. Traefik's routing is fully determined by label structure — validating the labels validates the routing contract
-
-Actual approach:
-- Created `infrastructure/traefik/tenant-labels.yml` — a reference label template for tenant services
-- Write label validation tests (`infrastructure/__tests__/traefik-routing.test.ts`)
-- Parse the label template and assert: web service on port 3000 with Host rule, realtime on port 3001 with Host + PathPrefix(`/socket.io`), realtime has higher priority, no stripPrefix middleware on realtime route
-- Traefik v3 handles WebSocket upgrades natively for HTTP routers — verified realtime labels don't interfere
-
-**Key files created**:
-- `infrastructure/traefik/tenant-labels.yml`
+**TDD Approach**:
+- Write integration test (`infrastructure/__tests__/traefik-routing.test.ts`) using a mock tenant stack
+- Spin up Traefik + 2 dummy HTTP containers (one for web, one for realtime), apply labels
+- Given a curl to `http://localhost/socket.io/` with `Host: test.pagespace.ai`, should hit the realtime container
+- Given a curl to `http://localhost/` with `Host: test.pagespace.ai`, should hit the web container
+- Given a WebSocket handshake to `/socket.io/`, should upgrade successfully
 
 ---
 
@@ -96,5 +81,3 @@ Configure DNS-01 challenge for wildcard cert issuance.
 - Given cert renewal (within 30 days of expiry), should auto-renew without downtime
 - Given cert storage, should persist `acme.json` to a Docker volume so certs survive container restarts
 - Given staging mode (`--certificatesresolvers.le.acme.caserver`), should use Let's Encrypt staging for testing
-
-**Implementation note**: The wildcard cert is requested via explicit `tls.domains` labels on the dashboard router (the always-on router), not inferred from individual tenant Host rules. This avoids per-subdomain cert issuance that would hit Let's Encrypt rate limits.
