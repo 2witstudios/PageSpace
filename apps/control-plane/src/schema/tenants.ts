@@ -7,6 +7,7 @@ export const tenantStatusEnum = pgEnum('tenant_status', [
   'suspended',
   'destroying',
   'destroyed',
+  'failed',
 ])
 
 export const healthStatusEnum = pgEnum('health_status', [

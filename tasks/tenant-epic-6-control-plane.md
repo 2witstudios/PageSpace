@@ -9,8 +9,8 @@ This epic was too large for a single PR. It has been broken into 4 sub-epics tha
 
 | Sub-Epic | Plan | Dependencies | Status |
 |---|---|---|---|
-| 6a - Scaffold & Schema | [tenant-epic-6a-control-plane-scaffold.md](tenant-epic-6a-control-plane-scaffold.md) | None | PLANNED |
-| 6b - Repository & Validation | [tenant-epic-6b-tenant-repository.md](tenant-epic-6b-tenant-repository.md) | 6a | PLANNED |
+| 6a - Scaffold & Schema | [tenant-epic-6a-control-plane-scaffold.md](tenant-epic-6a-control-plane-scaffold.md) | None | COMPLETE |
+| 6b - Repository & Validation | [tenant-epic-6b-tenant-repository.md](tenant-epic-6b-tenant-repository.md) | 6a | COMPLETE |
 | 6c - Provisioning Engine | [tenant-epic-6c-provisioning-engine.md](tenant-epic-6c-provisioning-engine.md) | 6a, 6b, Epic 5 | PLANNED |
 | 6d - REST API | [tenant-epic-6d-rest-api.md](tenant-epic-6d-rest-api.md) | 6a, 6b, 6c | PLANNED |
 
