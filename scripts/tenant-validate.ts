@@ -19,6 +19,7 @@ import { sql } from 'drizzle-orm';
 import { existsSync } from 'fs';
 import path from 'path';
 import type { ValidateOptions, ValidationResult } from './lib/migration-types';
+import { TABLE_IMPORT_ORDER } from './lib/migration-types';
 import { fileChecksum } from './lib/migration-utils';
 
 type DbClient = ReturnType<typeof drizzle>;
@@ -31,16 +32,8 @@ async function queryIds(
   return (result.rows as Record<string, unknown>[]).map((r) => r.id as string);
 }
 
-async function queryCount(
-  db: DbClient,
-  query: ReturnType<typeof sql>,
-): Promise<number> {
-  const result = await db.execute(query);
-  return Number((result.rows as Record<string, unknown>[])[0]?.count ?? 0);
-}
-
 /**
- * Compare a single table between source and target.
+ * Compare a single table between source and target by ID.
  */
 async function validateTable(
   sourceDb: DbClient,
@@ -51,7 +44,6 @@ async function validateTable(
   const sourceIds = await queryIds(sourceDb, idQuery);
   const sourceIdSet = new Set(sourceIds);
 
-  // Query target for same IDs
   const targetIds = await queryIds(targetDb, idQuery);
   const targetIdSet = new Set(targetIds);
 
@@ -59,12 +51,38 @@ async function validateTable(
   const extraIds = [...targetIdSet].filter((id) => !sourceIdSet.has(id));
 
   return {
-    passed: missingIds.length === 0,
+    passed: missingIds.length === 0 && extraIds.length === 0,
     table: tableName,
     sourceCount: sourceIds.length,
     targetCount: targetIds.length,
     missingIds,
     extraIds,
+  };
+}
+
+/**
+ * Compare a table with a composite primary key using row counts.
+ */
+async function validateTableCount(
+  sourceDb: DbClient,
+  targetDb: DbClient,
+  tableName: string,
+  countQuery: ReturnType<typeof sql>,
+): Promise<ValidationResult> {
+  const srcResult = await sourceDb.execute(countQuery);
+  const tgtResult = await targetDb.execute(countQuery);
+  const sourceCount = Number((srcResult.rows as Record<string, unknown>[])[0]?.count ?? 0);
+  const targetCount = Number((tgtResult.rows as Record<string, unknown>[])[0]?.count ?? 0);
+
+  return {
+    passed: sourceCount === targetCount,
+    table: tableName,
+    sourceCount,
+    targetCount,
+    missingIds: [],
+    extraIds: sourceCount !== targetCount
+      ? [`count mismatch: source=${sourceCount}, target=${targetCount}`]
+      : [],
   };
 }
 
@@ -118,43 +136,59 @@ export async function validateData(
   const pageIds = (pageRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
   const pageIdPlaceholders = pageIds.map((id) => `'${id}'`).join(', ') || "''";
 
-  // Validate each table
+  // Get channel message IDs for reaction validation
+  const channelMsgRows = await sourceDb.execute(
+    sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
+  );
+  const channelMsgIds = (channelMsgRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
+  const channelMsgIdPlaceholders = channelMsgIds.map((id) => `'${id}'`).join(', ') || "''";
+
+  // Get conversation IDs for message validation
+  const convoRows = await sourceDb.execute(
+    sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIdPlaceholders})`),
+  );
+  const convoIds = (convoRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
+  const convoIdPlaceholders = convoIds.map((id) => `'${id}'`).join(', ') || "''";
+
+  // ID-based queries for tables with a single PK
+  const idQueries: Record<string, ReturnType<typeof sql>> = {
+    users: sql.raw(`SELECT id FROM users WHERE id IN (${userIdPlaceholders})`),
+    user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIdPlaceholders})`),
+    drives: sql.raw(`SELECT id FROM drives WHERE id IN (${driveIdPlaceholders})`),
+    drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIdPlaceholders})`),
+    drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIdPlaceholders}) AND "userId" IN (${userIdPlaceholders})`),
+    pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIdPlaceholders})`),
+    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIdPlaceholders}))`),
+    chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
+    channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
+    channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIdPlaceholders})`),
+    conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIdPlaceholders})`),
+    messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIdPlaceholders})`),
+    files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIdPlaceholders})`),
+    permissions: sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
+    page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
+    mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIdPlaceholders})`),
+    user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIdPlaceholders})`),
+    favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIdPlaceholders})`),
+  };
+
+  // Count-based queries for composite-key tables
+  const countQueries: Record<string, ReturnType<typeof sql>> = {
+    page_tags: sql.raw(`SELECT count(*) AS count FROM page_tags WHERE "pageId" IN (${pageIdPlaceholders})`),
+    file_pages: sql.raw(`SELECT count(*) AS count FROM file_pages WHERE "fileId" IN (SELECT id FROM files WHERE "driveId" IN (${driveIdPlaceholders}))`),
+    channel_read_status: sql.raw(`SELECT count(*) AS count FROM channel_read_status WHERE "userId" IN (${userIdPlaceholders}) AND "channelId" IN (${pageIdPlaceholders})`),
+  };
+
+  // Validate all tables in import order
   const tableResults: ValidationResult[] = [];
 
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'users',
-    sql.raw(`SELECT id FROM users WHERE id IN (${userIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'drives',
-    sql.raw(`SELECT id FROM drives WHERE id IN (${driveIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'pages',
-    sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'chat_messages',
-    sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'files',
-    sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'permissions',
-    sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
-  ));
-
-  tableResults.push(await validateTable(
-    sourceDb, targetDb, 'page_permissions',
-    sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
-  ));
+  for (const table of TABLE_IMPORT_ORDER) {
+    if (idQueries[table]) {
+      tableResults.push(await validateTable(sourceDb, targetDb, table, idQueries[table]));
+    } else if (countQueries[table]) {
+      tableResults.push(await validateTableCount(sourceDb, targetDb, table, countQueries[table]));
+    }
+  }
 
   // Validate file blobs
   const fileMismatches: { file: string; reason: string }[] = [];
@@ -234,6 +268,9 @@ async function main(): Promise<void> {
     console.log(`  [${status}] ${tr.table}: source=${tr.sourceCount}, target=${tr.targetCount}`);
     if (tr.missingIds.length > 0) {
       console.log(`    Missing IDs: ${tr.missingIds.join(', ')}`);
+    }
+    if (tr.extraIds.length > 0) {
+      console.log(`    Extra IDs: ${tr.extraIds.join(', ')}`);
     }
   }
 

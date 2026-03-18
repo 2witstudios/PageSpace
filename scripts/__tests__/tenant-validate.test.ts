@@ -5,7 +5,7 @@
  *
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -22,6 +22,7 @@ import {
   type TestDb,
 } from './setup';
 import { validateData } from '../tenant-validate';
+import { TABLE_IMPORT_ORDER } from '../lib/migration-types';
 
 let db: TestDb;
 let tmpDir: string;
@@ -50,9 +51,14 @@ beforeEach(async () => {
   await writeFile(path.join(blobDir, 'data.txt'), '0123456789');
 });
 
+afterEach(async () => {
+  if (tmpDir && existsSync(tmpDir)) {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 describe('validateData', () => {
   it('reports success when source and target match', async () => {
-    // Source and target are the same DB with identical data
     const result = await validateData(db as never, db as never, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
@@ -67,19 +73,11 @@ describe('validateData', () => {
   });
 
   it('detects missing page in target', async () => {
-    // Delete a page to simulate missing data
+    // Same-DB limitation: after delete, both source and target reflect the change.
+    // We verify the structure reports the correct count after cascade delete.
     await db.execute(sql.raw(
       `DELETE FROM pages WHERE id = '${FIXTURES.pages.grandchild.id}'`,
     ));
-
-    // We need two separate DB connections to simulate source vs target
-    // Here, the "source" has all pages but the "target" (same db after delete) is missing one
-    // For a proper test we'd need two databases. Instead, we verify the logic
-    // by checking that after deleting, the validation catches it.
-
-    // Re-seed to restore source state, but validate against the mutated state
-    // Actually, since source and target are the same DB, we can't easily test this
-    // without a second database. Let's test the validation result structure instead.
 
     const result = await validateData(db as never, db as never, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
@@ -89,17 +87,14 @@ describe('validateData', () => {
       targetFileStoragePath: fileStoragePath,
     });
 
-    // After delete, source and target are same (both missing the page)
-    // so it should still pass (both show 2 pages)
     const pagesResult = result.tableResults.find((r) => r.table === 'pages');
     expect(pagesResult).toBeDefined();
-    expect(pagesResult!.sourceCount).toBe(2); // grandchild was deleted (cascade took chat messages too)
+    expect(pagesResult!.sourceCount).toBe(2);
   });
 
   it('detects missing file blob in target', async () => {
     const targetFilePath = path.join(tmpDir, 'target-missing');
     await mkdir(targetFilePath, { recursive: true });
-    // Don't create the blob file in target
 
     const result = await validateData(db as never, db as never, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
@@ -132,7 +127,7 @@ describe('validateData', () => {
     expect(result.fileResults.mismatches[0].reason).toContain('checksum mismatch');
   });
 
-  it('validates all expected tables', async () => {
+  it('validates all 21 exported tables', async () => {
     const result = await validateData(db as never, db as never, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
@@ -142,12 +137,34 @@ describe('validateData', () => {
     });
 
     const tableNames = result.tableResults.map((r) => r.table);
-    expect(tableNames).toContain('users');
-    expect(tableNames).toContain('drives');
-    expect(tableNames).toContain('pages');
-    expect(tableNames).toContain('chat_messages');
-    expect(tableNames).toContain('files');
-    expect(tableNames).toContain('permissions');
-    expect(tableNames).toContain('page_permissions');
+    // Every table in the import order should be validated
+    for (const table of TABLE_IMPORT_ORDER) {
+      expect(tableNames).toContain(table);
+    }
+    expect(tableNames).toHaveLength(TABLE_IMPORT_ORDER.length);
+  });
+
+  it('reports correct counts for seeded data', async () => {
+    const result = await validateData(db as never, db as never, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: fileStoragePath,
+      targetFileStoragePath: fileStoragePath,
+    });
+
+    const find = (t: string) => result.tableResults.find((r) => r.table === t)!;
+
+    expect(find('users').sourceCount).toBe(2);
+    expect(find('drives').sourceCount).toBe(1);
+    expect(find('pages').sourceCount).toBe(3);
+    expect(find('chat_messages').sourceCount).toBe(2);
+    expect(find('files').sourceCount).toBe(1);
+    expect(find('permissions').sourceCount).toBe(1);
+    expect(find('page_permissions').sourceCount).toBe(1);
+    expect(find('tags').sourceCount).toBe(1);
+    expect(find('mentions').sourceCount).toBe(1);
+    expect(find('user_mentions').sourceCount).toBe(1);
+    expect(find('favorites').sourceCount).toBe(1);
   });
 });
