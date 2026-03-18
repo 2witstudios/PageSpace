@@ -191,6 +191,7 @@ const mockCheckoutSession = (overrides: Partial<{
   mode: string;
   customer: string;
   customerEmail: string;
+  metadata: Record<string, string>;
 }> = {}): Stripe.Checkout.Session => ({
   id: overrides.id ?? 'cs_123',
   mode: (overrides.mode ?? 'subscription') as Stripe.Checkout.Session.Mode,
@@ -203,6 +204,7 @@ const mockCheckoutSession = (overrides: Partial<{
     tax_exempt: 'none',
     tax_ids: null,
   },
+  metadata: overrides.metadata ?? {},
   object: 'checkout.session',
 } as Stripe.Checkout.Session);
 
@@ -616,6 +618,165 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(body.received).toBe(true);
+    });
+  });
+
+  describe('Control-Plane Provisioning Bridge', () => {
+    const originalFetch = global.fetch;
+
+    beforeEach(() => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        json: async () => ({ slug: 'acme', status: 'provisioning' }),
+      });
+      process.env.CONTROL_PLANE_URL = 'http://control-plane:4000';
+      process.env.CONTROL_PLANE_API_KEY = 'test-api-key';
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      delete process.env.CONTROL_PLANE_URL;
+      delete process.env.CONTROL_PLANE_API_KEY;
+    });
+
+    it('should call control-plane to provision tenant when metadata.slug is present', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'business' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://control-plane:4000/api/tenants',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'X-API-Key': 'test-api-key',
+          }),
+          body: JSON.stringify({
+            slug: 'acme',
+            name: 'acme',
+            ownerEmail: 'admin@acme.com',
+            tier: 'business',
+          }),
+        }),
+      );
+    });
+
+    it('should not call control-plane when metadata.slug is absent', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'test@example.com',
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should skip provisioning when CONTROL_PLANE_URL is not set', async () => {
+      delete process.env.CONTROL_PLANE_URL;
+
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'business' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should not throw when control-plane call fails', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('Connection refused')
+      );
+
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'business' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // Must still return 200 — fire-and-forget
+      expect(response.status).toBe(200);
+    });
+
+    it('should default tier to pro when metadata.tier is absent', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://control-plane:4000/api/tenants',
+        expect.objectContaining({
+          body: JSON.stringify({
+            slug: 'acme',
+            name: 'acme',
+            ownerEmail: 'admin@acme.com',
+            tier: 'pro',
+          }),
+        }),
+      );
     });
   });
 
