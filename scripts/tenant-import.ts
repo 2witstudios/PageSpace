@@ -103,7 +103,10 @@ export async function runImport(options: ImportOptions): Promise<ImportResult> {
   let filesImported = 0;
   for (const entry of manifest.fileChecksums) {
     const srcPath = path.join(bundleDir, 'files', entry.path);
-    if (!existsSync(srcPath)) continue;
+    if (!existsSync(srcPath)) {
+      console.warn(`WARNING: bundle file not found, skipping: ${entry.path}`);
+      continue;
+    }
 
     const destPath = path.join(fileStoragePath, entry.path);
     await mkdir(path.dirname(destPath), { recursive: true });

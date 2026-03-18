@@ -30,6 +30,7 @@ import {
   computeFileChecksum,
   writeManifest,
   toSqlInList,
+  validateIds,
 } from './lib/migration-utils';
 
 // ─── Column definitions per table ──────────────────────────────
@@ -451,7 +452,10 @@ export async function exportData(
     if (!storagePath) continue;
 
     const srcPath = path.join(fileStoragePath, storagePath);
-    if (!existsSync(srcPath)) continue;
+    if (!existsSync(srcPath)) {
+      console.warn(`WARNING: source file not found, skipping: ${srcPath}`);
+      continue;
+    }
 
     const destPath = path.join(outputDir, 'files', storagePath);
 
@@ -510,6 +514,7 @@ async function main(): Promise<void> {
   }
 
   const userIds = usersArg.split(',').map((s) => s.trim()).filter(Boolean);
+  validateIds(userIds, 'user ID');
 
   console.log(`Exporting data for ${userIds.length} users...`);
   if (dryRun) console.log('[DRY RUN] No files will be written.');

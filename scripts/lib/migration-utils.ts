@@ -33,6 +33,21 @@ function escapeString(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+/** Alphanumeric + underscore pattern for safe SQL interpolation of IDs */
+const SAFE_ID_PATTERN = /^[a-z0-9_-]+$/i;
+
+/**
+ * Validate that all IDs are safe for SQL interpolation.
+ * Throws if any ID contains unexpected characters.
+ */
+export function validateIds(ids: string[], label = 'ID'): void {
+  for (const id of ids) {
+    if (!SAFE_ID_PATTERN.test(id)) {
+      throw new Error(`Invalid ${label}: "${id}" — expected alphanumeric/underscore/hyphen characters only`);
+    }
+  }
+}
+
 /**
  * Build a SQL IN-list from an array of string IDs, with escaping.
  * Returns "''" (empty string literal) for empty arrays to keep SQL valid.

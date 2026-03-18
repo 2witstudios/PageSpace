@@ -20,7 +20,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
-import { fileChecksum, toSqlInList } from './lib/migration-utils';
+import { fileChecksum, toSqlInList, validateIds } from './lib/migration-utils';
 
 async function queryIds(
   db: DbClient,
@@ -249,6 +249,7 @@ async function main(): Promise<void> {
   }
 
   const userIds = usersArg.split(',').map((s) => s.trim()).filter(Boolean);
+  validateIds(userIds, 'user ID');
 
   console.log('Validating migration integrity...');
 

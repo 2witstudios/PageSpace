@@ -2,7 +2,6 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 const dbNodeModules = path.resolve(__dirname, '../packages/db/node_modules');
-const rootNodeModules = path.resolve(__dirname, '../node_modules');
 
 export default defineConfig({
   resolve: {
