@@ -28,14 +28,17 @@ export function createAlertingService(deps: AlertingDeps) {
   const { transports, deduplicationWindowMs = 60 * 60 * 1000 } = deps
   const lastAlertTime = new Map<string, number>()
 
-  async function broadcast(payload: AlertPayload | RecoveryPayload): Promise<void> {
+  async function broadcast(payload: AlertPayload | RecoveryPayload): Promise<boolean> {
+    let delivered = false
     for (const transport of transports) {
       try {
         await transport.send(payload)
+        delivered = true
       } catch {
         // Best-effort delivery — continue to other transports
       }
     }
+    return delivered
   }
 
   return {
@@ -52,9 +55,7 @@ export function createAlertingService(deps: AlertingDeps) {
         return
       }
 
-      lastAlertTime.set(input.tenantSlug, now)
-
-      await broadcast({
+      const delivered = await broadcast({
         type: 'alert',
         tenantSlug: input.tenantSlug,
         status: input.status,
@@ -62,6 +63,11 @@ export function createAlertingService(deps: AlertingDeps) {
         lastError: input.lastError,
         timestamp: new Date(now),
       })
+
+      // Only deduplicate after at least one transport succeeds
+      if (delivered) {
+        lastAlertTime.set(input.tenantSlug, now)
+      }
     },
 
     async sendRecovery(input: {

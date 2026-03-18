@@ -1,3 +1,4 @@
+import { resolve } from 'path'
 import type { ShellExecutor } from './shell-executor'
 import { validateSlug } from '../validation/tenant-validation'
 
@@ -74,7 +75,7 @@ export function createBackupService(deps: BackupDeps) {
 
         // tar file storage (non-fatal — db dump is the primary backup)
         await executor.exec(
-          `${composeCmd(slug, 'exec -T web tar czf - /app/file_storage')} > ${filesPath}`,
+          `${composeCmd(slug, 'exec -T web tar czf - /app/storage')} > ${filesPath}`,
           { cwd: basePath }
         )
 
@@ -145,13 +146,17 @@ export function createBackupService(deps: BackupDeps) {
       const slugResult = validateSlug(slug)
       if (!slugResult.valid) throw new Error(`Invalid slug: ${slugResult.error}`)
 
-      if (!backupPath.startsWith(backupsPath + '/')) {
+      // Normalize and validate: must resolve within this tenant's backup directory,
+      // no path traversal, no shell metacharacters
+      const tenantBackupDir = `${backupsPath}/${slug}/`
+      const normalized = resolve(backupPath)
+      if (!normalized.startsWith(tenantBackupDir) || /[;&|`$(){}]/.test(backupPath)) {
         throw new Error('Backup path must be within the backups directory')
       }
 
       // Restore database
       const result = await executor.exec(
-        `gunzip -c ${backupPath} | ${composeCmd(slug, 'exec -T postgres psql -U pagespace -d pagespace')}`,
+        `gunzip -c ${normalized} | ${composeCmd(slug, 'exec -T postgres psql -U pagespace -d pagespace')}`,
         { cwd: basePath }
       )
       if (result.exitCode !== 0) {
@@ -159,7 +164,7 @@ export function createBackupService(deps: BackupDeps) {
       }
 
       // Restore files (non-fatal — archive may not exist)
-      const filesBackupPath = backupPath.replace('.sql.gz', '-files.tar.gz')
+      const filesBackupPath = normalized.replace('.sql.gz', '-files.tar.gz')
       try {
         await executor.exec(
           `${composeCmd(slug, 'exec -T web tar xzf - -C /')} < ${filesBackupPath}`,

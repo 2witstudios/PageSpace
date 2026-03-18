@@ -70,7 +70,7 @@ describe('BackupService', () => {
       expect(dumpCall![1]).toEqual(expect.objectContaining({ cwd: '/data/tenants' }))
     })
 
-    test('given a tenant slug, should tar the file_storage volume', async () => {
+    test('given a tenant slug, should tar the storage volume', async () => {
       const deps = makeDeps()
       const service = createBackupService(deps)
 
@@ -82,7 +82,7 @@ describe('BackupService', () => {
       expect(tarCall).toBeDefined()
       expect(tarCall![0]).toContain('docker compose -p ps-acme')
       expect(tarCall![0]).toContain('-f /opt/infrastructure/docker-compose.tenant.yml')
-      expect(tarCall![0]).toContain('file_storage')
+      expect(tarCall![0]).toContain('storage')
       expect(tarCall![1]).toEqual(expect.objectContaining({ cwd: '/data/tenants' }))
     })
 
@@ -402,6 +402,39 @@ describe('BackupService', () => {
 
       await expect(
         service.restoreTenant('acme', '/etc/passwd')
+      ).rejects.toThrow('Backup path must be within the backups directory')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given a backupPath for a different tenant, should reject', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.restoreTenant('acme', '/data/backups/beta/2025-01-15.sql.gz')
+      ).rejects.toThrow('Backup path must be within the backups directory')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given a backupPath with path traversal, should reject', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.restoreTenant('acme', '/data/backups/acme/../beta/2025-01-15.sql.gz')
+      ).rejects.toThrow('Backup path must be within the backups directory')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given a backupPath with shell metacharacters, should reject', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.restoreTenant('acme', '/data/backups/acme/$(whoami).sql.gz')
       ).rejects.toThrow('Backup path must be within the backups directory')
 
       expect(deps.executor.exec).not.toHaveBeenCalled()

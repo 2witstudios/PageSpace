@@ -219,5 +219,26 @@ describe('AlertingService', () => {
 
       expect(workingTransport.send).toHaveBeenCalledTimes(1)
     })
+
+    test('given all transports fail, should not deduplicate so retries can succeed', async () => {
+      const failingTransport = { send: vi.fn().mockRejectedValue(new Error('SMTP error')) }
+      const deps = makeDeps({ transports: [failingTransport] })
+      const service = createAlertingService(deps)
+
+      await service.sendAlert({
+        tenantSlug: 'acme',
+        status: 'unhealthy',
+        consecutiveFailures: 3,
+      })
+
+      // Second attempt should NOT be deduplicated since first delivery failed
+      await service.sendAlert({
+        tenantSlug: 'acme',
+        status: 'unhealthy',
+        consecutiveFailures: 4,
+      })
+
+      expect(failingTransport.send).toHaveBeenCalledTimes(2)
+    })
   })
 })
