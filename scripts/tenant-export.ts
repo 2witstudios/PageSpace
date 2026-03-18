@@ -287,12 +287,27 @@ export async function exportData(
     usersData.push(...additionalUsers);
   }
 
+  // Strip suspension flags — these may be set as a migration read-only lock
+  // on the shared instance and must not leak into the tenant
+  for (const user of usersData) {
+    user.suspendedAt = null;
+    user.suspendedReason = null;
+  }
+
+  // Build the authoritative set of all users in the export (initial + discovered)
+  const allExportedUserIdSet = new Set(usersData.map((u) => u.id as string));
+  const allUserIdPlaceholders = [...allExportedUserIdSet].map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+
   const channelMessageIds = channelMessagesData.map((r) => r.id as string);
-  const channelReactionsData = channelMessageIds.length > 0
+  // Filter reactions to only include those from exported users (userId is NOT NULL)
+  const channelReactionsDataRaw = channelMessageIds.length > 0
     ? await queryRows(db, sql.raw(
         `SELECT * FROM channel_message_reactions WHERE "messageId" IN (${channelMessageIds.map((id) => `'${id}'`).join(', ')})`,
       ))
     : [];
+  const channelReactionsData = channelReactionsDataRaw.filter(
+    (r) => allExportedUserIdSet.has(r.userId as string),
+  );
 
   const channelReadStatusData = await queryRows(db, sql.raw(
     `SELECT * FROM channel_read_status WHERE "userId" IN (${userIdPlaceholders}) AND "channelId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
@@ -303,16 +318,17 @@ export async function exportData(
   ));
   const conversationIds = conversationsData.map((r) => r.id as string);
 
+  // Filter messages to only include those from exported users (userId is NOT NULL)
   const messagesData = conversationIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM messages WHERE "conversationId" IN (${conversationIds.map((id) => `'${id}'`).join(', ')})`,
+        `SELECT * FROM messages WHERE "conversationId" IN (${conversationIds.map((id) => `'${id}'`).join(', ')}) AND "userId" IN (${allUserIdPlaceholders})`,
       ))
     : [];
 
   const filesData = await queryRows(db, sql.raw(
     `SELECT * FROM files WHERE "driveId" IN (${driveIdPlaceholders})`,
   ));
-  nullifyOrphanedUserRefs(filesData, userIdSet, 'createdBy');
+  nullifyOrphanedUserRefs(filesData, allExportedUserIdSet, 'createdBy');
   const fileIds = filesData.map((r) => r.id as string);
 
   const filePagesData = fileIds.length > 0
@@ -320,16 +336,17 @@ export async function exportData(
         `SELECT * FROM file_pages WHERE "fileId" IN (${fileIds.map((id) => `'${id}'`).join(', ')})`,
       ))
     : [];
-  nullifyOrphanedUserRefs(filePagesData, userIdSet, 'linkedBy');
+  nullifyOrphanedUserRefs(filePagesData, allExportedUserIdSet, 'linkedBy');
 
   const permissionsData = await queryRows(db, sql.raw(
     `SELECT * FROM permissions WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
   ));
 
+  // Filter page permissions to only include exported users (userId is NOT NULL)
   const pagePermissionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM page_permissions WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM page_permissions WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "userId" IN (${allUserIdPlaceholders})`,
   ));
-  nullifyOrphanedUserRefs(pagePermissionsData, userIdSet, 'grantedBy');
+  nullifyOrphanedUserRefs(pagePermissionsData, allExportedUserIdSet, 'grantedBy');
 
   // Tags referenced by exported pages
   const pageTagsData = await queryRows(db, sql.raw(
@@ -347,10 +364,11 @@ export async function exportData(
     `SELECT * FROM mentions WHERE "sourcePageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "targetPageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
   ));
 
+  // Filter user mentions to only include exported target users (targetUserId is NOT NULL)
   const userMentionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM user_mentions WHERE "sourcePageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM user_mentions WHERE "sourcePageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "targetUserId" IN (${allUserIdPlaceholders})`,
   ));
-  nullifyOrphanedUserRefs(userMentionsData, userIdSet, 'mentionedByUserId');
+  nullifyOrphanedUserRefs(userMentionsData, allExportedUserIdSet, 'mentionedByUserId');
 
   const favoritesData = await queryRows(db, sql.raw(
     `SELECT * FROM favorites WHERE "userId" IN (${userIdPlaceholders})`,

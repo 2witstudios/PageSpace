@@ -5,7 +5,7 @@
  *
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -49,6 +49,12 @@ beforeEach(async () => {
   const blobDir = path.join(fileStoragePath, 'test_file_blob_001');
   await mkdir(blobDir, { recursive: true });
   await writeFile(path.join(blobDir, 'data.txt'), '0123456789'); // 10 bytes
+});
+
+afterEach(async () => {
+  if (tmpDir && existsSync(tmpDir)) {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('discoverDrives', () => {
@@ -303,6 +309,49 @@ describe('exportData', () => {
     expect(result.sqlStatements).toContain('page_permissions');
     // The export should complete without error
     expect(result.manifest.tableCounts.pagePermissions).toBe(1);
+  });
+
+  it('excludes page_permissions for non-exported users', async () => {
+    // Add a page_permission for outsider user (not in migrated set)
+    const { sql: sqlFn } = await import('drizzle-orm');
+    await db.execute(sqlFn.raw(
+      `INSERT INTO page_permissions (id, "pageId", "userId", "canView", "canEdit", "canShare", "canDelete", "grantedBy", "grantedAt")
+       VALUES ('test_pp_outsider', '${FIXTURES.pages.root.id}', '${FIXTURES.users.outsider.id}', true, false, false, false, '${FIXTURES.users.owner.id}', NOW())`,
+    ));
+
+    const outputDir = path.join(tmpDir, 'bundle-fk-filter');
+    const result = await exportData(db as never, {
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      outputDir,
+      fileStoragePath,
+      databaseUrl: getTestDatabaseUrl(),
+      dryRun: false,
+    });
+
+    // The outsider's page_permission should be excluded (userId is NOT NULL, can't nullify)
+    // Only the original pp1 for FIXTURES.users.member should remain
+    expect(result.manifest.tableCounts.pagePermissions).toBe(1);
+    expect(result.sqlStatements).not.toContain(FIXTURES.users.outsider.id);
+  });
+
+  it('strips suspendedAt from exported users', async () => {
+    // Simulate the migration read-only lock
+    const { sql: sqlFn } = await import('drizzle-orm');
+    await db.execute(sqlFn.raw(
+      `UPDATE users SET "suspendedAt" = NOW(), "suspendedReason" = 'Migration in progress' WHERE id = '${FIXTURES.users.owner.id}'`,
+    ));
+
+    const outputDir = path.join(tmpDir, 'bundle-suspend');
+    const result = await exportData(db as never, {
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      outputDir,
+      fileStoragePath,
+      databaseUrl: getTestDatabaseUrl(),
+      dryRun: false,
+    });
+
+    // The SQL should NOT contain 'Migration in progress'
+    expect(result.sqlStatements).not.toContain('Migration in progress');
   });
 
   it('throws when no drives found for specified users', async () => {

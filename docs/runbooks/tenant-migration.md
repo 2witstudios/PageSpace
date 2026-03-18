@@ -35,6 +35,7 @@ Step-by-step procedure for migrating a team from the shared PageSpace SaaS insta
    UPDATE users SET "suspendedAt" = NOW(), "suspendedReason" = 'Migration in progress'
    WHERE id IN ('user1', 'user2', ...);
    ```
+   > **Note:** The export script automatically strips `suspendedAt` and `suspendedReason` from exported user records, so users will not be suspended on the tenant after import.
 
 5. **Verify target tenant** is accessible and has an empty database with the correct schema:
    ```bash
