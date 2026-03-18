@@ -2,4 +2,8 @@ export { createShellExecutor, createMockExecutor, type ShellExecutor, type ExecR
 export { createAdminSeeder, type TenantDbConnection, type SeedInput, type SeedResult } from './admin-seeder'
 export { createProvisioningEngine, type ProvisioningDeps } from './provisioning-engine'
 export { createTenantLifecycle, type LifecycleDeps } from './tenant-lifecycle'
+export { createBackupService, type BackupDeps, type BackupServiceRepo, type BackupFs } from './backup-service'
+export { createHealthMonitor, type HealthMonitorDeps, type HealthMonitorRepo, type HttpClient } from './health-monitor'
+export { createUpgradeService, type UpgradeDeps } from './upgrade-service'
+export { createAlertingService, type AlertingDeps, type AlertTransport, type AlertPayload, type RecoveryPayload } from './alerting-service'
 export type { Tenant, TenantRepo } from './types'
