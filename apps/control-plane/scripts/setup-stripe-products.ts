@@ -56,11 +56,13 @@ export async function setupStripeProducts(stripe: StripeClient): Promise<SetupRe
     limit: 100,
   })
 
+  const pricedWithTier = existingPrices.data.filter((p) => p.metadata?.tier)
+
   const existingTiers = new Set(
-    existingPrices.data.map((p) => p.metadata.tier)
+    pricedWithTier.map((p) => p.metadata.tier)
   )
 
-  const prices: Array<{ id: string; tier: string }> = existingPrices.data.map((p) => ({
+  const prices: Array<{ id: string; tier: string }> = pricedWithTier.map((p) => ({
     id: p.id,
     tier: p.metadata.tier,
   }))
