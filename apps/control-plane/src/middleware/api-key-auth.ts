@@ -12,6 +12,7 @@ function safeCompare(a: string, b: string): boolean {
 async function apiKeyAuthPlugin(app: FastifyInstance) {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.url === '/api/health') return
+    if (request.url === '/api/webhooks/stripe') return
 
     const apiKey = process.env.CONTROL_PLANE_API_KEY
     if (!apiKey) {

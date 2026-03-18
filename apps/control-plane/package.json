@@ -22,7 +22,8 @@
     "drizzle-orm": "^0.32.2",
     "fastify": "^5.3.3",
     "fastify-plugin": "^5.1.0",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "stripe": "^20.1.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
