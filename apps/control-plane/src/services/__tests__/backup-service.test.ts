@@ -34,6 +34,8 @@ function makeDeps(overrides: Partial<BackupDeps> = {}): BackupDeps {
     repo: makeMockRepo(),
     fs: makeMockFs(),
     backupsPath: '/data/backups',
+    composePath: '/opt/infrastructure/docker-compose.tenant.yml',
+    basePath: '/data/tenants',
     now: () => FIXED_DATE,
     ...overrides,
   }
@@ -61,8 +63,11 @@ describe('BackupService', () => {
       )
       expect(dumpCall).toBeDefined()
       expect(dumpCall![0]).toContain('docker compose -p ps-acme')
+      expect(dumpCall![0]).toContain('-f /opt/infrastructure/docker-compose.tenant.yml')
+      expect(dumpCall![0]).toContain('--env-file /data/tenants/acme/.env')
       expect(dumpCall![0]).toContain('exec -T postgres pg_dump')
       expect(dumpCall![0]).toContain('gzip')
+      expect(dumpCall![1]).toEqual(expect.objectContaining({ cwd: '/data/tenants' }))
     })
 
     test('given a tenant slug, should tar the file_storage volume', async () => {
@@ -76,7 +81,9 @@ describe('BackupService', () => {
       )
       expect(tarCall).toBeDefined()
       expect(tarCall![0]).toContain('docker compose -p ps-acme')
+      expect(tarCall![0]).toContain('-f /opt/infrastructure/docker-compose.tenant.yml')
       expect(tarCall![0]).toContain('file_storage')
+      expect(tarCall![1]).toEqual(expect.objectContaining({ cwd: '/data/tenants' }))
     })
 
     test('given a tenant slug, should save backups with timestamp in filename', async () => {
@@ -219,11 +226,14 @@ describe('BackupService', () => {
 
       await service.pruneBackups('tenant-1', { daily: 7, weekly: 0 })
 
-      expect(deps.fs.unlink).toHaveBeenCalledTimes(3)
-      // Should delete the 3 oldest
+      // Should delete 3 SQL dumps + 3 companion file archives = 6 unlinks
+      expect(deps.fs.unlink).toHaveBeenCalledTimes(6)
       expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-01.sql.gz')
+      expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-01-files.tar.gz')
       expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-02.sql.gz')
+      expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-02-files.tar.gz')
       expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-03.sql.gz')
+      expect(deps.fs.unlink).toHaveBeenCalledWith('/data/backups/acme/2025-01-03-files.tar.gz')
     })
 
     test('given fewer backups than retention limit, should prune none', async () => {
@@ -257,10 +267,8 @@ describe('BackupService', () => {
 
       const result = await service.pruneBackups('tenant-1', { daily: 7, weekly: 2 })
 
-      // Keep 7 daily (most recent) + up to 2 weekly from the remaining 13
-      // Total deleted = 20 - 7 - (up to 2 weekly) = at least 11
-      expect(result.deleted).toBeGreaterThanOrEqual(11)
-      expect(result.deleted).toBeLessThanOrEqual(13)
+      // Keep 7 daily (Mar 14-20) + 2 weekly (Mar 13 from W11, Mar 9 from W10) = 9 kept
+      expect(result.deleted).toBe(11)
     })
 
     test('given only failed backups, should skip them in retention count', async () => {
@@ -298,20 +306,20 @@ describe('BackupService', () => {
   })
 
   describe('restoreTenant', () => {
-    test('given a valid backup path, should call pg restore with correct commands', async () => {
+    test('given a valid backup path, should call pg restore with compose args', async () => {
       const deps = makeDeps()
       const service = createBackupService(deps)
 
       await service.restoreTenant('acme', '/data/backups/acme/2025-01-15.sql.gz')
 
-      expect(deps.executor.exec).toHaveBeenCalledWith(
-        expect.stringContaining('gunzip'),
-        expect.any(Object)
+      const dbCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('gunzip')
       )
-      expect(deps.executor.exec).toHaveBeenCalledWith(
-        expect.stringContaining('ps-acme'),
-        expect.any(Object)
-      )
+      expect(dbCall).toBeDefined()
+      expect(dbCall![0]).toContain('ps-acme')
+      expect(dbCall![0]).toContain('-f /opt/infrastructure/docker-compose.tenant.yml')
+      expect(dbCall![0]).toContain('--env-file /data/tenants/acme/.env')
+      expect(dbCall![1]).toEqual(expect.objectContaining({ cwd: '/data/tenants' }))
     })
 
     test('given restore failure, should throw with error message', async () => {
@@ -333,6 +341,87 @@ describe('BackupService', () => {
       const result = await service.restoreTenant('acme', '/data/backups/acme/2025-01-15.sql.gz')
 
       expect(result.success).toBe(true)
+    })
+
+    test('given a backup with a companion files archive, should restore files after DB', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await service.restoreTenant('acme', '/data/backups/acme/2025-01-15.sql.gz')
+
+      const allCalls = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call: unknown[]) => call[0] as string
+      )
+      const dbRestoreIdx = allCalls.findIndex(c => c.includes('gunzip') && c.includes('psql'))
+      const fileRestoreIdx = allCalls.findIndex(c => c.includes('tar') && c.includes('xzf'))
+      expect(dbRestoreIdx).toBeGreaterThan(-1)
+      expect(fileRestoreIdx).toBeGreaterThan(dbRestoreIdx)
+      expect(allCalls[fileRestoreIdx]).toContain('2025-01-15-files.tar.gz')
+    })
+
+    test('given a backup without a companion files archive, should skip file restore gracefully', async () => {
+      const deps = makeDeps()
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 }) // DB restore succeeds
+        .mockResolvedValueOnce({ stdout: '', stderr: 'no such file', exitCode: 1 }) // file restore fails
+      const service = createBackupService(deps)
+
+      const result = await service.restoreTenant('acme', '/data/backups/acme/2025-01-15.sql.gz')
+
+      expect(result.success).toBe(true)
+    })
+  })
+
+  describe('slug validation', () => {
+    test('given an invalid slug in backupTenant, should reject without calling shell', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.backupTenant('tenant-1', '; rm -rf /')
+      ).rejects.toThrow('Invalid slug')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+      expect(deps.repo.createBackupRecord).not.toHaveBeenCalled()
+    })
+
+    test('given an invalid slug in restoreTenant, should reject without calling shell', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.restoreTenant('; rm -rf /', '/data/backups/acme/backup.sql.gz')
+      ).rejects.toThrow('Invalid slug')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given a backupPath outside the backups directory, should reject', async () => {
+      const deps = makeDeps()
+      const service = createBackupService(deps)
+
+      await expect(
+        service.restoreTenant('acme', '/etc/passwd')
+      ).rejects.toThrow('Backup path must be within the backups directory')
+
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('error handling', () => {
+    test('given backup failure AND repo update failure in catch, should still throw original error', async () => {
+      const deps = makeDeps()
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        stdout: '', stderr: 'connection refused', exitCode: 1,
+      })
+      ;(deps.repo.updateBackupRecord as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('DB unreachable')
+      )
+      const service = createBackupService(deps)
+
+      await expect(
+        service.backupTenant('tenant-1', 'acme')
+      ).rejects.toThrow('pg_dump failed')
     })
   })
 })

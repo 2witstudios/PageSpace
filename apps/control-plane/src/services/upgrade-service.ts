@@ -48,6 +48,15 @@ export function createUpgradeService(deps: UpgradeDeps) {
       throw new Error(`Pull failed: ${pullResult.stderr}`)
     }
 
+    // Run database migrations before recreating app containers
+    const migrateResult = await executor.exec(
+      composeCmd(tenant.slug, 'run --rm migrate'),
+      envOpts
+    )
+    if (migrateResult.exitCode !== 0) {
+      throw new Error(`Migration failed: ${migrateResult.stderr}`)
+    }
+
     // Recreate services one at a time, health check after each
     for (const service of UPGRADE_ORDER) {
       const result = await executor.exec(
@@ -57,7 +66,10 @@ export function createUpgradeService(deps: UpgradeDeps) {
       if (result.exitCode !== 0) {
         throw new Error(`Recreate ${service} failed: ${result.stderr}`)
       }
-      await pollHealth(tenant.slug)
+      const health = await pollHealth(tenant.slug)
+      if (!health.healthy) {
+        throw new Error(`Health check failed after recreating ${service}`)
+      }
     }
   }
 

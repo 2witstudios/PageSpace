@@ -1,4 +1,5 @@
 import type { ShellExecutor } from './shell-executor'
+import { validateSlug } from '../validation/tenant-validation'
 
 export type BackupServiceRepo = {
   createBackupRecord(input: { tenantId: string; backupPath: string; status: 'running' }): Promise<{ id: string }>
@@ -19,6 +20,8 @@ export type BackupDeps = {
   repo: BackupServiceRepo
   fs: BackupFs
   backupsPath: string
+  composePath: string
+  basePath: string
   now?: () => Date
 }
 
@@ -36,10 +39,17 @@ function getWeekKey(date: Date): string {
 }
 
 export function createBackupService(deps: BackupDeps) {
-  const { executor, repo, fs, backupsPath, now = () => new Date() } = deps
+  const { executor, repo, fs, backupsPath, composePath, basePath, now = () => new Date() } = deps
+
+  function composeCmd(slug: string, action: string): string {
+    return `docker compose -p ps-${slug} -f ${composePath} --env-file ${basePath}/${slug}/.env ${action}`
+  }
 
   return {
     async backupTenant(tenantId: string, slug: string): Promise<{ id: string; dbPath: string; filesPath: string }> {
+      const slugResult = validateSlug(slug)
+      if (!slugResult.valid) throw new Error(`Invalid slug: ${slugResult.error}`)
+
       const timestamp = formatTimestamp(now())
       const backupDir = `${backupsPath}/${slug}`
       const dbPath = `${backupDir}/${timestamp}.sql.gz`
@@ -55,7 +65,8 @@ export function createBackupService(deps: BackupDeps) {
 
       try {
         const dumpResult = await executor.exec(
-          `docker compose -p ps-${slug} exec -T postgres pg_dump -U pagespace -d pagespace | gzip > ${dbPath}`
+          `${composeCmd(slug, 'exec -T postgres pg_dump -U pagespace -d pagespace')} | gzip > ${dbPath}`,
+          { cwd: basePath }
         )
         if (dumpResult.exitCode !== 0) {
           throw new Error(`pg_dump failed: ${dumpResult.stderr}`)
@@ -63,7 +74,8 @@ export function createBackupService(deps: BackupDeps) {
 
         // tar file storage (non-fatal — db dump is the primary backup)
         await executor.exec(
-          `docker compose -p ps-${slug} exec -T web tar czf - /app/file_storage > ${filesPath}`
+          `${composeCmd(slug, 'exec -T web tar czf - /app/file_storage')} > ${filesPath}`,
+          { cwd: basePath }
         )
 
         const stats = await fs.stat(dbPath)
@@ -79,13 +91,17 @@ export function createBackupService(deps: BackupDeps) {
 
         return { id: record.id, dbPath, filesPath }
       } catch (error) {
-        await repo.updateBackupRecord(record.id, {
-          status: 'failed',
-          completedAt: now(),
-        })
-        await repo.recordEvent(tenantId, 'backup_failed', {
-          error: (error as Error).message,
-        })
+        try {
+          await repo.updateBackupRecord(record.id, {
+            status: 'failed',
+            completedAt: now(),
+          })
+          await repo.recordEvent(tenantId, 'backup_failed', {
+            error: (error as Error).message,
+          })
+        } catch {
+          // Best-effort status update
+        }
         throw error
       }
     },
@@ -118,6 +134,7 @@ export function createBackupService(deps: BackupDeps) {
       const toDelete = sorted.filter(b => !toKeep.has(b.id))
       for (const backup of toDelete) {
         try { await fs.unlink(backup.backupPath) } catch { /* file may not exist */ }
+        try { await fs.unlink(backup.backupPath.replace('.sql.gz', '-files.tar.gz')) } catch { /* companion archive may not exist */ }
         await repo.deleteBackupRecord(backup.id)
       }
 
@@ -125,13 +142,33 @@ export function createBackupService(deps: BackupDeps) {
     },
 
     async restoreTenant(slug: string, backupPath: string): Promise<{ success: boolean }> {
+      const slugResult = validateSlug(slug)
+      if (!slugResult.valid) throw new Error(`Invalid slug: ${slugResult.error}`)
+
+      if (!backupPath.startsWith(backupsPath + '/')) {
+        throw new Error('Backup path must be within the backups directory')
+      }
+
+      // Restore database
       const result = await executor.exec(
-        `gunzip -c ${backupPath} | docker compose -p ps-${slug} exec -T postgres psql -U pagespace -d pagespace`,
-        { cwd: backupsPath }
+        `gunzip -c ${backupPath} | ${composeCmd(slug, 'exec -T postgres psql -U pagespace -d pagespace')}`,
+        { cwd: basePath }
       )
       if (result.exitCode !== 0) {
         throw new Error(`Restore failed: ${result.stderr}`)
       }
+
+      // Restore files (non-fatal — archive may not exist)
+      const filesBackupPath = backupPath.replace('.sql.gz', '-files.tar.gz')
+      try {
+        await executor.exec(
+          `${composeCmd(slug, 'exec -T web tar xzf - -C /')} < ${filesBackupPath}`,
+          { cwd: basePath }
+        )
+      } catch {
+        // Best-effort file restoration
+      }
+
       return { success: true }
     },
   }

@@ -137,6 +137,23 @@ describe('UpgradeService', () => {
       expect(deps.pollHealth).toHaveBeenCalledTimes(4)
       expect(deps.pollHealth).toHaveBeenCalledWith('acme')
     })
+
+    test('given a tenant upgrade, should run migrate before recreating app containers', async () => {
+      const deps = makeDeps()
+      const service = createUpgradeService(deps)
+
+      await service.upgradeAll({ imageTag: 'v2.0.0' })
+
+      const allCalls = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call: unknown[]) => call[0] as string
+      )
+      const migrateIdx = allCalls.findIndex(c => c.includes('run --rm migrate'))
+      const firstRecreateIdx = allCalls.findIndex(c => c.includes('up -d --no-deps'))
+
+      expect(migrateIdx).toBeGreaterThan(-1)
+      expect(firstRecreateIdx).toBeGreaterThan(-1)
+      expect(migrateIdx).toBeLessThan(firstRecreateIdx)
+    })
   })
 
   describe('failure handling', () => {
@@ -148,11 +165,7 @@ describe('UpgradeService', () => {
         makeTenant({ id: 't3', slug: 'gamma' }),
       ])
       // alpha succeeds, beta pull fails
-      ;(deps.executor.exec as ReturnType<typeof vi.fn>)
-        .mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }) // default success
-      let callCount = 0
       ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
-        callCount++
         if ((cmd as string).includes('ps-beta') && (cmd as string).includes('pull')) {
           return { stdout: '', stderr: 'pull failed', exitCode: 1 }
         }
@@ -195,6 +208,22 @@ describe('UpgradeService', () => {
         (call: unknown[]) => (call[0] as string).includes('ps-gamma')
       )
       expect(gammaCalls.length).toBeGreaterThan(0)
+    })
+
+    test('given pollHealth returns unhealthy after service restart, should record upgrade_failed', async () => {
+      const deps = makeDeps()
+      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockResolvedValue({ healthy: false })
+      const service = createUpgradeService(deps)
+
+      const result = await service.upgradeAll({ imageTag: 'v2.0.0' })
+
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0].error).toContain('Health check failed')
+      expect(deps.repo.recordEvent).toHaveBeenCalledWith(
+        'tenant-1',
+        'upgrade_failed',
+        expect.objectContaining({ error: expect.stringContaining('Health check failed') })
+      )
     })
 
     test('given tenant upgrade failure, should record upgrade_failed event', async () => {
