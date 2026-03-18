@@ -56,16 +56,20 @@ export async function setupStripeProducts(stripe: StripeClient): Promise<SetupRe
     limit: 100,
   })
 
-  const pricedWithTier = existingPrices.data.filter((p) => p.metadata?.tier)
+  // Deduplicate by tier — if multiple prices share the same tier metadata, keep the first
+  const tierMap = new Map<string, string>()
+  for (const p of existingPrices.data) {
+    const tier = p.metadata?.tier
+    if (tier && !tierMap.has(tier)) {
+      tierMap.set(tier, p.id)
+    }
+  }
 
-  const existingTiers = new Set(
-    pricedWithTier.map((p) => p.metadata.tier)
+  const existingTiers = new Set(tierMap.keys())
+
+  const prices: Array<{ id: string; tier: string }> = [...tierMap.entries()].map(
+    ([tier, id]) => ({ id, tier })
   )
-
-  const prices: Array<{ id: string; tier: string }> = pricedWithTier.map((p) => ({
-    id: p.id,
-    tier: p.metadata.tier,
-  }))
 
   for (const tierConfig of PRICE_TIERS) {
     if (existingTiers.has(tierConfig.tier)) continue
