@@ -1,6 +1,6 @@
 # Operational Tooling Epic
 
-**Status**: PLANNED
+**Status**: IN PROGRESS
 **Goal**: Day-2 operations for managing N tenant stacks: backups, health monitoring, rolling upgrades, and alerting
 
 ## Overview
