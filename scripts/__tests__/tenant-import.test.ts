@@ -5,7 +5,7 @@
  *
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -22,7 +22,7 @@ import {
   type TestDb,
 } from './setup';
 import { exportData } from '../tenant-export';
-import { runImport, splitSqlStatements } from '../tenant-import';
+import { runImport } from '../tenant-import';
 
 let db: TestDb;
 let tmpDir: string;
@@ -63,24 +63,10 @@ beforeEach(async () => {
   });
 });
 
-describe('splitSqlStatements', () => {
-  it('splits multi-line INSERT statements correctly', () => {
-    const sql = `-- comment
-BEGIN;
-
-INSERT INTO "users" ("id", "name")
-VALUES
-  ('a', 'Alice'),
-  ('b', 'Bob')
-ON CONFLICT DO NOTHING;
-
-COMMIT;
-`;
-    const stmts = splitSqlStatements(sql);
-    expect(stmts).toHaveLength(3); // BEGIN, INSERT, COMMIT
-    expect(stmts[1]).toContain('INSERT INTO');
-    expect(stmts[1]).toContain('Alice');
-  });
+afterEach(async () => {
+  if (tmpDir && existsSync(tmpDir)) {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('runImport', () => {
@@ -226,6 +212,46 @@ describe('runImport', () => {
     // Verify no data was written
     const usersResult = await db.execute(sql.raw(`SELECT count(*) as count FROM users`));
     expect(Number((usersResult.rows as Record<string, unknown>[])[0].count)).toBe(0);
+  });
+
+  it('round-trips page content with semicolons and SQL-like comments', async () => {
+    const contentWithSemicolons = 'const x = 1;\n-- SQL comment\nconst y = 2;';
+
+    await db.execute(sql.raw(
+      `UPDATE pages SET content = '${contentWithSemicolons.replace(/'/g, "''")}' WHERE id = '${FIXTURES.pages.root.id}'`,
+    ));
+
+    // Re-export with the new content
+    const semiBundle = path.join(tmpDir, 'semicolon-bundle');
+    const srcFiles = path.join(tmpDir, 'src-files-semi');
+    await mkdir(srcFiles, { recursive: true });
+
+    await exportData(db as never, {
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      outputDir: semiBundle,
+      fileStoragePath: srcFiles,
+      databaseUrl: getTestDatabaseUrl(),
+      dryRun: false,
+    });
+
+    // Truncate and reimport
+    await truncateAll(db);
+    const tgtFiles = path.join(tmpDir, 'tgt-files-semi');
+    await mkdir(tgtFiles, { recursive: true });
+
+    await runImport({
+      bundleDir: semiBundle,
+      databaseUrl: getTestDatabaseUrl(),
+      fileStoragePath: tgtFiles,
+      dryRun: false,
+    });
+
+    // Verify content survived the round-trip
+    const result = await db.execute(sql.raw(
+      `SELECT content FROM pages WHERE id = '${FIXTURES.pages.root.id}'`,
+    ));
+    const rows = result.rows as Record<string, unknown>[];
+    expect(rows[0].content).toBe(contentWithSemicolons);
   });
 
   it('rolls back on SQL error (all-or-nothing)', async () => {

@@ -71,7 +71,9 @@ export async function runImport(options: ImportOptions): Promise<ImportResult> {
     };
   }
 
-  // 4. Execute SQL in a transaction
+  // 4. Execute SQL as a single multi-statement query
+  // The pg driver natively handles multi-statement strings and returns
+  // an array of QueryResult objects. The SQL already contains BEGIN/COMMIT.
   const pool = new Pool({ connectionString: databaseUrl, ssl: false });
   const client = await pool.connect();
 
@@ -79,27 +81,18 @@ export async function runImport(options: ImportOptions): Promise<ImportResult> {
   let rowsSkipped = 0;
 
   try {
-    // Split the SQL into individual statements, filtering out comments/empty
-    const statements = splitSqlStatements(sqlContent);
-
-    await client.query('BEGIN');
-
-    for (const stmt of statements) {
-      const trimmed = stmt.trim();
-      if (!trimmed || trimmed === 'BEGIN;' || trimmed === 'COMMIT;') continue;
-
-      const result = await client.query(trimmed);
-      if (result.rowCount !== null && result.rowCount !== undefined) {
-        rowsImported += result.rowCount;
+    const result = await client.query(sqlContent);
+    // pg returns QueryResult[] for multi-statement queries
+    const results = Array.isArray(result) ? result : [result];
+    for (const r of results) {
+      if (typeof r.rowCount === 'number') {
+        rowsImported += r.rowCount;
       }
     }
-
-    await client.query('COMMIT');
-
-    // Calculate skipped rows (expected - actual imported)
     rowsSkipped = Math.max(0, totalExpected - rowsImported);
   } catch (err) {
-    await client.query('ROLLBACK');
+    // The SQL's BEGIN started a transaction; clear the aborted state
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -125,37 +118,6 @@ export async function runImport(options: ImportOptions): Promise<ImportResult> {
     rowsSkipped,
     filesImported,
   };
-}
-
-/**
- * Split a SQL file into individual statements.
- * Handles multi-line INSERT statements correctly.
- */
-export function splitSqlStatements(sql: string): string[] {
-  const statements: string[] = [];
-  let current = '';
-
-  for (const line of sql.split('\n')) {
-    const trimmed = line.trim();
-
-    // Skip comments
-    if (trimmed.startsWith('--')) continue;
-
-    current += line + '\n';
-
-    // Statement ends with semicolon
-    if (trimmed.endsWith(';')) {
-      const stmt = current.trim();
-      if (stmt) statements.push(stmt);
-      current = '';
-    }
-  }
-
-  // Handle any trailing statement without semicolon
-  const remaining = current.trim();
-  if (remaining) statements.push(remaining);
-
-  return statements;
 }
 
 // ─── CLI entry point ──────────────────────────────
