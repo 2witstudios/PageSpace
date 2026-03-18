@@ -69,6 +69,13 @@ Step-by-step procedure for migrating a team from the shared PageSpace SaaS insta
    rsync -avz ./migration-bundle/ target-host:/tmp/migration-bundle/
    ```
 
+> **Security:** The export bundle contains sensitive data including password hashes,
+> Stripe customer IDs, and user email addresses. Treat it as confidential:
+> - Transfer over encrypted channels (rsync over SSH, scp)
+> - Delete the bundle from intermediate hosts after import
+> - Do not commit the bundle to version control
+> - Restrict file permissions: `chmod 600 migration-bundle/data.sql`
+
 ### Rollback: Export
 - Delete the export bundle: `rm -rf ./migration-bundle`
 - Remove read-only flag and notify team

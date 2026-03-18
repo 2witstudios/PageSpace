@@ -74,7 +74,7 @@ export async function runImport(options: ImportOptions): Promise<ImportResult> {
   // 4. Execute SQL as a single multi-statement query
   // The pg driver natively handles multi-statement strings and returns
   // an array of QueryResult objects. The SQL already contains BEGIN/COMMIT.
-  const pool = new Pool({ connectionString: databaseUrl, ssl: false });
+  const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
 
   let rowsImported = 0;

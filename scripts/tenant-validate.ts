@@ -18,11 +18,9 @@ import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { existsSync } from 'fs';
 import path from 'path';
-import type { ValidateOptions, ValidationResult } from './lib/migration-types';
+import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
 import { fileChecksum } from './lib/migration-utils';
-
-type DbClient = ReturnType<typeof drizzle>;
 
 async function queryIds(
   db: DbClient,
@@ -101,8 +99,8 @@ export interface FullValidationResult {
 export async function runValidation(
   options: ValidateOptions,
 ): Promise<FullValidationResult> {
-  const sourcePool = new Pool({ connectionString: options.sourceDatabaseUrl, ssl: false });
-  const targetPool = new Pool({ connectionString: options.targetDatabaseUrl, ssl: false });
+  const sourcePool = new Pool({ connectionString: options.sourceDatabaseUrl });
+  const targetPool = new Pool({ connectionString: options.targetDatabaseUrl });
   const sourceDb = drizzle(sourcePool);
   const targetDb = drizzle(targetPool);
 

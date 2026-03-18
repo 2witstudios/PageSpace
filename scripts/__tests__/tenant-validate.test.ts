@@ -23,6 +23,7 @@ import {
 } from './setup';
 import { validateData } from '../tenant-validate';
 import { TABLE_IMPORT_ORDER } from '../lib/migration-types';
+import type { DbClient } from '../lib/migration-types';
 
 let db: TestDb;
 let tmpDir: string;
@@ -59,7 +60,7 @@ afterEach(async () => {
 
 describe('validateData', () => {
   it('reports success when source and target match', async () => {
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -79,7 +80,7 @@ describe('validateData', () => {
       `DELETE FROM pages WHERE id = '${FIXTURES.pages.grandchild.id}'`,
     ));
 
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -96,7 +97,7 @@ describe('validateData', () => {
     const targetFilePath = path.join(tmpDir, 'target-missing');
     await mkdir(targetFilePath, { recursive: true });
 
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -115,7 +116,7 @@ describe('validateData', () => {
     await mkdir(blobDir, { recursive: true });
     await writeFile(path.join(blobDir, 'data.txt'), 'DIFFERENT!');
 
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -128,7 +129,7 @@ describe('validateData', () => {
   });
 
   it('validates all 21 exported tables', async () => {
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -145,7 +146,7 @@ describe('validateData', () => {
   });
 
   it('reports correct counts for seeded data', async () => {
-    const result = await validateData(db as never, db as never, {
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],

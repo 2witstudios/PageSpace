@@ -21,7 +21,7 @@ import {
   type TestDb,
 } from './setup';
 import { exportData, discoverDrives } from '../tenant-export';
-import type { ExportManifest } from '../lib/migration-types';
+import type { ExportManifest, DbClient } from '../lib/migration-types';
 
 let db: TestDb;
 let tmpDir: string;
@@ -59,7 +59,7 @@ afterEach(async () => {
 
 describe('discoverDrives', () => {
   it('discovers drives where specified users are members', async () => {
-    const driveIds = await discoverDrives(db as never, [
+    const driveIds = await discoverDrives(db as unknown as DbClient, [
       FIXTURES.users.owner.id,
       FIXTURES.users.member.id,
     ]);
@@ -69,7 +69,7 @@ describe('discoverDrives', () => {
   });
 
   it('returns empty array for users with no drives', async () => {
-    const driveIds = await discoverDrives(db as never, ['nonexistent_user']);
+    const driveIds = await discoverDrives(db as unknown as DbClient, ['nonexistent_user']);
     expect(driveIds).toHaveLength(0);
   });
 });
@@ -77,7 +77,7 @@ describe('discoverDrives', () => {
 describe('exportData', () => {
   it('exports correct users', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -91,7 +91,7 @@ describe('exportData', () => {
 
   it('exports the shared drive', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -104,7 +104,7 @@ describe('exportData', () => {
 
   it('exports only specified users drive memberships', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -117,7 +117,7 @@ describe('exportData', () => {
 
   it('exports all pages in drive maintaining tree structure', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -135,7 +135,7 @@ describe('exportData', () => {
 
   it('exports chat messages', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -148,7 +148,7 @@ describe('exportData', () => {
 
   it('exports files and copies blobs', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -168,7 +168,7 @@ describe('exportData', () => {
 
   it('exports permissions', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -182,7 +182,7 @@ describe('exportData', () => {
 
   it('exports tags and page-tag links', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -196,7 +196,7 @@ describe('exportData', () => {
 
   it('exports mentions and user mentions', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -210,7 +210,7 @@ describe('exportData', () => {
 
   it('exports favorites', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -223,7 +223,7 @@ describe('exportData', () => {
 
   it('produces correct manifest with row counts', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -248,7 +248,7 @@ describe('exportData', () => {
 
   it('writes data.sql with INSERT statements', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
-    await exportData(db as never, {
+    await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -270,7 +270,7 @@ describe('exportData', () => {
 
   it('dry-run does not write any files', async () => {
     const outputDir = path.join(tmpDir, 'dryrun-bundle');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -297,7 +297,7 @@ describe('exportData', () => {
     ));
 
     const outputDir = path.join(tmpDir, 'bundle-fk');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -320,7 +320,7 @@ describe('exportData', () => {
     ));
 
     const outputDir = path.join(tmpDir, 'bundle-fk-filter');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -342,7 +342,7 @@ describe('exportData', () => {
     ));
 
     const outputDir = path.join(tmpDir, 'bundle-suspend');
-    const result = await exportData(db as never, {
+    const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir,
       fileStoragePath,
@@ -356,7 +356,7 @@ describe('exportData', () => {
 
   it('throws when no drives found for specified users', async () => {
     await expect(
-      exportData(db as never, {
+      exportData(db as unknown as DbClient, {
         userIds: ['nonexistent_user_id'],
         outputDir: path.join(tmpDir, 'empty'),
         fileStoragePath,

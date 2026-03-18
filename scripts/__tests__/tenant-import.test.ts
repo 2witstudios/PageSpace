@@ -23,6 +23,7 @@ import {
 } from './setup';
 import { exportData } from '../tenant-export';
 import { runImport } from '../tenant-import';
+import type { DbClient } from '../lib/migration-types';
 
 let db: TestDb;
 let tmpDir: string;
@@ -54,7 +55,7 @@ beforeEach(async () => {
   await writeFile(path.join(blobDir, 'data.txt'), '0123456789');
 
   // Export a bundle we can import
-  await exportData(db as never, {
+  await exportData(db as unknown as DbClient, {
     userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
     outputDir: bundleDir,
     fileStoragePath,
@@ -226,7 +227,7 @@ describe('runImport', () => {
     const srcFiles = path.join(tmpDir, 'src-files-semi');
     await mkdir(srcFiles, { recursive: true });
 
-    await exportData(db as never, {
+    await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       outputDir: semiBundle,
       fileStoragePath: srcFiles,

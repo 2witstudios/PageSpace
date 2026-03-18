@@ -1,3 +1,8 @@
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+
+/** Drizzle database client type (schema-agnostic) */
+export type DbClient = NodePgDatabase<Record<string, never>>;
+
 /** Row counts per table in the export bundle */
 export interface ManifestTableCounts {
   users: number;

@@ -23,6 +23,7 @@ import type {
   ExportOptions,
   ExportManifest,
   ManifestTableCounts,
+  DbClient,
 } from './lib/migration-types';
 import {
   buildInsert,
@@ -31,6 +32,10 @@ import {
 } from './lib/migration-utils';
 
 // ─── Column definitions per table ──────────────────────────────
+// WARNING: These column lists must stay in sync with the Drizzle schema
+// in packages/db/src/schema/. If a column is added or renamed in the
+// schema, update the corresponding array here. A mismatch will cause
+// data loss (missing column) or an import error (extra column).
 
 const USER_COLUMNS = [
   'id', 'name', 'email', 'emailVerified', 'image', 'password',
@@ -132,8 +137,6 @@ const FAVORITE_COLUMNS = [
 
 // ─── Query helpers ──────────────────────────────
 
-type DbClient = ReturnType<typeof drizzle>;
-
 async function queryRows(db: DbClient, query: ReturnType<typeof sql>): Promise<Record<string, unknown>[]> {
   const result = await db.execute(query);
   return result.rows as Record<string, unknown>[];
@@ -201,7 +204,7 @@ export interface ExportResult {
  * Returns the manifest and SQL content (useful for testing).
  */
 export async function runExport(options: ExportOptions): Promise<ExportResult> {
-  const pool = new Pool({ connectionString: options.databaseUrl, ssl: false });
+  const pool = new Pool({ connectionString: options.databaseUrl });
   const db = drizzle(pool);
 
   try {
