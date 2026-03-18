@@ -7,6 +7,8 @@
 
 Each tenant gets a subdomain (`{slug}.pagespace.ai`) routing to their isolated Docker stack. Traefik v3 auto-discovers tenant containers via Docker labels, terminates TLS with a wildcard Let's Encrypt cert, and routes HTTP + WebSocket traffic to the right services. This replaces per-tenant nginx config with zero-touch auto-discovery.
 
+**Caddy coexistence**: The current production deploy at pagespace.ai (`/Users/jono/production/PageSpace-Deploy/`) uses Caddy for the main domain and all existing services. Traefik is additive — it handles only tenant subdomains (`*.pagespace.ai`). Both can run in parallel: Caddy on ports 80/443 for `pagespace.ai` and `www.pagespace.ai`, Traefik on internal ports for tenant routing, fronted by Caddy as a reverse proxy. A full Caddy-to-Traefik cutover is out of scope for this epic and should be tracked separately if needed.
+
 ---
 
 ## Traefik Static Config

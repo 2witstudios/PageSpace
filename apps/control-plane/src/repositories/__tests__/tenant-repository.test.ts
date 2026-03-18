@@ -338,4 +338,63 @@ describe('createTenantRepository', () => {
       expect(db._chain.limit).toHaveBeenCalledWith(50) // @scaffold
     })
   })
+
+  describe('getTenantByStripeSubscription', () => {
+    test('given an existing subscription id, should return the tenant', async () => {
+      const expected = makeTenant({ stripeSubscriptionId: 'sub_abc123' })
+      const db = createMockDb([expected])
+      const repo = createTenantRepository(db as never)
+
+      const result = await repo.getTenantByStripeSubscription('sub_abc123')
+
+      expect(result).toEqual(expected)
+      expect(db.select).toHaveBeenCalled()
+      expect(db._chain.where).toHaveBeenCalled()
+    })
+
+    test('given a nonexistent subscription id, should return null', async () => {
+      const db = createMockDb([])
+      const repo = createTenantRepository(db as never)
+
+      const result = await repo.getTenantByStripeSubscription('sub_missing')
+
+      expect(result).toBeNull()
+    })
+  })
+
+  describe('updateTenantStripeIds', () => {
+    test('given valid ids, should return updated tenant', async () => {
+      const updated = makeTenant({ stripeCustomerId: 'cus_new', stripeSubscriptionId: 'sub_new' })
+      const db = createMockDb([updated])
+      const repo = createTenantRepository(db as never)
+
+      const result = await repo.updateTenantStripeIds('test-id-123', 'cus_new', 'sub_new')
+
+      expect(result).toEqual(updated)
+      expect(db.update).toHaveBeenCalled()
+    })
+
+    test('given valid ids, should pass correct fields to db.update.set', async () => {
+      const db = createMockDb([makeTenant()])
+      const repo = createTenantRepository(db as never)
+
+      await repo.updateTenantStripeIds('test-id-123', 'cus_abc', 'sub_abc')
+
+      expect(db._chain.set).toHaveBeenCalled()
+      const setArg = (db._chain.set as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      expect(setArg).toMatchObject({
+        stripeCustomerId: 'cus_abc',
+        stripeSubscriptionId: 'sub_abc',
+      })
+      expect(setArg).toHaveProperty('updatedAt')
+    })
+
+    test('given nonexistent tenant, should throw', async () => {
+      const db = createMockDb([])
+      const repo = createTenantRepository(db as never)
+
+      await expect(repo.updateTenantStripeIds('missing', 'cus_x', 'sub_x'))
+        .rejects.toThrow('Tenant not found')
+    })
+  })
 })
