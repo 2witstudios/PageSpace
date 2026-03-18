@@ -16,12 +16,19 @@ type AdminSeeder = {
   }>
 }
 
+type ProvisioningEmailData = {
+  loginUrl: string
+  adminEmail: string
+  temporaryPassword?: string
+}
+
 export type ProvisioningDeps = {
   repo: TenantRepo
   executor: ShellExecutor
   fs: FsLike
   seeder: AdminSeeder
   pollHealth: (slug: string) => Promise<{ healthy: boolean }>
+  sendProvisioningEmail: (data: ProvisioningEmailData) => Promise<void>
   basePath: string
   scriptsPath: string
   composePath: string
@@ -40,7 +47,7 @@ function getEnvVar(envContent: string, name: string): string | undefined {
 }
 
 export function createProvisioningEngine(deps: ProvisioningDeps) {
-  const { repo, executor, fs, seeder, pollHealth, basePath, scriptsPath, composePath } = deps
+  const { repo, executor, fs, seeder, pollHealth, sendProvisioningEmail, basePath, scriptsPath, composePath } = deps
 
   return {
     async provision(request: ProvisionRequest) {
@@ -109,10 +116,24 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           databaseUrl,
         })
 
-        // Step 9: Update status to active
+        // Step 9: Send provisioning email (fire-and-forget — must not fail provisioning)
+        try {
+          const emailData: ProvisioningEmailData = {
+            loginUrl: `https://${request.slug}.pagespace.ai`,
+            adminEmail: request.ownerEmail,
+          }
+          if (!seedResult.alreadyExisted && seedResult.temporaryPassword) {
+            emailData.temporaryPassword = seedResult.temporaryPassword
+          }
+          await sendProvisioningEmail(emailData)
+        } catch {
+          // Email failure must NOT fail provisioning
+        }
+
+        // Step 10: Update status to active
         await repo.updateTenantStatus(tenant.id, 'active')
 
-        // Step 10: Record provisioned event
+        // Step 11: Record provisioned event
         await repo.recordEvent(tenant.id, 'provisioned', {
           ownerEmail: request.ownerEmail,
           tier: request.tier,

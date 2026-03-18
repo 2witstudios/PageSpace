@@ -54,6 +54,10 @@ function makeMockHealthPoller() {
   return vi.fn().mockResolvedValue({ healthy: true })
 }
 
+function makeMockEmailSender() {
+  return vi.fn().mockResolvedValue(undefined)
+}
+
 function makeDeps(overrides: Partial<ProvisioningDeps> = {}): ProvisioningDeps {
   return {
     repo: makeMockRepo(),
@@ -61,6 +65,7 @@ function makeDeps(overrides: Partial<ProvisioningDeps> = {}): ProvisioningDeps {
     fs: makeMockFs(),
     seeder: makeMockSeeder(),
     pollHealth: makeMockHealthPoller(),
+    sendProvisioningEmail: makeMockEmailSender(),
     basePath: '/data/tenants',
     scriptsPath: '/opt/infrastructure/scripts',
     composePath: '/opt/infrastructure/docker-compose.tenant.yml',
@@ -347,6 +352,67 @@ describe('ProvisioningEngine', () => {
     })
   })
 
+  describe('provisioning email', () => {
+    test('given a new admin user, should send provisioning email with credentials', async () => {
+      const deps = makeDeps()
+      const engine = createProvisioningEngine(deps)
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.sendProvisioningEmail).toHaveBeenCalledWith({
+        loginUrl: 'https://acme.pagespace.ai',
+        adminEmail: 'owner@acme.com',
+        temporaryPassword: 'TempPass!',
+      })
+    })
+
+    test('given an existing admin user, should send email without temporaryPassword', async () => {
+      const deps = makeDeps()
+      ;(deps.seeder.seed as ReturnType<typeof vi.fn>).mockResolvedValue({
+        email: 'owner@acme.com',
+        temporaryPassword: 'SomePass!',
+        alreadyExisted: true,
+      })
+      const engine = createProvisioningEngine(deps)
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.sendProvisioningEmail).toHaveBeenCalledWith({
+        loginUrl: 'https://acme.pagespace.ai',
+        adminEmail: 'owner@acme.com',
+      })
+    })
+
+    test('given email send failure, should not fail provisioning', async () => {
+      const deps = makeDeps()
+      ;(deps.sendProvisioningEmail as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('SMTP connection refused')
+      )
+      const engine = createProvisioningEngine(deps)
+
+      const result = await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(result.tenantId).toBe('tenant-123')
+      expect(deps.repo.updateTenantStatus).toHaveBeenCalledWith('tenant-123', 'active')
+    })
+
+    test('given email send failure, should still record provisioned event', async () => {
+      const deps = makeDeps()
+      ;(deps.sendProvisioningEmail as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('SMTP connection refused')
+      )
+      const engine = createProvisioningEngine(deps)
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.repo.recordEvent).toHaveBeenCalledWith(
+        'tenant-123',
+        'provisioned',
+        expect.any(Object)
+      )
+    })
+  })
+
   describe('step ordering', () => {
     test('given a valid request, should execute steps in the correct order', async () => {
       const callOrder: string[] = []
@@ -396,7 +462,11 @@ describe('ProvisioningEngine', () => {
         return { healthy: true }
       })
 
-      const deps = makeDeps({ repo, executor, fs, seeder, pollHealth })
+      const sendProvisioningEmail = vi.fn().mockImplementation(async () => {
+        callOrder.push('send-email')
+      })
+
+      const deps = makeDeps({ repo, executor, fs, seeder, pollHealth, sendProvisioningEmail })
       const engine = createProvisioningEngine(deps)
 
       await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
@@ -410,6 +480,7 @@ describe('ProvisioningEngine', () => {
         'compose-up',
         'poll-health',
         'seed-admin',
+        'send-email',
         'update-status',
         'record-event',
       ])
