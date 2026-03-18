@@ -353,6 +353,15 @@ describe('ProvisioningEngine', () => {
   })
 
   describe('provisioning email', () => {
+    test('given no sendProvisioningEmail dep, should provision successfully without sending email', async () => {
+      const { sendProvisioningEmail: _, ...depsWithoutEmail } = makeDeps()
+      const engine = createProvisioningEngine(depsWithoutEmail)
+
+      const result = await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(result.tenantId).toBe('tenant-123')
+    })
+
     test('given a new admin user, should send provisioning email with credentials', async () => {
       const deps = makeDeps()
       const engine = createProvisioningEngine(deps)

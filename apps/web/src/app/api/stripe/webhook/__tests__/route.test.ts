@@ -778,6 +778,34 @@ describe('POST /api/stripe/webhook', () => {
         }),
       );
     });
+
+    it('should still return 200 when control-plane returns non-2xx', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Tenant slug "acme" already exists' }),
+      });
+
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'business' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).toHaveBeenCalled();
+    });
   });
 
   describe('Event Processing', () => {

@@ -1,10 +1,17 @@
 import { loggers } from '@pagespace/lib/server';
 
+// Mirrors control-plane's tenant-validation.ts SLUG_PATTERN
+const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
 export async function GET(
   _request: Request,
   context: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await context.params;
+
+  if (!slug || slug.length < 3 || slug.length > 63 || !SLUG_PATTERN.test(slug)) {
+    return Response.json({ error: 'Invalid slug' }, { status: 400 });
+  }
 
   const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
   if (!controlPlaneUrl) {

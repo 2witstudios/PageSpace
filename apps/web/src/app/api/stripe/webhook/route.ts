@@ -305,11 +305,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
               tier,
             }),
           });
-          loggers.api.info('Control-plane provisioning triggered', {
-            slug,
-            tier,
-            status: response.status,
-          });
+          if (!response.ok) {
+            loggers.api.warn('Control-plane provisioning returned non-2xx', {
+              slug,
+              tier,
+              status: response.status,
+            });
+          } else {
+            loggers.api.info('Control-plane provisioning triggered', {
+              slug,
+              tier,
+              status: response.status,
+            });
+          }
         } catch (error) {
           loggers.api.error('Failed to trigger control-plane provisioning', error instanceof Error ? error : undefined, { slug });
         }

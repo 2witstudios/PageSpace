@@ -139,4 +139,38 @@ describe('GET /api/provisioning-status/[slug]', () => {
     expect(body.tier).toBeUndefined();
     expect(body.recentEvents).toBeUndefined();
   });
+
+  describe('slug validation', () => {
+    it('should return 400 for slug with path traversal characters', async () => {
+      const { request, context } = makeRequest('../../etc/passwd');
+      const response = await GET(request, context);
+
+      expect(response.status).toBe(400);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for slug that is too short', async () => {
+      const { request, context } = makeRequest('ab');
+      const response = await GET(request, context);
+
+      expect(response.status).toBe(400);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for slug with uppercase letters', async () => {
+      const { request, context } = makeRequest('AcMe');
+      const response = await GET(request, context);
+
+      expect(response.status).toBe(400);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for slug with spaces', async () => {
+      const { request, context } = makeRequest('my tenant');
+      const response = await GET(request, context);
+
+      expect(response.status).toBe(400);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+  });
 });

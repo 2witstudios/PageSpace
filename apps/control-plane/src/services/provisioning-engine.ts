@@ -28,7 +28,7 @@ export type ProvisioningDeps = {
   fs: FsLike
   seeder: AdminSeeder
   pollHealth: (slug: string) => Promise<{ healthy: boolean }>
-  sendProvisioningEmail: (data: ProvisioningEmailData) => Promise<void>
+  sendProvisioningEmail?: (data: ProvisioningEmailData) => Promise<void>
   basePath: string
   scriptsPath: string
   composePath: string
@@ -47,7 +47,11 @@ function getEnvVar(envContent: string, name: string): string | undefined {
 }
 
 export function createProvisioningEngine(deps: ProvisioningDeps) {
-  const { repo, executor, fs, seeder, pollHealth, sendProvisioningEmail, basePath, scriptsPath, composePath } = deps
+  const {
+    repo, executor, fs, seeder, pollHealth,
+    sendProvisioningEmail = async () => { console.warn('sendProvisioningEmail not configured — skipping provisioning email') },
+    basePath, scriptsPath, composePath,
+  } = deps
 
   return {
     async provision(request: ProvisionRequest) {
@@ -118,14 +122,13 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
 
         // Step 9: Send provisioning email (fire-and-forget — must not fail provisioning)
         try {
-          const emailData: ProvisioningEmailData = {
+          await sendProvisioningEmail({
             loginUrl: `https://${request.slug}.pagespace.ai`,
             adminEmail: request.ownerEmail,
-          }
-          if (!seedResult.alreadyExisted && seedResult.temporaryPassword) {
-            emailData.temporaryPassword = seedResult.temporaryPassword
-          }
-          await sendProvisioningEmail(emailData)
+            ...(!seedResult.alreadyExisted && seedResult.temporaryPassword
+              ? { temporaryPassword: seedResult.temporaryPassword }
+              : {}),
+          })
         } catch {
           // Email failure must NOT fail provisioning
         }
