@@ -1,6 +1,6 @@
 # Data Migration Tooling Epic
 
-**Status**: PLANNED
+**Status**: IMPLEMENTED
 **Goal**: Scripts to export a team's data from the shared SaaS instance and import into their isolated tenant
 
 ## Overview
