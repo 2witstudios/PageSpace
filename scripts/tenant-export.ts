@@ -29,6 +29,7 @@ import {
   buildInsert,
   computeFileChecksum,
   writeManifest,
+  toSqlInList,
 } from './lib/migration-utils';
 
 // ─── Column definitions per table ──────────────────────────────
@@ -152,10 +153,9 @@ export async function discoverDrives(
   userIds: string[],
 ): Promise<string[]> {
   if (userIds.length === 0) return [];
-  const placeholders = userIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
   const rows = await queryRows(
     db,
-    sql.raw(`SELECT DISTINCT "driveId" FROM drive_members WHERE "userId" IN (${placeholders})`),
+    sql.raw(`SELECT DISTINCT "driveId" FROM drive_members WHERE "userId" IN (${toSqlInList(userIds)})`),
   );
   return rows.map((r) => r.driveId as string);
 }
@@ -227,47 +227,48 @@ export async function exportData(
     throw new Error('No drives found for the specified users');
   }
 
-  const driveIdPlaceholders = driveIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
-  const userIdPlaceholders = userIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+  const driveIn = toSqlInList(driveIds);
+  const userIn = toSqlInList(userIds);
 
   // 2. Query all data
   const usersData = await queryRows(db, sql.raw(
-    `SELECT * FROM users WHERE id IN (${userIdPlaceholders})`,
+    `SELECT * FROM users WHERE id IN (${userIn})`,
   ));
 
   const userProfilesData = await queryRows(db, sql.raw(
-    `SELECT * FROM user_profiles WHERE "userId" IN (${userIdPlaceholders})`,
+    `SELECT * FROM user_profiles WHERE "userId" IN (${userIn})`,
   ));
 
   const drivesData = await queryRows(db, sql.raw(
-    `SELECT * FROM drives WHERE id IN (${driveIdPlaceholders})`,
+    `SELECT * FROM drives WHERE id IN (${driveIn})`,
   ));
 
   const driveRolesData = await queryRows(db, sql.raw(
-    `SELECT * FROM drive_roles WHERE "driveId" IN (${driveIdPlaceholders})`,
+    `SELECT * FROM drive_roles WHERE "driveId" IN (${driveIn})`,
   ));
 
   const driveMembersData = await queryRows(db, sql.raw(
-    `SELECT * FROM drive_members WHERE "driveId" IN (${driveIdPlaceholders}) AND "userId" IN (${userIdPlaceholders})`,
+    `SELECT * FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`,
   ));
   nullifyOrphanedUserRefs(driveMembersData, userIdSet, 'invitedBy');
 
   const pagesData = await queryRows(db, sql.raw(
-    `SELECT * FROM pages WHERE "driveId" IN (${driveIdPlaceholders})`,
+    `SELECT * FROM pages WHERE "driveId" IN (${driveIn})`,
   ));
   const pageIdSet = new Set(pagesData.map((r) => r.id as string));
+  const pageIn = toSqlInList(pageIdSet);
 
   // Null out parentId / originalParentId if they point outside exported pages
   nullifyOrphanedPageRefs(pagesData, pageIdSet, 'parentId', 'originalParentId');
 
   const chatMessagesData = await queryRows(db, sql.raw(
-    `SELECT * FROM chat_messages WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM chat_messages WHERE "pageId" IN (${pageIn})`,
   ));
   nullifyOrphanedUserRefs(chatMessagesData, userIdSet, 'userId');
   nullifyOrphanedPageRefs(chatMessagesData, pageIdSet, 'sourceAgentId');
 
   const channelMessagesData = await queryRows(db, sql.raw(
-    `SELECT * FROM channel_messages WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM channel_messages WHERE "pageId" IN (${pageIn})`,
   ));
 
   // For channel messages from non-exported users, we need to include those user records
@@ -283,9 +284,8 @@ export async function exportData(
   // Fetch any additional referenced users not in original set
   const additionalUserIds = [...referencedUserIds].filter((id) => !userIdSet.has(id));
   if (additionalUserIds.length > 0) {
-    const additionalPlaceholders = additionalUserIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
     const additionalUsers = await queryRows(db, sql.raw(
-      `SELECT * FROM users WHERE id IN (${additionalPlaceholders})`,
+      `SELECT * FROM users WHERE id IN (${toSqlInList(additionalUserIds)})`,
     ));
     usersData.push(...additionalUsers);
   }
@@ -299,13 +299,13 @@ export async function exportData(
 
   // Build the authoritative set of all users in the export (initial + discovered)
   const allExportedUserIdSet = new Set(usersData.map((u) => u.id as string));
-  const allUserIdPlaceholders = [...allExportedUserIdSet].map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+  const allUserIn = toSqlInList(allExportedUserIdSet);
 
   const channelMessageIds = channelMessagesData.map((r) => r.id as string);
   // Filter reactions to only include those from exported users (userId is NOT NULL)
   const channelReactionsDataRaw = channelMessageIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM channel_message_reactions WHERE "messageId" IN (${channelMessageIds.map((id) => `'${id}'`).join(', ')})`,
+        `SELECT * FROM channel_message_reactions WHERE "messageId" IN (${toSqlInList(channelMessageIds)})`,
       ))
     : [];
   const channelReactionsData = channelReactionsDataRaw.filter(
@@ -313,68 +313,68 @@ export async function exportData(
   );
 
   const channelReadStatusData = await queryRows(db, sql.raw(
-    `SELECT * FROM channel_read_status WHERE "userId" IN (${userIdPlaceholders}) AND "channelId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM channel_read_status WHERE "userId" IN (${userIn}) AND "channelId" IN (${pageIn})`,
   ));
 
   const conversationsData = await queryRows(db, sql.raw(
-    `SELECT * FROM conversations WHERE "userId" IN (${userIdPlaceholders})`,
+    `SELECT * FROM conversations WHERE "userId" IN (${userIn})`,
   ));
   const conversationIds = conversationsData.map((r) => r.id as string);
 
   // Filter messages to only include those from exported users (userId is NOT NULL)
   const messagesData = conversationIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM messages WHERE "conversationId" IN (${conversationIds.map((id) => `'${id}'`).join(', ')}) AND "userId" IN (${allUserIdPlaceholders})`,
+        `SELECT * FROM messages WHERE "conversationId" IN (${toSqlInList(conversationIds)}) AND "userId" IN (${allUserIn})`,
       ))
     : [];
 
   const filesData = await queryRows(db, sql.raw(
-    `SELECT * FROM files WHERE "driveId" IN (${driveIdPlaceholders})`,
+    `SELECT * FROM files WHERE "driveId" IN (${driveIn})`,
   ));
   nullifyOrphanedUserRefs(filesData, allExportedUserIdSet, 'createdBy');
   const fileIds = filesData.map((r) => r.id as string);
 
   const filePagesData = fileIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM file_pages WHERE "fileId" IN (${fileIds.map((id) => `'${id}'`).join(', ')})`,
+        `SELECT * FROM file_pages WHERE "fileId" IN (${toSqlInList(fileIds)})`,
       ))
     : [];
   nullifyOrphanedUserRefs(filePagesData, allExportedUserIdSet, 'linkedBy');
 
   const permissionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM permissions WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM permissions WHERE "pageId" IN (${pageIn})`,
   ));
 
   // Filter page permissions to only include exported users (userId is NOT NULL)
   const pagePermissionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM page_permissions WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "userId" IN (${allUserIdPlaceholders})`,
+    `SELECT * FROM page_permissions WHERE "pageId" IN (${pageIn}) AND "userId" IN (${allUserIn})`,
   ));
   nullifyOrphanedUserRefs(pagePermissionsData, allExportedUserIdSet, 'grantedBy');
 
   // Tags referenced by exported pages
   const pageTagsData = await queryRows(db, sql.raw(
-    `SELECT * FROM page_tags WHERE "pageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM page_tags WHERE "pageId" IN (${pageIn})`,
   ));
   const tagIds = [...new Set(pageTagsData.map((r) => r.tagId as string))];
   const tagsData = tagIds.length > 0
     ? await queryRows(db, sql.raw(
-        `SELECT * FROM tags WHERE id IN (${tagIds.map((id) => `'${id}'`).join(', ')})`,
+        `SELECT * FROM tags WHERE id IN (${toSqlInList(tagIds)})`,
       ))
     : [];
 
   // Mentions between exported pages only
   const mentionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM mentions WHERE "sourcePageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "targetPageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"})`,
+    `SELECT * FROM mentions WHERE "sourcePageId" IN (${pageIn}) AND "targetPageId" IN (${pageIn})`,
   ));
 
   // Filter user mentions to only include exported target users (targetUserId is NOT NULL)
   const userMentionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM user_mentions WHERE "sourcePageId" IN (${[...pageIdSet].map((id) => `'${id}'`).join(', ') || "''"}) AND "targetUserId" IN (${allUserIdPlaceholders})`,
+    `SELECT * FROM user_mentions WHERE "sourcePageId" IN (${pageIn}) AND "targetUserId" IN (${allUserIn})`,
   ));
   nullifyOrphanedUserRefs(userMentionsData, allExportedUserIdSet, 'mentionedByUserId');
 
   const favoritesData = await queryRows(db, sql.raw(
-    `SELECT * FROM favorites WHERE "userId" IN (${userIdPlaceholders})`,
+    `SELECT * FROM favorites WHERE "userId" IN (${userIn})`,
   ));
 
   // 3. Build SQL

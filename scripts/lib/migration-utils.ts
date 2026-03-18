@@ -34,6 +34,16 @@ function escapeString(s: string): string {
 }
 
 /**
+ * Build a SQL IN-list from an array of string IDs, with escaping.
+ * Returns "''" (empty string literal) for empty arrays to keep SQL valid.
+ */
+export function toSqlInList(ids: string[] | Set<string> | readonly string[]): string {
+  const arr = Array.from(ids);
+  if (arr.length === 0) return "''";
+  return arr.map((id) => `'${escapeString(id)}'`).join(', ');
+}
+
+/**
  * Build an INSERT statement with ON CONFLICT DO NOTHING for idempotency.
  */
 export function buildInsert(

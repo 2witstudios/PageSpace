@@ -36,7 +36,7 @@ Create a script that exports a team's complete data from the shared instance.
 - Given file blobs, should copy referenced files from `FILE_STORAGE_PATH` into the export bundle
 - Given the export, should produce: `data.sql` (INSERT statements preserving cuid2 IDs), `files/` directory with blobs, `manifest.json` (row counts per table, file checksums, export timestamp)
 - Given a table with FK references to non-exported data, should handle gracefully (null out or skip orphaned refs)
-- Given large datasets, should stream exports (not load entire tables into memory)
+- ~~Given large datasets, should stream exports (not load entire tables into memory)~~ **Deferred**: current implementation loads full table results. Sufficient for expected migration sizes (< 50K pages). Streaming can be added if needed for larger tenants.
 
 **TDD Approach**:
 - Write export tests (`scripts/__tests__/tenant-export.test.ts`)

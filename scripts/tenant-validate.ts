@@ -20,7 +20,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
-import { fileChecksum } from './lib/migration-utils';
+import { fileChecksum, toSqlInList } from './lib/migration-utils';
 
 async function queryIds(
   db: DbClient,
@@ -118,63 +118,63 @@ export async function validateData(
   options: ValidateOptions,
 ): Promise<FullValidationResult> {
   const { userIds, sourceFileStoragePath, targetFileStoragePath } = options;
-  const userIdPlaceholders = userIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+  const userIn = toSqlInList(userIds);
 
   // Discover drives from source
   const driveRows = await sourceDb.execute(
-    sql.raw(`SELECT DISTINCT "driveId" FROM drive_members WHERE "userId" IN (${userIdPlaceholders})`),
+    sql.raw(`SELECT DISTINCT "driveId" FROM drive_members WHERE "userId" IN (${userIn})`),
   );
   const driveIds = (driveRows.rows as Record<string, unknown>[]).map((r) => r.driveId as string);
-  const driveIdPlaceholders = driveIds.map((id) => `'${id}'`).join(', ') || "''";
+  const driveIn = toSqlInList(driveIds);
 
   // Get page IDs from source
   const pageRows = await sourceDb.execute(
-    sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIdPlaceholders})`),
+    sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
   );
   const pageIds = (pageRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
-  const pageIdPlaceholders = pageIds.map((id) => `'${id}'`).join(', ') || "''";
+  const pageIn = toSqlInList(pageIds);
 
   // Get channel message IDs for reaction validation
   const channelMsgRows = await sourceDb.execute(
-    sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
+    sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
   );
   const channelMsgIds = (channelMsgRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
-  const channelMsgIdPlaceholders = channelMsgIds.map((id) => `'${id}'`).join(', ') || "''";
+  const channelMsgIn = toSqlInList(channelMsgIds);
 
   // Get conversation IDs for message validation
   const convoRows = await sourceDb.execute(
-    sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIdPlaceholders})`),
+    sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
   );
   const convoIds = (convoRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
-  const convoIdPlaceholders = convoIds.map((id) => `'${id}'`).join(', ') || "''";
+  const convoIn = toSqlInList(convoIds);
 
   // ID-based queries for tables with a single PK
   const idQueries: Record<string, ReturnType<typeof sql>> = {
-    users: sql.raw(`SELECT id FROM users WHERE id IN (${userIdPlaceholders})`),
-    user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIdPlaceholders})`),
-    drives: sql.raw(`SELECT id FROM drives WHERE id IN (${driveIdPlaceholders})`),
-    drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIdPlaceholders})`),
-    drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIdPlaceholders}) AND "userId" IN (${userIdPlaceholders})`),
-    pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIdPlaceholders})`),
-    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIdPlaceholders}))`),
-    chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
-    channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIdPlaceholders})`),
-    channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIdPlaceholders})`),
-    conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIdPlaceholders})`),
-    messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIdPlaceholders})`),
-    files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIdPlaceholders})`),
-    permissions: sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
-    page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIdPlaceholders})`),
-    mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIdPlaceholders})`),
-    user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIdPlaceholders})`),
-    favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIdPlaceholders})`),
+    users: sql.raw(`SELECT id FROM users WHERE id IN (${userIn})`),
+    user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIn})`),
+    drives: sql.raw(`SELECT id FROM drives WHERE id IN (${driveIn})`),
+    drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIn})`),
+    drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`),
+    pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
+    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIn}))`),
+    chat_messages: sql.raw(`SELECT id FROM chat_messages WHERE "pageId" IN (${pageIn})`),
+    channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
+    channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
+    conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
+    messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
+    files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
+    permissions: sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIn})`),
+    page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),
+    mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
+    user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`),
+    favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIn})`),
   };
 
   // Count-based queries for composite-key tables
   const countQueries: Record<string, ReturnType<typeof sql>> = {
-    page_tags: sql.raw(`SELECT count(*) AS count FROM page_tags WHERE "pageId" IN (${pageIdPlaceholders})`),
-    file_pages: sql.raw(`SELECT count(*) AS count FROM file_pages WHERE "fileId" IN (SELECT id FROM files WHERE "driveId" IN (${driveIdPlaceholders}))`),
-    channel_read_status: sql.raw(`SELECT count(*) AS count FROM channel_read_status WHERE "userId" IN (${userIdPlaceholders}) AND "channelId" IN (${pageIdPlaceholders})`),
+    page_tags: sql.raw(`SELECT count(*) AS count FROM page_tags WHERE "pageId" IN (${pageIn})`),
+    file_pages: sql.raw(`SELECT count(*) AS count FROM file_pages WHERE "fileId" IN (SELECT id FROM files WHERE "driveId" IN (${driveIn}))`),
+    channel_read_status: sql.raw(`SELECT count(*) AS count FROM channel_read_status WHERE "userId" IN (${userIn}) AND "channelId" IN (${pageIn})`),
   };
 
   // Validate all tables in import order
@@ -192,7 +192,7 @@ export async function validateData(
   const fileMismatches: { file: string; reason: string }[] = [];
 
   const fileStorageRows = await sourceDb.execute(
-    sql.raw(`SELECT id, "storagePath" FROM files WHERE "driveId" IN (${driveIdPlaceholders}) AND "storagePath" IS NOT NULL`),
+    sql.raw(`SELECT id, "storagePath" FROM files WHERE "driveId" IN (${driveIn}) AND "storagePath" IS NOT NULL`),
   );
   const fileStorageData = fileStorageRows.rows as Record<string, unknown>[];
 
