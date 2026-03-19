@@ -375,6 +375,17 @@ describe('ProvisioningEngine', () => {
       })
     })
 
+    test('given a custom tenantBaseDomain, should use it in the login URL', async () => {
+      const deps = makeDeps()
+      const engine = createProvisioningEngine({ ...deps, tenantBaseDomain: 'example.com' })
+
+      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
+
+      expect(deps.sendProvisioningEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ loginUrl: 'https://acme.example.com' })
+      )
+    })
+
     test('given an existing admin user, should send email without temporaryPassword', async () => {
       const deps = makeDeps()
       ;(deps.seeder.seed as ReturnType<typeof vi.fn>).mockResolvedValue({

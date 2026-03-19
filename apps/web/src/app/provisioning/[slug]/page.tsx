@@ -3,6 +3,8 @@
 import { use, useState } from 'react';
 import useSWR from 'swr';
 
+const TENANT_BASE_DOMAIN = process.env.NEXT_PUBLIC_TENANT_BASE_DOMAIN || 'pagespace.ai';
+
 const fetcher = async (url: string) => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Status check failed (${res.status})`);
@@ -66,7 +68,7 @@ export default function ProvisioningStatusPage({
               Check your email for login credentials.
             </p>
             <a
-              href={`https://${slug}.pagespace.ai`}
+              href={`https://${slug}.${TENANT_BASE_DOMAIN}`}
               className="inline-block rounded-md bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500"
             >
               Go to your environment
