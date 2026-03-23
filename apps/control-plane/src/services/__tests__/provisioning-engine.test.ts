@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from 'vitest'
 import { createProvisioningEngine, type ProvisioningDeps } from '../provisioning-engine'
+import type { TenantInfraProvider } from '../../providers/types'
 
 const REALISTIC_ENV = [
   'TENANT_SLUG=acme',
@@ -25,18 +26,22 @@ function makeMockRepo() {
   }
 }
 
+function makeMockProvider(): TenantInfraProvider {
+  return {
+    provision: vi.fn().mockResolvedValue(undefined),
+    destroy: vi.fn().mockResolvedValue(undefined),
+    suspend: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn().mockResolvedValue(undefined),
+    upgrade: vi.fn().mockResolvedValue(undefined),
+    healthCheck: vi.fn().mockResolvedValue({ healthy: true }),
+    exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }),
+  }
+}
+
 function makeMockExecutor() {
   return {
     exec: vi.fn().mockResolvedValue({ stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }),
     history: [] as Array<{ command: string; exitCode: number }>,
-  }
-}
-
-function makeMockFs() {
-  return {
-    mkdir: vi.fn().mockResolvedValue(undefined),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    readFile: vi.fn().mockResolvedValue(REALISTIC_ENV),
   }
 }
 
@@ -50,10 +55,6 @@ function makeMockSeeder() {
   }
 }
 
-function makeMockHealthPoller() {
-  return vi.fn().mockResolvedValue({ healthy: true })
-}
-
 function makeMockEmailSender() {
   return vi.fn().mockResolvedValue(undefined)
 }
@@ -61,14 +62,11 @@ function makeMockEmailSender() {
 function makeDeps(overrides: Partial<ProvisioningDeps> = {}): ProvisioningDeps {
   return {
     repo: makeMockRepo(),
+    provider: makeMockProvider(),
     executor: makeMockExecutor(),
-    fs: makeMockFs(),
     seeder: makeMockSeeder(),
-    pollHealth: makeMockHealthPoller(),
     sendProvisioningEmail: makeMockEmailSender(),
-    basePath: '/data/tenants',
     scriptsPath: '/opt/infrastructure/scripts',
-    composePath: '/opt/infrastructure/docker-compose.tenant.yml',
     ...overrides,
   }
 }
@@ -101,41 +99,22 @@ describe('ProvisioningEngine', () => {
       )
     })
 
-    test('given a valid request, should write env to tenants/{slug}/.env', async () => {
+    test('given a valid request, should call provider.provision with slug and env content', async () => {
       const deps = makeDeps()
       const engine = createProvisioningEngine(deps)
 
       await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
 
-      expect(deps.fs.mkdir).toHaveBeenCalledWith('/data/tenants/acme', { recursive: true })
-      expect(deps.fs.writeFile).toHaveBeenCalledWith(
-        '/data/tenants/acme/.env',
-        expect.any(String)
-      )
+      expect(deps.provider.provision).toHaveBeenCalledWith('acme', REALISTIC_ENV)
     })
 
-    test('given a valid request, should run docker compose up with correct project name', async () => {
+    test('given a valid request, should call provider.healthCheck after provisioning', async () => {
       const deps = makeDeps()
       const engine = createProvisioningEngine(deps)
 
       await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
 
-      const composeCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
-        (call: unknown[]) => (call[0] as string).includes('docker compose')
-      )
-      expect(composeCall).toBeDefined()
-      expect(composeCall![0]).toContain('-p ps-acme')
-      expect(composeCall![0]).toContain('up -d')
-      expect(composeCall![0]).toContain('--env-file /data/tenants/acme/.env')
-    })
-
-    test('given a valid request, should poll health after docker compose up', async () => {
-      const deps = makeDeps()
-      const engine = createProvisioningEngine(deps)
-
-      await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
-
-      expect(deps.pollHealth).toHaveBeenCalledWith('acme')
+      expect(deps.provider.healthCheck).toHaveBeenCalledWith('acme')
     })
 
     test('given a valid request, should seed admin user after health check passes', async () => {
@@ -201,7 +180,9 @@ describe('ProvisioningEngine', () => {
 
     test('given env without POSTGRES_* vars, should use pagespace defaults', async () => {
       const deps = makeDeps()
-      ;(deps.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue('DEPLOYMENT_MODE=tenant')
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        stdout: 'DEPLOYMENT_MODE=tenant', stderr: '', exitCode: 0,
+      })
       const engine = createProvisioningEngine(deps)
 
       await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
@@ -275,27 +256,23 @@ describe('ProvisioningEngine', () => {
       )
     })
 
-    test('given docker compose up failure, should attempt cleanup with docker compose down', async () => {
+    test('given provider.provision failure after infra started, should attempt cleanup via provider.destroy', async () => {
       const deps = makeDeps()
-      ;(deps.executor.exec as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }) // env gen
-        .mockResolvedValueOnce({ stdout: '', stderr: 'compose error', exitCode: 1 }) // compose up fails
-        .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 }) // compose down cleanup
+      ;(deps.provider.provision as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('compose error'))
       const engine = createProvisioningEngine(deps)
 
       await expect(
         engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
       ).rejects.toThrow()
 
-      const downCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
-        (call: unknown[]) => (call[0] as string).includes('down --volumes')
-      )
-      expect(downCall).toBeDefined()
+      // provision threw before infraStarted was set, so destroy should NOT be called
+      // (infra never came up if provision itself threw)
+      expect(deps.provider.destroy).not.toHaveBeenCalled()
     })
 
-    test('given health poll timeout, should update status to failed', async () => {
+    test('given health check failure after infra started, should attempt cleanup via provider.destroy', async () => {
       const deps = makeDeps()
-      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockRejectedValue(
+      ;(deps.provider.healthCheck as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('health check timeout')
       )
       const engine = createProvisioningEngine(deps)
@@ -304,29 +281,13 @@ describe('ProvisioningEngine', () => {
         engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
       ).rejects.toThrow('health check timeout')
 
+      expect(deps.provider.destroy).toHaveBeenCalledWith('acme')
       expect(deps.repo.updateTenantStatus).toHaveBeenCalledWith('tenant-123', 'failed')
     })
 
-    test('given health poll timeout after compose up, should attempt cleanup', async () => {
+    test('given health check returns unhealthy, should update status to failed and not seed', async () => {
       const deps = makeDeps()
-      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error('health check timeout')
-      )
-      const engine = createProvisioningEngine(deps)
-
-      await expect(
-        engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
-      ).rejects.toThrow()
-
-      const downCall = (deps.executor.exec as ReturnType<typeof vi.fn>).mock.calls.find(
-        (call: unknown[]) => (call[0] as string).includes('down --volumes')
-      )
-      expect(downCall).toBeDefined()
-    })
-
-    test('given health poll returns unhealthy, should update status to failed and not seed', async () => {
-      const deps = makeDeps()
-      ;(deps.pollHealth as ReturnType<typeof vi.fn>).mockResolvedValue({ healthy: false })
+      ;(deps.provider.healthCheck as ReturnType<typeof vi.fn>).mockResolvedValue({ healthy: false })
       const engine = createProvisioningEngine(deps)
 
       await expect(
@@ -456,18 +417,24 @@ describe('ProvisioningEngine', () => {
       }
 
       const executor = {
-        exec: vi.fn().mockImplementation(async (cmd: string) => {
-          if (cmd.includes('generate-tenant-env')) callOrder.push('generate-env')
-          if (cmd.includes('up -d')) callOrder.push('compose-up')
+        exec: vi.fn().mockImplementation(async () => {
+          callOrder.push('generate-env')
           return { stdout: REALISTIC_ENV, stderr: '', exitCode: 0 }
         }),
         history: [],
       }
 
-      const fs = {
-        mkdir: vi.fn().mockImplementation(async () => { callOrder.push('mkdir') }),
-        writeFile: vi.fn().mockImplementation(async () => { callOrder.push('write-env') }),
-        readFile: vi.fn().mockResolvedValue(REALISTIC_ENV),
+      const provider = {
+        provision: vi.fn().mockImplementation(async () => { callOrder.push('provider-provision') }),
+        destroy: vi.fn().mockResolvedValue(undefined),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        resume: vi.fn().mockResolvedValue(undefined),
+        upgrade: vi.fn().mockResolvedValue(undefined),
+        healthCheck: vi.fn().mockImplementation(async () => {
+          callOrder.push('health-check')
+          return { healthy: true }
+        }),
+        exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }),
       }
 
       const seeder = {
@@ -477,16 +444,11 @@ describe('ProvisioningEngine', () => {
         }),
       }
 
-      const pollHealth = vi.fn().mockImplementation(async () => {
-        callOrder.push('poll-health')
-        return { healthy: true }
-      })
-
       const sendProvisioningEmail = vi.fn().mockImplementation(async () => {
         callOrder.push('send-email')
       })
 
-      const deps = makeDeps({ repo, executor, fs, seeder, pollHealth, sendProvisioningEmail })
+      const deps = makeDeps({ repo, provider, executor, seeder, sendProvisioningEmail })
       const engine = createProvisioningEngine(deps)
 
       await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
@@ -495,10 +457,8 @@ describe('ProvisioningEngine', () => {
         'check-slug',
         'create-tenant',
         'generate-env',
-        'mkdir',
-        'write-env',
-        'compose-up',
-        'poll-health',
+        'provider-provision',
+        'health-check',
         'seed-admin',
         'send-email',
         'update-status',

@@ -1,12 +1,7 @@
 import type { ShellExecutor } from './shell-executor'
 import type { TenantRepo } from './types'
+import type { TenantInfraProvider } from '../providers/types'
 import { validateSlug } from '../validation/tenant-validation'
-
-type FsLike = {
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>
-  writeFile(path: string, data: string): Promise<void>
-  readFile(path: string): Promise<string>
-}
 
 type AdminSeeder = {
   seed(input: { slug: string; ownerEmail: string; databaseUrl: string }): Promise<{
@@ -24,15 +19,12 @@ type ProvisioningEmailData = {
 
 export type ProvisioningDeps = {
   repo: TenantRepo
+  provider: TenantInfraProvider
   executor: ShellExecutor
-  fs: FsLike
   seeder: AdminSeeder
-  pollHealth: (slug: string) => Promise<{ healthy: boolean }>
   sendProvisioningEmail?: (data: ProvisioningEmailData) => Promise<void>
   tenantBaseDomain?: string
-  basePath: string
   scriptsPath: string
-  composePath: string
 }
 
 type ProvisionRequest = {
@@ -49,10 +41,10 @@ function getEnvVar(envContent: string, name: string): string | undefined {
 
 export function createProvisioningEngine(deps: ProvisioningDeps) {
   const {
-    repo, executor, fs, seeder, pollHealth,
+    repo, provider, executor, seeder,
     sendProvisioningEmail = async () => { console.warn('sendProvisioningEmail not configured — skipping provisioning email') },
     tenantBaseDomain = 'pagespace.ai',
-    basePath, scriptsPath, composePath,
+    scriptsPath,
   } = deps
 
   return {
@@ -77,7 +69,7 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
         tier: request.tier,
       })
 
-      let composeStarted = false
+      let infraStarted = false
 
       try {
         // Step 4: Generate env file via shell script
@@ -89,28 +81,19 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           throw Object.assign(new Error(`Env generation failed: ${envResult.stderr}`), { step: 'generate-env' })
         }
 
-        // Step 5: Write env to tenants/{slug}/.env
-        const tenantDir = `${basePath}/${request.slug}`
-        await fs.mkdir(tenantDir, { recursive: true })
-        await fs.writeFile(`${tenantDir}/.env`, envResult.stdout)
+        const envContent = envResult.stdout
 
-        // Step 6: Docker compose up
-        const composeCmd = `docker compose -p ps-${request.slug} -f ${composePath} --env-file ${tenantDir}/.env up -d`
-        const composeResult = await executor.exec(composeCmd, { cwd: basePath })
-        if (composeResult.exitCode !== 0) {
-          composeStarted = true
-          throw Object.assign(new Error(`Docker compose up failed: ${composeResult.stderr}`), { step: 'compose-up' })
-        }
-        composeStarted = true
+        // Step 5: Provision infrastructure (provider writes env + starts services)
+        await provider.provision(request.slug, envContent)
+        infraStarted = true
 
-        // Step 7: Poll health
-        const healthResult = await pollHealth(request.slug)
+        // Step 6: Poll health
+        const healthResult = await provider.healthCheck(request.slug)
         if (!healthResult.healthy) {
           throw Object.assign(new Error('Health check failed: services not healthy'), { step: 'poll-health' })
         }
 
-        // Step 8: Seed admin user
-        const envContent = await fs.readFile(`${tenantDir}/.env`)
+        // Step 7: Seed admin user (extract DB URL from in-memory env content)
         const pgUser = getEnvVar(envContent, 'POSTGRES_USER') ?? 'pagespace'
         const pgPassword = getEnvVar(envContent, 'POSTGRES_PASSWORD') ?? ''
         const pgDb = getEnvVar(envContent, 'POSTGRES_DB') ?? 'pagespace'
@@ -122,7 +105,7 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           databaseUrl,
         })
 
-        // Step 9: Send provisioning email (fire-and-forget — must not fail provisioning)
+        // Step 8: Send provisioning email (fire-and-forget — must not fail provisioning)
         try {
           await sendProvisioningEmail({
             loginUrl: `https://${request.slug}.${tenantBaseDomain}`,
@@ -135,10 +118,10 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           // Email failure must NOT fail provisioning
         }
 
-        // Step 10: Update status to active
+        // Step 9: Update status to active
         await repo.updateTenantStatus(tenant.id, 'active')
 
-        // Step 11: Record provisioned event
+        // Step 10: Record provisioned event
         await repo.recordEvent(tenant.id, 'provisioned', {
           ownerEmail: request.ownerEmail,
           tier: request.tier,
@@ -160,12 +143,9 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           // Best-effort status update
         }
 
-        if (composeStarted) {
+        if (infraStarted) {
           try {
-            await executor.exec(
-              `docker compose -p ps-${request.slug} -f ${composePath} down --volumes`,
-              { cwd: basePath }
-            )
+            await provider.destroy(request.slug)
           } catch {
             // Best-effort cleanup
           }
