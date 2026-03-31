@@ -569,7 +569,7 @@ export const githubImportTools = {
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 skipped.push(`${file.filename} (${msg.slice(0, 80)})`);
-                importLogger.warn(`Failed to import PR file: ${file.filename}`, undefined, { error: msg });
+                importLogger.warn(`Failed to import PR file: ${file.filename}`, { error: msg });
               }
             }
 
