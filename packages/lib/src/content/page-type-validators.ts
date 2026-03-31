@@ -118,6 +118,10 @@ export function validatePageCreation(
       // Code pages can start empty
       break;
 
+    case PageType.TERMINAL:
+      // Terminal pages start with empty session history
+      break;
+
     case PageType.SHEET:
       if (data.content) {
         if (typeof data.content !== 'string' || !isValidSheetContent(data.content)) {
