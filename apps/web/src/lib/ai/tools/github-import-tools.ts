@@ -99,7 +99,8 @@ async function githubFetch(
 
 async function resolveGitHubToken(
   connectionId: string,
-  userId: string
+  userId: string,
+  driveId: string
 ): Promise<string> {
   const connection = await getConnectionWithProvider(db, connectionId);
   if (!connection) {
@@ -108,10 +109,13 @@ async function resolveGitHubToken(
     );
   }
 
-  // Verify the connection belongs to the caller (user-scoped) or their drive
+  // Verify the connection belongs to the caller (user-scoped) or their drive (drive-scoped)
   const conn = connection as unknown as { userId?: string; driveId?: string };
   if (conn.userId && conn.userId !== userId) {
     throw new Error('GitHub connection does not belong to this user.');
+  }
+  if (conn.driveId && conn.driveId !== driveId) {
+    throw new Error('GitHub connection does not belong to this drive.');
   }
 
   if (connection.status !== 'active') {
@@ -427,8 +431,8 @@ export const githubImportTools = {
         throw new Error('Only drive owners can create pages at the root level');
       }
 
-      // Resolve GitHub credentials (scoped to calling user)
-      const token = await resolveGitHubToken(connectionId, userId);
+      // Resolve GitHub credentials (scoped to calling user + drive)
+      const token = await resolveGitHubToken(connectionId, userId, driveId);
 
       try {
         switch (mode) {

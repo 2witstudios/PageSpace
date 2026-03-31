@@ -213,7 +213,7 @@ export const githubProvider: IntegrationProviderConfig = {
       id: 'get_repo_tree',
       name: 'Get Repository Tree',
       description:
-        'Get the full file tree of a repository at a given branch or commit SHA. Returns all files and directories recursively. For very large repos, the response may be truncated.',
+        'Get the full recursive file tree of a repository at a given branch or commit SHA. For very large repos (>100k files), the response may be truncated — check the "truncated" field.',
       category: 'read',
       inputSchema: {
         type: 'object',
@@ -230,11 +230,6 @@ export const githubProvider: IntegrationProviderConfig = {
             type: 'string',
             description: 'Tree SHA, branch name, or commit SHA (e.g. "main", "HEAD")',
           },
-          recursive: {
-            type: 'string',
-            enum: ['1'],
-            description: 'Set to "1" to retrieve tree recursively (includes all subdirectories)',
-          },
         },
         required: ['owner', 'repo', 'tree_sha'],
       },
@@ -244,7 +239,7 @@ export const githubProvider: IntegrationProviderConfig = {
           method: 'GET',
           pathTemplate: '/repos/{owner}/{repo}/git/trees/{tree_sha}',
           queryParams: {
-            recursive: { $param: 'recursive' },
+            recursive: '1',
           },
         },
       },
@@ -484,6 +479,7 @@ export const githubProvider: IntegrationProviderConfig = {
           user: 'user.login',
           labels: 'labels',
           created_at: 'created_at',
+          pull_request_url: 'pull_request.html_url',
         },
         maxLength: 500,
       },

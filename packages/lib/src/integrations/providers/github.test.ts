@@ -395,9 +395,9 @@ describe('githubProvider', () => {
       expect(required).toEqual(['owner', 'repo', 'tree_sha']);
     });
 
-    it('given a branch name as tree_sha, should build correct request', () => {
+    it('given a branch name as tree_sha, should build correct request with recursive=1', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
-      const input = { owner: 'acme', repo: 'webapp', tree_sha: 'main', recursive: '1' };
+      const input = { owner: 'acme', repo: 'webapp', tree_sha: 'main' };
 
       const result = buildHttpRequest(config, input, 'https://api.github.com');
 
