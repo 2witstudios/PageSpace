@@ -121,6 +121,7 @@ describe('AdminSeeder', () => {
   })
 
   describe('CUID2 id generation', () => {
+    /** @scaffold - parameter-count assertion; will break if INSERT columns change */
     test('given a new user, should include id column in INSERT with a generated CUID2', async () => {
       const db = makeMockDb(null)
       const bcrypt = makeMockBcrypt()
