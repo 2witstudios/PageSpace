@@ -569,7 +569,7 @@ export const githubImportTools = {
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 skipped.push(`${file.filename} (${msg.slice(0, 80)})`);
-                importLogger.warn({ file: file.filename, error: msg }, 'Failed to import PR file');
+                importLogger.warn(`Failed to import PR file: ${file.filename}`, undefined, { error: msg });
               }
             }
 
@@ -738,7 +738,7 @@ export const githubImportTools = {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        importLogger.error({ mode, owner, repo, error: message }, 'GitHub import failed');
+        importLogger.error('GitHub import failed', error instanceof Error ? error : undefined, { mode, owner, repo });
         return { success: false, error: message };
       }
     },
