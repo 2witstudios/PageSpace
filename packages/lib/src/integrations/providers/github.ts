@@ -1150,7 +1150,7 @@ export const githubProvider: IntegrationProviderConfig = {
       id: 'create_pr_review_comment',
       name: 'Create PR Inline Comment',
       description:
-        'Add a single inline review comment on a specific line of a pull request diff. For multi-line comments, specify start_line and start_side.',
+        'Add a single inline review comment on a specific line of a pull request diff. Requires commit_id (use head_sha from get_pull_request) and line number (from get_pr_diff). For multi-line comments, also specify start_line and start_side.',
       category: 'write',
       inputSchema: {
         type: 'object',
@@ -1207,7 +1207,7 @@ export const githubProvider: IntegrationProviderConfig = {
             description: 'Whether the comment is on a line or the whole file',
           },
         },
-        required: ['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id'],
+        required: ['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id', 'line'],
       },
       execution: {
         type: 'http',

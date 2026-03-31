@@ -367,6 +367,15 @@ describe('githubProvider', () => {
       );
     });
 
+    it('given no path, should build request for repository root', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = { owner: 'acme', repo: 'webapp' };
+
+      const result = buildHttpRequest(config, input, 'https://api.github.com');
+
+      expect(result.url).toContain('/repos/acme/webapp/contents');
+    });
+
     it('given a ref parameter, should include it as query param', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
       const input = { owner: 'acme', repo: 'webapp', path: 'README.md', ref: 'develop' };
@@ -669,9 +678,9 @@ describe('githubProvider', () => {
   describe('create_pr_review_comment tool', () => {
     const tool = findTool('create_pr_review_comment');
 
-    it('given the tool, should require owner, repo, pull_number, body, path, and commit_id', () => {
+    it('given the tool, should require owner, repo, pull_number, body, path, commit_id, and line', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id']);
+      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id', 'line']);
     });
 
     it('given a single-line comment, should build correct POST', () => {
