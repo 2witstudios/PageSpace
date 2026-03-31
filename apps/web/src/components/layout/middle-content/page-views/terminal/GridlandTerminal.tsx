@@ -1,8 +1,54 @@
 "use client";
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import { TUI } from '@gridland/web/next';
-import { useKeyboard } from '@gridland/utils';
+import { useKeyboard, type KeyEvent } from '@gridland/utils';
+
+// ── Typed Gridland primitives ────────────────────────────────────────────
+// Gridland's reconciler defines intrinsic elements (box, text, scrollbox)
+// at runtime. These wrappers provide TypeScript types without conflicting
+// with the global JSX.IntrinsicElements (HTML text, input, code).
+
+interface BoxProps {
+  children?: ReactNode;
+  flexDirection?: 'row' | 'column';
+  flexGrow?: number;
+  width?: number | string;
+  height?: number | string;
+  padding?: number;
+  gap?: number;
+  border?: boolean;
+  borderStyle?: 'single' | 'rounded' | 'double' | 'bold';
+  borderColor?: string;
+  backgroundColor?: string;
+}
+
+interface TextProps {
+  children?: ReactNode;
+  fg?: string;
+  bold?: boolean;
+  dim?: boolean;
+}
+
+interface ScrollboxProps {
+  children?: ReactNode;
+  flexDirection?: 'row' | 'column';
+  flexGrow?: number;
+}
+
+function Box(props: BoxProps) {
+  return React.createElement('box', props);
+}
+
+function Text(props: TextProps) {
+  return React.createElement('text', props);
+}
+
+function Scrollbox(props: ScrollboxProps) {
+  return React.createElement('scrollbox', props);
+}
+
+// ── Types ────────────────────────────────────────────────────────────────
 
 interface HistoryEntry {
   command: string;
@@ -22,16 +68,16 @@ interface GridlandTerminalProps {
   isReadOnly: boolean;
 }
 
+// ── Theme ────────────────────────────────────────────────────────────────
+
 const PROMPT = '$ ';
 
-// Theme colors
 const themes = {
   dark: {
     bg: '#1a1b26',
     fg: '#c0caf5',
     prompt: '#7aa2f7',
     output: '#9ece6a',
-    error: '#f7768e',
     dim: '#565f89',
     border: '#3b4261',
     inputBg: '#1f2335',
@@ -41,17 +87,17 @@ const themes = {
     fg: '#343b58',
     prompt: '#2e7de9',
     output: '#587539',
-    error: '#c64343',
     dim: '#8990b3',
     border: '#c4c8da',
     inputBg: '#e9e9ec',
   },
 };
 
+// ── Terminal content (runs inside TUI reconciler) ────────────────────────
+
 function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: GridlandTerminalProps) {
   const [input, setInput] = useState('');
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const scrollOffsetRef = useRef(0);
   const theme = isDark ? themes.dark : themes.light;
 
   const handleSubmit = useCallback(() => {
@@ -68,10 +114,9 @@ function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: Gr
     onCommand(trimmed);
     setInput('');
     setHistoryIndex(-1);
-    scrollOffsetRef.current = 0;
   }, [input, onCommand, onClear]);
 
-  useKeyboard((key) => {
+  useKeyboard((key: KeyEvent) => {
     if (isReadOnly) return;
 
     if (key.name === 'return') {
@@ -111,79 +156,66 @@ function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: Gr
       return;
     }
 
-    // Ctrl+L to clear
     if (key.name === 'l' && key.ctrl) {
       onClear();
       return;
     }
 
-    // Ctrl+U to clear input line
     if (key.name === 'u' && key.ctrl) {
       setInput('');
       return;
     }
 
-    // Regular character input
     if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
       setInput(prev => prev + key.sequence);
     }
   });
 
   return (
-    <box flexDirection="column" flexGrow={1}>
-      {/* Header */}
-      <box
-        height={1}
-        flexDirection="row"
-        backgroundColor={theme.border}
-      >
-        <text fg={theme.fg} bold> Terminal </text>
-        <box flexGrow={1} />
-        <text fg={theme.dim}> {session.history.length} commands </text>
-      </box>
+    <Box flexDirection="column" flexGrow={1}>
+      {/* Header bar */}
+      <Box height={1} flexDirection="row" backgroundColor={theme.border}>
+        <Text fg={theme.fg} bold> Terminal </Text>
+        <Box flexGrow={1} />
+        <Text fg={theme.dim}> {session.history.length} commands </Text>
+      </Box>
 
-      {/* Scrollable output area */}
-      <scrollbox flexGrow={1} flexDirection="column">
-        {/* Welcome message when empty */}
+      {/* Scrollable output */}
+      <Scrollbox flexGrow={1} flexDirection="column">
         {session.history.length === 0 && (
-          <box flexDirection="column" padding={1}>
-            <text fg={theme.dim}>PageSpace Terminal</text>
-            <text fg={theme.dim}>Type a command and press Enter. Type &quot;clear&quot; to reset.</text>
-            <text fg={theme.dim}>Shell connection not yet configured.</text>
-            <text fg={theme.dim}>{''}</text>
-          </box>
+          <Box flexDirection="column" padding={1}>
+            <Text fg={theme.dim}>PageSpace Terminal</Text>
+            <Text fg={theme.dim}>Type a command and press Enter. Type &quot;clear&quot; to reset.</Text>
+            <Text fg={theme.dim}>Shell connection not yet configured.</Text>
+          </Box>
         )}
 
-        {/* Command history */}
         {session.history.map((entry, i) => (
-          <box key={i} flexDirection="column">
-            <box flexDirection="row">
-              <text fg={theme.prompt} bold>{PROMPT}</text>
-              <text fg={theme.fg}>{entry.command}</text>
-            </box>
+          <Box key={i} flexDirection="column">
+            <Box flexDirection="row">
+              <Text fg={theme.prompt} bold>{PROMPT}</Text>
+              <Text fg={theme.fg}>{entry.command}</Text>
+            </Box>
             {entry.output && (
-              <box>
-                <text fg={theme.output}>{entry.output}</text>
-              </box>
+              <Box>
+                <Text fg={theme.output}>{entry.output}</Text>
+              </Box>
             )}
-          </box>
+          </Box>
         ))}
-      </scrollbox>
+      </Scrollbox>
 
       {/* Input line */}
-      <box
-        height={1}
-        flexDirection="row"
-        backgroundColor={theme.inputBg}
-        borderColor={theme.border}
-      >
-        <text fg={theme.prompt} bold>{PROMPT}</text>
-        <text fg={theme.fg}>{input}</text>
-        <text fg={theme.prompt}>{'█'}</text>
-      </box>
-    </box>
+      <Box height={1} flexDirection="row" backgroundColor={theme.inputBg}>
+        <Text fg={theme.prompt} bold>{PROMPT}</Text>
+        <Text fg={theme.fg}>{input}</Text>
+        <Text fg={theme.prompt}>{'\u2588'}</Text>
+      </Box>
+    </Box>
   );
 }
+
+// ── Outer wrapper (manages DOM container + TUI mount) ────────────────────
 
 export default function GridlandTerminal(props: GridlandTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);

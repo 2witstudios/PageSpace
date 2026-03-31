@@ -4,7 +4,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
-import { pageService } from '@/services/api';
+import { pageService, type CreatePageParams } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
 
     const result = await pageService.createPage(userId, {
       title: validatedData.title,
-      type: validatedData.type,
+      type: validatedData.type as CreatePageParams['type'],
       driveId: validatedData.driveId,
       parentId: validatedData.parentId,
       content: validatedData.content,

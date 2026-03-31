@@ -39,4 +39,6 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withGridland(nextConfig);
+// withGridland's NextConfig type is simpler than Next.js's full NextConfig
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export default withGridland(nextConfig as any) as NextConfig;

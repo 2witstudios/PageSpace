@@ -591,6 +591,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.1)
+      '@gridland/utils':
+        specifier: ^0.2.53
+        version: 0.2.53(react@19.2.1)
       '@gridland/web':
         specifier: ^0.2.53
         version: 0.2.53(react@19.2.1)
