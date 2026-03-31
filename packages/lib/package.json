@@ -189,6 +189,11 @@
       "import": "./dist/utils/file-security.js",
       "require": "./dist/utils/file-security.js"
     },
+    "./utils/language-detection": {
+      "types": "./dist/utils/language-detection.d.ts",
+      "import": "./dist/utils/language-detection.js",
+      "require": "./dist/utils/language-detection.js"
+    },
     "./pages/circular-reference-guard": {
       "types": "./dist/pages/circular-reference-guard.d.ts",
       "import": "./dist/pages/circular-reference-guard.js",
