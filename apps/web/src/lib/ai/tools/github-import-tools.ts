@@ -121,7 +121,7 @@ async function resolveGitHubToken(
   }
 
   const credentials = (await decryptCredentials(
-    connection.credentials as Record<string, unknown>
+    connection.credentials as Record<string, string>
   )) as { accessToken?: string; token?: string };
 
   const token = credentials.accessToken || credentials.token;
