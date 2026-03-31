@@ -691,6 +691,7 @@ describe('githubProvider', () => {
         pull_number: 7,
         body: 'Consider using `const` here',
         path: 'src/index.ts',
+        commit_id: 'abc123def456',
         line: 42,
         side: 'RIGHT',
       };
