@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import CopyPlugin from "copy-webpack-plugin";
+import { withGridland } from "@gridland/web/next-plugin";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -38,4 +39,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withGridland(nextConfig);
