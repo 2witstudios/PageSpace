@@ -160,7 +160,7 @@ export const githubProvider: IntegrationProviderConfig = {
       id: 'get_repo_content',
       name: 'Get Repository Content',
       description:
-        'Read file content or list directory contents from a repository. For files, returns base64-encoded content in the "content" field. For directories, returns an array of entries with name, path, type, and size.',
+        'Read file content or list directory contents from a repository. For files, returns base64-encoded content in the "content" field. For directories, returns an array of entries with name, path, type, and size. Omit path to list the repository root.',
       category: 'read',
       inputSchema: {
         type: 'object',
@@ -175,14 +175,14 @@ export const githubProvider: IntegrationProviderConfig = {
           },
           path: {
             type: 'string',
-            description: 'Path to file or directory (e.g. "src/index.ts" or "docs")',
+            description: 'Path to file or directory (e.g. "src/index.ts" or "docs"). Omit to list repository root.',
           },
           ref: {
             type: 'string',
             description: 'Branch, tag, or commit SHA (defaults to default branch)',
           },
         },
-        required: ['owner', 'repo', 'path'],
+        required: ['owner', 'repo'],
       },
       execution: {
         type: 'http',
@@ -249,13 +249,10 @@ export const githubProvider: IntegrationProviderConfig = {
         },
       },
       outputTransform: {
-        extract: '$.tree',
         mapping: {
-          path: 'path',
-          type: 'type',
-          mode: 'mode',
-          size: 'size',
           sha: 'sha',
+          tree: 'tree',
+          truncated: 'truncated',
         },
         maxLength: 500,
       },
@@ -1076,7 +1073,7 @@ export const githubProvider: IntegrationProviderConfig = {
           },
           body: {
             type: 'string',
-            description: 'Review summary comment (required for REQUEST_CHANGES and COMMENT events)',
+            description: 'Review summary comment (required for all events; for APPROVE it is optional on GitHub but always sent)',
           },
           event: {
             type: 'string',
@@ -1125,7 +1122,7 @@ export const githubProvider: IntegrationProviderConfig = {
             description: 'SHA of the commit to review (defaults to latest PR commit)',
           },
         },
-        required: ['owner', 'repo', 'pull_number', 'event'],
+        required: ['owner', 'repo', 'pull_number', 'event', 'body'],
       },
       execution: {
         type: 'http',
@@ -1214,7 +1211,7 @@ export const githubProvider: IntegrationProviderConfig = {
             description: 'Whether the comment is on a line or the whole file',
           },
         },
-        required: ['owner', 'repo', 'pull_number', 'body', 'path'],
+        required: ['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id'],
       },
       execution: {
         type: 'http',

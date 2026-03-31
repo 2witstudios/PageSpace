@@ -60,12 +60,19 @@ interface GitHubPRFile {
   patch?: string;
 }
 
+function encodePathSegments(path: string): string {
+  return path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
 async function githubFetch(
   path: string,
   token: string,
   queryParams?: Record<string, string>
 ): Promise<unknown> {
-  const url = new URL(`${GITHUB_API_BASE}${path}`);
+  const url = new URL(`${GITHUB_API_BASE}${encodePathSegments(path)}`);
   if (queryParams) {
     for (const [key, value] of Object.entries(queryParams)) {
       url.searchParams.set(key, value);
@@ -90,13 +97,23 @@ async function githubFetch(
   return response.json();
 }
 
-async function resolveGitHubToken(connectionId: string): Promise<string> {
+async function resolveGitHubToken(
+  connectionId: string,
+  userId: string
+): Promise<string> {
   const connection = await getConnectionWithProvider(db, connectionId);
   if (!connection) {
     throw new Error(
       'GitHub connection not found. Connect your GitHub account in Settings > Integrations.'
     );
   }
+
+  // Verify the connection belongs to the caller (user-scoped) or their drive
+  const conn = connection as unknown as { userId?: string; driveId?: string };
+  if (conn.userId && conn.userId !== userId) {
+    throw new Error('GitHub connection does not belong to this user.');
+  }
+
   if (connection.status !== 'active') {
     throw new Error(
       `GitHub connection is ${connection.status}. Please reconnect in Settings > Integrations.`
@@ -172,13 +189,14 @@ async function createCodePage(params: {
     metadata: { source: 'github-import' },
   });
 
-  await broadcastPageEvent(
+  // Best-effort broadcast — don't fail the import if websocket is down
+  broadcastPageEvent(
     createPageEventPayload(params.driveId, newPage.id, 'created', {
       parentId: params.parentId,
       title: newPage.title,
       type: 'CODE',
     })
-  );
+  ).catch(() => {});
 
   // Fire-and-forget activity logging
   getActorInfo(params.userId).then(actorInfo => {
@@ -250,13 +268,14 @@ async function createFolderPage(params: {
     metadata: { source: 'github-import' },
   });
 
-  await broadcastPageEvent(
+  // Best-effort broadcast — don't fail the import if websocket is down
+  broadcastPageEvent(
     createPageEventPayload(params.driveId, newPage.id, 'created', {
       parentId: params.parentId,
       title: newPage.title,
       type: 'FOLDER',
     })
-  );
+  ).catch(() => {});
 
   // Fire-and-forget activity logging
   getActorInfo(params.userId).then(actorInfo => {
@@ -408,8 +427,8 @@ export const githubImportTools = {
         throw new Error('Only drive owners can create pages at the root level');
       }
 
-      // Resolve GitHub credentials
-      const token = await resolveGitHubToken(connectionId);
+      // Resolve GitHub credentials (scoped to calling user)
+      const token = await resolveGitHubToken(connectionId, userId);
 
       try {
         switch (mode) {

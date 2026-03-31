@@ -351,9 +351,9 @@ describe('githubProvider', () => {
   describe('get_repo_content tool', () => {
     const tool = findTool('get_repo_content');
 
-    it('given the tool, should require owner, repo, and path', () => {
+    it('given the tool, should require owner and repo (path is optional for root listing)', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toEqual(['owner', 'repo', 'path']);
+      expect(required).toEqual(['owner', 'repo']);
     });
 
     it('given a nested file path, should build correct GET request with slashes in path', () => {
@@ -405,8 +405,9 @@ describe('githubProvider', () => {
       expect(result.url).toContain('recursive=1');
     });
 
-    it('given the tool, should extract tree array from response', () => {
-      expect(tool.outputTransform!.extract).toBe('$.tree');
+    it('given the tool, should include truncated flag and tree in output mapping', () => {
+      expect(tool.outputTransform!.mapping).toHaveProperty('tree');
+      expect(tool.outputTransform!.mapping).toHaveProperty('truncated');
     });
   });
 
@@ -611,9 +612,9 @@ describe('githubProvider', () => {
   describe('create_pr_review tool', () => {
     const tool = findTool('create_pr_review');
 
-    it('given the tool, should require owner, repo, pull_number, and event', () => {
+    it('given the tool, should require owner, repo, pull_number, event, and body', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toEqual(['owner', 'repo', 'pull_number', 'event']);
+      expect(required).toEqual(['owner', 'repo', 'pull_number', 'event', 'body']);
     });
 
     it('given an approval with no inline comments, should build correct POST', () => {
@@ -668,9 +669,9 @@ describe('githubProvider', () => {
   describe('create_pr_review_comment tool', () => {
     const tool = findTool('create_pr_review_comment');
 
-    it('given the tool, should require owner, repo, pull_number, body, and path', () => {
+    it('given the tool, should require owner, repo, pull_number, body, path, and commit_id', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body', 'path']);
+      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id']);
     });
 
     it('given a single-line comment, should build correct POST', () => {

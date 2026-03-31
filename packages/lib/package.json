@@ -394,6 +394,9 @@
       "utils/file-security": [
         "./dist/utils/file-security.d.ts"
       ],
+      "utils/language-detection": [
+        "./dist/utils/language-detection.d.ts"
+      ],
       "pages/circular-reference-guard": [
         "./dist/pages/circular-reference-guard.d.ts"
       ],
