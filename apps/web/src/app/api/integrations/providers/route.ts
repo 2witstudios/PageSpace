@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { listEnabledProviders, createProvider, seedBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
+import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -45,6 +45,19 @@ export async function GET(request: Request) {
           error: seedError instanceof Error ? seedError.message : String(seedError),
         });
       }
+    }
+
+    // Refresh builtin providers with latest tool definitions (e.g. after deploy)
+    try {
+      const refreshed = await refreshBuiltinProviders(db, builtinProviderList);
+      if (refreshed > 0) {
+        loggers.api.info('Refreshed builtin provider configs', { count: refreshed });
+        providers = await listEnabledProviders(db);
+      }
+    } catch (refreshError) {
+      loggers.api.warn('Failed to refresh builtin providers (non-fatal)', {
+        error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+      });
     }
 
     // Strip config details for listing (security)
