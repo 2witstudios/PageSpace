@@ -455,7 +455,6 @@ export const githubImportTools = {
       } = params;
 
       const maxFiles = Math.max(1, Math.min(Math.floor(rawMaxFiles ?? DEFAULT_MAX_FILES), MAX_FILES_LIMIT));
-      const connectionId = explicitConnectionId ?? await findGitHubConnectionId(userId, driveId);
 
       // Verify drive exists
       const drive = await driveRepository.findByIdBasic(driveId);
@@ -476,6 +475,9 @@ export const githubImportTools = {
       } else if (drive.ownerId !== userId) {
         throw new Error('Only drive owners can create pages at the root level');
       }
+
+      // Resolve GitHub connection (after drive/permission validation)
+      const connectionId = explicitConnectionId ?? await findGitHubConnectionId(userId, driveId);
 
       // Resolve GitHub credentials (scoped to calling user + drive)
       const token = await resolveGitHubToken(connectionId, userId, driveId);
