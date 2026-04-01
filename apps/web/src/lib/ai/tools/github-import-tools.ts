@@ -16,7 +16,16 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  resolveGlobalAssistantIntegrations,
+  listUserConnections,
+  listDriveConnections,
+  getConfig,
+  type DriveRole,
+  type ResolutionDependencies,
+  type GrantWithConnectionAndProvider,
+  type GlobalAssistantConfigData,
 } from '@pagespace/lib/integrations';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { db } from '@pagespace/db';
 import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -133,6 +142,41 @@ async function resolveGitHubToken(
   }
 
   return token;
+}
+
+async function findGitHubConnectionId(
+  userId: string,
+  driveId: string
+): Promise<string> {
+  // Resolve connections through the same path the global assistant uses,
+  // applying visibility, assistant-config, and drive-scoping filters.
+  const driveAccess = await getDriveAccess(driveId, userId);
+  const userDriveRole: DriveRole | null = driveAccess.isMember
+    ? (driveAccess.role as DriveRole)
+    : null;
+
+  const deps: ResolutionDependencies = {
+    listGrantsByAgent: async () => [] as GrantWithConnectionAndProvider[],
+    listUserConnections: (uid) => listUserConnections(db, uid),
+    listDriveConnections: (did) => listDriveConnections(db, did),
+    getAssistantConfig: (uid) => getConfig(db, uid) as Promise<GlobalAssistantConfigData | null>,
+  };
+
+  const grants = await resolveGlobalAssistantIntegrations(
+    deps, userId, driveId, userDriveRole
+  );
+
+  const githubGrant = grants.find(
+    (g) => g.connection?.provider?.slug === 'github'
+  );
+
+  if (!githubGrant) {
+    throw new Error(
+      'No active GitHub connection found for this drive. Connect your GitHub account in Settings > Integrations.'
+    );
+  }
+
+  return githubGrant.connectionId;
 }
 
 async function createCodePage(params: {
@@ -357,7 +401,8 @@ export const githubImportTools = {
     inputSchema: z.object({
       connectionId: z
         .string()
-        .describe('ID of the GitHub integration connection to use'),
+        .optional()
+        .describe('GitHub connection ID (auto-detected if omitted)'),
       mode: z
         .enum(['file', 'pr', 'directory'])
         .describe('Import mode: "file" for a single file, "pr" for PR changed files, "directory" for a directory'),
@@ -396,7 +441,7 @@ export const githubImportTools = {
       }
 
       const {
-        connectionId,
+        connectionId: explicitConnectionId,
         mode,
         owner,
         repo,
@@ -430,6 +475,9 @@ export const githubImportTools = {
       } else if (drive.ownerId !== userId) {
         throw new Error('Only drive owners can create pages at the root level');
       }
+
+      // Resolve GitHub connection (after drive/permission validation)
+      const connectionId = explicitConnectionId ?? await findGitHubConnectionId(userId, driveId);
 
       // Resolve GitHub credentials (scoped to calling user + drive)
       const token = await resolveGitHubToken(connectionId, userId, driveId);
