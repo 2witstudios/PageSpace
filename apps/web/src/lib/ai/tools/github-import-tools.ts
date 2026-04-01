@@ -16,9 +16,16 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  resolveGlobalAssistantIntegrations,
   listUserConnections,
   listDriveConnections,
+  getConfig,
+  type DriveRole,
+  type ResolutionDependencies,
+  type GrantWithConnectionAndProvider,
+  type GlobalAssistantConfigData,
 } from '@pagespace/lib/integrations';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { db } from '@pagespace/db';
 import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -141,22 +148,35 @@ async function findGitHubConnectionId(
   userId: string,
   driveId: string
 ): Promise<string> {
-  // Check user connections first, then drive connections
-  const userConns = await listUserConnections(db, userId);
-  const githubConn = userConns.find(
-    (c) => c.provider?.slug === 'github' && c.status === 'active'
-  );
-  if (githubConn) return githubConn.id;
+  // Resolve connections through the same path the global assistant uses,
+  // applying visibility, assistant-config, and drive-scoping filters.
+  const driveAccess = await getDriveAccess(driveId, userId);
+  const userDriveRole: DriveRole | null = driveAccess.isMember
+    ? (driveAccess.role as DriveRole)
+    : null;
 
-  const driveConns = await listDriveConnections(db, driveId);
-  const driveGithubConn = driveConns.find(
-    (c) => c.provider?.slug === 'github' && c.status === 'active'
-  );
-  if (driveGithubConn) return driveGithubConn.id;
+  const deps: ResolutionDependencies = {
+    listGrantsByAgent: async () => [] as GrantWithConnectionAndProvider[],
+    listUserConnections: (uid) => listUserConnections(db, uid),
+    listDriveConnections: (did) => listDriveConnections(db, did),
+    getAssistantConfig: (uid) => getConfig(db, uid) as Promise<GlobalAssistantConfigData | null>,
+  };
 
-  throw new Error(
-    'No active GitHub connection found. Connect your GitHub account in Settings > Integrations.'
+  const grants = await resolveGlobalAssistantIntegrations(
+    deps, userId, driveId, userDriveRole
   );
+
+  const githubGrant = grants.find(
+    (g) => g.connection?.provider?.slug === 'github'
+  );
+
+  if (!githubGrant) {
+    throw new Error(
+      'No active GitHub connection found for this drive. Connect your GitHub account in Settings > Integrations.'
+    );
+  }
+
+  return githubGrant.connectionId;
 }
 
 async function createCodePage(params: {

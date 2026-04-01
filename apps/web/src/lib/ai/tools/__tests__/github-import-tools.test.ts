@@ -41,6 +41,12 @@ vi.mock('@pagespace/lib/integrations', () => ({
   decryptCredentials: vi.fn(),
   listUserConnections: vi.fn().mockResolvedValue([]),
   listDriveConnections: vi.fn().mockResolvedValue([]),
+  getConfig: vi.fn().mockResolvedValue(null),
+  resolveGlobalAssistantIntegrations: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({ isMember: true, role: 'OWNER' }),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -65,8 +71,7 @@ import {
 import {
   getConnectionWithProvider,
   decryptCredentials,
-  listUserConnections,
-  listDriveConnections,
+  resolveGlobalAssistantIntegrations,
 } from '@pagespace/lib/integrations';
 import type { ToolExecutionContext } from '../../core';
 
@@ -75,8 +80,7 @@ const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockGetConnection = vi.mocked(getConnectionWithProvider);
 const mockDecryptCredentials = vi.mocked(decryptCredentials);
-const mockListUserConnections = vi.mocked(listUserConnections);
-const mockListDriveConnections = vi.mocked(listDriveConnections);
+const mockResolveIntegrations = vi.mocked(resolveGlobalAssistantIntegrations);
 
 function makeContext(userId?: string) {
   return {
@@ -111,9 +115,24 @@ function setupAuthMocks() {
     id: 'drive-1',
     ownerId: 'user-123',
   } as never);
-  // Auto-discovery: return a GitHub connection when listing user connections
-  mockListUserConnections.mockResolvedValue([
-    { id: 'conn-1', provider: { slug: 'github' }, status: 'active' },
+  // Auto-discovery: resolve a GitHub connection through the standard integration resolution
+  mockResolveIntegrations.mockResolvedValue([
+    {
+      id: 'synthetic-conn-1',
+      agentId: 'global-assistant',
+      connectionId: 'conn-1',
+      allowedTools: null,
+      deniedTools: null,
+      readOnly: false,
+      rateLimitOverride: null,
+      connection: {
+        id: 'conn-1',
+        name: 'GitHub',
+        status: 'active',
+        providerId: 'github-provider',
+        provider: { id: 'github-provider', slug: 'github', name: 'GitHub', config: {} },
+      },
+    },
   ] as never);
 }
 
@@ -329,12 +348,11 @@ describe('github-import-tools', () => {
       );
 
       expect(result).toMatchObject({ success: true });
-      expect(mockListUserConnections).toHaveBeenCalledWith(expect.anything(), 'user-123');
+      expect(mockResolveIntegrations).toHaveBeenCalled();
     });
 
-    it('throws when no GitHub connection exists', async () => {
-      mockListUserConnections.mockResolvedValue([]);
-      mockListDriveConnections.mockResolvedValue([]);
+    it('throws when no GitHub connection is resolved', async () => {
+      mockResolveIntegrations.mockResolvedValue([]);
 
       await expect(
         githubImportTools.import_from_github.execute!(
