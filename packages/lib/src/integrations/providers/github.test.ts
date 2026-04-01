@@ -678,9 +678,9 @@ describe('githubProvider', () => {
   describe('create_pr_review_comment tool', () => {
     const tool = findTool('create_pr_review_comment');
 
-    it('given the tool, should require owner, repo, pull_number, body, path, commit_id, and line', () => {
+    it('given the tool, should require owner, repo, pull_number, and body', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id', 'line']);
+      expect(required).toEqual(['owner', 'repo', 'pull_number', 'body']);
     });
 
     it('given a single-line comment, should build correct POST', () => {

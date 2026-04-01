@@ -409,7 +409,7 @@ export const githubImportTools = {
         maxFiles: rawMaxFiles,
       } = params;
 
-      const maxFiles = Math.min(rawMaxFiles ?? DEFAULT_MAX_FILES, MAX_FILES_LIMIT);
+      const maxFiles = Math.max(1, Math.min(Math.floor(rawMaxFiles ?? DEFAULT_MAX_FILES), MAX_FILES_LIMIT));
 
       // Verify drive exists
       const drive = await driveRepository.findByIdBasic(driveId);
@@ -472,8 +472,8 @@ export const githubImportTools = {
 
           case 'pr': {
             const importedAt = new Date().toISOString();
-            if (!pullNumber) {
-              throw new Error('pullNumber is required for PR import mode');
+            if (!pullNumber || !Number.isInteger(pullNumber) || pullNumber < 1) {
+              throw new Error('pullNumber must be a positive integer for PR import mode');
             }
 
             // Get PR metadata

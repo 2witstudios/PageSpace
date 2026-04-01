@@ -414,7 +414,7 @@ describe('github-import-tools', () => {
         makeContext('user-123')
       );
 
-      expect(result).toMatchObject({ success: false, error: expect.stringContaining('pullNumber is required') });
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('pullNumber must be a positive integer') });
     });
 
     it('imports PR files into a folder', async () => {

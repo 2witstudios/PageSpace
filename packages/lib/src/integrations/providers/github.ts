@@ -947,7 +947,7 @@ export const githubProvider: IntegrationProviderConfig = {
           },
           state_reason: {
             type: 'string',
-            enum: ['completed', 'not_planned', 'reopened'],
+            enum: ['completed', 'not_planned', 'reopened', 'duplicate'],
             description: 'Reason for state change',
           },
           labels: {
@@ -961,8 +961,8 @@ export const githubProvider: IntegrationProviderConfig = {
             description: 'Usernames to assign (replaces all existing assignees)',
           },
           milestone: {
-            type: 'integer',
-            description: 'Milestone number to associate',
+            type: ['integer', 'null'],
+            description: 'Milestone number to associate (null to clear)',
           },
         },
         required: ['owner', 'repo', 'issue_number'],
@@ -1150,7 +1150,7 @@ export const githubProvider: IntegrationProviderConfig = {
       id: 'create_pr_review_comment',
       name: 'Create PR Inline Comment',
       description:
-        'Add a single inline review comment on a specific line of a pull request diff. Requires commit_id (use head_sha from get_pull_request) and line number (from get_pr_diff). For multi-line comments, also specify start_line and start_side.',
+        'Add a review comment on a pull request. For inline comments: provide path, commit_id, and line. For file-level comments: provide path, commit_id, and subject_type "file". For replies: provide in_reply_to (comment ID) and body only. Use head_sha from get_pull_request for commit_id.',
       category: 'write',
       inputSchema: {
         type: 'object',
@@ -1207,7 +1207,7 @@ export const githubProvider: IntegrationProviderConfig = {
             description: 'Whether the comment is on a line or the whole file',
           },
         },
-        required: ['owner', 'repo', 'pull_number', 'body', 'path', 'commit_id', 'line'],
+        required: ['owner', 'repo', 'pull_number', 'body'],
       },
       execution: {
         type: 'http',
