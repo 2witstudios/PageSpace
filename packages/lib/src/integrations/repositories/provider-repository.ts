@@ -176,9 +176,24 @@ export const seedBuiltinProviders = async (
 };
 
 /**
+ * Deterministic JSON serialization with sorted keys at all levels.
+ * Needed because PostgreSQL JSONB does not preserve key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+    return `{${sorted.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
  * Refresh builtin provider configs from the in-memory definitions.
- * Updates the DB config when the set of tool IDs has changed (e.g. after a deploy
- * that adds new tools). Only touches providers with providerType 'builtin'.
+ * Compares the full config (tools, schemas, rate limits, etc.) via stable
+ * JSON serialization. Only touches providers with providerType 'builtin'.
  */
 export const refreshBuiltinProviders = async (
   database: typeof defaultDb,
@@ -195,10 +210,7 @@ export const refreshBuiltinProviders = async (
     });
     if (!existing) continue;
 
-    const existingConfig = existing.config as IntegrationProviderConfig;
-    const existingToolIds = (existingConfig.tools ?? []).map((t: { id: string }) => t.id).sort().join(',');
-    const newToolIds = (builtin.tools ?? []).map((t) => t.id).sort().join(',');
-    if (existingToolIds === newToolIds) continue;
+    if (stableStringify(existing.config) === stableStringify(builtin)) continue;
 
     await database
       .update(integrationProviders)

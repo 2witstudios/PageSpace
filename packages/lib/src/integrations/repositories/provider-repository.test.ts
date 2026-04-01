@@ -512,7 +512,18 @@ describe('seedBuiltinProviders', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface BuiltinConfigWithTools extends BuiltinConfig {
-  tools?: Array<{ id: string }>;
+  tools?: Array<{ id: string; inputSchema?: unknown; rateLimit?: unknown }>;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+    return `{${sorted.join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 const refreshBuiltinProviders = async (
@@ -527,10 +538,7 @@ const refreshBuiltinProviders = async (
     });
     if (!existing) continue;
 
-    const existingConfig = existing.config as BuiltinConfigWithTools;
-    const existingToolIds = (existingConfig.tools ?? []).map((t: { id: string }) => t.id).sort().join(',');
-    const newToolIds = (builtin.tools ?? []).map((t) => t.id).sort().join(',');
-    if (existingToolIds === newToolIds) continue;
+    if (stableStringify(existing.config) === stableStringify(builtin)) continue;
 
     await db.update().set({ config: builtin }).where({ id: existing.id }).returning();
     updated++;
@@ -553,12 +561,17 @@ describe('refreshBuiltinProviders', () => {
     });
   });
 
-  it('given provider with stale tools, should update config', async () => {
+  it('given provider with new tools added, should update config', async () => {
+    const dbConfig = {
+      id: 'github',
+      name: 'GitHub',
+      tools: [{ id: 'list_repos' }, { id: 'get_issues' }],
+    };
     mockDb.query.integrationProviders.findFirst.mockResolvedValue({
       id: 'prov-1',
       slug: 'github',
       name: 'GitHub',
-      config: { tools: [{ id: 'list_repos' }, { id: 'get_issues' }] },
+      config: dbConfig,
       enabled: true,
       isSystem: true,
     });
@@ -571,7 +584,6 @@ describe('refreshBuiltinProviders', () => {
           { id: 'list_repos' },
           { id: 'get_issues' },
           { id: 'get_pull_request' },
-          { id: 'create_pr_review' },
         ],
       },
     ]);
@@ -580,22 +592,23 @@ describe('refreshBuiltinProviders', () => {
     expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 
-  it('given provider with current tools, should skip update', async () => {
+  it('given identical config, should skip update', async () => {
+    const config = {
+      id: 'github',
+      name: 'GitHub',
+      tools: [{ id: 'list_repos' }],
+    };
     mockDb.query.integrationProviders.findFirst.mockResolvedValue({
       id: 'prov-1',
       slug: 'github',
       name: 'GitHub',
-      config: { tools: [{ id: 'get_issues' }, { id: 'list_repos' }] },
+      config,
       enabled: true,
       isSystem: true,
     });
 
     const result = await refreshBuiltinProviders(mockDb, [
-      {
-        id: 'github',
-        name: 'GitHub',
-        tools: [{ id: 'list_repos' }, { id: 'get_issues' }],
-      },
+      { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
     ]);
 
     expect(result).toBe(0);
@@ -613,18 +626,57 @@ describe('refreshBuiltinProviders', () => {
     expect(mockDb.update).not.toHaveBeenCalled();
   });
 
-  it('given provider with no tools, should update when new tools added', async () => {
+  it('given same tool IDs but changed schema, should update config', async () => {
+    const dbConfig = {
+      id: 'github',
+      name: 'GitHub',
+      tools: [{ id: 'list_repos', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } }],
+    };
     mockDb.query.integrationProviders.findFirst.mockResolvedValue({
       id: 'prov-1',
       slug: 'github',
       name: 'GitHub',
-      config: {},
+      config: dbConfig,
       enabled: true,
       isSystem: true,
     });
 
     const result = await refreshBuiltinProviders(mockDb, [
-      { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
+      {
+        id: 'github',
+        name: 'GitHub',
+        tools: [{
+          id: 'list_repos',
+          inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' } } },
+        }],
+      },
+    ]);
+
+    expect(result).toBe(1);
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('given same tool IDs but changed rate limit, should update config', async () => {
+    const dbConfig = {
+      id: 'github',
+      name: 'GitHub',
+      tools: [{ id: 'list_repos', rateLimit: { requests: 30, windowMs: 60000 } }],
+    };
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue({
+      id: 'prov-1',
+      slug: 'github',
+      name: 'GitHub',
+      config: dbConfig,
+      enabled: true,
+      isSystem: true,
+    });
+
+    const result = await refreshBuiltinProviders(mockDb, [
+      {
+        id: 'github',
+        name: 'GitHub',
+        tools: [{ id: 'list_repos', rateLimit: { requests: 10, windowMs: 60000 } }],
+      },
     ]);
 
     expect(result).toBe(1);
