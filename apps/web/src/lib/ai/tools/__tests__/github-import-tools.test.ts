@@ -39,6 +39,8 @@ vi.mock('@pagespace/lib/monitoring', () => ({
 vi.mock('@pagespace/lib/integrations', () => ({
   getConnectionWithProvider: vi.fn(),
   decryptCredentials: vi.fn(),
+  listUserConnections: vi.fn().mockResolvedValue([]),
+  listDriveConnections: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -63,6 +65,8 @@ import {
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  listUserConnections,
+  listDriveConnections,
 } from '@pagespace/lib/integrations';
 import type { ToolExecutionContext } from '../../core';
 
@@ -71,6 +75,8 @@ const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockGetConnection = vi.mocked(getConnectionWithProvider);
 const mockDecryptCredentials = vi.mocked(decryptCredentials);
+const mockListUserConnections = vi.mocked(listUserConnections);
+const mockListDriveConnections = vi.mocked(listDriveConnections);
 
 function makeContext(userId?: string) {
   return {
@@ -105,6 +111,10 @@ function setupAuthMocks() {
     id: 'drive-1',
     ownerId: 'user-123',
   } as never);
+  // Auto-discovery: return a GitHub connection when listing user connections
+  mockListUserConnections.mockResolvedValue([
+    { id: 'conn-1', provider: { slug: 'github' }, status: 'active' },
+  ] as never);
 }
 
 function base64Encode(str: string): string {
@@ -287,6 +297,57 @@ describe('github-import-tools', () => {
           makeContext('user-123')
         )
       ).rejects.toThrow('expired');
+    });
+  });
+
+  describe('connection auto-discovery', () => {
+    beforeEach(setupAuthMocks);
+
+    it('auto-discovers GitHub connection when connectionId is omitted', async () => {
+      const fileContent = 'hello';
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'test.ts',
+          path: 'test.ts',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode(fileContent),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'test.ts',
+        },
+        makeContext('user-123')
+      );
+
+      expect(result).toMatchObject({ success: true });
+      expect(mockListUserConnections).toHaveBeenCalledWith(expect.anything(), 'user-123');
+    });
+
+    it('throws when no GitHub connection exists', async () => {
+      mockListUserConnections.mockResolvedValue([]);
+      mockListDriveConnections.mockResolvedValue([]);
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'test.ts',
+          },
+          makeContext('user-123')
+        )
+      ).rejects.toThrow('No active GitHub connection found');
     });
   });
 

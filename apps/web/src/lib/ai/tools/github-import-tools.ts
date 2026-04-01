@@ -16,6 +16,8 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  listUserConnections,
+  listDriveConnections,
 } from '@pagespace/lib/integrations';
 import { db } from '@pagespace/db';
 import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
@@ -133,6 +135,28 @@ async function resolveGitHubToken(
   }
 
   return token;
+}
+
+async function findGitHubConnectionId(
+  userId: string,
+  driveId: string
+): Promise<string> {
+  // Check user connections first, then drive connections
+  const userConns = await listUserConnections(db, userId);
+  const githubConn = userConns.find(
+    (c) => c.provider?.slug === 'github' && c.status === 'active'
+  );
+  if (githubConn) return githubConn.id;
+
+  const driveConns = await listDriveConnections(db, driveId);
+  const driveGithubConn = driveConns.find(
+    (c) => c.provider?.slug === 'github' && c.status === 'active'
+  );
+  if (driveGithubConn) return driveGithubConn.id;
+
+  throw new Error(
+    'No active GitHub connection found. Connect your GitHub account in Settings > Integrations.'
+  );
 }
 
 async function createCodePage(params: {
@@ -357,7 +381,8 @@ export const githubImportTools = {
     inputSchema: z.object({
       connectionId: z
         .string()
-        .describe('ID of the GitHub integration connection to use'),
+        .optional()
+        .describe('GitHub connection ID (auto-detected if omitted)'),
       mode: z
         .enum(['file', 'pr', 'directory'])
         .describe('Import mode: "file" for a single file, "pr" for PR changed files, "directory" for a directory'),
@@ -396,7 +421,7 @@ export const githubImportTools = {
       }
 
       const {
-        connectionId,
+        connectionId: explicitConnectionId,
         mode,
         owner,
         repo,
@@ -410,6 +435,7 @@ export const githubImportTools = {
       } = params;
 
       const maxFiles = Math.max(1, Math.min(Math.floor(rawMaxFiles ?? DEFAULT_MAX_FILES), MAX_FILES_LIMIT));
+      const connectionId = explicitConnectionId ?? await findGitHubConnectionId(userId, driveId);
 
       // Verify drive exists
       const drive = await driveRepository.findByIdBasic(driveId);
