@@ -110,11 +110,10 @@ async function resolveGitHubToken(
   }
 
   // Verify the connection belongs to the caller (user-scoped) or their drive (drive-scoped)
-  const conn = connection as unknown as { userId?: string; driveId?: string };
-  if (conn.userId && conn.userId !== userId) {
+  if (connection.userId && connection.userId !== userId) {
     throw new Error('GitHub connection does not belong to this user.');
   }
-  if (conn.driveId && conn.driveId !== driveId) {
+  if (connection.driveId && connection.driveId !== driveId) {
     throw new Error('GitHub connection does not belong to this drive.');
   }
 
@@ -310,6 +309,7 @@ async function importSingleFile(params: {
   driveId: string;
   parentId: string | null;
   userId: string;
+  importedAt: string;
 }): Promise<{ id: string; title: string; language: string }> {
   const queryParams: Record<string, string> = {};
   if (params.ref) queryParams.ref = params.ref;
@@ -342,7 +342,7 @@ async function importSingleFile(params: {
       ref: params.ref ?? null,
       sha: data.sha,
       htmlUrl: data.html_url,
-      importedAt: new Date().toISOString(),
+      importedAt: params.importedAt,
       language,
     },
   });
@@ -437,6 +437,7 @@ export const githubImportTools = {
       try {
         switch (mode) {
           case 'file': {
+            const importedAt = new Date().toISOString();
             if (!path) {
               throw new Error('path is required for file import mode');
             }
@@ -457,6 +458,7 @@ export const githubImportTools = {
               driveId,
               parentId: parentId ?? null,
               userId,
+              importedAt,
             });
 
             return {
@@ -469,6 +471,7 @@ export const githubImportTools = {
           }
 
           case 'pr': {
+            const importedAt = new Date().toISOString();
             if (!pullNumber) {
               throw new Error('pullNumber is required for PR import mode');
             }
@@ -511,7 +514,7 @@ export const githubImportTools = {
                 additions: pr.additions,
                 deletions: pr.deletions,
                 changedFiles: pr.changed_files,
-                importedAt: new Date().toISOString(),
+                importedAt,
               },
             });
 
@@ -564,7 +567,7 @@ export const githubImportTools = {
                     fileStatus: file.status,
                     additions: file.additions,
                     deletions: file.deletions,
-                    importedAt: new Date().toISOString(),
+                    importedAt,
                     language,
                   },
                 });
@@ -591,6 +594,7 @@ export const githubImportTools = {
           }
 
           case 'directory': {
+            const importedAt = new Date().toISOString();
             if (path === undefined) {
               throw new Error('path is required for directory import mode (use "" for repo root)');
             }
@@ -625,19 +629,26 @@ export const githubImportTools = {
                 repo,
                 path: dirPath,
                 ref: ref ?? null,
-                importedAt: new Date().toISOString(),
+                importedAt,
               },
             });
 
-            const imported: string[] = [];
-            const skipped: string[] = [];
-            let filesProcessed = 0;
+            interface DirectoryResult {
+              imported: string[];
+              skipped: string[];
+              filesProcessed: number;
+            }
 
             const processDirectory = async (
               dirEntries: GitHubFileEntry[],
               targetParentId: string,
-              depth: number
-            ) => {
+              depth: number,
+              processedSoFar: number
+            ): Promise<DirectoryResult> => {
+              const imported: string[] = [];
+              const skipped: string[] = [];
+              let filesProcessed = processedSoFar;
+
               for (const entry of dirEntries) {
                 if (filesProcessed >= maxFiles) break;
 
@@ -679,7 +690,7 @@ export const githubImportTools = {
                         ref: ref ?? null,
                         sha: entry.sha,
                         htmlUrl: entry.html_url,
-                        importedAt: new Date().toISOString(),
+                        importedAt,
                         language: detectLanguageFromFilename(entry.name),
                       },
                     });
@@ -713,7 +724,10 @@ export const githubImportTools = {
                     )) as GitHubFileEntry[];
 
                     if (Array.isArray(subEntries)) {
-                      await processDirectory(subEntries, subFolder.id, depth + 1);
+                      const subResult = await processDirectory(subEntries, subFolder.id, depth + 1, filesProcessed);
+                      imported.push(...subResult.imported);
+                      skipped.push(...subResult.skipped);
+                      filesProcessed = subResult.filesProcessed;
                     }
                   } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
@@ -721,18 +735,20 @@ export const githubImportTools = {
                   }
                 }
               }
+
+              return { imported, skipped, filesProcessed };
             };
 
-            await processDirectory(entries, folder.id, 0);
+            const result = await processDirectory(entries, folder.id, 0, 0);
 
             return {
               success: true,
               folderId: folder.id,
               folderTitle: folder.title,
-              importedCount: imported.length,
-              imported,
-              skippedCount: skipped.length,
-              skipped,
+              importedCount: result.imported.length,
+              imported: result.imported,
+              skippedCount: result.skipped.length,
+              skipped: result.skipped,
               source: `${owner}/${repo}/${dirPath}${ref ? `@${ref}` : ''}`,
             };
           }
