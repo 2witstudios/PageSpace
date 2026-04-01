@@ -180,6 +180,9 @@ importers:
       postgres:
         specifier: ^3.4.5
         version: 3.4.8
+      stripe:
+        specifier: ^20.1.0
+        version: 20.1.0(@types/node@24.5.2)
     devDependencies:
       '@types/bcryptjs':
         specifier: ^2.4.6
@@ -17413,7 +17416,7 @@ snapshots:
       http-errors: 2.0.0
       iconv-lite: 0.7.1
       on-finished: 2.4.1
-      qs: 6.14.0
+      qs: 6.14.1
       raw-body: 3.0.2
       type-is: 2.0.1
     transitivePeerDependencies:
@@ -23926,9 +23929,15 @@ snapshots:
 
   stripe@20.1.0(@types/node@20.19.17):
     dependencies:
-      qs: 6.14.0
+      qs: 6.14.1
     optionalDependencies:
       '@types/node': 20.19.17
+
+  stripe@20.1.0(@types/node@24.5.2):
+    dependencies:
+      qs: 6.14.1
+    optionalDependencies:
+      '@types/node': 24.5.2
 
   stubborn-fs@1.2.5: {}
 

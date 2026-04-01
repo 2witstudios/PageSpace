@@ -1,6 +1,7 @@
 import { createApp } from './app'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import Stripe from 'stripe'
 import { createTenantRepository, type TenantDb } from './repositories/tenant-repository'
 import { createProvisioningEngine, createTenantLifecycle, createShellExecutor, createAdminSeeder } from './services'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
@@ -77,11 +78,26 @@ async function start() {
     composePath, basePath,
   })
 
+  // Stripe client — optional, only if STRIPE_SECRET_KEY is configured
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY
+  const stripe = stripeSecretKey
+    ? new Stripe(stripeSecretKey, { apiVersion: '2025-12-15.clover' })
+    : undefined
+
+  // Map tier names to real Stripe price IDs from environment
+  const priceMap: Record<string, string> = {}
+  if (process.env.STRIPE_PRICE_FREE) priceMap.free = process.env.STRIPE_PRICE_FREE
+  if (process.env.STRIPE_PRICE_PRO) priceMap.pro = process.env.STRIPE_PRICE_PRO
+  if (process.env.STRIPE_PRICE_BUSINESS) priceMap.business = process.env.STRIPE_PRICE_BUSINESS
+  if (process.env.STRIPE_PRICE_ENTERPRISE) priceMap.enterprise = process.env.STRIPE_PRICE_ENTERPRISE
+
   const app = createApp({
     logger: true,
     repo,
     provisioningEngine,
     lifecycle,
+    stripe,
+    priceMap,
   })
 
   // Verify database connectivity before accepting traffic

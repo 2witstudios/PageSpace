@@ -23,6 +23,11 @@ services:
       resources:
         limits:
           memory: 200M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
@@ -48,6 +53,11 @@ services:
       resources:
         limits:
           memory: 160M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
@@ -70,6 +80,11 @@ services:
       resources:
         limits:
           memory: 96M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
@@ -160,6 +175,11 @@ services:
       - /tmp:noexec,nosuid,size=100m
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 
@@ -212,6 +232,11 @@ services:
       resources:
         limits:
           memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${TENANT_SLUG}-web.rule=Host(`${TENANT_SLUG}.pagespace.ai`)"
@@ -249,6 +274,11 @@ services:
       resources:
         limits:
           memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${TENANT_SLUG}-realtime.rule=Host(`${TENANT_SLUG}.pagespace.ai`) && PathPrefix(`/socket.io`)"
@@ -273,6 +303,11 @@ services:
       resources:
         limits:
           memory: 32M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - internal
 

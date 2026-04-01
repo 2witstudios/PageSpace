@@ -281,6 +281,48 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
       loggers.api.info('Linked Stripe customer to user', { customerId, email: customerEmail });
     }
+
+    // Bridge to control-plane: trigger tenant provisioning if metadata.slug is present
+    const slug = session.metadata?.slug;
+    if (slug) {
+      const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
+      if (!controlPlaneUrl) {
+        loggers.api.warn('CONTROL_PLANE_URL not set, skipping tenant provisioning', { slug });
+      } else {
+        try {
+          const tier = session.metadata?.tier || 'pro';
+          const ownerEmail = session.customer_details?.email || '';
+          const response = await fetch(`${controlPlaneUrl}/api/tenants`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': process.env.CONTROL_PLANE_API_KEY || '',
+            },
+            body: JSON.stringify({
+              slug,
+              name: slug,
+              ownerEmail,
+              tier,
+            }),
+          });
+          if (!response.ok) {
+            loggers.api.warn('Control-plane provisioning returned non-2xx', {
+              slug,
+              tier,
+              status: response.status,
+            });
+          } else {
+            loggers.api.info('Control-plane provisioning triggered', {
+              slug,
+              tier,
+              status: response.status,
+            });
+          }
+        } catch (error) {
+          loggers.api.error('Failed to trigger control-plane provisioning', error instanceof Error ? error : undefined, { slug });
+        }
+      }
+    }
   }
 }
 

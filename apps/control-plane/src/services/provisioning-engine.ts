@@ -16,12 +16,20 @@ type AdminSeeder = {
   }>
 }
 
+type ProvisioningEmailData = {
+  loginUrl: string
+  adminEmail: string
+  temporaryPassword?: string
+}
+
 export type ProvisioningDeps = {
   repo: TenantRepo
   executor: ShellExecutor
   fs: FsLike
   seeder: AdminSeeder
   pollHealth: (slug: string) => Promise<{ healthy: boolean }>
+  sendProvisioningEmail?: (data: ProvisioningEmailData) => Promise<void>
+  tenantBaseDomain?: string
   basePath: string
   scriptsPath: string
   composePath: string
@@ -40,7 +48,12 @@ function getEnvVar(envContent: string, name: string): string | undefined {
 }
 
 export function createProvisioningEngine(deps: ProvisioningDeps) {
-  const { repo, executor, fs, seeder, pollHealth, basePath, scriptsPath, composePath } = deps
+  const {
+    repo, executor, fs, seeder, pollHealth,
+    sendProvisioningEmail = async () => { console.warn('sendProvisioningEmail not configured — skipping provisioning email') },
+    tenantBaseDomain = 'pagespace.ai',
+    basePath, scriptsPath, composePath,
+  } = deps
 
   return {
     async provision(request: ProvisionRequest) {
@@ -109,10 +122,23 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           databaseUrl,
         })
 
-        // Step 9: Update status to active
+        // Step 9: Send provisioning email (fire-and-forget — must not fail provisioning)
+        try {
+          await sendProvisioningEmail({
+            loginUrl: `https://${request.slug}.${tenantBaseDomain}`,
+            adminEmail: request.ownerEmail,
+            ...(!seedResult.alreadyExisted && seedResult.temporaryPassword
+              ? { temporaryPassword: seedResult.temporaryPassword }
+              : {}),
+          })
+        } catch {
+          // Email failure must NOT fail provisioning
+        }
+
+        // Step 10: Update status to active
         await repo.updateTenantStatus(tenant.id, 'active')
 
-        // Step 10: Record provisioned event
+        // Step 11: Record provisioned event
         await repo.recordEvent(tenant.id, 'provisioned', {
           ownerEmail: request.ownerEmail,
           tier: request.tier,
