@@ -1,6 +1,6 @@
 # Terminal Pages Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-03-31)
 **Goal**: Add a TERMINAL page type that renders a live shell UI using Gridland (Canvas-based TUI renderer)
 
 ## Overview
