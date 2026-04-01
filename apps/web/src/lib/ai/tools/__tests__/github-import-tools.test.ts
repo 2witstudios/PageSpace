@@ -844,7 +844,7 @@ describe('github-import-tools', () => {
       expect(codePageCalls.length).toBe(2);
 
       const timestamps = codePageCalls.map(
-        (call) => ((call[0] as Record<string, unknown>).extractionMetadata as Record<string, unknown>)?.importedAt
+        (call) => ((call[0] as unknown as Record<string, Record<string, unknown>>).extractionMetadata?.importedAt)
       );
       expect(timestamps[0]).toBe(timestamps[1]);
     });
