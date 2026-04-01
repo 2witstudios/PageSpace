@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 import path from "path";
 import CopyPlugin from "copy-webpack-plugin";
-import { withGridland } from "@gridland/web/next-plugin";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -35,10 +34,20 @@ const nextConfig: NextConfig = {
         })
       );
     }
+
+    // Gridland stubs: @gridland/web uses CJS require for bun:ffi at build time.
+    // Alias to its shipped browser shims so webpack can resolve them.
+    const gridlandShims = path.join(__dirname, "node_modules/@gridland/web/src/shims");
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "bun:ffi": path.join(gridlandShims, "bun-ffi.ts"),
+      "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
+      bun: path.join(gridlandShims, "bun-ffi.ts"),
+    };
+
     return config;
   },
 };
 
-// withGridland's NextConfig type is simpler than Next.js's full NextConfig
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default withGridland(nextConfig as any) as NextConfig;
+export default nextConfig;

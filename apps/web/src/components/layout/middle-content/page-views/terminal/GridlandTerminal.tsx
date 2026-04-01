@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
-import { TUI } from '@gridland/web/next';
+import { TUI } from '@gridland/web';
 import { useKeyboard, type KeyEvent } from '@gridland/utils';
 
 // ── Typed Gridland primitives ────────────────────────────────────────────
@@ -97,7 +97,7 @@ const themes = {
 
 function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: GridlandTerminalProps) {
   const [input, setInput] = useState('');
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [, setHistoryIndex] = useState(-1);
   const theme = isDark ? themes.dark : themes.light;
 
   const handleSubmit = useCallback(() => {
