@@ -176,6 +176,41 @@ export const seedBuiltinProviders = async (
 };
 
 /**
+ * Refresh builtin provider configs from the in-memory definitions.
+ * Updates the DB config when the set of tool IDs has changed (e.g. after a deploy
+ * that adds new tools). Only touches providers with providerType 'builtin'.
+ */
+export const refreshBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<number> => {
+  let updated = 0;
+
+  for (const builtin of builtins) {
+    const existing = await database.query.integrationProviders.findFirst({
+      where: and(
+        eq(integrationProviders.slug, builtin.id),
+        eq(integrationProviders.providerType, 'builtin')
+      ),
+    });
+    if (!existing) continue;
+
+    const existingConfig = existing.config as IntegrationProviderConfig;
+    const existingToolIds = (existingConfig.tools ?? []).map((t: { id: string }) => t.id).sort().join(',');
+    const newToolIds = (builtin.tools ?? []).map((t) => t.id).sort().join(',');
+    if (existingToolIds === newToolIds) continue;
+
+    await database
+      .update(integrationProviders)
+      .set({ config: builtin as unknown as Record<string, unknown> })
+      .where(eq(integrationProviders.id, existing.id));
+    updated++;
+  }
+
+  return updated;
+};
+
+/**
  * Count connections for a provider.
  */
 export const countProviderConnections = async (

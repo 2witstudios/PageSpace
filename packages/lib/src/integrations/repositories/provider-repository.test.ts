@@ -507,6 +507,131 @@ describe('seedBuiltinProviders', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// REFRESH BUILTIN PROVIDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface BuiltinConfigWithTools extends BuiltinConfig {
+  tools?: Array<{ id: string }>;
+}
+
+const refreshBuiltinProviders = async (
+  db: MockDb,
+  builtins: BuiltinConfigWithTools[]
+): Promise<number> => {
+  let updated = 0;
+
+  for (const builtin of builtins) {
+    const existing = await db.query.integrationProviders.findFirst({
+      where: { slug: builtin.id, providerType: 'builtin' },
+    });
+    if (!existing) continue;
+
+    const existingConfig = existing.config as BuiltinConfigWithTools;
+    const existingToolIds = (existingConfig.tools ?? []).map((t: { id: string }) => t.id).sort().join(',');
+    const newToolIds = (builtin.tools ?? []).map((t) => t.id).sort().join(',');
+    if (existingToolIds === newToolIds) continue;
+
+    await db.update().set({ config: builtin }).where({ id: existing.id }).returning();
+    updated++;
+  }
+
+  return updated;
+};
+
+describe('refreshBuiltinProviders', () => {
+  let mockDb: MockDb;
+
+  beforeEach(() => {
+    mockDb = createMockDb();
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{}]),
+        }),
+      }),
+    });
+  });
+
+  it('given provider with stale tools, should update config', async () => {
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue({
+      id: 'prov-1',
+      slug: 'github',
+      name: 'GitHub',
+      config: { tools: [{ id: 'list_repos' }, { id: 'get_issues' }] },
+      enabled: true,
+      isSystem: true,
+    });
+
+    const result = await refreshBuiltinProviders(mockDb, [
+      {
+        id: 'github',
+        name: 'GitHub',
+        tools: [
+          { id: 'list_repos' },
+          { id: 'get_issues' },
+          { id: 'get_pull_request' },
+          { id: 'create_pr_review' },
+        ],
+      },
+    ]);
+
+    expect(result).toBe(1);
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('given provider with current tools, should skip update', async () => {
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue({
+      id: 'prov-1',
+      slug: 'github',
+      name: 'GitHub',
+      config: { tools: [{ id: 'get_issues' }, { id: 'list_repos' }] },
+      enabled: true,
+      isSystem: true,
+    });
+
+    const result = await refreshBuiltinProviders(mockDb, [
+      {
+        id: 'github',
+        name: 'GitHub',
+        tools: [{ id: 'list_repos' }, { id: 'get_issues' }],
+      },
+    ]);
+
+    expect(result).toBe(0);
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('given provider not in database, should skip it', async () => {
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue(undefined);
+
+    const result = await refreshBuiltinProviders(mockDb, [
+      { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
+    ]);
+
+    expect(result).toBe(0);
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('given provider with no tools, should update when new tools added', async () => {
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue({
+      id: 'prov-1',
+      slug: 'github',
+      name: 'GitHub',
+      config: {},
+      enabled: true,
+      isSystem: true,
+    });
+
+    const result = await refreshBuiltinProviders(mockDb, [
+      { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
+    ]);
+
+    expect(result).toBe(1);
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('countProviderConnections', () => {
   let mockDb: MockDb;
 
