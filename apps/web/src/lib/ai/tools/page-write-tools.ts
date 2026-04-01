@@ -6,6 +6,7 @@ import {
   PageType,
   isAIChatPage,
   isDocumentPage,
+  getDefaultContent,
   parseSheetContent,
   serializeSheetContent,
   updateSheetCells,
@@ -579,7 +580,7 @@ export const pageWriteTools = {
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
-        const initialContent = '';
+        const initialContent = getDefaultContent(type as PageType);
         const contentFormat = detectPageContentFormat(initialContent);
         const contentRef = hashWithPrefix(contentFormat, initialContent);
         const stateHash = computePageStateHash({

@@ -48,7 +48,6 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [session, setSession] = useState<TerminalSession>({ history: [] });
   const isDirtyRef = useRef(false);
-  const hasInitializedRef = useRef(false);
   const socket = useSocket();
   const { user } = useAuth();
   const { resolvedTheme } = useTheme();
@@ -68,18 +67,10 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Initialize document when component mounts
+  // Initialize document when component mounts or pageId changes
   useEffect(() => {
-    if (!hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-      initializeAndActivate();
-    }
+    initializeAndActivate();
   }, [pageId, initializeAndActivate]);
-
-  // Reset initialization flag when pageId changes
-  useEffect(() => {
-    hasInitializedRef.current = false;
-  }, [pageId]);
 
   // Sync document content to local session state
   useEffect(() => {
@@ -121,6 +112,12 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     checkPermissions();
   }, [user?.id, pageId]);
 
+  // Keep a ref to latest documentState to avoid stale closures in socket handler
+  const documentStateRef = useRef(documentState);
+  useEffect(() => {
+    documentStateRef.current = documentState;
+  }, [documentState]);
+
   // Listen for content updates from other sources
   useEffect(() => {
     if (!socket) return;
@@ -131,7 +128,8 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
           const response = await fetchWithAuth(`/api/pages/${pageId}`);
           if (response.ok) {
             const updatedPage = await response.json();
-            if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
+            const currentDoc = documentStateRef.current;
+            if (updatedPage.content !== currentDoc?.content && !currentDoc?.isDirty) {
               updateContentFromServer(updatedPage.content, updatedPage.revision);
             }
           }
@@ -144,7 +142,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, pageId, documentState, updateContentFromServer]);
+  }, [socket, pageId, updateContentFromServer]);
 
   // Handle command submission
   const handleCommand = useCallback((command: string) => {
