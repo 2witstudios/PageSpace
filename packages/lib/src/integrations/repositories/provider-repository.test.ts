@@ -682,6 +682,43 @@ describe('refreshBuiltinProviders', () => {
     expect(result).toBe(1);
     expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
+
+  it('given findFirst rejects, should propagate the error', async () => {
+    mockDb.query.integrationProviders.findFirst.mockRejectedValue(
+      new Error('DB connection lost')
+    );
+
+    await expect(
+      refreshBuiltinProviders(mockDb, [
+        { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
+      ])
+    ).rejects.toThrow('DB connection lost');
+  });
+
+  it('given update rejects, should propagate the error', async () => {
+    mockDb.query.integrationProviders.findFirst.mockResolvedValue({
+      id: 'prov-1',
+      slug: 'github',
+      name: 'GitHub',
+      config: { id: 'github', name: 'GitHub', tools: [] },
+      enabled: true,
+      isSystem: true,
+    });
+
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockRejectedValue(new Error('write failed')),
+        }),
+      }),
+    });
+
+    await expect(
+      refreshBuiltinProviders(mockDb, [
+        { id: 'github', name: 'GitHub', tools: [{ id: 'list_repos' }] },
+      ])
+    ).rejects.toThrow('write failed');
+  });
 });
 
 describe('countProviderConnections', () => {
