@@ -170,4 +170,5 @@ playground.xcworkspace
 # Claude Code skills & agents (local plugin data)
 .agents/
 .claude/skills/
+.claude/*.local.md
 skills-lock.json

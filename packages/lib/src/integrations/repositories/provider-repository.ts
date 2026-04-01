@@ -176,6 +176,53 @@ export const seedBuiltinProviders = async (
 };
 
 /**
+ * Deterministic JSON serialization with sorted keys at all levels.
+ * Needed because PostgreSQL JSONB does not preserve key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+    return `{${sorted.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Refresh builtin provider configs from the in-memory definitions.
+ * Compares the full config (tools, schemas, rate limits, etc.) via stable
+ * JSON serialization. Only touches providers with providerType 'builtin'.
+ */
+export const refreshBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<number> => {
+  let updated = 0;
+
+  for (const builtin of builtins) {
+    const existing = await database.query.integrationProviders.findFirst({
+      where: and(
+        eq(integrationProviders.slug, builtin.id),
+        eq(integrationProviders.providerType, 'builtin')
+      ),
+    });
+    if (!existing) continue;
+
+    if (stableStringify(existing.config) === stableStringify(builtin)) continue;
+
+    await database
+      .update(integrationProviders)
+      .set({ config: builtin as unknown as Record<string, unknown> })
+      .where(eq(integrationProviders.id, existing.id));
+    updated++;
+  }
+
+  return updated;
+};
+
+/**
  * Count connections for a provider.
  */
 export const countProviderConnections = async (

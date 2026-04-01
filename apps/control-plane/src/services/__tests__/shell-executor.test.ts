@@ -76,14 +76,15 @@ describe('ShellExecutor', () => {
   })
 
   describe('timeout handling', () => {
-    test('given a timeout option, should reject when command exceeds timeout', async () => {
+    test('given a timeout option, should return error result when command exceeds timeout', async () => {
       const executor = createMockExecutor([
-        { stdout: '', stderr: 'timeout', exitCode: -1, delay: 200 },
+        { stdout: '', stderr: 'timed out', exitCode: -1, delay: 200 },
       ])
 
       const result = await executor.exec('slow-command', { timeout: 50 })
 
-      expect(result.exitCode).not.toBe(0)
+      expect(result.exitCode).toBe(-1)
+      expect(result.stderr).toContain('timed out')
     })
   })
 

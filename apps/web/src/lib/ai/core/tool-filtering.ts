@@ -25,6 +25,8 @@ const WRITE_TOOLS = new Set([
   'update_task',
   // Channel operations
   'send_channel_message',
+  // GitHub import (creates pages)
+  'import_from_github',
 ]);
 
 // Web search tools (excluded when web search is disabled)
