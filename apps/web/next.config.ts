@@ -34,6 +34,17 @@ const nextConfig: NextConfig = {
         })
       );
     }
+    // Gridland stubs: @gridland/web uses CJS require for bun:ffi at build time.
+    // Alias to its shipped browser shims so webpack can resolve them.
+    const gridlandShims = path.join(__dirname, "node_modules/@gridland/web/src/shims");
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "bun:ffi": path.join(gridlandShims, "bun-ffi.ts"),
+      "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
+      bun: path.join(gridlandShims, "bun-ffi.ts"),
+    };
+
     return config;
   },
 };
