@@ -15,6 +15,7 @@ import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
 import CodePageView from './page-views/code/CodePageView';
+import TerminalView from './page-views/terminal/TerminalView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/client-safe';
@@ -149,6 +150,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     SheetView,
     TaskListView,
     CodePageView,
+    TerminalView,
   };
 
   const componentName = getPageTypeComponent(page.type);
@@ -169,6 +171,9 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'CodePageView') {
     // CodePageView accepts only pageId (new pattern)
     pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
+  } else if (componentName === 'TerminalView') {
+    // TerminalView accepts only pageId (new pattern)
+    pageComponent = <TerminalView key={`terminal-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'CanvasPageView') {
     // CanvasPageView should remount per page to isolate edit/undo state
     pageComponent = <CanvasPageView key={`canvas-${page.id}`} page={page} />;
