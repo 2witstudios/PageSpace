@@ -1,297 +1,118 @@
-# PageSpace Local Development Guide
+# PageSpace
 
-## 1. TECH STACK & ARCHITECTURE
+PageSpace is an AI-native knowledge management and collaboration platform. Humans and AI agents work together in shared workspaces using 33+ real tools — AI can create, edit, organize, and search content directly, not just answer questions. The platform supports 9 page types (Document, Code, Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), 100+ AI models across multiple providers, and MCP protocol integration. Available as cloud SaaS (pagespace.ai), self-hosted, desktop (Electron), and mobile (Capacitor).
 
-### 1.1. Core Technology Stack
+## Monorepo Structure
 
-- **Full-Stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
+pnpm workspace + Turbo build system.
+
+```
+apps/
+  web/              # Next.js 15 main app (frontend + API routes)
+  realtime/         # Socket.IO real-time collaboration server
+  processor/        # File processing (uploads, images, OCR, PDF extraction)
+  control-plane/    # Fastify tenant provisioning, Stripe billing, lifecycle mgmt
+  desktop/          # Electron wrapper (macOS, Windows, Linux)
+  ios/              # Capacitor iOS wrapper
+  android/          # Capacitor Android wrapper
+  marketing/        # Marketing site (pagespace.ai landing pages)
+  atlas/            # Internal architecture visualization (React Flow)
+
+packages/
+  db/               # Drizzle ORM schema + migrations (PostgreSQL)
+  lib/              # Shared auth, permissions, services, integrations, utilities
+```
+
+## Tech Stack
+
+- **Full-stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
 - **Database**: PostgreSQL + Drizzle ORM
-- **AI**: Ollama (local models) + Vercel AI SDK + OpenRouter + Google AI SDK
-- **Auth**: Custom JWT-based authentication
-- **File Storage**: Local filesystem with metadata in PostgreSQL
-- **Real-time**: Socket.IO for live collaboration
-- **Deployment**: Docker Compose on VPS (pagespace.ai), images built and pushed to GHCR (`ghcr.io/2witstudios/`), reverse proxy via Caddy
-- **Deploy Repo**: Compose file, Caddyfile, and deploy scripts live in a separate repo at `/Users/jono/production/PageSpace-Deploy/`
+- **AI**: Vercel AI SDK + multi-provider (Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama)
+- **Auth**: Custom JWT (jose + bcryptjs)
+- **Real-time**: Socket.IO with Redis pub/sub
+- **Editors**: TipTap (rich text), Monaco (code), custom sheet + canvas
+- **State**: Zustand (client) + SWR (server cache)
+- **Build**: pnpm + Turbo + Docker Compose
+- **Deployment**: Docker images on GHCR (`ghcr.io/2witstudios/`), Caddy reverse proxy
+- **Deploy repo**: Compose file, Caddyfile, deploy scripts at `/Users/jono/production/PageSpace-Deploy/`
 
-#### Deployment Modes
+## Deployment Modes
 
-The application supports three deployment modes via the `DEPLOYMENT_MODE` env var (see `packages/lib/src/deployment-mode.ts`):
+Three modes via `DEPLOYMENT_MODE` env var (see `packages/lib/src/deployment-mode.ts`):
 
 - **`cloud`** (default) — SaaS at pagespace.ai. Stripe billing, OAuth, self-registration enabled.
-- **`onprem`** — Self-hosted. Disables Stripe, OAuth, and self-registration; uses password auth, local AI providers, and admin-managed accounts.
-- **`tenant`** — Managed multi-tenant. Billing handled by the control plane; all users get business-tier features. Cloud-only routes (Stripe, OAuth) are blocked like on-prem.
+- **`onprem`** — Self-hosted. Disables Stripe, OAuth, self-registration. Password auth, local AI, admin-managed accounts.
+- **`tenant`** — Managed multi-tenant. Billing at the control plane. All users get business-tier features. Cloud-only routes blocked.
 
-### 1.2. Monorepo Architecture
+## Critical Rules
 
-This project uses a pnpm workspace with Turbo build system with the following structure:
+**Package manager**: Always use `pnpm`. Never `npm`. This is a pnpm workspace — everything breaks otherwise.
 
-- `apps/web`: The main Next.js 15 frontend and backend application
-- `apps/marketing`: Marketing site (pagespace.ai landing pages)
-- `apps/realtime`: A dedicated Socket.IO service for real-time communication
-- `apps/processor`: File processing service for uploads, image optimization, and content extraction
-- `packages/db`: The centralized Drizzle ORM package containing database schema, migrations, and query logic
-- `packages/lib`: Shared utilities, types, and functions used across the monorepo
-
-### 1.3. Key Dependencies
-
-**Frontend & UI:**
-- Next.js 15.3.5 with App Router
-- React ^19.0.0 + TypeScript ^5.8.3
-- Tailwind CSS ^4 + shadcn/ui components
-- TipTap rich text editor with markdown support
-- Monaco Editor for code editing
-- @dnd-kit for drag-and-drop functionality
-
-**Backend & Database:**
-- Drizzle ORM ^0.32.2 with PostgreSQL
-- Custom JWT authentication with jose ^6.0.11
-- bcryptjs ^3.0.2 for password hashing
-
-**AI & Real-time:**
-- Vercel AI SDK (ai) ^5.0.12
-- @ai-sdk/google ^2.0.6, @ai-sdk/anthropic ^2.0.4, @ai-sdk/openai ^2.0.15, @ai-sdk/xai ^2.0.8
-- @openrouter/ai-sdk-provider ^1.1.2 for cloud models
-- Socket.IO ^4.8.1 for real-time collaboration
-
-**State Management:**
-- Zustand for client state
-- SWR for server state and caching
-
-## 2. NEXT.JS 15 ROUTE HANDLER REQUIREMENTS
-
-### 2.1. Breaking Change: Dynamic Route params are Promises
-
-**CRITICAL**: In Next.js 15, `params` in dynamic routes are Promise objects. You MUST await `context.params` before destructuring.
-
+**Next.js 15 async params**: `params` in dynamic routes are Promises. You MUST await them:
 ```typescript
-// ✅ CORRECT Pattern
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  const { id } = await context.params; // Must await params
-  return Response.json({ id });
-}
-
-// ❌ INCORRECT Pattern
-export async function GET(
-  request: Request,
-  { params }: { params: { id: string } } // WRONG: params is a Promise
-) {
-  // This will fail in Next.js 15
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
 }
 ```
+Destructuring params directly without await is a silent runtime bug.
 
-### 2.2. Request Handling Standards
+**Database migrations**: Never manually create or edit SQL files in `packages/db/drizzle/`. Always use `pnpm db:generate` from schema changes in `packages/db/src/schema/`.
 
-- **Get Request Body**: `const body = await request.json();`
-- **Get Search Params**: `const { searchParams } = new URL(request.url);`
-- **Return JSON**: `return Response.json(data)` or `return NextResponse.json(data)`
+**No `any` types**: Always use proper TypeScript types.
 
-## 3. MANDATORY DOCUMENTATION WORKFLOW
+**Message content**: Always use the `parts` array structure for message content. Read the message types in `packages/lib/src/types.ts` for the canonical shape.
 
-- When changes land, update the changelog and any user-visible notes.
+**Permissions**: Always use the centralized permission functions from `packages/lib/src/permissions/`. Never roll your own access checks.
 
-## 4. DEVELOPMENT STANDARDS
+**UI refresh protection**: Any component that edits content or streams AI must register state with `useEditingStore` to prevent SWR from clobbering in-progress work. Read `apps/web/src/stores/useEditingStore.ts` for the API.
 
-### 4.1. Code Quality Principles
+**Changelog**: When changes land, update the changelog and any user-visible notes.
 
-- **No `any` types** - Always use proper TypeScript types
-- **Explicit over implicit** - Clear, self-documenting code
-- **Right-first approach** - Build the ideal solution from the start
-- **Consistent patterns** - Follow established conventions
+## Key Source Locations
 
-### 4.2. Critical Patterns
+When you need to understand a subsystem, read these canonical sources (not docs that may be stale):
 
-**Message Content Structure:**
-```typescript
-// ✅ CORRECT - Always use message parts structure
-const message = {
-  parts: [
-    { type: 'text', text: "Hello world" }
-  ]
-};
-```
+| Area | Path |
+|------|------|
+| Page types enum | `packages/lib/src/utils/enums.ts` |
+| Permissions | `packages/lib/src/permissions/` |
+| Auth (JWT, sessions) | `packages/lib/src/auth/` |
+| UI refresh protection | `apps/web/src/stores/useEditingStore.ts` |
+| Integrations (GitHub, Calendar, OAuth) | `packages/lib/src/integrations/` |
+| DB schema (all tables) | `packages/db/src/schema/` |
+| Services (billing, search, calendar sync) | `packages/lib/src/services/` |
+| Deployment mode detection | `packages/lib/src/deployment-mode.ts` |
+| AI provider setup | `apps/web/src/lib/ai/` |
+| Real-time events | `apps/realtime/src/` |
 
-**Permission Logic:**
-```typescript
-// ✅ CORRECT - Use centralized permissions
-import { getUserAccessLevel, canUserEditPage } from '@pagespace/lib/permissions';
-const accessLevel = await getUserAccessLevel(userId, pageId);
-```
-
-**Database Access:**
-```typescript
-// ✅ CORRECT - Always use Drizzle client from @pagespace/db
-import { db, pages } from '@pagespace/db';
-const page = await db.select().from(pages);
-```
-
-**UI Refresh Protection:**
-```typescript
-// ✅ CORRECT - Register editing/streaming state to prevent UI refreshes
-import { useEditingStore } from '@/stores/useEditingStore';
-
-// For document editing:
-useEffect(() => {
-  if (isDirty) {
-    useEditingStore.getState().startEditing(id, 'document', metadata);
-  } else {
-    useEditingStore.getState().endEditing(id);
-  }
-  return () => useEditingStore.getState().endEditing(id);
-}, [isDirty, id]);
-
-// For AI streaming:
-useEffect(() => {
-  if (status === 'streaming' || status === 'loading') {
-    useEditingStore.getState().startStreaming(id, metadata);
-  } else {
-    useEditingStore.getState().endStreaming(id);
-  }
-  return () => useEditingStore.getState().endStreaming(id);
-}, [status, id]);
-
-// For SWR protection (CRITICAL: must allow initial fetch):
-import { useRef } from 'react';
-import { isEditingActive } from '@/stores/useEditingStore';
-
-const hasLoadedRef = useRef(false);
-useSWR(key, fetcher, {
-  // Only pause AFTER initial load - never block the first fetch
-  isPaused: () => hasLoadedRef.current && isEditingActive(),
-  onSuccess: () => { hasLoadedRef.current = true; },
-  refreshInterval: 300000, // 5 minutes
-  revalidateOnFocus: false,
-});
-```
-
-See [docs/3.0-guides-and-tools/ui-refresh-protection.md](docs/3.0-guides-and-tools/ui-refresh-protection.md) for complete documentation.
-
-### 4.3. Critical Rules
-
-**CRITICAL: Package Manager**
-- **ALWAYS use `pnpm`** - This is a pnpm workspace project
-- **NEVER use `npm`** for install, run, or any other commands
-- All scripts in package.json are designed for pnpm
-
-**CRITICAL: Database Migrations**
-- **NEVER manually create or edit SQL migration files** in `packages/db/drizzle/`
-- **ALWAYS use Drizzle generate commands**: `pnpm db:generate`
-- Migration files are auto-generated from schema changes in `packages/db/src/schema/`
-
-## 5. CLAUDE CODE INTEGRATION & MCP TOOLS
-
-### 5.1. MCP Tools Integration
-
-Claude Code can invoke the MCP/DevTools integration whenever browser automation or diagnostics are needed.
-
-### 5.2. PageSpace Domain Expert Agents
-
-PageSpace has 17 specialized domain expert agents with deep knowledge of specific subsystems.
-
-**Core Infrastructure (5 agents):**
-- **Authentication & Security Expert**: JWT tokens, CSRF protection, encryption, rate limiting, session management
-- **Database & Schema Expert**: Drizzle ORM, PostgreSQL, migrations, schema design, query optimization
-- **Permissions & Authorization Expert**: RBAC, drive membership, page permissions, access control logic
-- **Real-time Collaboration Expert**: Socket.IO, live sync, conflict resolution, event broadcasting
-- **Monitoring & Analytics Expert**: Logging, tracking, performance metrics, error handling, usage analytics
-
-**AI Intelligence (3 agents):**
-- **AI System Architect**: AI providers, message flow, streaming, model capabilities, provider factory
-- **AI Tools Integration Expert**: Tool calling, PageSpace tools, batch operations, search tools
-- **AI Agents Communication Expert**: Agent roles, agent-to-agent communication, custom agents
-
-**Content & Workspace (4 agents):**
-- **Pages & Content Expert**: Page types, content management, CRUD operations, tree structure
-- **Drives & Workspace Expert**: Drive management, membership, invitations, workspace organization
-- **File Processing Expert**: File uploads, processor service, image optimization, content-addressed storage
-- **Search & Discovery Expert**: Regex search, glob patterns, multi-drive search, mention system
-
-**Frontend & UX (3 agents):**
-- **Frontend Architecture Expert**: Next.js 15, App Router, components, state management, Zustand, SWR
-- **Editor System Expert**: Tiptap, Monaco, document state, auto-save, Prettier integration
-- **Canvas Dashboard Expert**: Shadow DOM, custom HTML/CSS, navigation, security sanitization
-
-**API & Integration (2 agents):**
-- **API Routes Expert**: Next.js routes, async params, request handling, error responses, middleware
-- **MCP Integration Expert**: MCP tokens, document operations, protocol integration, external tools
-
-### 5.3. Development Workflow Patterns
-
-Use the Task tool to launch domain experts; each agent advertises its own capabilities and workflow.
-
-## 6. PROJECT STRUCTURE
-
-```
-PageSpace/
-├── apps/
-│   ├── web/              # Next.js 15 App Router main application
-│   ├── marketing/        # Marketing site (pagespace.ai)
-│   ├── realtime/         # Socket.IO service (port 3001)
-│   ├── processor/        # File processing service (port 3003)
-│   └── desktop/          # Electron desktop app wrapper
-├── packages/
-│   ├── db/               # Drizzle ORM schema & migrations
-│   └── lib/              # Shared utilities & types
-├── docs/                 # Architecture & guides
-│   ├── 1.0-overview/     # Getting started, concepts, API list
-│   ├── 2.0-architecture/ # Frontend, backend, features
-│   ├── 3.0-guides-and-tools/ # Developer guides
-│   └── testing/          # Testing infrastructure docs
-└── scripts/              # Utility scripts
-```
-
-## 7. COMMANDS
+## Commands
 
 ```bash
 # Development
-pnpm dev                    # Start all services (web, realtime, processor)
+pnpm dev                    # Start all services (web, realtime, processor — excludes control-plane)
+pnpm dev:services           # Start Postgres, Redis, processor, realtime via Docker
 pnpm --filter web dev       # Start web app only
 pnpm --filter realtime dev  # Start realtime service only
 pnpm --filter processor dev # Start processor service only
-pnpm dev:desktop            # Start Electron desktop app (dev mode)
+pnpm dev:desktop            # Start Electron desktop app
 
 # Build
-pnpm build                  # Build all apps (uses Turbo)
+pnpm build                  # Build all apps (Turbo)
 pnpm --filter web build     # Build web app only
-pnpm build:desktop          # Build desktop app TypeScript
-pnpm package:desktop        # Package desktop app for distribution
 
 # Database
-pnpm db:generate            # Generate Drizzle migrations
+pnpm db:generate            # Generate Drizzle migrations from schema changes
 pnpm db:migrate             # Run database migrations
 pnpm --filter @pagespace/db db:studio  # Open Drizzle Studio
 
 # Testing
-pnpm test                   # Run all tests
-pnpm test:unit              # Run unit tests (Vitest)
+pnpm test                   # Run all tests (with DB setup)
+pnpm test:unit              # Run unit tests (packages/lib + apps/web)
 pnpm test:watch             # Run tests in watch mode
 pnpm test:coverage          # Run tests with coverage report
-pnpm test:e2e               # Run E2E tests (Playwright)
 pnpm test:security          # Run security tests
 
-# Testing apps/web
-cd apps/web && pnpm vitest run                   # Run all web tests
-cd apps/web && pnpm vitest run src/lib/websocket/__tests__/ws-connections.test.ts  # Run specific test
-cd apps/web && pnpm vitest run --watch           # Run tests in watch mode
-
-# Linting & Type Checking
-pnpm --filter web lint      # Run ESLint on web app
-pnpm typecheck              # Run TypeScript checks across monorepo
+# Quality
+pnpm lint                   # Lint all apps
+pnpm typecheck              # TypeScript checks across monorepo
 ```
-
-## 8. COMMON WORKFLOWS
-
-### 8.1. Development Workflows
-
-1. **Adding new API routes**: Follow Next.js 15 async params pattern
-2. **Database changes**: Update schema in `packages/db`, generate migrations
-3. **New components**: Follow existing patterns in `components/` directory
-4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
-5. **Testing**: Write tests first (TDD), maintain >75% coverage
-6. **File processing**: Integration with processor service at port 3003
-
-### 8.2. Domain Expert Agent Workflows
-
-Lean on Section 5.2 and each agent’s self-description; selection emerges from the query context.
