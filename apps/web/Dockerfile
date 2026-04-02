@@ -57,7 +57,7 @@ RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
 
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=2048" pnpm build
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" pnpm build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
