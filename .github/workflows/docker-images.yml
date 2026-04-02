@@ -77,8 +77,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            NEXT_PUBLIC_REALTIME_URL=__RUNTIME_REALTIME_URL__
-            NEXT_PUBLIC_APP_URL=__RUNTIME_APP_URL__
+            NEXT_PUBLIC_APP_URL=https://pagespace.ai
+            NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
             NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
-            NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=
-            NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=
+            NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+            NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
