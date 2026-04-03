@@ -178,7 +178,8 @@ describe('FetchBridge', () => {
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
-      const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      // Start request; we catch the rejection to avoid unhandled promise warnings
+      const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat').catch(() => {});
       const requestId = getSentRequestId(mockWs);
 
       // Send headers so the activity timeout resets on chunks
@@ -202,6 +203,7 @@ describe('FetchBridge', () => {
 
       // This final advance pushes past 120s overall
       vi.advanceTimersByTime(20_000);
+      await promise;
 
       // The overall timeout should have fired
       expect(bridge.getPendingRequestCount()).toBe(0);
