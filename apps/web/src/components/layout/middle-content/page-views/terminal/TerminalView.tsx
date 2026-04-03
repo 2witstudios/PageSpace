@@ -59,18 +59,14 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Initialize document when component mounts
+  // Initialize document when component mounts or pageId changes
   useEffect(() => {
-    if (!hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-      initializeAndActivate();
-    }
+    hasInitializedRef.current = true;
+    initializeAndActivate();
+    return () => {
+      hasInitializedRef.current = false;
+    };
   }, [pageId, initializeAndActivate]);
-
-  // Reset initialization flag when pageId changes
-  useEffect(() => {
-    hasInitializedRef.current = false;
-  }, [pageId]);
 
   // Sync document content to local session state
   useEffect(() => {
@@ -198,7 +194,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        forceSaveRef.current();
+        forceSaveRef.current().catch(console.error);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
