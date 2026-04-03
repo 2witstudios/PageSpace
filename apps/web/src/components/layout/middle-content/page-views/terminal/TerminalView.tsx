@@ -39,7 +39,6 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [session, setSession] = useState<TerminalSession>({ history: [] });
   const isDirtyRef = useRef(false);
-  const hasInitializedRef = useRef(false);
   const socket = useSocket();
   const { user } = useAuth();
   const { resolvedTheme } = useTheme();
@@ -61,19 +60,15 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
   // Initialize document when component mounts or pageId changes
   useEffect(() => {
-    hasInitializedRef.current = true;
     initializeAndActivate();
-    return () => {
-      hasInitializedRef.current = false;
-    };
   }, [pageId, initializeAndActivate]);
 
-  // Sync document content to local session state
+  // Sync document content to local session state (skip when locally dirty)
   useEffect(() => {
-    if (documentState?.content) {
+    if (documentState?.content && !documentState.isDirty) {
       setSession(parseSession(documentState.content));
     }
-  }, [documentState?.content]);
+  }, [documentState?.content, documentState?.isDirty]);
 
   // Register editing state when document is dirty
   useEffect(() => {
@@ -93,19 +88,19 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
   // Check user permissions
   useEffect(() => {
-    const checkPermissions = async () => {
-      if (!user?.id) return;
-      try {
-        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check`);
+    if (!user?.id) return;
+    const controller = new AbortController();
+    fetchWithAuth(`/api/pages/${pageId}/permissions/check`, { signal: controller.signal })
+      .then(async (response) => {
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
         }
-      } catch (error) {
-        console.error('Failed to check permissions:', error);
-      }
-    };
-    checkPermissions();
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.error('Failed to check permissions:', err);
+      });
+    return () => controller.abort();
   }, [user?.id, pageId]);
 
   // Keep a ref to latest documentState to avoid stale closures in socket handler
