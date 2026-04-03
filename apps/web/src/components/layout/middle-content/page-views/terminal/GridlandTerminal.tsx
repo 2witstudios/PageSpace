@@ -88,8 +88,21 @@ const themes = {
 
 function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: GridlandTerminalProps) {
   const [input, setInput] = useState('');
-  const [, setHistoryIndex] = useState(-1);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const theme = isDark ? themes.dark : themes.light;
+
+  // Derive input from historyIndex — keeps updaters pure (no side effects)
+  useEffect(() => {
+    if (historyIndex < 0) {
+      setInput('');
+      return;
+    }
+    const commands = session.history.map(h => h.command);
+    const idx = commands.length - 1 - historyIndex;
+    if (idx >= 0 && idx < commands.length) {
+      setInput(commands[idx]);
+    }
+  }, [historyIndex, session.history]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = input.trim();
@@ -122,28 +135,14 @@ function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: Gr
 
     if (key.name === 'up') {
       setHistoryIndex(prev => {
-        const commands = session.history.map(h => h.command);
         const next = prev + 1;
-        if (next < commands.length) {
-          setInput(commands[commands.length - 1 - next]);
-          return next;
-        }
-        return prev;
+        return next < session.history.length ? next : prev;
       });
       return;
     }
 
     if (key.name === 'down') {
-      setHistoryIndex(prev => {
-        if (prev <= 0) {
-          setInput('');
-          return -1;
-        }
-        const commands = session.history.map(h => h.command);
-        const next = prev - 1;
-        setInput(commands[commands.length - 1 - next]);
-        return next;
-      });
+      setHistoryIndex(prev => (prev <= 0 ? -1 : prev - 1));
       return;
     }
 
