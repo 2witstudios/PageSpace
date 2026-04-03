@@ -19,13 +19,14 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code' | 'Terminal';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'terminal';
+  experimental?: boolean;
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -185,6 +186,24 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'CodePageView',
     layoutViewType: 'code',
   },
+  [PageType.TERMINAL]: {
+    type: PageType.TERMINAL,
+    displayName: 'Terminal',
+    description: 'Interactive terminal with shell access',
+    iconName: 'Terminal',
+    emoji: '🖥️',
+    capabilities: {
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: false,
+      supportsAI: false,
+    },
+    defaultContent: () => JSON.stringify({ history: [] }),
+    uiComponent: 'TerminalView',
+    layoutViewType: 'terminal',
+    experimental: true,
+  },
 };
 
 // Helper functions
@@ -278,4 +297,12 @@ export function isTaskListPage(type: PageType): boolean {
 
 export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
+}
+
+export function isTerminalPage(type: PageType): boolean {
+  return type === PageType.TERMINAL;
+}
+
+export function getCreatablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
 }
