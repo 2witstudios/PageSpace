@@ -533,7 +533,7 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting), TERMINAL (interactive terminal). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
