@@ -2,6 +2,8 @@ import WebSocket from 'ws';
 import { getMCPManager } from './mcp-manager';
 import { logger } from './logger';
 import { loadAuthSession } from './auth-storage';
+import { handleFetchProxyRequest } from './fetch-proxy-handler';
+import type { FetchProxyRequest } from '../shared/fetch-proxy-types';
 
 /**
  * WebSocket Client for MCP Bridge
@@ -246,6 +248,16 @@ export class WSClient {
             message as unknown as ToolExecutionRequest
           );
           break;
+
+        case 'fetch_request': {
+          const fetchRequest = message as unknown as FetchProxyRequest;
+          logger.debug('Fetch proxy request received', {
+            id: fetchRequest.id,
+            url: fetchRequest.url,
+          });
+          await handleFetchProxyRequest(fetchRequest, (msg) => this.sendMessage(msg));
+          break;
+        }
 
         case 'error':
           logger.error('Server error', { error: message.error });
