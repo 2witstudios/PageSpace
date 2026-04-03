@@ -186,5 +186,21 @@ describe('createWsProxyFetch', () => {
       const call = vi.mocked(mockBridge.proxyFetch).mock.calls[0];
       expect(atob(call[2]!.body!)).toBe('binary-content');
     });
+
+    it('handles Unicode string body without throwing', async () => {
+      const unicodeBody = '{"prompt":"Hello 🌍 こんにちは"}';
+
+      await proxyFetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        body: unicodeBody,
+      });
+
+      const call = vi.mocked(mockBridge.proxyFetch).mock.calls[0];
+      // Decode base64 → bytes → string to verify round-trip
+      const decoded = new TextDecoder().decode(
+        Uint8Array.from(atob(call[2]!.body!), (c) => c.charCodeAt(0))
+      );
+      expect(decoded).toBe(unicodeBody);
+    });
   });
 });

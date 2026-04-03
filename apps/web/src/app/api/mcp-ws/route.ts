@@ -1,6 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
+import { getFetchBridge } from '@/lib/fetch-bridge';
 import {
   registerConnection,
   unregisterConnection,
@@ -18,6 +19,10 @@ import {
   isPingMessage,
   isToolExecuteMessage,
   isToolResultMessage,
+  isFetchResponseStartMessage,
+  isFetchResponseChunkMessage,
+  isFetchResponseEndMessage,
+  isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
 
@@ -281,6 +286,25 @@ export async function UPGRADE(
         return;
       }
 
+      // Handle fetch bridge responses (local AI provider proxying)
+      const fetchBridge = getFetchBridge();
+      if (isFetchResponseStartMessage(message)) {
+        fetchBridge.handleResponseStart(message);
+        return;
+      }
+      if (isFetchResponseChunkMessage(message)) {
+        fetchBridge.handleResponseChunk(message);
+        return;
+      }
+      if (isFetchResponseEndMessage(message)) {
+        fetchBridge.handleResponseEnd(message);
+        return;
+      }
+      if (isFetchResponseErrorMessage(message)) {
+        fetchBridge.handleResponseError(message);
+        return;
+      }
+
       // Note: Unknown message types are now caught by Zod validation above
     } catch (error) {
       logSecurityEvent('ws_message_parse_error', {
@@ -308,6 +332,7 @@ export async function UPGRADE(
 
     // Clean up resources
     unregisterConnection(userId, client);
+    getFetchBridge().cancelUserRequests(userId);
   });
 
   // Handle errors

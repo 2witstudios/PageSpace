@@ -72,7 +72,8 @@ async function serializeBody(body?: BodyInit | null): Promise<string | undefined
   if (body === null || body === undefined) return undefined;
 
   if (typeof body === 'string') {
-    return btoa(body);
+    // Use TextEncoder for Unicode safety (btoa fails on non-Latin1 chars)
+    return uint8ArrayToBase64(new TextEncoder().encode(body));
   }
 
   // Uint8Array and other typed arrays
@@ -85,15 +86,15 @@ async function serializeBody(body?: BodyInit | null): Promise<string | undefined
     return uint8ArrayToBase64(new Uint8Array(body as ArrayBuffer));
   }
 
-  // URLSearchParams — convert to string before stream checks
+  // URLSearchParams — convert to string
   if (body instanceof URLSearchParams) {
-    return btoa(body.toString());
+    return uint8ArrayToBase64(new TextEncoder().encode(body.toString()));
   }
 
   // Blob — duck-type for cross-realm compatibility, use Response API
   if (body instanceof Blob || (typeof body === 'object' && body.constructor?.name === 'Blob')) {
-    const text = await new Response(body as Blob).text();
-    return btoa(text);
+    const bytes = new Uint8Array(await new Response(body as Blob).arrayBuffer());
+    return uint8ArrayToBase64(bytes);
   }
 
   // ReadableStream
@@ -115,8 +116,8 @@ async function serializeBody(body?: BodyInit | null): Promise<string | undefined
     return uint8ArrayToBase64(merged);
   }
 
-  // Fallback: convert to string
-  return btoa(String(body));
+  // Fallback: convert to string (use TextEncoder for Unicode safety)
+  return uint8ArrayToBase64(new TextEncoder().encode(String(body)));
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
