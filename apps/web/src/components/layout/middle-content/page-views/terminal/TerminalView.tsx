@@ -100,7 +100,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     const checkPermissions = async () => {
       if (!user?.id) return;
       try {
-        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check`);
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -157,7 +157,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
     const entry = {
       command,
-      output: 'Shell not connected. PTY backend required.',
+      output: 'Shell connection not yet configured.',
       timestamp: Date.now(),
     };
 
@@ -264,4 +264,4 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   );
 };
 
-export default React.memo(TerminalView, (prevProps, nextProps) => prevProps.pageId === nextProps.pageId);
+export default React.memo(TerminalView);
