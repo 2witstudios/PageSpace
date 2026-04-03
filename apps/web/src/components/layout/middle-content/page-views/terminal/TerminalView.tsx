@@ -146,12 +146,12 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
   // Handle command submission — gated on document initialization
   const handleCommand = useCallback((command: string) => {
-    if (isReadOnly || !documentState) {
-      if (!isReadOnly && !documentState) {
-        toast.error('Terminal is still loading');
-      } else {
-        toast.error('You do not have permission to edit this page');
-      }
+    if (!documentState) {
+      toast.error('Terminal is still loading');
+      return;
+    }
+    if (isReadOnly) {
+      toast.error('You do not have permission to edit this page');
       return;
     }
 
@@ -161,14 +161,12 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       timestamp: Date.now(),
     };
 
-    setSession(prev => {
-      const updated = { history: [...prev.history, entry] };
-      const serialized = serializeSession(updated);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
-      return updated;
-    });
-  }, [isReadOnly, documentState, updateContent, saveWithDebounce]);
+    const updated: TerminalSession = { history: [...session.history, entry] };
+    setSession(updated);
+    const serialized = serializeSession(updated);
+    updateContent(serialized);
+    saveWithDebounce(serialized);
+  }, [isReadOnly, documentState, session.history, updateContent, saveWithDebounce]);
 
   // Handle clearing the terminal
   const handleClear = useCallback(() => {
