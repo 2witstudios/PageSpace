@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import { TUI } from '@gridland/web';
 import { useKeyboard, type KeyEvent } from '@gridland/utils';
+import type { TerminalSession } from './types';
 
 // ── Typed Gridland primitives ────────────────────────────────────────────
 // Gridland's reconciler defines intrinsic elements (box, text, scrollbox)
@@ -49,16 +50,6 @@ function Scrollbox(props: ScrollboxProps) {
 }
 
 // ── Types ────────────────────────────────────────────────────────────────
-
-interface HistoryEntry {
-  command: string;
-  output: string;
-  timestamp: number;
-}
-
-interface TerminalSession {
-  history: HistoryEntry[];
-}
 
 interface GridlandTerminalProps {
   session: TerminalSession;

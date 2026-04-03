@@ -11,19 +11,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useTheme } from 'next-themes';
+import type { TerminalSession } from './types';
 
 interface TerminalViewProps {
   pageId: string;
-}
-
-interface HistoryEntry {
-  command: string;
-  output: string;
-  timestamp: number;
-}
-
-interface TerminalSession {
-  history: HistoryEntry[];
 }
 
 function parseSession(content: string): TerminalSession {
@@ -48,6 +39,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [session, setSession] = useState<TerminalSession>({ history: [] });
   const isDirtyRef = useRef(false);
+  const hasInitializedRef = useRef(false);
   const socket = useSocket();
   const { user } = useAuth();
   const { resolvedTheme } = useTheme();
@@ -67,10 +59,18 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Initialize document when component mounts or pageId changes
+  // Initialize document when component mounts
   useEffect(() => {
-    initializeAndActivate();
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      initializeAndActivate();
+    }
   }, [pageId, initializeAndActivate]);
+
+  // Reset initialization flag when pageId changes
+  useEffect(() => {
+    hasInitializedRef.current = false;
+  }, [pageId]);
 
   // Sync document content to local session state
   useEffect(() => {
@@ -144,14 +144,18 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     };
   }, [socket, pageId, updateContentFromServer]);
 
-  // Handle command submission
+  // Handle command submission — gated on document initialization
   const handleCommand = useCallback((command: string) => {
-    if (isReadOnly) {
-      toast.error('You do not have permission to edit this page');
+    if (isReadOnly || !documentState) {
+      if (!isReadOnly && !documentState) {
+        toast.error('Terminal is still loading');
+      } else {
+        toast.error('You do not have permission to edit this page');
+      }
       return;
     }
 
-    const entry: HistoryEntry = {
+    const entry = {
       command,
       output: 'Shell not connected. PTY backend required.',
       timestamp: Date.now(),
@@ -164,17 +168,17 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       saveWithDebounce(serialized);
       return updated;
     });
-  }, [isReadOnly, updateContent, saveWithDebounce]);
+  }, [isReadOnly, documentState, updateContent, saveWithDebounce]);
 
   // Handle clearing the terminal
   const handleClear = useCallback(() => {
-    if (isReadOnly) return;
+    if (isReadOnly || !documentState) return;
     const updated: TerminalSession = { history: [] };
     setSession(updated);
     const serialized = serializeSession(updated);
     updateContent(serialized);
     saveWithDebounce(serialized);
-  }, [isReadOnly, updateContent, saveWithDebounce]);
+  }, [isReadOnly, documentState, updateContent, saveWithDebounce]);
 
   // Track isDirty in ref
   useEffect(() => {
@@ -239,7 +243,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
           onCommand={handleCommand}
           onClear={handleClear}
           isDark={isDark}
-          isReadOnly={isReadOnly}
+          isReadOnly={isReadOnly || isLoading || !documentState}
         />
       </div>
 
