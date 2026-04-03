@@ -338,7 +338,7 @@ importers:
         version: 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@remotion/tailwind':
         specifier: ^4.0.421
-        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0)
+        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -789,9 +789,6 @@ importers:
       motion:
         specifier: ^12.23.22
         version: 12.23.22(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
-      nanoid:
-        specifier: ^5.1.6
-        version: 5.1.6
       next:
         specifier: 15.3.9
         version: 15.3.9(@babel/core@7.28.4)(@opentelemetry/api@1.9.0)(@playwright/test@1.55.1)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -915,7 +912,7 @@ importers:
         version: 8.18.1
       copy-webpack-plugin:
         specifier: ^12.0.2
-        version: 12.0.2(webpack@5.105.0)
+        version: 12.0.2(webpack@5.105.0(esbuild@0.19.12))
       eslint:
         specifier: ^9
         version: 9.36.0(jiti@2.6.0)
@@ -9461,11 +9458,6 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nanoid@5.1.6:
-    resolution: {integrity: sha512-c7+7RQ+dMB5dPwwCp4ee1/iV/q2P6aK1mTZcfr1BTuVlyW9hJYiMPybJCcnBlQtuSmTIWNeazm/zqNoZSSElBg==}
-    engines: {node: ^18 || >=20}
-    hasBin: true
-
   napi-postinstall@0.3.3:
     resolution: {integrity: sha512-uTp172LLXSxuSYHv/kou+f6KW3SMppU9ivthaVTXian9sOt3XM/zHYHpRZiLgQoxeWfYUnslNWQHF1+G71xcow==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
@@ -15511,7 +15503,7 @@ snapshots:
       remotion: 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       source-map: 0.7.3
       style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
     transitivePeerDependencies:
       - '@swc/core'
       - bufferutil
@@ -15660,13 +15652,13 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0)':
+  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))':
     dependencies:
       '@remotion/bundler': 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       autoprefixer: 10.4.20(postcss@8.4.47)
       css-loader: 5.2.7(webpack@5.105.0(esbuild@0.25.0))
       postcss: 8.4.47
-      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0)
+      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
       postcss-preset-env: 8.5.1(postcss@8.4.47)
       style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
       tailwindcss: 3.4.13(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))
@@ -17823,7 +17815,7 @@ snapshots:
 
   cookiejar@2.1.4: {}
 
-  copy-webpack-plugin@12.0.2(webpack@5.105.0):
+  copy-webpack-plugin@12.0.2(webpack@5.105.0(esbuild@0.19.12)):
     dependencies:
       fast-glob: 3.3.3
       glob-parent: 6.0.2
@@ -17831,7 +17823,7 @@ snapshots:
       normalize-path: 3.0.0
       schema-utils: 4.3.2
       serialize-javascript: 6.0.2
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
 
   core-util-is@1.0.2:
     optional: true
@@ -17930,7 +17922,7 @@ snapshots:
       postcss-value-parser: 4.2.0
       schema-utils: 3.3.0
       semver: 7.7.2
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
 
   css-prefers-color-scheme@8.0.2(postcss@8.4.47):
     dependencies:
@@ -21557,8 +21549,6 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  nanoid@5.1.6: {}
-
   napi-postinstall@0.3.3: {}
 
   native-run@2.0.3:
@@ -22260,13 +22250,13 @@ snapshots:
       postcss: 8.5.6
       ts-node: 10.9.2(@types/node@20.19.17)(typescript@5.9.2)
 
-  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0):
+  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12)):
     dependencies:
       cosmiconfig: 8.3.6(typescript@5.9.2)
       jiti: 1.21.7
       postcss: 8.4.47
       semver: 7.7.2
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
     transitivePeerDependencies:
       - typescript
 
@@ -23892,7 +23882,7 @@ snapshots:
 
   style-loader@4.0.0(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
 
   style-to-js@1.1.17:
     dependencies:
@@ -24042,16 +24032,16 @@ snapshots:
       mkdirp: 0.5.6
       rimraf: 2.6.3
 
-  terser-webpack-plugin@5.3.16(esbuild@0.25.0)(webpack@5.105.0(esbuild@0.25.0)):
+  terser-webpack-plugin@5.3.16(esbuild@0.19.12)(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.3
       serialize-javascript: 6.0.2
       terser: 5.44.0
-      webpack: 5.105.0(esbuild@0.25.0)
+      webpack: 5.105.0(esbuild@0.19.12)
     optionalDependencies:
-      esbuild: 0.25.0
+      esbuild: 0.19.12
 
   terser@5.44.0:
     dependencies:
@@ -24759,7 +24749,7 @@ snapshots:
 
   webpack-sources@3.3.3: {}
 
-  webpack@5.105.0(esbuild@0.25.0):
+  webpack@5.105.0(esbuild@0.19.12):
     dependencies:
       '@types/eslint-scope': 3.7.7
       '@types/estree': 1.0.8
@@ -24783,7 +24773,7 @@ snapshots:
       neo-async: 2.6.2
       schema-utils: 4.3.3
       tapable: 2.3.0
-      terser-webpack-plugin: 5.3.16(esbuild@0.25.0)(webpack@5.105.0(esbuild@0.25.0))
+      terser-webpack-plugin: 5.3.16(esbuild@0.19.12)(webpack@5.105.0(esbuild@0.25.0))
       watchpack: 2.5.1
       webpack-sources: 3.3.3
     transitivePeerDependencies:
