@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache, getCreatablePageTypes } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
@@ -11,7 +11,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 // Zod schema for page creation request
 const createPageSchema = z.object({
   title: z.string().min(1, 'Title is required'),
-  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE', 'TERMINAL']),
+  type: z.enum(getCreatablePageTypes() as [string, ...string[]]),
   driveId: z.string().min(1, 'Drive ID is required'),
   parentId: z.string().nullable().optional(),
   content: z.string().optional(),

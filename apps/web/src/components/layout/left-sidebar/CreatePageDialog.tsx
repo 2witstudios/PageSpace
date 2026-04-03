@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageType, Page, getDefaultContent } from '@pagespace/lib/client-safe';
+import { PageType, Page, getDefaultContent, getCreatablePageTypes, getPageTypeDisplayName } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -182,15 +182,11 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
                   <SelectValue placeholder="Select a page type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="DOCUMENT">Document</SelectItem>
-                  <SelectItem value="FOLDER">Folder</SelectItem>
-                  <SelectItem value="CHANNEL">Channel</SelectItem>
-                  <SelectItem value="AI_CHAT">AI Chat</SelectItem>
-                  <SelectItem value="CANVAS">Canvas</SelectItem>
-                  <SelectItem value="SHEET">Sheet</SelectItem>
-                  <SelectItem value="TASK_LIST">Task List</SelectItem>
-                  <SelectItem value="CODE">Code</SelectItem>
-                  <SelectItem value="TERMINAL">Terminal</SelectItem>
+                  {getCreatablePageTypes()
+                    .filter(t => t !== PageType.FILE)
+                    .map(t => (
+                      <SelectItem key={t} value={t}>{getPageTypeDisplayName(t)}</SelectItem>
+                    ))}
                   <SelectItem value="FILE">File Upload</SelectItem>
                 </SelectContent>
               </Select>

@@ -7,6 +7,7 @@ import {
   isAIChatPage,
   isDocumentPage,
   getDefaultContent,
+  getCreatablePageTypes,
   parseSheetContent,
   serializeSheetContent,
   updateSheetCells,
@@ -533,12 +534,12 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting), TERMINAL (interactive terminal). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE', 'TERMINAL']).describe('The type of page to create'),
+      type: z.enum(getCreatablePageTypes() as [string, ...string[]]).describe('The type of page to create'),
       contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
     }),
     execute: async ({ driveId, parentId, title, type, contentMode }, { experimental_context: context }) => {
@@ -597,7 +598,7 @@ export const pageWriteTools = {
         // Create the page via repository seam
         const newPage = await pageRepository.create({
           title,
-          type,
+          type: type as PageType,
           content: initialContent,
           contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
           position: nextPosition,

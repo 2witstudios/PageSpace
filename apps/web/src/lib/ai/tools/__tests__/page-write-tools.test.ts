@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/server', () => ({
     TERMINAL: 'TERMINAL',
   },
   getDefaultContent: vi.fn(() => ''),
+  getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
   isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
   isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
   parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),

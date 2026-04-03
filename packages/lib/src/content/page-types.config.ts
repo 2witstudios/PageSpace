@@ -26,6 +26,7 @@ export interface PageTypeConfig {
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
   layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'terminal';
+  experimental?: boolean;
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -201,6 +202,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     defaultContent: () => JSON.stringify({ history: [] }),
     uiComponent: 'TerminalView',
     layoutViewType: 'terminal',
+    experimental: true,
   },
 };
 
@@ -299,4 +301,8 @@ export function isCodePage(type: PageType): boolean {
 
 export function isTerminalPage(type: PageType): boolean {
   return type === PageType.TERMINAL;
+}
+
+export function getCreatablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
 }
