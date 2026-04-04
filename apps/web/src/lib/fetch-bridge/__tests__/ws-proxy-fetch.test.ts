@@ -203,4 +203,29 @@ describe('createWsProxyFetch', () => {
       expect(decoded).toBe(unicodeBody);
     });
   });
+
+  describe('AbortSignal passthrough', () => {
+    it('passes signal through to proxyFetch', async () => {
+      const controller = new AbortController();
+
+      await proxyFetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        signal: controller.signal,
+      });
+
+      const call = vi.mocked(mockBridge.proxyFetch).mock.calls[0];
+      expect(call[2]?.signal).toBe(controller.signal);
+    });
+
+    it('throws AbortError for pre-aborted signal before calling proxyFetch', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        proxyFetch('http://localhost:11434/api/chat', { signal: controller.signal })
+      ).rejects.toThrow('aborted');
+
+      expect(mockBridge.proxyFetch).not.toHaveBeenCalled();
+    });
+  });
 });

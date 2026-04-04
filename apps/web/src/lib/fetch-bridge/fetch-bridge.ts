@@ -38,7 +38,7 @@ export class FetchBridge {
   async proxyFetch(
     userId: string,
     url: string,
-    init?: { method?: string; headers?: Record<string, string>; body?: string }
+    init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }
   ): Promise<Response> {
     const connection = getConnection(userId);
 
@@ -59,6 +59,11 @@ export class FetchBridge {
     const urlValidation = await validateLocalProviderURL(url);
     if (!urlValidation.valid) {
       throw new Error(`URL validation failed: ${urlValidation.error}`);
+    }
+
+    // Check if already aborted before doing any work
+    if (init?.signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
     }
 
     const requestId = crypto.randomUUID();
@@ -132,6 +137,13 @@ export class FetchBridge {
         return;
       }
     });
+
+    // Wire AbortSignal to cancel the pending request
+    if (init?.signal) {
+      init.signal.addEventListener('abort', () => {
+        this.cleanupRequest(requestId, new DOMException('The operation was aborted.', 'AbortError'));
+      }, { once: true });
+    }
 
     const meta = await headersPromise;
 

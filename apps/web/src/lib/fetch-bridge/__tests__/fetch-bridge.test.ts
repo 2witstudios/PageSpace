@@ -433,6 +433,81 @@ describe('FetchBridge', () => {
       expect(bridge.getPendingRequestCount()).toBe(0);
     });
   });
+
+  describe('AbortSignal support', () => {
+    it('throws AbortError immediately for already-aborted signal', async () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat', {
+          method: 'POST',
+          signal: controller.signal,
+        })
+      ).rejects.toThrow('aborted');
+
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('aborts mid-stream when signal fires', async () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
+
+      const controller = new AbortController();
+
+      const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat', {
+        signal: controller.signal,
+      });
+      await flushMicrotasks();
+      const requestId = getSentRequestId(mockWs);
+
+      // Send headers so we get a Response
+      bridge.handleResponseStart({
+        type: 'fetch_response_start',
+        id: requestId,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+      });
+
+      const response = await promise;
+
+      // Now abort mid-stream
+      controller.abort();
+
+      // The pending request should be cleaned up
+      expect(bridge.getPendingRequestCount()).toBe(0);
+    });
+
+    it('works normally when no signal is provided', async () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
+
+      const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
+      const requestId = getSentRequestId(mockWs);
+
+      bridge.handleResponseStart({
+        type: 'fetch_response_start',
+        id: requestId,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+      });
+
+      const response = await promise;
+      expect(response.status).toBe(200);
+
+      bridge.handleResponseEnd({ type: 'fetch_response_end', id: requestId });
+      expect(bridge.getPendingRequestCount()).toBe(0);
+    });
+  });
 });
 
 describe('getFetchBridge', () => {

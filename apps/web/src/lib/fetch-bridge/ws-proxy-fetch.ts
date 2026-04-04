@@ -8,8 +8,13 @@ type FetchFunction = typeof globalThis.fetch;
  */
 export function createWsProxyFetch(userId: string, fetchBridge: FetchBridge): FetchFunction {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    // Check pre-aborted signal before doing any work
+    if (init?.signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
     const { url, method, headers, body } = await normalizeInput(input, init);
-    return fetchBridge.proxyFetch(userId, url, { method, headers, body });
+    return fetchBridge.proxyFetch(userId, url, { method, headers, body, signal: init?.signal });
   };
 }
 
