@@ -289,21 +289,31 @@ export async function createAIProvider(
         };
       }
 
-      // SECURITY: Validate URL before use
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
-      if (!ollamaUrlValidation.valid) {
-        return {
-          error: `Ollama base URL blocked: ${ollamaUrlValidation.error}`,
-          status: 400,
-        };
+      // Check if desktop bridge is available for local AI
+      const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
+      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+
+      if (!useOllamaDesktopBridge) {
+        // Direct HTTP: validate URL on server (SSRF protection)
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+        const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
+        if (!ollamaUrlValidation.valid) {
+          return {
+            error: `Ollama base URL blocked: ${ollamaUrlValidation.error}`,
+            status: 400,
+          };
+        }
       }
+      // When using desktop bridge, skip URL validation — URL resolves on user's machine
 
       // Create Ollama provider instance with base URL
       // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
       const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
       const ollamaProvider = createOllama({
         baseURL: ollamaApiUrl,
+        ...(useOllamaDesktopBridge ? {
+          fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge()),
+        } : {}),
       });
       model = ollamaProvider(currentModel);
 
@@ -323,21 +333,31 @@ export async function createAIProvider(
         };
       }
 
-      // SECURITY: Validate URL before use
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
-      const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
-      if (!lmstudioUrlValidation.valid) {
-        return {
-          error: `LM Studio base URL blocked: ${lmstudioUrlValidation.error}`,
-          status: 400,
-        };
+      // Check if desktop bridge is available for local AI
+      const { isFetchBridgeInitialized: isLmBridgeInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
+      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().isUserConnected(userId);
+
+      if (!useLmstudioDesktopBridge) {
+        // Direct HTTP: validate URL on server (SSRF protection)
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+        const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
+        if (!lmstudioUrlValidation.valid) {
+          return {
+            error: `LM Studio base URL blocked: ${lmstudioUrlValidation.error}`,
+            status: 400,
+          };
+        }
       }
+      // When using desktop bridge, skip URL validation — URL resolves on user's machine
 
       // Create LM Studio provider instance with base URL
       // LM Studio uses OpenAI-compatible API - no path suffix needed as user provides full URL
       const lmstudioProvider = createOpenAICompatible({
         name: 'lmstudio',
         baseURL: lmstudioSettings.baseUrl,
+        ...(useLmstudioDesktopBridge ? {
+          fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getLmBridge()),
+        } : {}),
       });
       model = lmstudioProvider(currentModel);
 

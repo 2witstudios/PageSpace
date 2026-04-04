@@ -18,7 +18,12 @@ import {
   isPingMessage,
   isToolExecuteMessage,
   isToolResultMessage,
+  isFetchResponseStartMessage,
+  isFetchResponseChunkMessage,
+  isFetchResponseEndMessage,
+  isFetchResponseErrorMessage,
 } from '@/lib/websocket';
+import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
 
 // Initialize cleanup interval on module load
@@ -281,6 +286,38 @@ export async function UPGRADE(
         return;
       }
 
+      // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
+      if (isFetchBridgeInitialized()) {
+        if (isFetchResponseStartMessage(message)) {
+          logSecurityEvent('ws_fetch_response_start', {
+            userId,
+            requestId: message.id,
+            status: message.status,
+            severity: 'info',
+          });
+          getFetchBridge().handleResponseStart(message);
+          return;
+        }
+        if (isFetchResponseChunkMessage(message)) {
+          getFetchBridge().handleResponseChunk(message);
+          return;
+        }
+        if (isFetchResponseEndMessage(message)) {
+          getFetchBridge().handleResponseEnd(message);
+          return;
+        }
+        if (isFetchResponseErrorMessage(message)) {
+          logSecurityEvent('ws_fetch_response_error', {
+            userId,
+            requestId: message.id,
+            error: message.error,
+            severity: 'warn',
+          });
+          getFetchBridge().handleResponseError(message);
+          return;
+        }
+      }
+
       // Note: Unknown message types are now caught by Zod validation above
     } catch (error) {
       logSecurityEvent('ws_message_parse_error', {
@@ -307,6 +344,9 @@ export async function UPGRADE(
     });
 
     // Clean up resources
+    if (isFetchBridgeInitialized()) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
     unregisterConnection(userId, client);
   });
 

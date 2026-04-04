@@ -25,30 +25,39 @@ export async function GET(request: Request) {
       }, { status: 400 });
     }
 
-    // SECURITY: Validate URL to prevent SSRF attacks
-    const urlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
-    if (!urlValidation.valid) {
-      loggers.ai.warn('SSRF protection: blocked Ollama URL', {
-        userId,
-        baseUrl: ollamaSettings.baseUrl,
-        error: urlValidation.error,
-      });
-      return NextResponse.json({
-        success: false,
-        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
-        models: {}
-      }, { status: 400 });
+    // Check if desktop bridge is available for local AI
+    const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
+    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+
+    if (!useDesktopBridge) {
+      // SECURITY: Validate URL to prevent SSRF attacks (only for direct server fetch)
+      const urlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
+      if (!urlValidation.valid) {
+        loggers.ai.warn('SSRF protection: blocked Ollama URL', {
+          userId,
+          baseUrl: ollamaSettings.baseUrl,
+          error: urlValidation.error,
+        });
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
+          models: {}
+        }, { status: 400 });
+      }
     }
 
     try {
       // Connect to user's Ollama instance and fetch available models
-      const ollamaResponse = await fetch(`${ollamaSettings.baseUrl}/api/tags`, {
+      // When desktop bridge is connected, route through WebSocket to user's machine
+      const fetchFn = useDesktopBridge
+        ? (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge())
+        : fetch;
+      const ollamaResponse = await fetchFn(`${ollamaSettings.baseUrl}/api/tags`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
-        // Add timeout to prevent hanging
-        signal: AbortSignal.timeout(5000), // 5 second timeout
+        signal: AbortSignal.timeout(useDesktopBridge ? 10000 : 5000),
       });
 
       if (!ollamaResponse.ok) {
