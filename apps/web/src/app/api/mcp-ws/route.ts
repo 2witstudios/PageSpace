@@ -1,7 +1,9 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
+import { getFetchBridge } from '@/lib/fetch-bridge';
 import {
+  getConnection,
   registerConnection,
   unregisterConnection,
   updateLastPing,
@@ -288,8 +290,6 @@ export async function UPGRADE(
       }
 
       // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
-      // Security: message.id is a server-generated nanoid scoped to the user's request.
-      // The FetchBridge tracks userId internally via its userRequests reverse index.
       if (isFetchBridgeInitialized()) {
         if (isFetchResponseStartMessage(message)) {
           logSecurityEvent('ws_fetch_response_start', {
@@ -339,6 +339,9 @@ export async function UPGRADE(
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
+    // Check before unregister — if another socket replaced this one, don't cancel its fetches
+    const isActiveConnection = getConnection(userId) === client;
+
     logSecurityEvent('ws_connection_closed', {
       userId,
       code,
@@ -353,6 +356,9 @@ export async function UPGRADE(
       getFetchBridge().cancelUserRequests(userId);
     }
     unregisterConnection(userId, client);
+    if (isActiveConnection) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
   });
 
   // Handle errors

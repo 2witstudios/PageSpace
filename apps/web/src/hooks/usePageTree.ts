@@ -125,18 +125,18 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
-      // Don't revalidate tree if user is actively editing to prevent component remounting
-      // Allow revalidation during AI streaming to show real-time updates
+      // Guard: skip revalidation during document/form editing to prevent editor remounting.
+      // AI streaming is intentionally NOT blocked — without cache.delete, revalidation
+      // fetches fresh data in the background (stale-while-revalidate) without causing unmounts.
       const isEditing = useEditingStore.getState().isAnyEditing();
       if (isEditing) {
         console.log('⏸️ Skipping tree revalidation - document editing in progress');
         return;
       }
 
-      cache.delete(swrKey);
-      mutate(); // Re-fetch
+      mutate();
     }
-  }, [swrKey, cache, mutate]);
+  }, [swrKey, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
     // Avoid optimistic mutation before the first tree snapshot exists.

@@ -1,6 +1,6 @@
 /**
  * WebSocket Message Validation Schemas
- * Zod schemas for all WebSocket message types in the MCP bridge
+ * Zod schemas for all WebSocket message types (MCP bridge + fetch bridge)
  * Provides runtime validation and type safety
  */
 
@@ -55,7 +55,19 @@ export const ToolResultMessageSchema = BaseMessageSchema.extend({
 });
 
 /**
- * Client -> Server: Fetch response start (desktop bridge sends HTTP response metadata)
+ * Server -> Client: Fetch request (cloud -> desktop for local AI proxy)
+ */
+export const FetchRequestMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_request'),
+  id: z.string(),
+  url: z.string(),
+  method: z.string(),
+  headers: z.record(z.string(), z.string()),
+  body: z.string().optional(),
+});
+
+/**
+ * Client -> Server: Fetch response headers (desktop -> cloud)
  */
 export const FetchResponseStartMessageSchema = BaseMessageSchema.extend({
   type: z.literal('fetch_response_start'),
@@ -66,7 +78,7 @@ export const FetchResponseStartMessageSchema = BaseMessageSchema.extend({
 });
 
 /**
- * Client -> Server: Fetch response chunk (desktop bridge streams response body)
+ * Client -> Server: Fetch response body chunk (desktop -> cloud, base64-encoded)
  */
 export const FetchResponseChunkMessageSchema = BaseMessageSchema.extend({
   type: z.literal('fetch_response_chunk'),
@@ -75,7 +87,7 @@ export const FetchResponseChunkMessageSchema = BaseMessageSchema.extend({
 });
 
 /**
- * Client -> Server: Fetch response end (desktop bridge signals response complete)
+ * Client -> Server: Fetch response complete (desktop -> cloud)
  */
 export const FetchResponseEndMessageSchema = BaseMessageSchema.extend({
   type: z.literal('fetch_response_end'),
@@ -83,7 +95,7 @@ export const FetchResponseEndMessageSchema = BaseMessageSchema.extend({
 });
 
 /**
- * Client -> Server: Fetch response error (desktop bridge signals fetch failure)
+ * Client -> Server: Fetch response error (desktop -> cloud)
  */
 export const FetchResponseErrorMessageSchema = BaseMessageSchema.extend({
   type: z.literal('fetch_response_error'),
@@ -120,6 +132,7 @@ export const IncomingMessageSchema = z.discriminatedUnion('type', [
 export const OutgoingMessageSchema = z.discriminatedUnion('type', [
   PongMessageSchema,
   ErrorMessageSchema,
+  FetchRequestMessageSchema,
 ]);
 
 /**
@@ -129,11 +142,12 @@ export type PingMessage = z.infer<typeof PingMessageSchema>;
 export type PongMessage = z.infer<typeof PongMessageSchema>;
 export type ToolExecuteMessage = z.infer<typeof ToolExecuteMessageSchema>;
 export type ToolResultMessage = z.infer<typeof ToolResultMessageSchema>;
+export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
+export type FetchRequestMessage = z.infer<typeof FetchRequestMessageSchema>;
 export type FetchResponseStartMessage = z.infer<typeof FetchResponseStartMessageSchema>;
 export type FetchResponseChunkMessage = z.infer<typeof FetchResponseChunkMessageSchema>;
 export type FetchResponseEndMessage = z.infer<typeof FetchResponseEndMessageSchema>;
 export type FetchResponseErrorMessage = z.infer<typeof FetchResponseErrorMessageSchema>;
-export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 
 export type IncomingMessage = z.infer<typeof IncomingMessageSchema>;
 export type OutgoingMessage = z.infer<typeof OutgoingMessageSchema>;

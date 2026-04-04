@@ -283,7 +283,7 @@ describe('usePageTree', () => {
   });
 
   describe('invalidateTree', () => {
-    it('given no active editing, should delete cache and mutate', () => {
+    it('given no active editing, should mutate without deleting cache', () => {
       mockSWRState.data = [createMockTreePage()];
       mockIsAnyEditing.mockReturnValue(false);
 
@@ -293,7 +293,7 @@ describe('usePageTree', () => {
         result.current.invalidateTree();
       });
 
-      expect(mockCacheDelete).toHaveBeenCalledWith('/api/drives/drive-123/pages');
+      expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(mockMutate).toHaveBeenCalled();
     });
 

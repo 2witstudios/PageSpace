@@ -352,10 +352,11 @@ export async function validateLocalProviderURL(
     return { valid: false, error: `Hostname blocked: ${url.hostname}` };
   }
 
-  // 4. Docker's host.docker.internal is registered in /etc/hosts, not DNS.
-  //    dns.resolve4/6 bypass /etc/hosts so resolution fails in containers.
-  //    This hostname only ever points to the host machine (a private IP we allow).
-  if (url.hostname === 'host.docker.internal') {
+  // 4. Hostnames that are safe for local providers but may fail dns.resolve4/6
+  //    (which bypasses /etc/hosts). Skip DNS and return valid immediately.
+  //    - host.docker.internal: Docker's hostname for the host machine
+  //    - localhost: resolves via /etc/hosts in containers, not DNS
+  if (url.hostname === 'host.docker.internal' || url.hostname === 'localhost') {
     return { valid: true, url, resolvedIPs: [] };
   }
 
