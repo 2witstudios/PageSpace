@@ -17,6 +17,7 @@ import type { NextRequest } from 'next/server';
 
 // Mock dependencies
 vi.mock('@/lib/websocket/ws-connections', () => ({
+  getConnection: vi.fn(),
   registerConnection: vi.fn(),
   unregisterConnection: vi.fn(),
   updateLastPing: vi.fn(),
@@ -32,6 +33,16 @@ vi.mock('@/lib/websocket/ws-connections', () => ({
 vi.mock('@/lib/mcp/mcp-bridge', () => ({
   getMCPBridge: vi.fn(() => ({
     handleToolResponse: vi.fn(),
+  })),
+}));
+
+vi.mock('@/lib/fetch-bridge', () => ({
+  getFetchBridge: vi.fn(() => ({
+    handleResponseStart: vi.fn(),
+    handleResponseChunk: vi.fn(),
+    handleResponseEnd: vi.fn(),
+    handleResponseError: vi.fn(),
+    cancelUserRequests: vi.fn(),
   })),
 }));
 
