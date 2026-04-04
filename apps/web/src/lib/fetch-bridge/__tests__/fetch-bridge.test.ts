@@ -475,7 +475,7 @@ describe('FetchBridge', () => {
         headers: {},
       });
 
-      const response = await promise;
+      await promise;
 
       // Now abort mid-stream
       controller.abort();
