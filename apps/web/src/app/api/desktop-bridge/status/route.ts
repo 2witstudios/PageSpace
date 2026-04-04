@@ -10,10 +10,7 @@ export async function GET(request: Request) {
   const auth = await authenticateSessionRequest(request);
   if (isAuthError(auth)) return auth.error;
 
-  const bridge = isFetchBridgeInitialized() ? getFetchBridge() : null;
+  const connected = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(auth.userId);
 
-  return NextResponse.json({
-    connected: bridge?.isUserConnected(auth.userId) ?? false,
-    canProxyFetch: bridge?.canProxyFetch(auth.userId) ?? false,
-  });
+  return NextResponse.json({ connected });
 }

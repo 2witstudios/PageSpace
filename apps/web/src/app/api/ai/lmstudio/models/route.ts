@@ -25,9 +25,9 @@ export async function GET(request: Request) {
       }, { status: 400 });
     }
 
-    // Check if desktop bridge supports fetch proxying for this user
+    // Check if desktop bridge is available for local AI
     const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
-    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().canProxyFetch(userId);
+    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
 
     // Basic URL format validation applies to both paths
     try { new URL(lmstudioSettings.baseUrl); } catch {

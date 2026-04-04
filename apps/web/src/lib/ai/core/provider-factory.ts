@@ -289,9 +289,9 @@ export async function createAIProvider(
         };
       }
 
-      // Check if desktop bridge supports fetch proxying for this user
+      // Check if desktop bridge is available for local AI
       const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
-      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().canProxyFetch(userId);
+      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
 
       // Basic URL format validation applies to both paths
       try { new URL(ollamaSettings.baseUrl); } catch {
@@ -337,9 +337,9 @@ export async function createAIProvider(
         };
       }
 
-      // Check if desktop bridge supports fetch proxying for this user
+      // Check if desktop bridge is available for local AI
       const { isFetchBridgeInitialized: isLmBridgeInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
-      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().canProxyFetch(userId);
+      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().isUserConnected(userId);
 
       // Basic URL format validation applies to both paths
       try { new URL(lmstudioSettings.baseUrl); } catch {
