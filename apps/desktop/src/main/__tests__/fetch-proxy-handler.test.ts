@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleFetchProxyRequest, resetActiveRequests } from '../fetch-proxy-handler';
 import type { FetchProxyRequest } from '../../shared/fetch-proxy-types';
-import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_TIMEOUT_MS, FETCH_PROXY_MAX_CONCURRENT } from '../../shared/fetch-proxy-types';
+import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_MAX_CONCURRENT } from '../../shared/fetch-proxy-types';
 
 /** Helper to create a readable stream from a Uint8Array */
 function createReadableStream(data: Uint8Array): ReadableStream<Uint8Array> {
@@ -113,6 +113,23 @@ describe('handleFetchProxyRequest', () => {
       type: 'fetch_response_error',
       id: 'req-1',
       error: 'connect ECONNREFUSED 127.0.0.1:11434',
+    });
+  });
+
+  it('should block redirect responses to prevent SSRF bypass', async () => {
+    mockFetch.mockResolvedValueOnce(createMockResponse(null, {
+      status: 302,
+      statusText: 'Found',
+      headers: { location: 'https://evil.com/steal-data' },
+    }));
+
+    await handleFetchProxyRequest(baseRequest, sendMessage);
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]).toMatchObject({
+      type: 'fetch_response_error',
+      id: 'req-1',
+      error: 'Redirects are not allowed for fetch proxy',
     });
   });
 

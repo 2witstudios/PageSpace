@@ -41,7 +41,14 @@ export async function handleFetchProxyRequest(
       headers: request.headers,
       body: request.body ? Buffer.from(request.body, 'base64') : undefined,
       signal: AbortSignal.timeout(FETCH_PROXY_TIMEOUT_MS),
+      redirect: 'manual',
     });
+
+    // Block redirects to prevent SSRF via allowlisted endpoints that 30x to public URLs
+    if (response.status >= 300 && response.status < 400) {
+      sendMessage({ type: 'fetch_response_error', id, error: 'Redirects are not allowed for fetch proxy' });
+      return;
+    }
 
     sendMessage({
       type: 'fetch_response_start',
