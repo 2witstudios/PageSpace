@@ -9,6 +9,10 @@ import {
   PongMessageSchema,
   ToolExecuteMessageSchema,
   ToolResultMessageSchema,
+  FetchResponseStartMessageSchema,
+  FetchResponseChunkMessageSchema,
+  FetchResponseEndMessageSchema,
+  FetchResponseErrorMessageSchema,
   ErrorMessageSchema,
   FetchRequestMessageSchema,
   FetchResponseStartMessageSchema,
@@ -228,6 +232,95 @@ describe('WebSocket Message Schemas', () => {
     });
   });
 
+  describe('FetchResponseStartMessageSchema', () => {
+    it('should validate valid fetch response start', () => {
+      const result = FetchResponseStartMessageSchema.safeParse({
+        type: 'fetch_response_start',
+        id: 'req_1',
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject missing status', () => {
+      const result = FetchResponseStartMessageSchema.safeParse({
+        type: 'fetch_response_start',
+        id: 'req_1',
+        statusText: 'OK',
+        headers: {},
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject non-string header values', () => {
+      const result = FetchResponseStartMessageSchema.safeParse({
+        type: 'fetch_response_start',
+        id: 'req_1',
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-length': 42 },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('FetchResponseChunkMessageSchema', () => {
+    it('should validate valid chunk message', () => {
+      const result = FetchResponseChunkMessageSchema.safeParse({
+        type: 'fetch_response_chunk',
+        id: 'req_1',
+        chunk: 'base64encodeddata==',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject missing chunk', () => {
+      const result = FetchResponseChunkMessageSchema.safeParse({
+        type: 'fetch_response_chunk',
+        id: 'req_1',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('FetchResponseEndMessageSchema', () => {
+    it('should validate valid end message', () => {
+      const result = FetchResponseEndMessageSchema.safeParse({
+        type: 'fetch_response_end',
+        id: 'req_1',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject missing id', () => {
+      const result = FetchResponseEndMessageSchema.safeParse({
+        type: 'fetch_response_end',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('FetchResponseErrorMessageSchema', () => {
+    it('should validate valid error message', () => {
+      const result = FetchResponseErrorMessageSchema.safeParse({
+        type: 'fetch_response_error',
+        id: 'req_1',
+        error: 'Connection refused',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject missing error', () => {
+      const result = FetchResponseErrorMessageSchema.safeParse({
+        type: 'fetch_response_error',
+        id: 'req_1',
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('ErrorMessageSchema', () => {
     it('should validate error message', () => {
       const validMessage = {
@@ -290,6 +383,43 @@ describe('WebSocket Message Schemas', () => {
         success: true,
       };
       const result = IncomingMessageSchema.safeParse(message);
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate fetch_response_start message', () => {
+      const result = IncomingMessageSchema.safeParse({
+        type: 'fetch_response_start',
+        id: 'req_1',
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate fetch_response_chunk message', () => {
+      const result = IncomingMessageSchema.safeParse({
+        type: 'fetch_response_chunk',
+        id: 'req_1',
+        chunk: 'data',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate fetch_response_end message', () => {
+      const result = IncomingMessageSchema.safeParse({
+        type: 'fetch_response_end',
+        id: 'req_1',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should validate fetch_response_error message', () => {
+      const result = IncomingMessageSchema.safeParse({
+        type: 'fetch_response_error',
+        id: 'req_1',
+        error: 'Connection refused',
+      });
       expect(result.success).toBe(true);
     });
 
@@ -461,6 +591,79 @@ describe('WebSocket Message Schemas', () => {
         const message = { type: 'ping' as const };
         const result = IncomingMessageSchema.parse(message);
         expect(isToolResultMessage(result)).toBe(false);
+      });
+    });
+
+    describe('isFetchResponseStartMessage', () => {
+      it('should identify fetch_response_start message', () => {
+        const message = {
+          type: 'fetch_response_start' as const,
+          id: '123',
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+        };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseStartMessage(result)).toBe(true);
+      });
+
+      it('should reject non-fetch_response_start message', () => {
+        const message = { type: 'ping' as const };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseStartMessage(result)).toBe(false);
+      });
+    });
+
+    describe('isFetchResponseChunkMessage', () => {
+      it('should identify fetch_response_chunk message', () => {
+        const message = {
+          type: 'fetch_response_chunk' as const,
+          id: '123',
+          chunk: 'data',
+        };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseChunkMessage(result)).toBe(true);
+      });
+
+      it('should reject non-fetch_response_chunk message', () => {
+        const message = { type: 'ping' as const };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseChunkMessage(result)).toBe(false);
+      });
+    });
+
+    describe('isFetchResponseEndMessage', () => {
+      it('should identify fetch_response_end message', () => {
+        const message = {
+          type: 'fetch_response_end' as const,
+          id: '123',
+        };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseEndMessage(result)).toBe(true);
+      });
+
+      it('should reject non-fetch_response_end message', () => {
+        const message = { type: 'ping' as const };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseEndMessage(result)).toBe(false);
+      });
+    });
+
+    describe('isFetchResponseErrorMessage', () => {
+      it('should identify fetch_response_error message', () => {
+        const message = {
+          type: 'fetch_response_error' as const,
+          id: '123',
+          error: 'Connection refused',
+        };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseErrorMessage(result)).toBe(true);
+      });
+
+      it('should reject non-fetch_response_error message', () => {
+        const message = { type: 'ping' as const };
+        const result = IncomingMessageSchema.parse(message);
+        expect(isFetchResponseErrorMessage(result)).toBe(false);
       });
     });
   });
