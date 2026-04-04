@@ -54,6 +54,7 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+  getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -179,7 +180,8 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Invalid option: expected one of "FOLDER"|"DOCUMENT"|"CHANNEL"|"AI_CHAT"|"CANVAS"|"SHEET"|"TASK_LIST"|"CODE"');
+      expect(body.error).toContain('Invalid option');
+      expect(body.error).not.toContain('TERMINAL');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 

@@ -216,7 +216,7 @@ describe('page-type-validators', () => {
       })
 
       expect(result.valid).toBe(false)
-      expect(result.errors).toContain('Content must be valid JSON for channel/chat pages')
+      expect(result.errors).toContain('Content must be valid JSON for channel/chat/terminal pages')
     })
 
     it('validates valid JSON string content for AI_CHAT', () => {
