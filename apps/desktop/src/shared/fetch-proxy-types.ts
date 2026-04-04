@@ -58,3 +58,9 @@ export type FetchProxyResponse =
 
 /** Maximum chunk size in bytes for streaming response body */
 export const FETCH_PROXY_CHUNK_SIZE = 65536; // 64KB
+
+/** Timeout for fetch proxy requests in milliseconds */
+export const FETCH_PROXY_TIMEOUT_MS = 30000; // 30s
+
+/** Maximum number of concurrent fetch proxy requests */
+export const FETCH_PROXY_MAX_CONCURRENT = 10;

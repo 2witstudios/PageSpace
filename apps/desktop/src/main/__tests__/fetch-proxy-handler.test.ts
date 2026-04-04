@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleFetchProxyRequest } from '../fetch-proxy-handler';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { handleFetchProxyRequest, resetActiveRequests } from '../fetch-proxy-handler';
 import type { FetchProxyRequest } from '../../shared/fetch-proxy-types';
-import { FETCH_PROXY_CHUNK_SIZE } from '../../shared/fetch-proxy-types';
+import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_TIMEOUT_MS, FETCH_PROXY_MAX_CONCURRENT } from '../../shared/fetch-proxy-types';
 
 /** Helper to create a readable stream from a Uint8Array */
 function createReadableStream(data: Uint8Array): ReadableStream<Uint8Array> {
@@ -45,6 +45,11 @@ describe('handleFetchProxyRequest', () => {
     sentMessages.length = 0;
     mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
+    resetActiveRequests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   const baseRequest: FetchProxyRequest = {
@@ -162,11 +167,12 @@ describe('handleFetchProxyRequest', () => {
 
     await handleFetchProxyRequest(baseRequest, sendMessage);
 
-    expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/chat', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(baseRequest.body!, 'base64'),
-    });
+    const fetchCall = mockFetch.mock.calls[0];
+    expect(fetchCall[0]).toBe('http://localhost:11434/api/chat');
+    const options = fetchCall[1] as RequestInit;
+    expect(options.method).toBe('POST');
+    expect(options.headers).toEqual({ 'content-type': 'application/json' });
+    expect(options.body).toEqual(Buffer.from(baseRequest.body!, 'base64'));
   });
 
   it('should pass undefined body when request has no body', async () => {
@@ -183,10 +189,99 @@ describe('handleFetchProxyRequest', () => {
 
     await handleFetchProxyRequest(getRequest, sendMessage);
 
-    expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags', {
-      method: 'GET',
-      headers: {},
-      body: undefined,
+    const fetchCall = mockFetch.mock.calls[0];
+    expect(fetchCall[0]).toBe('http://localhost:11434/api/tags');
+    const options = fetchCall[1] as RequestInit;
+    expect(options.method).toBe('GET');
+    expect(options.body).toBeUndefined();
+  });
+
+  it('should pass an AbortSignal with timeout to fetch', async () => {
+    const body = new TextEncoder().encode('ok');
+    mockFetch.mockResolvedValueOnce(createMockResponse(body));
+
+    await handleFetchProxyRequest(baseRequest, sendMessage);
+
+    const fetchCall = mockFetch.mock.calls[0];
+    const options = fetchCall[1] as RequestInit;
+    expect(options.signal).toBeDefined();
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('should send error when fetch times out', async () => {
+    const abortError = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    mockFetch.mockRejectedValueOnce(abortError);
+
+    await handleFetchProxyRequest(baseRequest, sendMessage);
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]).toMatchObject({
+      type: 'fetch_response_error',
+      id: 'req-1',
+    });
+    expect((sentMessages[0].error as string)).toContain('aborted');
+  });
+
+  it('should reject requests beyond the concurrency limit', async () => {
+    // Fill up the concurrent request slots with hanging fetches
+    const hangingFetches: Array<{ resolve: (v: Response) => void }> = [];
+    for (let i = 0; i < FETCH_PROXY_MAX_CONCURRENT; i++) {
+      mockFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        hangingFetches.push({ resolve });
+      }));
+    }
+
+    // Launch max concurrent requests (don't await — they hang)
+    const pending = Array.from({ length: FETCH_PROXY_MAX_CONCURRENT }, (_, i) =>
+      handleFetchProxyRequest(
+        { ...baseRequest, id: `req-${i}` },
+        sendMessage
+      )
+    );
+
+    // The next request should be rejected immediately
+    await handleFetchProxyRequest(
+      { ...baseRequest, id: 'req-overflow' },
+      sendMessage
+    );
+
+    const overflowMsg = sentMessages.find((m) => m.id === 'req-overflow');
+    expect(overflowMsg).toMatchObject({
+      type: 'fetch_response_error',
+      id: 'req-overflow',
+      error: expect.stringContaining('Too many concurrent'),
+    });
+
+    // Clean up: resolve hanging fetches so pending promises settle
+    const dummyResponse = createMockResponse(null, { status: 200 });
+    hangingFetches.forEach((h) => h.resolve(dummyResponse));
+    await Promise.all(pending);
+  });
+
+  it('should allow new requests after previous ones complete', async () => {
+    // Fill up slots
+    for (let i = 0; i < FETCH_PROXY_MAX_CONCURRENT; i++) {
+      const body = new TextEncoder().encode('ok');
+      mockFetch.mockResolvedValueOnce(createMockResponse(body));
+      await handleFetchProxyRequest(
+        { ...baseRequest, id: `req-${i}` },
+        sendMessage
+      );
+    }
+
+    // Should still accept new requests after previous ones completed
+    sentMessages.length = 0;
+    const body = new TextEncoder().encode('ok');
+    mockFetch.mockResolvedValueOnce(createMockResponse(body));
+
+    await handleFetchProxyRequest(
+      { ...baseRequest, id: 'req-after' },
+      sendMessage
+    );
+
+    expect(sentMessages[0]).toMatchObject({
+      type: 'fetch_response_start',
+      id: 'req-after',
     });
   });
 });

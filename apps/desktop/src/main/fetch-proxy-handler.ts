@@ -1,10 +1,17 @@
 import { isAllowedFetchProxyURL } from '../shared/fetch-proxy-security';
 import type { FetchProxyRequest } from '../shared/fetch-proxy-types';
-import { FETCH_PROXY_CHUNK_SIZE } from '../shared/fetch-proxy-types';
+import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_TIMEOUT_MS, FETCH_PROXY_MAX_CONCURRENT } from '../shared/fetch-proxy-types';
 
 interface WebSocketMessage {
   type: string;
   [key: string]: unknown;
+}
+
+let activeRequests = 0;
+
+/** Reset active request count (for testing) */
+export function resetActiveRequests(): void {
+  activeRequests = 0;
 }
 
 /**
@@ -22,11 +29,18 @@ export async function handleFetchProxyRequest(
     return;
   }
 
+  if (activeRequests >= FETCH_PROXY_MAX_CONCURRENT) {
+    sendMessage({ type: 'fetch_response_error', id, error: 'Too many concurrent fetch proxy requests' });
+    return;
+  }
+
+  activeRequests++;
   try {
     const response = await fetch(url, {
       method: request.method,
       headers: request.headers,
       body: request.body ? Buffer.from(request.body, 'base64') : undefined,
+      signal: AbortSignal.timeout(FETCH_PROXY_TIMEOUT_MS),
     });
 
     sendMessage({
@@ -60,5 +74,7 @@ export async function handleFetchProxyRequest(
       id,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    activeRequests--;
   }
 }
