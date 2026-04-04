@@ -1,5 +1,6 @@
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
 import { logger } from '@pagespace/lib';
+import { validateLocalProviderURL } from '@pagespace/lib/security';
 import type {
   FetchResponseStartMessage,
   FetchResponseChunkMessage,
@@ -54,6 +55,12 @@ export class FetchBridge {
       );
     }
 
+    // Validate URL targets a local AI provider (blocks cloud metadata, non-local hosts)
+    const urlValidation = await validateLocalProviderURL(url);
+    if (!urlValidation.valid) {
+      throw new Error(`URL validation failed: ${urlValidation.error}`);
+    }
+
     const requestId = crypto.randomUUID();
 
     this.logger.info('Sending fetch request to desktop', {
@@ -71,6 +78,8 @@ export class FetchBridge {
       this.userRequests.set(userId, userSet);
     }
     userSet.add(requestId);
+
+    let streamRef: ReadableStream<Uint8Array> | undefined;
 
     const headersPromise = new Promise<FetchResponseMeta>((resolve, reject) => {
       const stream = new ReadableStream<Uint8Array>({
@@ -93,6 +102,7 @@ export class FetchBridge {
           });
         },
       });
+      streamRef = stream;
 
       // Send the request message to the desktop client
       const message = {
@@ -107,7 +117,6 @@ export class FetchBridge {
       try {
         connection.send(JSON.stringify(message));
       } catch (error) {
-        // Clean up the pending request that was just registered in the stream start
         const pending = this.pendingRequests.get(requestId);
         if (pending) {
           clearTimeout(pending.activityTimeout);
@@ -122,15 +131,9 @@ export class FetchBridge {
         );
         return;
       }
-
-      // Store the stream so we can build the Response from it once headers arrive
-      // We use a closure variable since the stream is created before the pending request
-      this._pendingStreams.set(requestId, stream);
     });
 
     const meta = await headersPromise;
-    const stream = this._pendingStreams.get(requestId);
-    this._pendingStreams.delete(requestId);
 
     this.logger.info('Fetch response headers received', {
       requestId,
@@ -138,15 +141,12 @@ export class FetchBridge {
       action: 'fetch_response_start',
     });
 
-    return new Response(stream, {
+    return new Response(streamRef, {
       status: meta.status,
       statusText: meta.statusText,
       headers: meta.headers,
     });
   }
-
-  // Temporary storage for streams until headers resolve
-  private _pendingStreams: Map<string, ReadableStream<Uint8Array>> = new Map();
 
   handleResponseStart(msg: FetchResponseStartMessage): void {
     const pending = this.pendingRequests.get(msg.id);
@@ -280,7 +280,6 @@ export class FetchBridge {
 
     this.pendingRequests.delete(requestId);
     this.removeUserRequest(pending.userId, requestId);
-    this._pendingStreams.delete(requestId);
   }
 
   private removeUserRequest(userId: string, requestId: string): void {

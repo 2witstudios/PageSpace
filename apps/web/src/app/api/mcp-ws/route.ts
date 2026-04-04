@@ -287,21 +287,20 @@ export async function UPGRADE(
       }
 
       // Handle fetch bridge responses (local AI provider proxying)
-      const fetchBridge = getFetchBridge();
       if (isFetchResponseStartMessage(message)) {
-        fetchBridge.handleResponseStart(message);
+        getFetchBridge().handleResponseStart(message);
         return;
       }
       if (isFetchResponseChunkMessage(message)) {
-        fetchBridge.handleResponseChunk(message);
+        getFetchBridge().handleResponseChunk(message);
         return;
       }
       if (isFetchResponseEndMessage(message)) {
-        fetchBridge.handleResponseEnd(message);
+        getFetchBridge().handleResponseEnd(message);
         return;
       }
       if (isFetchResponseErrorMessage(message)) {
-        fetchBridge.handleResponseError(message);
+        getFetchBridge().handleResponseError(message);
         return;
       }
 

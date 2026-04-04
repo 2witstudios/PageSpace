@@ -17,11 +17,17 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/security', () => ({
+  validateLocalProviderURL: vi.fn(),
+}));
+
 import { FetchBridge, getFetchBridge } from '../fetch-bridge';
+import { validateLocalProviderURL } from '@pagespace/lib/security';
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
 
 const mockGetConnection = vi.mocked(getConnection);
 const mockCheckConnectionHealth = vi.mocked(checkConnectionHealth);
+const mockValidateURL = vi.mocked(validateLocalProviderURL);
 
 function createMockWebSocket(readyState: number = 1): Partial<WebSocket> {
   return {
@@ -34,6 +40,9 @@ function createMockWebSocket(readyState: number = 1): Partial<WebSocket> {
 function healthyConnection() {
   return { isHealthy: true, readyState: 1, connectedDuration: 1000 };
 }
+
+/** Flush microtask queue so async proxyFetch progresses past await */
+const flushMicrotasks = () => vi.advanceTimersByTimeAsync(0);
 
 /** Extract the request ID from the first message sent to the mock WebSocket */
 function getSentRequestId(mockWs: Partial<WebSocket>): string {
@@ -48,6 +57,8 @@ describe('FetchBridge', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     bridge = new FetchBridge();
+    // Default: allow all local URLs (use mockReturnValue with Promise.resolve for sync resolution with fake timers)
+    mockValidateURL.mockReturnValue(Promise.resolve({ valid: true, resolvedIPs: ['127.0.0.1'] }));
   });
 
   afterEach(() => {
@@ -87,6 +98,33 @@ describe('FetchBridge', () => {
       );
     });
 
+    it('rejects non-local URLs to prevent open proxy abuse', async () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
+      mockValidateURL.mockReturnValue(Promise.resolve({ valid: false, error: 'Hostname blocked: evil.com' }));
+
+      await expect(
+        bridge.proxyFetch('user-1', 'https://evil.com/steal-data')
+      ).rejects.toThrow('URL validation failed');
+
+      // Should NOT have sent any message to the WebSocket
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
+    it('rejects cloud metadata URLs', async () => {
+      const mockWs = createMockWebSocket(1);
+      mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
+      mockValidateURL.mockReturnValue(Promise.resolve({ valid: false, error: 'IP address blocked: 169.254.169.254' }));
+
+      await expect(
+        bridge.proxyFetch('user-1', 'http://169.254.169.254/latest/meta-data/')
+      ).rejects.toThrow('URL validation failed');
+
+      expect(mockWs.send).not.toHaveBeenCalled();
+    });
+
     it('sends fetch_request message via WebSocket and returns Response on success', async () => {
       const mockWs = createMockWebSocket(1);
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
@@ -97,6 +135,7 @@ describe('FetchBridge', () => {
         headers: { 'content-type': 'application/json' },
         body: btoa('{"model":"llama3"}'),
       });
+      await flushMicrotasks();
 
       const sentData = JSON.parse((mockWs.send as ReturnType<typeof vi.fn>).mock.calls[0][0]);
       const requestId = sentData.id;
@@ -141,6 +180,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/v1/models');
+      await flushMicrotasks();
 
       const sentData = JSON.parse((mockWs.send as ReturnType<typeof vi.fn>).mock.calls[0][0]);
       const requestId = sentData.id;
@@ -180,6 +220,7 @@ describe('FetchBridge', () => {
 
       // Start request; we catch the rejection to avoid unhandled promise warnings
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat').catch(() => {});
+      await flushMicrotasks();
       const requestId = getSentRequestId(mockWs);
 
       // Send headers so the activity timeout resets on chunks
@@ -215,6 +256,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
 
       vi.advanceTimersByTime(30_000);
 
@@ -243,6 +285,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
       const requestId = getSentRequestId(mockWs);
 
       bridge.handleResponseStart({
@@ -293,6 +336,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
       const requestId = getSentRequestId(mockWs);
       expect(bridge.getPendingRequestCount()).toBe(1);
 
@@ -323,6 +367,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
       const requestId = getSentRequestId(mockWs);
 
       bridge.handleResponseError({
@@ -343,6 +388,7 @@ describe('FetchBridge', () => {
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
 
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
+      await flushMicrotasks();
 
       bridge.cancelUserRequests('user-1');
 

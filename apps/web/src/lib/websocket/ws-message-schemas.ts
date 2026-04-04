@@ -1,6 +1,6 @@
 /**
  * WebSocket Message Validation Schemas
- * Zod schemas for all WebSocket message types in the MCP bridge
+ * Zod schemas for all WebSocket message types (MCP bridge + fetch bridge)
  * Provides runtime validation and type safety
  */
 
