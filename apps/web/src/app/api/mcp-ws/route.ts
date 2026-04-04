@@ -288,7 +288,8 @@ export async function UPGRADE(
       }
 
       // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
-      // userId is passed to every handler for request ownership validation
+      // Security: message.id is a server-generated nanoid scoped to the user's request.
+      // The FetchBridge tracks userId internally via its userRequests reverse index.
       if (isFetchBridgeInitialized()) {
         if (isFetchResponseStartMessage(message)) {
           logSecurityEvent('ws_fetch_response_start', {
@@ -297,15 +298,15 @@ export async function UPGRADE(
             status: message.status,
             severity: 'info',
           });
-          getFetchBridge().handleResponseStart(message, userId);
+          getFetchBridge().handleResponseStart(message);
           return;
         }
         if (isFetchResponseChunkMessage(message)) {
-          getFetchBridge().handleResponseChunk(message, userId);
+          getFetchBridge().handleResponseChunk(message);
           return;
         }
         if (isFetchResponseEndMessage(message)) {
-          getFetchBridge().handleResponseEnd(message, userId);
+          getFetchBridge().handleResponseEnd(message);
           return;
         }
         if (isFetchResponseErrorMessage(message)) {
@@ -315,7 +316,7 @@ export async function UPGRADE(
             error: message.error,
             severity: 'warn',
           });
-          getFetchBridge().handleResponseError(message, userId);
+          getFetchBridge().handleResponseError(message);
           return;
         }
       }
