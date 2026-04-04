@@ -141,7 +141,12 @@ export class FetchBridge {
       action: 'fetch_response_start',
     });
 
-    return new Response(streamRef, {
+    // Response constructor rejects body for null-body status codes (204, 205, 304)
+    const isNullBodyStatus = meta.status === 204 || meta.status === 205 || meta.status === 304;
+    const method = init?.method?.toUpperCase() ?? 'GET';
+    const body = (isNullBodyStatus || method === 'HEAD') ? null : streamRef;
+
+    return new Response(body, {
       status: meta.status,
       statusText: meta.statusText,
       headers: meta.headers,
@@ -181,13 +186,15 @@ export class FetchBridge {
       this.cleanupRequest(msg.id, new Error('Fetch activity timeout: no data received for 30s'));
     }, ACTIVITY_TIMEOUT_MS);
 
-    // Decode base64 chunk and enqueue
-    const bytes = Uint8Array.from(atob(msg.chunk), (c) => c.charCodeAt(0));
+    // Decode base64 chunk and enqueue (inside try to catch malformed base64)
     try {
+      const bytes = Uint8Array.from(atob(msg.chunk), (c) => c.charCodeAt(0));
       pending.controller.enqueue(bytes);
-    } catch {
-      // Stream may have been cancelled by the consumer
-      this.cleanupRequest(msg.id);
+    } catch (error) {
+      this.cleanupRequest(
+        msg.id,
+        error instanceof Error ? error : new Error('Invalid fetch response chunk')
+      );
     }
   }
 
@@ -246,7 +253,8 @@ export class FetchBridge {
 
   isUserConnected(userId: string): boolean {
     const connection = getConnection(userId);
-    return connection !== undefined && connection.readyState === 1;
+    if (!connection) return false;
+    return checkConnectionHealth(connection).isHealthy;
   }
 
   getPendingRequestCount(): number {

@@ -17,17 +17,18 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+const { mockValidateURL } = vi.hoisted(() => ({
+  mockValidateURL: vi.fn(),
+}));
 vi.mock('@pagespace/lib/security', () => ({
-  validateLocalProviderURL: vi.fn(),
+  validateLocalProviderURL: mockValidateURL,
 }));
 
 import { FetchBridge, getFetchBridge } from '../fetch-bridge';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
 
 const mockGetConnection = vi.mocked(getConnection);
 const mockCheckConnectionHealth = vi.mocked(checkConnectionHealth);
-const mockValidateURL = vi.mocked(validateLocalProviderURL);
 
 function createMockWebSocket(readyState: number = 1): Partial<WebSocket> {
   return {
@@ -402,9 +403,10 @@ describe('FetchBridge', () => {
   });
 
   describe('isUserConnected', () => {
-    it('returns true when user has active connection', () => {
+    it('returns true when user has healthy connection', () => {
       const mockWs = createMockWebSocket(1);
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue(healthyConnection());
       expect(bridge.isUserConnected('user-1')).toBe(true);
     });
 
@@ -413,9 +415,15 @@ describe('FetchBridge', () => {
       expect(bridge.isUserConnected('user-1')).toBe(false);
     });
 
-    it('returns false when connection is closed', () => {
+    it('returns false when connection is unhealthy', () => {
       const mockWs = createMockWebSocket(3);
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
+      mockCheckConnectionHealth.mockReturnValue({
+        isHealthy: false,
+        reason: 'Connection not open',
+        readyState: 3,
+        connectedDuration: 0,
+      });
       expect(bridge.isUserConnected('user-1')).toBe(false);
     });
   });

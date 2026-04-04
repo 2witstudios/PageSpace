@@ -322,6 +322,9 @@ export async function UPGRADE(
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
+    // Check before unregister — if another socket replaced this one, don't cancel its fetches
+    const isActiveConnection = getConnection(userId) === client;
+
     logSecurityEvent('ws_connection_closed', {
       userId,
       code,
@@ -331,7 +334,9 @@ export async function UPGRADE(
 
     // Clean up resources
     unregisterConnection(userId, client);
-    getFetchBridge().cancelUserRequests(userId);
+    if (isActiveConnection) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
   });
 
   // Handle errors
