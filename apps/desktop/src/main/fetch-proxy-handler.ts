@@ -1,6 +1,6 @@
 import { isAllowedFetchProxyURL } from '../shared/fetch-proxy-security';
 import type { FetchProxyRequest } from '../shared/fetch-proxy-types';
-import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_TIMEOUT_MS, FETCH_PROXY_MAX_CONCURRENT } from '../shared/fetch-proxy-types';
+import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_TIMEOUT_MS, FETCH_PROXY_MAX_CONCURRENT, FETCH_PROXY_MAX_BODY_BYTES } from '../shared/fetch-proxy-types';
 
 interface WebSocketMessage {
   type: string;
@@ -36,10 +36,20 @@ export async function handleFetchProxyRequest(
 
   activeRequests++;
   try {
+    let requestBody: Buffer | undefined;
+    if (request.body) {
+      const estimatedBytes = Math.floor((request.body.length * 3) / 4);
+      if (estimatedBytes > FETCH_PROXY_MAX_BODY_BYTES) {
+        sendMessage({ type: 'fetch_response_error', id, error: 'Request body too large for fetch proxy' });
+        return;
+      }
+      requestBody = Buffer.from(request.body, 'base64');
+    }
+
     const response = await fetch(url, {
       method: request.method,
       headers: request.headers,
-      body: request.body ? Buffer.from(request.body, 'base64') : undefined,
+      body: requestBody,
       signal: AbortSignal.timeout(FETCH_PROXY_TIMEOUT_MS),
       redirect: 'manual',
     });

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleFetchProxyRequest, resetActiveRequests } from '../fetch-proxy-handler';
 import type { FetchProxyRequest } from '../../shared/fetch-proxy-types';
-import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_MAX_CONCURRENT } from '../../shared/fetch-proxy-types';
+import { FETCH_PROXY_CHUNK_SIZE, FETCH_PROXY_MAX_CONCURRENT, FETCH_PROXY_MAX_BODY_BYTES } from '../../shared/fetch-proxy-types';
 
 /** Helper to create a readable stream from a Uint8Array */
 function createReadableStream(data: Uint8Array): ReadableStream<Uint8Array> {
@@ -211,6 +211,25 @@ describe('handleFetchProxyRequest', () => {
     const options = fetchCall[1] as RequestInit;
     expect(options.method).toBe('GET');
     expect(options.body).toBeUndefined();
+  });
+
+  it('should reject request bodies exceeding size limit', async () => {
+    // Base64 string that decodes to > 10MB
+    const oversizedBase64 = Buffer.alloc(FETCH_PROXY_MAX_BODY_BYTES + 1).toString('base64');
+    const oversizedRequest: FetchProxyRequest = {
+      ...baseRequest,
+      body: oversizedBase64,
+    };
+
+    await handleFetchProxyRequest(oversizedRequest, sendMessage);
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]).toMatchObject({
+      type: 'fetch_response_error',
+      id: 'req-1',
+      error: 'Request body too large for fetch proxy',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('should pass an AbortSignal with timeout to fetch', async () => {

@@ -64,3 +64,6 @@ export const FETCH_PROXY_TIMEOUT_MS = 30000; // 30s
 
 /** Maximum number of concurrent fetch proxy requests */
 export const FETCH_PROXY_MAX_CONCURRENT = 10;
+
+/** Maximum request body size in bytes (10MB) */
+export const FETCH_PROXY_MAX_BODY_BYTES = 10 * 1024 * 1024;
