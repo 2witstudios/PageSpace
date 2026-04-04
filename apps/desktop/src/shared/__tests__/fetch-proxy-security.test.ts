@@ -47,6 +47,16 @@ describe('isAllowedFetchProxyURL', () => {
       expect(isAllowedFetchProxyURL('https://localhost:11434')).toBe(true);
       expect(isAllowedFetchProxyURL('https://192.168.1.1:443')).toBe(true);
     });
+
+    it('should allow IPv6-mapped private/loopback addresses (dotted form)', () => {
+      expect(isAllowedFetchProxyURL('http://[::ffff:192.168.1.1]:8080')).toBe(true);
+      expect(isAllowedFetchProxyURL('http://[::ffff:127.0.0.1]:11434')).toBe(true);
+      expect(isAllowedFetchProxyURL('http://[::ffff:10.0.0.1]:8080')).toBe(true);
+    });
+
+    it('should allow IPv6-mapped private addresses (hex form)', () => {
+      expect(isAllowedFetchProxyURL('http://[::ffff:c0a8:101]:1234')).toBe(true);
+    });
   });
 
   describe('blocked URLs', () => {
@@ -71,6 +81,11 @@ describe('isAllowedFetchProxyURL', () => {
     it('should deny public IPs', () => {
       expect(isAllowedFetchProxyURL('http://8.8.8.8')).toBe(false);
       expect(isAllowedFetchProxyURL('http://1.1.1.1')).toBe(false);
+    });
+
+    it('should deny IPv6-mapped public addresses', () => {
+      expect(isAllowedFetchProxyURL('http://[::ffff:8.8.8.8]:8080')).toBe(false);
+      expect(isAllowedFetchProxyURL('http://[::ffff:808:808]:8080')).toBe(false);
     });
 
     it('should deny 172.x outside 16-31 range', () => {

@@ -43,6 +43,32 @@ function isPrivateIPv4(hostname: string): boolean {
 }
 
 /**
+ * Extract the IPv4 address from an IPv6-mapped IPv4 hostname (::ffff:x.x.x.x or ::ffff:hex:hex).
+ * Returns the dotted-quad IPv4 string, or null if not an IPv6-mapped address.
+ */
+function parseIPv6MappedIPv4(hostname: string): string | null {
+  const match = hostname.match(/^::ffff:(.+)$/i);
+  if (!match) return null;
+
+  const mapped = match[1];
+
+  // Dotted form: ::ffff:192.168.1.1
+  if (mapped.includes('.')) return mapped;
+
+  // Hex form: ::ffff:c0a8:101 → 192.168.1.1
+  const hexParts = mapped.split(':');
+  if (hexParts.length === 2) {
+    const hi = parseInt(hexParts[0], 16);
+    const lo = parseInt(hexParts[1], 16);
+    if (!isNaN(hi) && !isNaN(lo)) {
+      return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Validates whether a URL is allowed for fetch proxy requests.
  *
  * Allows:
@@ -74,6 +100,12 @@ export function isAllowedFetchProxyURL(url: string): boolean {
 
   if (isPrivateIPv4(hostname)) {
     return true;
+  }
+
+  // Handle IPv6-mapped IPv4 addresses (e.g. ::ffff:192.168.1.1 or ::ffff:c0a8:101)
+  const mappedIPv4 = parseIPv6MappedIPv4(hostname);
+  if (mappedIPv4 !== null) {
+    return ALLOWED_HOSTNAMES.has(mappedIPv4) || isPrivateIPv4(mappedIPv4);
   }
 
   return false;
