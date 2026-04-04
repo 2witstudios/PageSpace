@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
 import { getFetchBridge } from '@/lib/fetch-bridge';
 import {
+  getConnection,
   registerConnection,
   unregisterConnection,
   updateLastPing,
