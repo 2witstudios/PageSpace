@@ -1,2 +1,2 @@
-export { FetchBridge, getFetchBridge } from './fetch-bridge';
+export { FetchBridge, getFetchBridge, isFetchBridgeInitialized } from './fetch-bridge';
 export { createWsProxyFetch } from './ws-proxy-fetch';

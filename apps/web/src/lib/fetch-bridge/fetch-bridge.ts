@@ -322,3 +322,7 @@ export function getFetchBridge(): FetchBridge {
   }
   return fetchBridge;
 }
+
+export function isFetchBridgeInitialized(): boolean {
+  return fetchBridge !== null;
+}
