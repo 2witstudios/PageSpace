@@ -1,7 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
-import { getFetchBridge } from '@/lib/fetch-bridge';
+import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
 import {
   getConnection,
   registerConnection,
@@ -24,9 +24,7 @@ import {
   isFetchResponseChunkMessage,
   isFetchResponseEndMessage,
   isFetchResponseErrorMessage,
-  getConnection,
 } from '@/lib/websocket';
-import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
 
 // Initialize cleanup interval on module load

@@ -37,6 +37,7 @@ vi.mock('@/lib/mcp/mcp-bridge', () => ({
 }));
 
 vi.mock('@/lib/fetch-bridge', () => ({
+  isFetchBridgeInitialized: vi.fn(() => true),
   getFetchBridge: vi.fn(() => ({
     handleResponseStart: vi.fn(),
     handleResponseChunk: vi.fn(),
