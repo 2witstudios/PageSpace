@@ -15,14 +15,14 @@ import type {
 } from '@/lib/websocket/ws-message-schemas';
 
 export interface FetchBridge {
-  /** Handle the start of a fetch response (status, headers) from the desktop */
-  handleResponseStart(msg: FetchResponseStartMessage): void;
-  /** Handle a streamed body chunk from the desktop */
-  handleResponseChunk(msg: FetchResponseChunkMessage): void;
-  /** Handle the end of a fetch response stream from the desktop */
-  handleResponseEnd(msg: FetchResponseEndMessage): void;
-  /** Handle a fetch error from the desktop */
-  handleResponseError(msg: FetchResponseErrorMessage): void;
+  /** Handle the start of a fetch response — userId enables ownership validation */
+  handleResponseStart(msg: FetchResponseStartMessage, userId: string): void;
+  /** Handle a streamed body chunk — userId enables ownership validation */
+  handleResponseChunk(msg: FetchResponseChunkMessage, userId: string): void;
+  /** Handle the end of a fetch response stream — userId enables ownership validation */
+  handleResponseEnd(msg: FetchResponseEndMessage, userId: string): void;
+  /** Handle a fetch error — userId enables ownership validation */
+  handleResponseError(msg: FetchResponseErrorMessage, userId: string): void;
   /** Cancel all pending fetch requests for a disconnected user */
   cancelUserRequests(userId: string): void;
   /** Check if a user has an active desktop bridge connection */

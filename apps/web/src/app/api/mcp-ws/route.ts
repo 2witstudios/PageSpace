@@ -288,6 +288,7 @@ export async function UPGRADE(
       }
 
       // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
+      // userId is passed to every handler for request ownership validation
       if (isFetchBridgeInitialized()) {
         if (isFetchResponseStartMessage(message)) {
           logSecurityEvent('ws_fetch_response_start', {
@@ -296,15 +297,15 @@ export async function UPGRADE(
             status: message.status,
             severity: 'info',
           });
-          getFetchBridge().handleResponseStart(message);
+          getFetchBridge().handleResponseStart(message, userId);
           return;
         }
         if (isFetchResponseChunkMessage(message)) {
-          getFetchBridge().handleResponseChunk(message);
+          getFetchBridge().handleResponseChunk(message, userId);
           return;
         }
         if (isFetchResponseEndMessage(message)) {
-          getFetchBridge().handleResponseEnd(message);
+          getFetchBridge().handleResponseEnd(message, userId);
           return;
         }
         if (isFetchResponseErrorMessage(message)) {
@@ -314,7 +315,7 @@ export async function UPGRADE(
             error: message.error,
             severity: 'warn',
           });
-          getFetchBridge().handleResponseError(message);
+          getFetchBridge().handleResponseError(message, userId);
           return;
         }
       }
