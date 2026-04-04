@@ -26,7 +26,7 @@ export function createWsProxyFetch(
   userId: string,
   bridge: FetchBridge
 ): typeof globalThis.fetch {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  return async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
     // Stub: will be replaced by real implementation from fetch-bridge-server branch
     void bridge;
     void userId;

@@ -22,6 +22,7 @@ import {
   isFetchResponseChunkMessage,
   isFetchResponseEndMessage,
   isFetchResponseErrorMessage,
+  getConnection,
 } from '@/lib/websocket';
 import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
@@ -343,8 +344,10 @@ export async function UPGRADE(
       severity: 'info',
     });
 
-    // Clean up resources
-    if (isFetchBridgeInitialized()) {
+    // Clean up resources — only cancel fetch-bridge requests if this socket
+    // is still the active connection (prevents stale socket from canceling
+    // in-flight requests after a reconnect)
+    if (isFetchBridgeInitialized() && getConnection(userId) === client) {
       getFetchBridge().cancelUserRequests(userId);
     }
     unregisterConnection(userId, client);

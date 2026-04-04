@@ -27,6 +27,13 @@ export interface FetchBridge {
   cancelUserRequests(userId: string): void;
   /** Check if a user has an active desktop bridge connection */
   isUserConnected(userId: string): boolean;
+  /**
+   * Check if a user's desktop supports the fetch-bridge protocol.
+   * Unlike isUserConnected, this verifies the desktop advertised fetch-proxy
+   * capability — prevents routing to older desktop clients that don't understand
+   * fetch_request messages.
+   */
+  canProxyFetch(userId: string): boolean;
 }
 
 let fetchBridge: FetchBridge | null = null;

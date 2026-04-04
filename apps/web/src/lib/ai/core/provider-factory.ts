@@ -289,12 +289,17 @@ export async function createAIProvider(
         };
       }
 
-      // Check if desktop bridge is available for local AI
+      // Check if desktop bridge supports fetch proxying for this user
       const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
-      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().canProxyFetch(userId);
+
+      // Basic URL format validation applies to both paths
+      try { new URL(ollamaSettings.baseUrl); } catch {
+        return { error: 'Ollama base URL is not a valid URL.', status: 400 };
+      }
 
       if (!useOllamaDesktopBridge) {
-        // Direct HTTP: validate URL on server (SSRF protection)
+        // Direct HTTP: full SSRF validation on server
         const { validateLocalProviderURL } = await import('@pagespace/lib/security');
         const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
         if (!ollamaUrlValidation.valid) {
@@ -304,7 +309,6 @@ export async function createAIProvider(
           };
         }
       }
-      // When using desktop bridge, skip URL validation — URL resolves on user's machine
 
       // Create Ollama provider instance with base URL
       // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
@@ -333,12 +337,17 @@ export async function createAIProvider(
         };
       }
 
-      // Check if desktop bridge is available for local AI
+      // Check if desktop bridge supports fetch proxying for this user
       const { isFetchBridgeInitialized: isLmBridgeInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
-      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().isUserConnected(userId);
+      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().canProxyFetch(userId);
+
+      // Basic URL format validation applies to both paths
+      try { new URL(lmstudioSettings.baseUrl); } catch {
+        return { error: 'LM Studio base URL is not a valid URL.', status: 400 };
+      }
 
       if (!useLmstudioDesktopBridge) {
-        // Direct HTTP: validate URL on server (SSRF protection)
+        // Direct HTTP: full SSRF validation on server
         const { validateLocalProviderURL } = await import('@pagespace/lib/security');
         const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
         if (!lmstudioUrlValidation.valid) {
@@ -348,7 +357,6 @@ export async function createAIProvider(
           };
         }
       }
-      // When using desktop bridge, skip URL validation — URL resolves on user's machine
 
       // Create LM Studio provider instance with base URL
       // LM Studio uses OpenAI-compatible API - no path suffix needed as user provides full URL

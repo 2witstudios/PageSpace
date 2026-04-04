@@ -25,12 +25,21 @@ export async function GET(request: Request) {
       }, { status: 400 });
     }
 
-    // Check if desktop bridge is available for local AI
+    // Check if desktop bridge supports fetch proxying for this user
     const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
-    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+    const useDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().canProxyFetch(userId);
+
+    // Basic URL format validation applies to both paths
+    try { new URL(ollamaSettings.baseUrl); } catch {
+      return NextResponse.json({
+        success: false,
+        error: 'Ollama base URL is not a valid URL.',
+        models: {}
+      }, { status: 400 });
+    }
 
     if (!useDesktopBridge) {
-      // SECURITY: Validate URL to prevent SSRF attacks (only for direct server fetch)
+      // SECURITY: Full SSRF validation for direct server fetch
       const urlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
       if (!urlValidation.valid) {
         loggers.ai.warn('SSRF protection: blocked Ollama URL', {
