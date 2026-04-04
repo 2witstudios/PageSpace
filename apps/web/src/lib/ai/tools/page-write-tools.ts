@@ -6,6 +6,8 @@ import {
   PageType,
   isAIChatPage,
   isDocumentPage,
+  getDefaultContent,
+  getCreatablePageTypes,
   parseSheetContent,
   serializeSheetContent,
   updateSheetCells,
@@ -537,7 +539,7 @@ export const pageWriteTools = {
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']).describe('The type of page to create'),
+      type: z.enum(getCreatablePageTypes() as [string, ...string[]]).describe('The type of page to create'),
       contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
     }),
     execute: async ({ driveId, parentId, title, type, contentMode }, { experimental_context: context }) => {
@@ -579,7 +581,7 @@ export const pageWriteTools = {
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
-        const initialContent = '';
+        const initialContent = getDefaultContent(type as PageType);
         const contentFormat = detectPageContentFormat(initialContent);
         const contentRef = hashWithPrefix(contentFormat, initialContent);
         const stateHash = computePageStateHash({
@@ -596,7 +598,7 @@ export const pageWriteTools = {
         // Create the page via repository seam
         const newPage = await pageRepository.create({
           title,
-          type,
+          type: type as PageType,
           content: initialContent,
           contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
           position: nextPosition,
