@@ -14,7 +14,7 @@ export function createWsProxyFetch(userId: string, fetchBridge: FetchBridge): Fe
     }
 
     const { url, method, headers, body } = await normalizeInput(input, init);
-    return fetchBridge.proxyFetch(userId, url, { method, headers, body, signal: init?.signal });
+    return fetchBridge.proxyFetch(userId, url, { method, headers, body, signal: init?.signal ?? undefined });
   };
 }
 
