@@ -1,6 +1,6 @@
 /**
  * WebSocket Message Validation Schemas
- * Zod schemas for all WebSocket message types in the MCP bridge
+ * Zod schemas for all WebSocket message types (MCP bridge + fetch bridge)
  * Provides runtime validation and type safety
  */
 
@@ -55,6 +55,55 @@ export const ToolResultMessageSchema = BaseMessageSchema.extend({
 });
 
 /**
+ * Server -> Client: Fetch request (cloud -> desktop for local AI proxy)
+ */
+export const FetchRequestMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_request'),
+  id: z.string(),
+  url: z.string(),
+  method: z.string(),
+  headers: z.record(z.string(), z.string()),
+  body: z.string().optional(),
+});
+
+/**
+ * Client -> Server: Fetch response headers (desktop -> cloud)
+ */
+export const FetchResponseStartMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_response_start'),
+  id: z.string(),
+  status: z.number(),
+  statusText: z.string(),
+  headers: z.record(z.string(), z.string()),
+});
+
+/**
+ * Client -> Server: Fetch response body chunk (desktop -> cloud, base64-encoded)
+ */
+export const FetchResponseChunkMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_response_chunk'),
+  id: z.string(),
+  chunk: z.string(),
+});
+
+/**
+ * Client -> Server: Fetch response complete (desktop -> cloud)
+ */
+export const FetchResponseEndMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_response_end'),
+  id: z.string(),
+});
+
+/**
+ * Client -> Server: Fetch response error (desktop -> cloud)
+ */
+export const FetchResponseErrorMessageSchema = BaseMessageSchema.extend({
+  type: z.literal('fetch_response_error'),
+  id: z.string(),
+  error: z.string(),
+});
+
+/**
  * Server -> Client: Error message
  */
 export const ErrorMessageSchema = BaseMessageSchema.extend({
@@ -71,6 +120,10 @@ export const IncomingMessageSchema = z.discriminatedUnion('type', [
   PingMessageSchema,
   ToolExecuteMessageSchema,
   ToolResultMessageSchema,
+  FetchResponseStartMessageSchema,
+  FetchResponseChunkMessageSchema,
+  FetchResponseEndMessageSchema,
+  FetchResponseErrorMessageSchema,
 ]);
 
 /**
@@ -79,6 +132,7 @@ export const IncomingMessageSchema = z.discriminatedUnion('type', [
 export const OutgoingMessageSchema = z.discriminatedUnion('type', [
   PongMessageSchema,
   ErrorMessageSchema,
+  FetchRequestMessageSchema,
 ]);
 
 /**
@@ -89,6 +143,11 @@ export type PongMessage = z.infer<typeof PongMessageSchema>;
 export type ToolExecuteMessage = z.infer<typeof ToolExecuteMessageSchema>;
 export type ToolResultMessage = z.infer<typeof ToolResultMessageSchema>;
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
+export type FetchRequestMessage = z.infer<typeof FetchRequestMessageSchema>;
+export type FetchResponseStartMessage = z.infer<typeof FetchResponseStartMessageSchema>;
+export type FetchResponseChunkMessage = z.infer<typeof FetchResponseChunkMessageSchema>;
+export type FetchResponseEndMessage = z.infer<typeof FetchResponseEndMessageSchema>;
+export type FetchResponseErrorMessage = z.infer<typeof FetchResponseErrorMessageSchema>;
 
 export type IncomingMessage = z.infer<typeof IncomingMessageSchema>;
 export type OutgoingMessage = z.infer<typeof OutgoingMessageSchema>;
@@ -155,4 +214,20 @@ export function isToolExecuteMessage(msg: IncomingMessage): msg is ToolExecuteMe
 
 export function isToolResultMessage(msg: IncomingMessage): msg is ToolResultMessage {
   return msg.type === 'tool_result';
+}
+
+export function isFetchResponseStartMessage(msg: IncomingMessage): msg is FetchResponseStartMessage {
+  return msg.type === 'fetch_response_start';
+}
+
+export function isFetchResponseChunkMessage(msg: IncomingMessage): msg is FetchResponseChunkMessage {
+  return msg.type === 'fetch_response_chunk';
+}
+
+export function isFetchResponseEndMessage(msg: IncomingMessage): msg is FetchResponseEndMessage {
+  return msg.type === 'fetch_response_end';
+}
+
+export function isFetchResponseErrorMessage(msg: IncomingMessage): msg is FetchResponseErrorMessage {
+  return msg.type === 'fetch_response_error';
 }

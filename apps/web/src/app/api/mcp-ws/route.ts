@@ -1,7 +1,9 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
+import { getFetchBridge } from '@/lib/fetch-bridge';
 import {
+  getConnection,
   registerConnection,
   unregisterConnection,
   updateLastPing,
@@ -18,6 +20,10 @@ import {
   isPingMessage,
   isToolExecuteMessage,
   isToolResultMessage,
+  isFetchResponseStartMessage,
+  isFetchResponseChunkMessage,
+  isFetchResponseEndMessage,
+  isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
 
@@ -281,6 +287,24 @@ export async function UPGRADE(
         return;
       }
 
+      // Handle fetch bridge responses (local AI provider proxying)
+      if (isFetchResponseStartMessage(message)) {
+        getFetchBridge().handleResponseStart(message);
+        return;
+      }
+      if (isFetchResponseChunkMessage(message)) {
+        getFetchBridge().handleResponseChunk(message);
+        return;
+      }
+      if (isFetchResponseEndMessage(message)) {
+        getFetchBridge().handleResponseEnd(message);
+        return;
+      }
+      if (isFetchResponseErrorMessage(message)) {
+        getFetchBridge().handleResponseError(message);
+        return;
+      }
+
       // Note: Unknown message types are now caught by Zod validation above
     } catch (error) {
       logSecurityEvent('ws_message_parse_error', {
@@ -299,6 +323,9 @@ export async function UPGRADE(
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
+    // Check before unregister — if another socket replaced this one, don't cancel its fetches
+    const isActiveConnection = getConnection(userId) === client;
+
     logSecurityEvent('ws_connection_closed', {
       userId,
       code,
@@ -308,6 +335,9 @@ export async function UPGRADE(
 
     // Clean up resources
     unregisterConnection(userId, client);
+    if (isActiveConnection) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
   });
 
   // Handle errors

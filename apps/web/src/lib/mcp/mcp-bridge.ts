@@ -1,5 +1,4 @@
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
-import { nanoid } from 'nanoid';
 import { logger } from '@pagespace/lib';
 
 /**
@@ -77,7 +76,7 @@ export class MCPBridge {
     }
 
     // Generate unique request ID
-    const requestId = nanoid();
+    const requestId = crypto.randomUUID();
 
     // Create the tool execution request
     const request: ToolExecutionRequest = {
