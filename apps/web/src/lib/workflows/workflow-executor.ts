@@ -1,4 +1,5 @@
-import { convertToModelMessages, generateText, stepCountIs } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { createId } from '@paralleldrive/cuid2';
 import {
   createAIProvider,
@@ -154,12 +155,12 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
             content: m.content,
             parts: [{ type: 'text' as const, text: m.content }],
           }))),
-          tools: availableTools,
+          tools: { ...availableTools, ...finishTool },
           toolChoice: 'auto',
           temperature: 0.7,
           maxRetries: 3,
           experimental_context: executionContext,
-          stopWhen: stepCountIs(100),
+          stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
         })
       : await generateText({
           model: providerResult.model,

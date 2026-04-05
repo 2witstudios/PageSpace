@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
@@ -778,6 +779,11 @@ MENTION PROCESSING:
       });
     }
 
+    // Always inject the finish tool so the model can signal task completion
+    if (Object.keys(finalTools).length > 0) {
+      finalTools = { ...finalTools, ...finishTool } as ToolSet;
+    }
+
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
     // Calculate context size BEFORE streaming (for real context window tracking)
@@ -828,7 +834,7 @@ MENTION PROCESSING:
           system: finalSystemPrompt,
           messages: modelMessages,
           tools: finalTools,
-          stopWhen: stepCountIs(100),
+          stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
           abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
           experimental_context: {
             userId,
