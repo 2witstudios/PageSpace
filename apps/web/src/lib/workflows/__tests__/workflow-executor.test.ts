@@ -149,7 +149,7 @@ describe('executeWorkflow', () => {
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     vi.mocked(generateText).mockResolvedValue({
       text: 'Report complete',
-      steps: [{ toolCalls: [{}] }],
+      steps: [{ text: 'Report complete', toolCalls: [{}] }],
       usage: { inputTokens: 100, outputTokens: 50 },
     } as never);
   });
