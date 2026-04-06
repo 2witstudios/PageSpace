@@ -34,6 +34,10 @@ function formatToolExecutionResults(steps: unknown[]): string {
           // Type guard for toolCall structure
           if (typeof toolCall === 'object' && toolCall !== null) {
             const toolCallObj = toolCall as Record<string, unknown>;
+
+            // Skip internal control-flow tools
+            if (toolCallObj.toolName === FINISH_TOOL_NAME) return;
+
             const toolResults = Array.isArray(stepObj.toolResults) ? stepObj.toolResults : [];
             const toolResult = toolResults[callIndex];
 
@@ -360,7 +364,9 @@ export async function POST(request: Request) {
       });
 
       // Extract response text with tool execution results
-      responseText = result.text;
+      // Collect text from all steps — result.text only returns the final step,
+      // which may be empty if the model's last action was calling the finish tool
+      responseText = result.steps?.map(s => s.text).filter(Boolean).join('') || '';
 
       // Enhanced: Include tool execution results for complete MCP responses
       if (result.steps && result.steps.length > 0) {

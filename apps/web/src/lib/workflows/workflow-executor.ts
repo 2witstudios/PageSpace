@@ -176,7 +176,9 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
           stopWhen: stepCountIs(100),
         });
 
-    const responseText = result.text || '';
+    // Collect text from all steps — result.text only returns the final step,
+    // which may be empty if the model's last action was calling the finish tool
+    const responseText = result.steps?.map(s => s.text).filter(Boolean).join('') || '';
     const toolCallCount = result.steps?.reduce(
       (count, step) => count + (step.toolCalls?.length || 0),
       0

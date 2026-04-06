@@ -571,7 +571,9 @@ export const agentCommunicationTools = {
             });
 
         // 12. Extract response text with error checking
-        const agentResponse = response.text;
+        // Collect text from all steps — response.text only returns the final step,
+        // which may be empty if the model's last action was calling the finish tool
+        const agentResponse = response.steps?.map(s => s.text).filter(Boolean).join('') || '';
 
         // Check for tool execution errors
         const toolErrors = response.steps?.flatMap(step =>

@@ -780,9 +780,7 @@ MENTION PROCESSING:
     }
 
     // Always inject the finish tool so the model can signal task completion
-    if (Object.keys(finalTools).length > 0) {
-      finalTools = { ...finalTools, ...finishTool } as ToolSet;
-    }
+    finalTools = { ...finalTools, ...finishTool } as ToolSet;
 
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 

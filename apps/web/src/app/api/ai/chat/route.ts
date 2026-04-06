@@ -660,9 +660,7 @@ export async function POST(request: Request) {
     }
 
     // Always inject the finish tool so the model can signal task completion
-    if (Object.keys(filteredTools).length > 0) {
-      filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
-    }
+    filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
     // DATABASE-FIRST ARCHITECTURE WITH CACHING:
     // PageSpace uses database as the single source of truth for all messages.
