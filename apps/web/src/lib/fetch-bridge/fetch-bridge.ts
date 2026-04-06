@@ -23,8 +23,8 @@ interface PendingFetchRequest {
   userId: string;
 }
 
-const ACTIVITY_TIMEOUT_MS = 30_000; // 30s between chunks
-const OVERALL_TIMEOUT_MS = 120_000; // 120s total
+const ACTIVITY_TIMEOUT_MS = 120_000; // 120s between chunks (local models like LM Studio/Ollama need time to load)
+const OVERALL_TIMEOUT_MS = 300_000; // 5min total
 
 export class FetchBridge {
   private pendingRequests: Map<string, PendingFetchRequest> = new Map();
@@ -90,7 +90,7 @@ export class FetchBridge {
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
           const activityTimeout = setTimeout(() => {
-            this.cleanupRequest(requestId, new Error('Fetch activity timeout: no data received for 30s'));
+            this.cleanupRequest(requestId, new Error('Fetch activity timeout: no data received for 120s'));
           }, ACTIVITY_TIMEOUT_MS);
 
           const overallTimeout = setTimeout(() => {
@@ -195,7 +195,7 @@ export class FetchBridge {
     // Reset activity timeout
     clearTimeout(pending.activityTimeout);
     pending.activityTimeout = setTimeout(() => {
-      this.cleanupRequest(msg.id, new Error('Fetch activity timeout: no data received for 30s'));
+      this.cleanupRequest(msg.id, new Error('Fetch activity timeout: no data received for 120s'));
     }, ACTIVITY_TIMEOUT_MS);
 
     // Decode base64 chunk and enqueue (inside try to catch malformed base64)
