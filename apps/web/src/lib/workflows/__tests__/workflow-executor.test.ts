@@ -29,6 +29,8 @@ vi.mock('ai', () => ({
   generateText: vi.fn(),
   convertToModelMessages: vi.fn((msgs) => msgs),
   stepCountIs: vi.fn(() => () => false),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config) => config),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
