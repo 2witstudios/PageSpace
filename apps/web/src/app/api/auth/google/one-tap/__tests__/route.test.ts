@@ -63,13 +63,14 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  createDesktopSession: vi.fn().mockResolvedValue({
+    sessionToken: 'ps_sess_desktop',
+    csrfToken: 'csrf-desktop',
+    deviceToken: 'ps_dev_desktop',
+  }),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-    deviceTokenRecordId: 'device-record-id',
-  }),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -123,7 +124,8 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, logAuthEvent, loggers } from '@pagespace/lib/server';
+import { logAuthEvent, loggers } from '@pagespace/lib/server';
+import { createDesktopSession } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -214,10 +216,11 @@ describe('POST /api/auth/google/one-tap', () => {
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
-    vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
-      deviceToken: 'mock-device-token',
-      deviceTokenRecordId: 'device-record-id',
-    } as never);
+    vi.mocked(createDesktopSession).mockResolvedValue({
+      sessionToken: 'ps_sess_desktop',
+      csrfToken: 'csrf-desktop',
+      deviceToken: 'ps_dev_desktop',
+    });
 
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
@@ -462,7 +465,11 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.tokens.deviceToken).toBe('mock-device-token');
+      expect(body.desktopTokens).toEqual({
+        sessionToken: 'ps_sess_desktop',
+        csrfToken: 'csrf-desktop',
+        deviceToken: 'ps_dev_desktop',
+      });
       expect(body.isNewUser).toBe(true);
     });
 
@@ -475,12 +482,12 @@ describe('POST /api/auth/google/one-tap', () => {
       });
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+      expect(createDesktopSession).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: mockNewUser.id,
           deviceId: 'device-123',
-          platform: 'desktop',
           deviceName: 'My Desktop',
+          provider: 'google-one-tap',
         })
       );
     });
@@ -493,7 +500,7 @@ describe('POST /api/auth/google/one-tap', () => {
       });
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+      expect(createDesktopSession).toHaveBeenCalledWith(
         expect.objectContaining({
           deviceName: 'TestBrowser/1.0',
         })
@@ -511,7 +518,7 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(appendSessionCookie).not.toHaveBeenCalled();
     });
 
-    it('does not create session for desktop platform', async () => {
+    it('delegates session creation to createDesktopSession for desktop platform', async () => {
       const request = createOneTapRequest({
         credential: 'valid-credential',
         platform: 'desktop',
@@ -519,8 +526,7 @@ describe('POST /api/auth/google/one-tap', () => {
       });
       await POST(request);
 
-      // Session is not created for desktop (device tokens are used instead)
-      expect(sessionService.createSession).not.toHaveBeenCalled();
+      expect(createDesktopSession).toHaveBeenCalled();
     });
   });
 

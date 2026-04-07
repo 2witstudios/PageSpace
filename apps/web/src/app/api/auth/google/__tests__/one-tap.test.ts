@@ -55,6 +55,11 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  createDesktopSession: vi.fn().mockResolvedValue({
+    sessionToken: 'ps_sess_desktop',
+    csrfToken: 'csrf-desktop',
+    deviceToken: 'ps_dev_desktop',
+  }),
 }));
 
 // Mock cookie utilities
@@ -65,7 +70,6 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -111,7 +115,7 @@ vi.mock('@/lib/auth', () => ({
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { createDesktopSession } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -344,13 +348,9 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(body.error).toContain('Device ID required');
     });
 
-    it('given desktop platform with deviceId, should return device token', async () => {
+    it('given desktop platform with deviceId, should return desktop tokens', async () => {
       vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
-      vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
-        deviceToken: 'desktop-device-token',
-        deviceTokenRecordId: 'device-record-id',
-      } as never);
 
       const request = createOneTapRequest({
         credential: 'valid-token',
@@ -363,8 +363,12 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.tokens.deviceToken).toBe('desktop-device-token');
-      // Desktop should NOT have session cookie
+      expect(body.desktopTokens).toEqual({
+        sessionToken: 'ps_sess_desktop',
+        csrfToken: 'csrf-desktop',
+        deviceToken: 'ps_dev_desktop',
+      });
+      // Desktop should NOT have session cookie (createDesktopSession handles tokens)
       expect(appendSessionCookie).not.toHaveBeenCalled();
     });
   });
