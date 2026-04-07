@@ -133,9 +133,12 @@ export function PasskeySignupButton({
       persistCsrfToken();
       useAuthStore.getState().setAuthFailedPermanently(false);
 
-      toast.success('Account created successfully!');
+      if (await handleDesktopAuthResponse(verifyData, '/dashboard?welcome=true')) {
+        toast.success('Account created successfully!');
+        return;
+      }
 
-      if (await handleDesktopAuthResponse(verifyData, '/dashboard?welcome=true')) return;
+      toast.success('Account created successfully!');
 
       if (onSuccess) {
         onSuccess(verifyData.redirectUrl);

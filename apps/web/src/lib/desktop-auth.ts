@@ -57,7 +57,7 @@ export async function handleDesktopAuthTokens(tokens: DesktopAuthTokens): Promis
  * Returns true if handled (caller should return), false otherwise.
  */
 export async function handleDesktopAuthResponse(
-  data: { sessionToken?: string; csrfToken?: string; deviceToken?: string; redirectUrl?: string },
+  data: { sessionToken?: string; csrfToken?: string; deviceToken?: string; redirectUrl?: string; redirectTo?: string },
   fallbackUrl = '/dashboard',
 ): Promise<boolean> {
   if (!isDesktopPlatform()) return false;
@@ -67,6 +67,6 @@ export async function handleDesktopAuthResponse(
     csrfToken: data.csrfToken,
     deviceToken: data.deviceToken,
   });
-  window.location.href = data.redirectUrl || fallbackUrl;
+  window.location.href = data.redirectUrl || data.redirectTo || fallbackUrl;
   return true;
 }

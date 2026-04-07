@@ -165,7 +165,7 @@ export async function POST(req: Request) {
     if (!user || !user.password || !isValid) {
       const reason = !user ? 'invalid_email' : 'invalid_password';
       logAuthEvent('failed', user?.id, email, clientIP, reason === 'invalid_email' ? 'Invalid email' : 'Invalid password');
-      trackAuthEvent(user?.id, 'failed_login', { reason, email, ip: clientIP });
+      trackAuthEvent(user?.id, 'failed_login', { reason, email: maskEmail(email), ip: clientIP });
       securityAudit.logAuthFailure(email, clientIP, reason).catch(() => {});
 
       // Record failed attempt for lockout tracking (only for existing users to avoid info leakage)
@@ -215,7 +215,7 @@ export async function POST(req: Request) {
 
     logAuthEvent('login', user.id, email, clientIP);
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
     });

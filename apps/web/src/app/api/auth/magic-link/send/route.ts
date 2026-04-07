@@ -16,7 +16,10 @@ const sendMagicLinkSchema = z.object({
   platform: z.enum(['web', 'desktop']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
-});
+}).refine(
+  (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
+  { message: 'deviceId and deviceName are required for desktop platform' }
+);
 
 /** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
 function maskEmail(email: string): string {

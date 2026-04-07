@@ -302,11 +302,10 @@ describe('POST /api/auth/login', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockUser.id,
         'login',
-        {
-          email: mockUser.email,
+        expect.objectContaining({
           ip: '192.168.1.1',
           userAgent: null,
-        }
+        })
       );
     });
   });

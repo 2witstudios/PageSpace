@@ -22,7 +22,10 @@ const createMagicLinkSchema = z.object({
   platform: z.enum(['web', 'desktop']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
-});
+}).refine(
+  (data) => data.platform !== 'desktop' || !!data.deviceId,
+  { message: 'deviceId is required for desktop platform' }
+);
 
 const verifyMagicLinkSchema = z.object({
   token: z.string().min(1).refine(

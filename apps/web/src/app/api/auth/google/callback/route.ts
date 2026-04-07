@@ -40,13 +40,19 @@ export async function GET(req: Request) {
       loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
       const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
 
-      // Check if this was a desktop request by parsing the state param
+      // Check if this was a desktop request — verify HMAC signature first
       let isDesktopRequest = false;
-      if (state) {
+      if (state && process.env.OAUTH_STATE_SECRET) {
         try {
           const stateWithSignature = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-          if (stateWithSignature.data?.platform === 'desktop') {
-            isDesktopRequest = true;
+          if (stateWithSignature.data && stateWithSignature.sig) {
+            const expectedSig = crypto
+              .createHmac('sha256', process.env.OAUTH_STATE_SECRET)
+              .update(JSON.stringify(stateWithSignature.data))
+              .digest('hex');
+            if (stateWithSignature.sig === expectedSig && stateWithSignature.data.platform === 'desktop') {
+              isDesktopRequest = true;
+            }
           }
         } catch {
           // Invalid state — fall through to web error redirect
