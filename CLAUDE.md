@@ -28,7 +28,7 @@ packages/
 - **Full-stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
 - **Database**: PostgreSQL + Drizzle ORM
 - **AI**: Vercel AI SDK + multi-provider (Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama)
-- **Auth**: Custom JWT (jose + bcryptjs)
+- **Auth**: Opaque session tokens (SHA-256 hashed, bcryptjs passwords)
 - **Real-time**: Socket.IO with Redis pub/sub
 - **Editors**: TipTap (rich text), Monaco (code), custom sheet + canvas
 - **State**: Zustand (client) + SWR (server cache)
@@ -76,7 +76,7 @@ When you need to understand a subsystem, read these canonical sources (not docs 
 |------|------|
 | Page types enum | `packages/lib/src/utils/enums.ts` |
 | Permissions | `packages/lib/src/permissions/` |
-| Auth (JWT, sessions) | `packages/lib/src/auth/` |
+| Auth (opaque tokens, sessions) | `packages/lib/src/auth/` |
 | UI refresh protection | `apps/web/src/stores/useEditingStore.ts` |
 | Integrations (GitHub, Calendar, OAuth) | `packages/lib/src/integrations/` |
 | DB schema (all tables) | `packages/db/src/schema/` |
