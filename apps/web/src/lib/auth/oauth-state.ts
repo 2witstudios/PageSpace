@@ -7,18 +7,36 @@ export interface OAuthStateData {
   deviceName?: string;
 }
 
+export type VerifyOAuthStateResult =
+  | { status: 'valid'; data: OAuthStateData }
+  | { status: 'invalid_signature' }
+  | { status: 'unsigned'; returnUrl?: string }
+  | { status: 'malformed' };
+
 /**
  * Verify an HMAC-signed OAuth state parameter.
- * Returns the decoded data if signature is valid, null otherwise.
+ * Returns a discriminated result so callers can handle each case appropriately:
+ * - 'valid': signature verified, data is trustworthy
+ * - 'invalid_signature': sig field present but doesn't match (reject)
+ * - 'unsigned': parseable JSON but no sig field (safe defaults)
+ * - 'malformed': unparseable (safe defaults)
+ *
  * Uses timing-safe comparison to prevent timing attacks.
  */
-export function verifyOAuthState(stateBase64: string): OAuthStateData | null {
+export function verifyOAuthState(stateBase64: string): VerifyOAuthStateResult {
   const secret = process.env.OAUTH_STATE_SECRET;
-  if (!secret) return null;
 
   try {
     const parsed = JSON.parse(Buffer.from(stateBase64, 'base64').toString('utf-8'));
-    if (!parsed.data || !parsed.sig) return null;
+
+    if (!parsed.data || !parsed.sig) {
+      // No signature — treat as unsigned legacy state
+      return { status: 'unsigned', returnUrl: parsed.returnUrl };
+    }
+
+    if (!secret) {
+      return { status: 'invalid_signature' };
+    }
 
     const { data, sig } = parsed;
     const expected = crypto
@@ -27,15 +45,20 @@ export function verifyOAuthState(stateBase64: string): OAuthStateData | null {
       .digest('hex');
 
     // Timing-safe comparison to prevent timing attacks
-    if (expected.length !== sig.length) return null;
+    if (expected.length !== sig.length) {
+      return { status: 'invalid_signature' };
+    }
+
     const isValid = crypto.timingSafeEqual(
       Buffer.from(expected, 'utf-8'),
       Buffer.from(sig, 'utf-8'),
     );
 
-    return isValid ? data : null;
+    return isValid
+      ? { status: 'valid', data }
+      : { status: 'invalid_signature' };
   } catch {
-    return null;
+    return { status: 'malformed' };
   }
 }
 
@@ -45,6 +68,6 @@ export function verifyOAuthState(stateBase64: string): OAuthStateData | null {
  */
 export function isDesktopOAuthState(stateBase64: string | null | undefined): boolean {
   if (!stateBase64) return false;
-  const data = verifyOAuthState(stateBase64);
-  return data?.platform === 'desktop';
+  const result = verifyOAuthState(stateBase64);
+  return result.status === 'valid' && result.data.platform === 'desktop';
 }

@@ -71,19 +71,37 @@ export async function POST(req: Request) {
     let deviceName: string | undefined;
 
     if (state) {
-      const verifiedData = verifyOAuthState(state);
-      if (verifiedData) {
-        returnUrl = verifiedData.returnUrl || '/dashboard';
-        platform = verifiedData.platform || 'web';
-        deviceId = verifiedData.deviceId;
-        deviceName = verifiedData.deviceName;
-      } else {
-        // Unsigned or invalid state — use safe defaults
-        loggers.auth.warn('Apple OAuth state invalid or unsigned - using safe defaults', {
-          stateLength: state?.length,
-        });
-        returnUrl = '/dashboard';
-        platform = 'web';
+      const stateResult = verifyOAuthState(state);
+
+      switch (stateResult.status) {
+        case 'valid':
+          returnUrl = stateResult.data.returnUrl || '/dashboard';
+          platform = stateResult.data.platform || 'web';
+          deviceId = stateResult.data.deviceId;
+          deviceName = stateResult.data.deviceName;
+          break;
+
+        case 'invalid_signature':
+          loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
+          return NextResponse.redirect(
+            new URL('/auth/signin?error=invalid_request', process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url)
+          );
+
+        case 'unsigned':
+          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
+            hasData: true, hasSig: false,
+          });
+          returnUrl = '/dashboard';
+          platform = 'web';
+          break;
+
+        case 'malformed':
+          loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
+            stateLength: state?.length,
+          });
+          returnUrl = '/dashboard';
+          platform = 'web';
+          break;
       }
     }
 

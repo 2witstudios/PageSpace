@@ -67,20 +67,29 @@ export async function GET(req: Request) {
     let deviceName: string | undefined;
 
     if (stateParam) {
-      const verifiedData = verifyOAuthState(stateParam);
-      if (verifiedData) {
-        returnUrl = verifiedData.returnUrl || '/dashboard';
-        platform = verifiedData.platform || 'web';
-        deviceId = verifiedData.deviceId;
-        deviceName = verifiedData.deviceName;
-      } else {
-        // Unsigned state or invalid signature — treat as simple returnUrl
-        try {
-          const parsed = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
-          returnUrl = parsed.returnUrl || '/dashboard';
-        } catch {
+      const stateResult = verifyOAuthState(stateParam);
+
+      switch (stateResult.status) {
+        case 'valid':
+          returnUrl = stateResult.data.returnUrl || '/dashboard';
+          platform = stateResult.data.platform || 'web';
+          deviceId = stateResult.data.deviceId;
+          deviceName = stateResult.data.deviceName;
+          break;
+
+        case 'invalid_signature':
+          loggers.auth.warn('OAuth state signature mismatch', { stateParam });
+          return NextResponse.redirect(
+            new URL('/auth/signin?error=invalid_request', process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url)
+          );
+
+        case 'unsigned':
+          returnUrl = stateResult.returnUrl || '/dashboard';
+          break;
+
+        case 'malformed':
           returnUrl = stateParam;
-        }
+          break;
       }
     }
 
