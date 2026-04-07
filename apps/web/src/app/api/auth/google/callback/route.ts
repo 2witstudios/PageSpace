@@ -37,19 +37,19 @@ export async function GET(req: Request) {
     const error = searchParams.get('error');
 
     if (error) {
-      loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
-      const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
+      const sanitizedError = String(error).slice(0, 100);
+      loggers.auth.warn('OAuth error', { error: sanitizedError });
 
-      const isDesktopRequest = isDesktopOAuthState(state);
-
-      if (isDesktopRequest) {
-        const deepLinkUrl = new URL('pagespace://auth-error');
-        deepLinkUrl.searchParams.set('error', errorParam);
-        return NextResponse.redirect(deepLinkUrl.toString());
+      // Desktop: redirect to deep link so Electron can show native error UI
+      if (isDesktopOAuthState(state)) {
+        // Use hardcoded error values — never pass user input into deep links
+        const desktopError = sanitizedError === 'access_denied' ? 'access_denied' : 'oauth_error';
+        return NextResponse.redirect(`pagespace://auth-error?error=${desktopError}`);
       }
 
+      const webError = sanitizedError === 'access_denied' ? 'access_denied' : 'oauth_error';
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(webError)}`, baseUrl));
     }
 
     const validation = googleCallbackSchema.safeParse({ code, state });

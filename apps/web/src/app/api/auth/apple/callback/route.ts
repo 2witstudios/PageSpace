@@ -42,19 +42,18 @@ export async function POST(req: Request) {
 
     // Handle errors from Apple
     if (error) {
-      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
-      const errorParam = error === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+      const sanitizedError = String(error).slice(0, 100);
+      loggers.auth.warn('Apple OAuth error', { error: sanitizedError });
 
-      const isDesktopRequest = isDesktopOAuthState(state);
-
-      if (isDesktopRequest) {
-        const deepLinkUrl = new URL('pagespace://auth-error');
-        deepLinkUrl.searchParams.set('error', errorParam);
-        return NextResponse.redirect(deepLinkUrl.toString());
+      // Desktop: redirect to deep link so Electron can show native error UI
+      if (isDesktopOAuthState(state)) {
+        const desktopError = sanitizedError === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+        return NextResponse.redirect(`pagespace://auth-error?error=${desktopError}`);
       }
 
+      const webError = sanitizedError === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(webError)}`, baseUrl));
     }
 
     // Validate required fields
