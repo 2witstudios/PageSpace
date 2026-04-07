@@ -61,6 +61,7 @@ export async function POST(req: Request) {
       tokenVersion: user.tokenVersion,
       deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
       userAgent: req.headers.get('user-agent') || undefined,
+      ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
     await resetDistributedRateLimit(`device:register:ip:${clientIP}`).catch(() => {});

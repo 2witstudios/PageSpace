@@ -120,6 +120,22 @@ export function appendSessionCookie(headers: Headers, sessionToken: string): voi
 }
 
 /**
+ * Create a short-lived, JS-readable cookie to hand a device token to the client
+ * during OAuth/signup redirects. The client reads it once, stores the value in
+ * localStorage, then immediately clears the cookie.
+ *
+ * NOT httpOnly so document.cookie can read it; SameSite=Lax for redirect compat.
+ */
+export function createDeviceTokenHandoffCookie(deviceToken: string): string {
+  return serialize('ps_device_token', deviceToken, {
+    ...getCommonOptions(false), // httpOnly = false
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60, // 1 minute — just long enough for the redirect round-trip
+  });
+}
+
+/**
  * Append clear cookies to headers for logout responses
  *
  * @param headers - Headers object to append cookies to

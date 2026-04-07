@@ -21,7 +21,7 @@ import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 import { validateLoginCSRFToken, getClientIP, createWebDeviceToken } from '@/lib/auth';
-import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 
 const signupSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -291,9 +291,7 @@ export async function POST(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
     if (deviceTokenValue) {
-      const isProduction = process.env.NODE_ENV === 'production';
-      const secureFlag = isProduction ? '; Secure' : '';
-      headers.append('Set-Cookie', `ps_device_token=${deviceTokenValue}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
+      headers.append('Set-Cookie', createDeviceTokenHandoffCookie(deviceTokenValue));
     }
 
     return NextResponse.redirect(redirectUrl, {

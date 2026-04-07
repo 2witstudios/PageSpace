@@ -121,6 +121,10 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           // a device token, causing an unnecessary forced logout.
           setTimeout(async () => {
             try {
+              // Guard: if the store socket changed (e.g., disconnect() + connect() called),
+              // this timer is stale — bail to avoid reconnecting an orphaned instance.
+              if (get().socket !== newSocket) return;
+
               // Re-check desktop status
               const isDesktopNow = typeof window !== 'undefined' &&
                                    window.electron &&
@@ -130,6 +134,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
                 // Web: Try getting a fresh socket token first (session cookie may still be valid)
                 const freshToken = await getSocketToken();
                 if (freshToken) {
+                  if (get().socket !== newSocket) return; // stale after async
                   console.log('🔄 Got fresh socket token, reconnecting socket...');
                   newSocket.auth = { token: freshToken };
                   newSocket.io.opts.reconnection = true;
@@ -146,6 +151,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
               const result = await refreshAuthSession();
 
               if (result.success) {
+                if (get().socket !== newSocket) return; // stale after async
                 console.log('🔄 Token refreshed via unified auth, reconnecting socket...');
 
                 // Clear session cache to ensure fresh token retrieval

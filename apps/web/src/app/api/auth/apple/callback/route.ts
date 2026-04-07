@@ -13,7 +13,7 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
@@ -369,9 +369,7 @@ export async function POST(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
     if (webDeviceTokenValue) {
-      const isProduction = process.env.NODE_ENV === 'production';
-      const secureFlag = isProduction ? '; Secure' : '';
-      headers.append('Set-Cookie', `ps_device_token=${webDeviceTokenValue}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
+      headers.append('Set-Cookie', createDeviceTokenHandoffCookie(webDeviceTokenValue));
     }
 
     return NextResponse.redirect(redirectUrl, { headers });

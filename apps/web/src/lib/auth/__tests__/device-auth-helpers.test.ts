@@ -34,12 +34,14 @@ describe('device-auth-helpers', () => {
       expect(count).toBe(1);
     });
 
-    it('without deviceId skips revocation and returns 0', async () => {
+    it('without deviceId falls back to revokeAllUserSessions', async () => {
+      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
+
       const count = await revokeSessionsForLogin('user-1', undefined, 'new_login', 'password');
 
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'new_login');
       expect(sessionService.revokeDeviceSessions).not.toHaveBeenCalled();
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalled();
-      expect(count).toBe(0);
+      expect(count).toBe(2);
     });
   });
 

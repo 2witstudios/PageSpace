@@ -11,9 +11,14 @@ export async function revokeSessionsForLogin(
   reason: string,
   provider = 'password',
 ): Promise<number> {
-  if (!deviceId) return 0;
-  const count = await sessionService.revokeDeviceSessions(userId, deviceId, reason);
-  if (count > 0) loggers.auth.info(`Revoked device sessions on ${provider} login`, { userId, deviceId, count });
+  if (deviceId) {
+    const count = await sessionService.revokeDeviceSessions(userId, deviceId, reason);
+    if (count > 0) loggers.auth.info(`Revoked device sessions on ${provider} login`, { userId, deviceId, count });
+    return count;
+  }
+  // Fallback: revoke all sessions for backward compatibility with older clients
+  const count = await sessionService.revokeAllUserSessions(userId, reason);
+  if (count > 0) loggers.auth.info(`Revoked all sessions on ${provider} login (no deviceId)`, { userId, count });
   return count;
 }
 
