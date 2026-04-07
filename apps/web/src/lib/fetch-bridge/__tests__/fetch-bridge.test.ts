@@ -214,7 +214,7 @@ describe('FetchBridge', () => {
       );
     });
 
-    it('times out after 120s overall even with active chunks', async () => {
+    it('times out after 5min overall even with active chunks', async () => {
       const mockWs = createMockWebSocket(1);
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
@@ -233,9 +233,9 @@ describe('FetchBridge', () => {
         headers: {},
       });
 
-      // Keep sending chunks every 20s to prevent activity timeout
-      for (let elapsed = 0; elapsed < 110_000; elapsed += 20_000) {
-        vi.advanceTimersByTime(20_000);
+      // Keep sending chunks every 60s to prevent activity timeout
+      for (let elapsed = 0; elapsed < 280_000; elapsed += 60_000) {
+        vi.advanceTimersByTime(60_000);
         bridge.handleResponseChunk({
           type: 'fetch_response_chunk',
           id: requestId,
@@ -243,15 +243,15 @@ describe('FetchBridge', () => {
         });
       }
 
-      // This final advance pushes past 120s overall
-      vi.advanceTimersByTime(20_000);
+      // This final advance pushes past 300s overall
+      vi.advanceTimersByTime(60_000);
       await promise;
 
       // The overall timeout should have fired
       expect(bridge.getPendingRequestCount()).toBe(0);
     });
 
-    it('times out after 30s of inactivity', async () => {
+    it('times out after 120s of inactivity', async () => {
       const mockWs = createMockWebSocket(1);
       mockGetConnection.mockReturnValue(mockWs as WebSocket);
       mockCheckConnectionHealth.mockReturnValue(healthyConnection());
@@ -259,7 +259,7 @@ describe('FetchBridge', () => {
       const promise = bridge.proxyFetch('user-1', 'http://localhost:11434/api/chat');
       await flushMicrotasks();
 
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(120_000);
 
       await expect(promise).rejects.toThrow('Fetch activity timeout');
     });
@@ -299,14 +299,14 @@ describe('FetchBridge', () => {
 
       const response = await promise;
 
-      // Advance 20s, send chunk (resets timeout), advance 20s more — should still be alive
-      vi.advanceTimersByTime(20_000);
+      // Advance 100s, send chunk (resets timeout), advance 100s more — should still be alive
+      vi.advanceTimersByTime(100_000);
       bridge.handleResponseChunk({
         type: 'fetch_response_chunk',
         id: requestId,
         chunk: btoa('chunk1'),
       });
-      vi.advanceTimersByTime(20_000);
+      vi.advanceTimersByTime(100_000);
       bridge.handleResponseChunk({
         type: 'fetch_response_chunk',
         id: requestId,
