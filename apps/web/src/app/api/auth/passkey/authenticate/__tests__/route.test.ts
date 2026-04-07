@@ -34,11 +34,6 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
-  createDesktopSession: vi.fn().mockResolvedValue({
-    sessionToken: 'ps_sess_desktop',
-    csrfToken: 'csrf-desktop',
-    deviceToken: 'ps_dev_desktop',
-  }),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -68,16 +63,7 @@ vi.mock('@pagespace/lib/security', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
-  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
-}));
-
-vi.mock('@/lib/repositories/auth-repository', () => ({
-  authRepository: {
-    findUserById: vi.fn().mockResolvedValue({
-      id: 'user-1',
-      tokenVersion: 0,
-    }),
-  },
+  createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -98,12 +84,11 @@ import {
   verifyAuthentication,
   sessionService,
   generateCSRFToken,
-  createDesktopSession,
 } from '@pagespace/lib/auth';
 import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const validPayload = {
@@ -386,7 +371,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
   describe('session creation errors', () => {
     it('returns 500 when session validation fails after creation', async () => {
-      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -412,7 +397,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
   });
 
-  describe('desktop platform handling', () => {
+  describe('desktop platform handling (unified path)', () => {
     const desktopPayload = {
       ...validPayload,
       platform: 'desktop',
@@ -427,53 +412,47 @@ describe('POST /api/auth/passkey/authenticate', () => {
         body: JSON.stringify(body),
       });
 
-    it('returns desktopTokens when platform is desktop', async () => {
+    it('returns sessionToken, csrfToken, deviceToken at top level for desktop', async () => {
       const response = await POST(createDesktopRequest());
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.desktopTokens).toEqual({
-        sessionToken: 'ps_sess_desktop',
-        csrfToken: 'csrf-desktop',
-        deviceToken: 'ps_dev_desktop',
-      });
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
+      expect(body.csrfToken).toBe('mock-csrf-token');
+      expect(body.deviceToken).toBe('ps_dev_mock_token');
+      // Should NOT have nested desktopTokens
+      expect(body.desktopTokens).toBeUndefined();
     });
 
-    it('calls createDesktopSession with correct params', async () => {
+    it('uses revokeAllUserSessions (hardest reset) for passkey', async () => {
       await POST(createDesktopRequest());
 
-      expect(createDesktopSession).toHaveBeenCalledWith(expect.objectContaining({
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
+    });
+
+    it('calls createDeviceToken with platform desktop', async () => {
+      await POST(createDesktopRequest());
+
+      expect(createDeviceToken).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         deviceId: 'device-123',
+        platform: 'desktop',
         deviceName: 'My Mac',
-        provider: 'passkey',
-      }));
-    });
-
-    it('passes the user tokenVersion to createDesktopSession', async () => {
-      await POST(createDesktopRequest());
-
-      expect(createDesktopSession).toHaveBeenCalledWith(expect.objectContaining({
         tokenVersion: 5,
       }));
     });
 
-    it('does not call createDesktopSession for web platform', async () => {
-      await POST(createRequest());
+    it('sets session cookies even for desktop platform', async () => {
+      await POST(createDesktopRequest());
 
-      expect(createDesktopSession).not.toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalled();
     });
 
-    it('returns 400 if desktop platform but no deviceId', async () => {
-      const response = await POST(createDesktopRequest({
-        ...validPayload,
-        platform: 'desktop',
-      }));
-      const body = await response.json();
+    it('does not create device token without deviceId', async () => {
+      await POST(createRequest());
 
-      expect(response.status).toBe(400);
-      expect(body.error).toContain('deviceId');
+      expect(createDeviceToken).not.toHaveBeenCalled();
     });
   });
 });

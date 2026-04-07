@@ -52,15 +52,21 @@ export async function handleDesktopAuthTokens(tokens: DesktopAuthTokens): Promis
 }
 
 /**
- * If on desktop and response contains desktopTokens, store them and redirect.
+ * If on desktop and response contains auth tokens, store them and redirect.
+ * Reads tokens from top-level response fields (sessionToken, csrfToken, deviceToken).
  * Returns true if handled (caller should return), false otherwise.
  */
 export async function handleDesktopAuthResponse(
-  data: { desktopTokens?: DesktopAuthTokens; redirectUrl?: string },
+  data: { sessionToken?: string; csrfToken?: string; deviceToken?: string; redirectUrl?: string },
   fallbackUrl = '/dashboard',
 ): Promise<boolean> {
-  if (!isDesktopPlatform() || !data.desktopTokens) return false;
-  await handleDesktopAuthTokens(data.desktopTokens);
+  if (!isDesktopPlatform()) return false;
+  if (!data.sessionToken || !data.csrfToken || !data.deviceToken) return false;
+  await handleDesktopAuthTokens({
+    sessionToken: data.sessionToken,
+    csrfToken: data.csrfToken,
+    deviceToken: data.deviceToken,
+  });
   window.location.href = data.redirectUrl || fallbackUrl;
   return true;
 }

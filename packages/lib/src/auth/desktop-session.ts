@@ -35,14 +35,17 @@ export async function createDesktopSession(
 ): Promise<DesktopSessionResult> {
   const { userId, deviceId, deviceName, provider, clientIP, userAgent, tokenVersion } = params;
 
-  const revokedCount = await sessionService.revokeAllUserSessions(
+  // Per-device revocation: only revoke sessions for this specific device
+  const revokedCount = await sessionService.revokeDeviceSessions(
     userId,
+    deviceId,
     `desktop_${provider}_login`
   );
   if (revokedCount > 0) {
-    loggers.auth.info('Revoked existing sessions on desktop login', {
+    loggers.auth.info('Revoked device sessions on desktop login', {
       userId,
       provider,
+      deviceId,
       count: revokedCount,
     });
   }

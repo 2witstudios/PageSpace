@@ -7,13 +7,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
-import { getDevicePlatformFields, handleDesktopAuthResponse, type DesktopAuthTokens } from '@/lib/desktop-auth';
+import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
 
 interface LoginApiResponse {
   error?: string;
   redirectTo?: string;
   redirectUrl?: string;
-  desktopTokens?: DesktopAuthTokens;
+  sessionToken?: string;
+  csrfToken?: string;
+  deviceToken?: string;
 }
 
 export function PasswordLoginForm() {
