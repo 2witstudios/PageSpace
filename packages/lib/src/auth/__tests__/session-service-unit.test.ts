@@ -8,6 +8,7 @@ vi.mock('../session-repository', () => ({
     touchSession: vi.fn(),
     revokeByHash: vi.fn(),
     revokeAllForUser: vi.fn(),
+    revokeForUserDevice: vi.fn(),
     deleteExpired: vi.fn(),
   },
 }));
@@ -257,6 +258,46 @@ describe('SessionService', () => {
       const count = await service.revokeAllUserSessions('user-1', 'test');
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe('revokeDeviceSessions', () => {
+    it('revokeDeviceSessions_withActiveDeviceSessions_returnsRevokedCount', async () => {
+      vi.mocked(sessionRepository.revokeForUserDevice).mockResolvedValue(2);
+
+      const count = await service.revokeDeviceSessions('user-1', 'device-abc', 'new_login');
+
+      expect(count).toBe(2);
+      expect(sessionRepository.revokeForUserDevice).toHaveBeenCalledWith('user-1', 'device-abc', 'new_login');
+    });
+
+    it('revokeDeviceSessions_withNoActiveSessions_returnsZero', async () => {
+      vi.mocked(sessionRepository.revokeForUserDevice).mockResolvedValue(0);
+
+      const count = await service.revokeDeviceSessions('user-1', 'device-abc', 'new_login');
+
+      expect(count).toBe(0);
+    });
+  });
+
+  describe('createSession with deviceId', () => {
+    it('createSession_withDeviceId_passesDeviceIdToRepository', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
+        id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
+
+      await service.createSession({
+        userId: 'user-1',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        deviceId: 'test-device-123',
+      });
+
+      expect(sessionRepository.insertSession).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceId: 'test-device-123' }),
+      );
     });
   });
 

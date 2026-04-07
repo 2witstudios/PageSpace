@@ -122,10 +122,13 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
   isSafeReturnUrl: vi.fn(() => true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@/lib/auth/google-avatar', () => ({
@@ -698,18 +701,16 @@ describe('GET /api/auth/google/callback', () => {
 
   describe('session management', () => {
     it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(3);
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockNewUser.id,
-        'new_login'
-      );
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on Google OAuth login',
-        expect.objectContaining({ count: 3 })
+        undefined,
+        'new_login',
+        'Google OAuth'
       );
     });
 

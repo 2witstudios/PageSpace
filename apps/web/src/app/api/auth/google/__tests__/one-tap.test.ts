@@ -104,6 +104,8 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -252,10 +254,11 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(mockNewUser.id, 'new_login');
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(mockNewUser.id, undefined, 'new_login', 'Google One Tap');
     });
 
     it('should track auth event with masked email', async () => {

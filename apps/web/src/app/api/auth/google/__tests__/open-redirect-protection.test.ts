@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'mock-device-token',
+    deviceTokenRecordId: 'device-record-id',
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -33,6 +37,8 @@ vi.mock('@pagespace/lib/security', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
   // Use actual implementation for isSafeReturnUrl so security tests are valid
   isSafeReturnUrl: (url: string | undefined): boolean => {
     if (!url) return true;
@@ -118,6 +124,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -130,6 +137,10 @@ vi.mock('@paralleldrive/cuid2', () => ({
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'existing-drive', created: false }),
+}));
+
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('crypto', async () => {

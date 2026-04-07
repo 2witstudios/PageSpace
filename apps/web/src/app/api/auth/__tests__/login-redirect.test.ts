@@ -105,6 +105,8 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
   getClientIP: vi.fn().mockReturnValue('unknown'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({

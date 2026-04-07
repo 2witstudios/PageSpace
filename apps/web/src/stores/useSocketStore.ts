@@ -115,23 +115,47 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           // Pause automatic reconnection during token refresh attempt
           newSocket.io.opts.reconnection = false;
 
-          // Attempt token refresh after a delay using the unified auth-fetch mechanism
-          // CRITICAL: Use refreshAuthSession() to share deduplication with other refresh paths
+          // Try getting a fresh socket token first — the session cookie may still be valid,
+          // and only the short-lived socket token (5 min) expired. Calling refreshAuthSession()
+          // directly would trigger a device token refresh which fails for web users without
+          // a device token, causing an unnecessary forced logout.
           setTimeout(async () => {
             try {
+              // Guard: if the store socket changed (e.g., disconnect() + connect() called),
+              // this timer is stale — bail to avoid reconnecting an orphaned instance.
+              if (get().socket !== newSocket) return;
+
+              // Re-check desktop status
+              const isDesktopNow = typeof window !== 'undefined' &&
+                                   window.electron &&
+                                   typeof window.electron.auth?.getSessionToken === 'function';
+
+              if (!isDesktopNow) {
+                // Web: Try getting a fresh socket token first (session cookie may still be valid)
+                const freshToken = await getSocketToken();
+                if (freshToken) {
+                  if (get().socket !== newSocket) return; // stale after async
+                  console.log('🔄 Got fresh socket token, reconnecting socket...');
+                  newSocket.auth = { token: freshToken };
+                  newSocket.io.opts.reconnection = true;
+                  newSocket.io.opts.reconnectionAttempts = 15;
+                  newSocket.connect();
+                  return;
+                }
+                // Socket token fetch failed — session cookie likely expired, fall through to full refresh
+                console.log('🔄 Socket token fetch failed, attempting full session refresh...');
+              }
+
+              // Full session refresh (desktop always uses this; web falls back to it)
               const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
               const result = await refreshAuthSession();
 
               if (result.success) {
+                if (get().socket !== newSocket) return; // stale after async
                 console.log('🔄 Token refreshed via unified auth, reconnecting socket...');
 
                 // Clear session cache to ensure fresh token retrieval
                 clearSessionCache();
-
-                // Re-check desktop status
-                const isDesktopNow = typeof window !== 'undefined' &&
-                                     window.electron &&
-                                     typeof window.electron.auth?.getSessionToken === 'function';
 
                 // Re-fetch the new token from storage or socket-token endpoint
                 let newToken: string | undefined;

@@ -129,6 +129,8 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
   getClientIP: vi.fn().mockReturnValue('unknown'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_device_token'),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
@@ -148,7 +150,7 @@ import {
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -266,7 +268,7 @@ describe('POST /api/auth/login', () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(mockUser.id, 'new_login');
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(mockUser.id, undefined, 'new_login', 'password');
     });
 
     it('resets rate limits on successful login', async () => {
@@ -909,17 +911,15 @@ describe('POST /api/auth/login', () => {
       expect(body.error).toBe('Failed to create session.');
     });
 
-    it('logs revoked sessions count when sessions exist', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValueOnce(3);
-
-      const request = createLoginRequest(validLoginPayload);
+    it('calls revokeSessionsForLogin with deviceId when provided', async () => {
+      const request = createLoginRequest({
+        ...validLoginPayload,
+        deviceId: 'device-abc',
+        deviceName: 'Chrome',
+      });
       await POST(request);
 
-      const { loggers } = await import('@pagespace/lib/server');
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on login',
-        { userId: mockUser.id, count: 3 }
-      );
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(mockUser.id, 'device-abc', 'new_login', 'password');
     });
 
     it('logs warning when rate limit reset fails', async () => {
@@ -979,6 +979,75 @@ describe('POST /api/auth/login', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe('device token creation', () => {
+    it('returns deviceToken when deviceId is provided', async () => {
+      const request = createLoginRequest({
+        ...validLoginPayload,
+        deviceId: 'device-abc',
+        deviceName: 'Chrome',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBe('ps_dev_mock_device_token');
+    });
+
+    it('calls createWebDeviceToken with correct params', async () => {
+      const request = createLoginRequest({
+        ...validLoginPayload,
+        deviceId: 'device-abc',
+        deviceName: 'Chrome',
+        deviceToken: 'ps_dev_existing',
+      });
+      await POST(request);
+
+      expect(createWebDeviceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockUser.id,
+          deviceId: 'device-abc',
+          providedDeviceToken: 'ps_dev_existing',
+        }),
+      );
+    });
+
+    it('does not return deviceToken when deviceId is absent', async () => {
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBeUndefined();
+      expect(createWebDeviceToken).not.toHaveBeenCalled();
+    });
+
+    it('succeeds even when device token creation fails', async () => {
+      vi.mocked(createWebDeviceToken).mockRejectedValueOnce(new Error('DB error'));
+
+      const request = createLoginRequest({
+        ...validLoginPayload,
+        deviceId: 'device-abc',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBeUndefined();
+    });
+
+    it('passes deviceId to createSession', async () => {
+      const request = createLoginRequest({
+        ...validLoginPayload,
+        deviceId: 'device-abc',
+      });
+      await POST(request);
+
+      expect(sessionService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceId: 'device-abc' }),
+      );
     });
   });
 });

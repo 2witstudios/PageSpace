@@ -3,7 +3,7 @@
  * Provides a clean seam for testing SessionService without ORM chain mocks.
  */
 
-import { db, sessions, users, eq, and, isNull, gt, lt } from '@pagespace/db';
+import { db, sessions, users, eq, and, or, isNull, gt, lt } from '@pagespace/db';
 
 export interface SessionUserRecord {
   id: string;
@@ -78,6 +78,19 @@ export const sessionRepository = {
     const result = await db.update(sessions)
       .set({ revokedAt: new Date(), revokedReason: reason })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+    return result.rowCount ?? 0;
+  },
+
+  revokeForUserDevice: async (userId: string, deviceId: string, reason: string): Promise<number> => {
+    // Revoke sessions matching this device OR legacy sessions with no device_id (pre-migration).
+    // This ensures the first device-aware login after deploy cleans up old NULL sessions.
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(
+        eq(sessions.userId, userId),
+        or(eq(sessions.deviceId, deviceId), isNull(sessions.deviceId)),
+        isNull(sessions.revokedAt),
+      ));
     return result.rowCount ?? 0;
   },
 
