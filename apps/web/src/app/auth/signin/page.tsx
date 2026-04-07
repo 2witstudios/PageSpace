@@ -14,6 +14,7 @@ import {
   MagicLinkForm,
   PasswordLoginForm,
   PasskeyLoginButton,
+  ExternalAuthWaiting,
 } from "@/components/auth";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
@@ -23,8 +24,15 @@ function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
-  const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
-    useOAuthSignIn();
+  const {
+    handleGoogleSignIn,
+    handleAppleSignIn,
+    isGoogleLoading,
+    isAppleLoading,
+    isWaitingForExternalAuth,
+    waitingProvider,
+    cancelExternalAuth,
+  } = useOAuthSignIn();
   const onPrem = isOnPrem();
 
   useEffect(() => {
@@ -125,13 +133,17 @@ function SignInForm() {
       </motion.div>
 
       {/* OAuth buttons */}
-      <OAuthButtons
-        onGoogleClick={handleGoogleSignIn}
-        onAppleClick={handleAppleSignIn}
-        disabled={isGoogleLoading || isAppleLoading}
-        isGoogleLoading={isGoogleLoading}
-        isAppleLoading={isAppleLoading}
-      />
+      {isWaitingForExternalAuth ? (
+        <ExternalAuthWaiting provider={waitingProvider} onCancel={cancelExternalAuth} />
+      ) : (
+        <OAuthButtons
+          onGoogleClick={handleGoogleSignIn}
+          onAppleClick={handleAppleSignIn}
+          disabled={isGoogleLoading || isAppleLoading}
+          isGoogleLoading={isGoogleLoading}
+          isAppleLoading={isAppleLoading}
+        />
+      )}
 
       <AuthDivider delay={0.3} />
 

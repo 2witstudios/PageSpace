@@ -11,6 +11,7 @@ import {
   OAuthButtons,
   GoogleOneTap,
   PasskeySignupButton,
+  ExternalAuthWaiting,
 } from "@/components/auth";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
@@ -38,8 +39,15 @@ function CloudSignUp() {
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
-  const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
-    useOAuthSignIn({
+  const {
+    handleGoogleSignIn,
+    handleAppleSignIn,
+    isGoogleLoading,
+    isAppleLoading,
+    isWaitingForExternalAuth,
+    waitingProvider,
+    cancelExternalAuth,
+  } = useOAuthSignIn({
       onStart: () => setError(null),
       onError: (msg) => setError(msg),
     });
@@ -76,13 +84,17 @@ function CloudSignUp() {
       )}
 
       {/* OAuth buttons */}
-      <OAuthButtons
-        onGoogleClick={handleGoogleSignIn}
-        onAppleClick={handleAppleSignIn}
-        disabled={isAnyLoading}
-        isGoogleLoading={isGoogleLoading}
-        isAppleLoading={isAppleLoading}
-      />
+      {isWaitingForExternalAuth ? (
+        <ExternalAuthWaiting provider={waitingProvider} onCancel={cancelExternalAuth} />
+      ) : (
+        <OAuthButtons
+          onGoogleClick={handleGoogleSignIn}
+          onAppleClick={handleAppleSignIn}
+          disabled={isAnyLoading}
+          isGoogleLoading={isGoogleLoading}
+          isAppleLoading={isAppleLoading}
+        />
+      )}
 
       <AuthDivider delay={0.3} />
 

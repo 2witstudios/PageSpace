@@ -1,8 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { isDesktopPlatform } from '@/lib/desktop-auth';
+
+const EXTERNAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+type OAuthProvider = 'google' | 'apple';
 
 interface UseOAuthSignInOptions {
   onStart?: () => void;
@@ -12,12 +17,34 @@ interface UseOAuthSignInOptions {
 export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
+  const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
   const router = useRouter();
 
   const reportError = (message: string) => {
     toast.error(message);
     onError?.(message);
   };
+
+  const cancelExternalAuth = useCallback(() => {
+    setWaitingProvider(null);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (cleanupRef.current) cleanupRef.current();
+    };
+  }, []);
 
   const handleNativeSuccess = async (result: {
     isNewUser?: boolean;
@@ -32,9 +59,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
   };
 
   const getDeviceInfo = async () => {
-    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-    if (isDesktop && window.electron) {
+    if (isDesktopPlatform() && window.electron) {
       const info = await window.electron.auth.getDeviceInfo();
       return { platform: 'desktop' as const, deviceId: info.deviceId, deviceName: info.deviceName };
     }
@@ -43,7 +68,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
     return { platform: 'web' as const, deviceId: getOrCreateDeviceId(), deviceName: getDeviceName() };
   };
 
-  const initiateWebOAuth = async (endpoint: string, providerName: string) => {
+  const initiateWebOAuth = async (endpoint: string, provider: OAuthProvider) => {
     const { platform, deviceId, deviceName } = await getDeviceInfo();
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -53,10 +78,38 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
 
     if (response.ok) {
       const data = await response.json();
+
+      if (isDesktopPlatform() && window.electron?.auth?.openExternal) {
+        // Clean up any prior waiting state before starting new attempt
+        cancelExternalAuth();
+
+        const result = await window.electron.auth.openExternal(data.url);
+        if (!result.success) {
+          reportError(result.error || 'Failed to open browser for sign-in');
+          return;
+        }
+
+        setWaitingProvider(provider);
+
+        timeoutRef.current = setTimeout(() => {
+          cancelExternalAuth();
+          toast.error('Sign-in timed out. Please try again.');
+        }, EXTERNAL_AUTH_TIMEOUT_MS);
+
+        const removeListener = window.electron.on('auth-error', (...args: unknown[]) => {
+          const errorData = args[0] as { error?: string } | undefined;
+          cancelExternalAuth();
+          reportError(errorData?.error || 'Authentication failed');
+        });
+        cleanupRef.current = removeListener;
+
+        return;
+      }
+
       window.location.href = data.url;
     } else {
       const errorData = await response.json();
-      reportError(errorData.error || `${providerName} sign-in failed. Please try again.`);
+      reportError(errorData.error || `${provider} sign-in failed. Please try again.`);
     }
   };
 
@@ -79,7 +132,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
         return;
       }
 
-      await initiateWebOAuth('/api/auth/google/signin', 'Google');
+      await initiateWebOAuth('/api/auth/google/signin', 'google');
     } catch (error) {
       console.error('Google sign-in error:', error);
       reportError('Network error. Please check your connection and try again.');
@@ -107,7 +160,7 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
         return;
       }
 
-      await initiateWebOAuth('/api/auth/apple/signin', 'Apple');
+      await initiateWebOAuth('/api/auth/apple/signin', 'apple');
     } catch (error) {
       console.error('Apple sign-in error:', error);
       reportError('Network error. Please check your connection and try again.');
@@ -116,5 +169,13 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
     }
   };
 
-  return { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading };
+  return {
+    handleGoogleSignIn,
+    handleAppleSignIn,
+    isGoogleLoading,
+    isAppleLoading,
+    isWaitingForExternalAuth: waitingProvider !== null,
+    waitingProvider,
+    cancelExternalAuth,
+  };
 }

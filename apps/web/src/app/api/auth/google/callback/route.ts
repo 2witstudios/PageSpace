@@ -38,10 +38,27 @@ export async function GET(req: Request) {
 
     if (error) {
       loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
-      let errorParam = 'oauth_error';
-      if (error === 'access_denied') {
-        errorParam = 'access_denied';
+      const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
+
+      // Check if this was a desktop request by parsing the state param
+      let isDesktopRequest = false;
+      if (state) {
+        try {
+          const stateWithSignature = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+          if (stateWithSignature.data?.platform === 'desktop') {
+            isDesktopRequest = true;
+          }
+        } catch {
+          // Invalid state — fall through to web error redirect
+        }
       }
+
+      if (isDesktopRequest) {
+        const deepLinkUrl = new URL('pagespace://auth-error');
+        deepLinkUrl.searchParams.set('error', errorParam);
+        return NextResponse.redirect(deepLinkUrl.toString());
+      }
+
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
     }

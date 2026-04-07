@@ -18,13 +18,14 @@ import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { securityAudit, maskEmail } from '@pagespace/lib/audit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1, 'Password is required'),
+  platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().max(128).optional(),
   deviceName: z.string().optional(),
   deviceToken: z.string().optional(),
@@ -87,7 +88,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { email, password, deviceId, deviceName, deviceToken } = validation.data;
+    const { email, password, platform, deviceId, deviceName, deviceToken } = validation.data;
 
     // Distributed rate limiting
     const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
@@ -234,10 +235,11 @@ export async function POST(req: Request) {
     let deviceTokenValue: string | undefined;
     if (deviceId) {
       try {
-        deviceTokenValue = await createWebDeviceToken({
+        deviceTokenValue = await createDeviceToken({
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          platform: platform || 'web',
           providedDeviceToken: deviceToken,
-          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
           userAgent: req.headers.get('user-agent') || undefined,
           ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
         });
@@ -264,6 +266,7 @@ export async function POST(req: Request) {
       id: user.id,
       name: user.name,
       email: user.email,
+      sessionToken,
       csrfToken,
       ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       ...(redirectTo && { redirectTo }),

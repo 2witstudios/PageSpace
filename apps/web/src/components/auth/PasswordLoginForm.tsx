@@ -7,10 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
+import { getDevicePlatformFields, handleDesktopAuthResponse, type DesktopAuthTokens } from '@/lib/desktop-auth';
 
 interface LoginApiResponse {
   error?: string;
   redirectTo?: string;
+  redirectUrl?: string;
+  desktopTokens?: DesktopAuthTokens;
 }
 
 export function PasswordLoginForm() {
@@ -26,6 +29,8 @@ export function PasswordLoginForm() {
     setIsSubmitting(true);
 
     try {
+      const platformFields = await getDevicePlatformFields();
+
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
@@ -33,7 +38,7 @@ export function PasswordLoginForm() {
           ...(csrfToken ? { 'x-login-csrf-token': csrfToken } : {}),
         },
         credentials: 'include',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, ...platformFields }),
       });
 
       const data: LoginApiResponse = await res.json();
@@ -48,6 +53,8 @@ export function PasswordLoginForm() {
         }
         return;
       }
+
+      if (await handleDesktopAuthResponse(data)) return;
 
       // Redirect on success (validate to prevent open redirect)
       const redirectTo = data.redirectTo || '/dashboard';

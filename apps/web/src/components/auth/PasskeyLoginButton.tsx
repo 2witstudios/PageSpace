@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
@@ -41,6 +42,8 @@ export function PasskeyLoginButton({
     try {
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
+      const platformFields = await getDevicePlatformFields();
 
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
@@ -81,6 +84,7 @@ export function PasskeyLoginButton({
           response: authResponse,
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
+          ...platformFields,
         }),
       });
 
@@ -98,17 +102,19 @@ export function PasskeyLoginButton({
         return;
       }
 
-      const { redirectUrl } = await verifyRes.json();
+      const verifyData = await verifyRes.json();
 
       persistCsrfToken();
       useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Signed in successfully');
 
+      if (await handleDesktopAuthResponse(verifyData)) return;
+
       if (onSuccess) {
-        onSuccess(redirectUrl);
+        onSuccess(verifyData.redirectUrl);
       } else {
-        window.location.href = redirectUrl;
+        window.location.href = verifyData.redirectUrl;
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -185,15 +191,14 @@ export function useConditionalPasskeyUI(
     if (!isAvailable || !csrfToken) return;
 
     try {
-      // Get authentication options for conditional UI
+      const platformFields = await getDevicePlatformFields();
+
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          csrfToken,
-        }),
+        body: JSON.stringify({ csrfToken }),
       });
 
       if (!optionsRes.ok) return;
@@ -202,13 +207,11 @@ export function useConditionalPasskeyUI(
 
       setIsAuthenticating(true);
 
-      // Start conditional UI authentication
       const authResponse = await startAuthentication({
         optionsJSON: options,
         useBrowserAutofill: true,
       });
 
-      // Verify authentication
       const verifyRes = await fetch('/api/auth/passkey/authenticate', {
         method: 'POST',
         headers: {
@@ -218,6 +221,7 @@ export function useConditionalPasskeyUI(
           response: authResponse,
           expectedChallenge: options.challenge,
           csrfToken,
+          ...platformFields,
         }),
       });
 
@@ -227,17 +231,19 @@ export function useConditionalPasskeyUI(
         return;
       }
 
-      const { redirectUrl } = await verifyRes.json();
+      const verifyData = await verifyRes.json();
 
       persistCsrfToken();
       useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Signed in successfully');
 
+      if (await handleDesktopAuthResponse(verifyData)) return;
+
       if (onSuccess) {
-        onSuccess(redirectUrl);
+        onSuccess(verifyData.redirectUrl);
       } else {
-        window.location.href = redirectUrl;
+        window.location.href = verifyData.redirectUrl;
       }
     } catch (err) {
       // Conditional UI was cancelled or failed - this is expected behavior

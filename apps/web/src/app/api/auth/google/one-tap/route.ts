@@ -1,7 +1,6 @@
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
-import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -218,49 +217,6 @@ export async function POST(req: Request) {
 
     const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
-    // DESKTOP PLATFORM: Return device token in response body
-    // Desktop uses device tokens, not web sessions
-    if (platform === 'desktop') {
-      if (!deviceId) {
-        loggers.auth.error('Desktop One Tap missing deviceId', {
-          userId: user.id,
-          email: user.email,
-        });
-        return NextResponse.json(
-          { error: 'Device ID required for desktop sign-in' },
-          { status: 400 }
-        );
-      }
-
-      // Generate device token for desktop
-      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
-        providedDeviceToken: undefined,
-        userId: user.id,
-        deviceId: deviceId,
-        platform: 'desktop',
-        tokenVersion: user.tokenVersion,
-        deviceName: deviceName || req.headers.get('user-agent') || 'Desktop App',
-        userAgent: req.headers.get('user-agent') || undefined,
-        ipAddress: clientIP,
-      });
-
-      return NextResponse.json({
-        success: true,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          emailVerified: user.emailVerified,
-        },
-        tokens: {
-          deviceToken: deviceTokenValue,
-        },
-        redirectTo,
-        isNewUser,
-      });
-    }
-
-    // WEB PLATFORM: Use session-based authentication
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
@@ -285,9 +241,10 @@ export async function POST(req: Request) {
     let deviceTokenValue: string | undefined;
     if (deviceId) {
       try {
-        deviceTokenValue = await createWebDeviceToken({
+        deviceTokenValue = await createDeviceToken({
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
-          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          platform: platform || 'web',
+          deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
           userAgent: req.headers.get('user-agent') || undefined,
           ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
         });
@@ -310,6 +267,7 @@ export async function POST(req: Request) {
           email: user.email,
           emailVerified: user.emailVerified,
         },
+        sessionToken,
         csrfToken,
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
