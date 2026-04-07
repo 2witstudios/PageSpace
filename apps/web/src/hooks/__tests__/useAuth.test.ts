@@ -175,6 +175,10 @@ describe('useAuth', () => {
     vi.clearAllMocks();
     mockLocalStorage.clear();
 
+    // Seed deviceToken to prevent lazy device registration from firing
+    // (tests that need to verify registration behavior should clear this)
+    mockLocalStorage.setItem('deviceToken', 'ps_dev_existing_token');
+
     // Reset mock auth store state
     mockAuthStore.user = null;
     mockAuthStore.isLoading = false;
@@ -304,6 +308,8 @@ describe('useAuth', () => {
 
     it('should include device information in login request body', async () => {
       // Mock both CSRF fetch (first call) and login fetch (second call)
+      // Login now returns a deviceToken which gets stored in localStorage,
+      // preventing the lazy device registration effect from firing an extra fetch
       vi.mocked(global.fetch)
         .mockResolvedValueOnce({
           ok: true,
@@ -311,7 +317,7 @@ describe('useAuth', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: () => Promise.resolve({ id: 'user-123' }),
+          json: () => Promise.resolve({ id: 'user-123', deviceToken: 'ps_dev_test123' }),
         } as Response);
 
       const { result } = renderHook(() => useAuth());
