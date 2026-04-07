@@ -266,8 +266,8 @@ export async function POST(req: Request) {
       id: user.id,
       name: user.name,
       email: user.email,
-      sessionToken,
       csrfToken,
+      ...(platform === 'desktop' && { sessionToken }),
       ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       ...(redirectTo && { redirectTo }),
     }, { status: 200, headers });

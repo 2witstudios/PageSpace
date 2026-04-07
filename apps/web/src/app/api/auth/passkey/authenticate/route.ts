@@ -192,8 +192,8 @@ export async function POST(req: Request) {
         success: true,
         userId,
         redirectUrl: '/dashboard',
-        sessionToken,
         csrfToken: newCsrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }

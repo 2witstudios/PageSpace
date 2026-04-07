@@ -11,9 +11,9 @@ import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -40,24 +40,7 @@ export async function GET(req: Request) {
       loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
       const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
 
-      // Check if this was a desktop request — verify HMAC signature first
-      let isDesktopRequest = false;
-      if (state && process.env.OAUTH_STATE_SECRET) {
-        try {
-          const stateWithSignature = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-          if (stateWithSignature.data && stateWithSignature.sig) {
-            const expectedSig = crypto
-              .createHmac('sha256', process.env.OAUTH_STATE_SECRET)
-              .update(JSON.stringify(stateWithSignature.data))
-              .digest('hex');
-            if (stateWithSignature.sig === expectedSig && stateWithSignature.data.platform === 'desktop') {
-              isDesktopRequest = true;
-            }
-          }
-        } catch {
-          // Invalid state — fall through to web error redirect
-        }
-      }
+      const isDesktopRequest = isDesktopOAuthState(state);
 
       if (isDesktopRequest) {
         const deepLinkUrl = new URL('pagespace://auth-error');
@@ -84,33 +67,20 @@ export async function GET(req: Request) {
     let deviceName: string | undefined;
 
     if (stateParam) {
-      try {
-        const stateWithSignature = JSON.parse(
-          Buffer.from(stateParam, 'base64').toString('utf-8')
-        );
-
-        if (stateWithSignature.data && stateWithSignature.sig) {
-          const { data, sig } = stateWithSignature;
-          const expectedSignature = crypto
-            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-            .update(JSON.stringify(data))
-            .digest('hex');
-
-          if (sig !== expectedSignature) {
-            loggers.auth.warn('OAuth state signature mismatch', { stateParam });
-            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-          }
-
-          returnUrl = data.returnUrl || '/dashboard';
-          platform = data.platform || 'web';
-          deviceId = data.deviceId;
-          deviceName = data.deviceName;
-        } else {
-          returnUrl = stateWithSignature.returnUrl || '/dashboard';
+      const verifiedData = verifyOAuthState(stateParam);
+      if (verifiedData) {
+        returnUrl = verifiedData.returnUrl || '/dashboard';
+        platform = verifiedData.platform || 'web';
+        deviceId = verifiedData.deviceId;
+        deviceName = verifiedData.deviceName;
+      } else {
+        // Unsigned state or invalid signature — treat as simple returnUrl
+        try {
+          const parsed = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
+          returnUrl = parsed.returnUrl || '/dashboard';
+        } catch {
+          returnUrl = stateParam;
         }
-      } catch {
-        returnUrl = stateParam;
       }
     }
 

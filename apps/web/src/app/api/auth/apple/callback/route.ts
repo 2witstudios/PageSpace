@@ -10,9 +10,9 @@ import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/l
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
@@ -45,24 +45,7 @@ export async function POST(req: Request) {
       loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
       const errorParam = error === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
 
-      // Check if this was a desktop request — verify HMAC signature first
-      let isDesktopRequest = false;
-      if (state && process.env.OAUTH_STATE_SECRET) {
-        try {
-          const stateWithSignature = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-          if (stateWithSignature.data && stateWithSignature.sig) {
-            const expectedSig = crypto
-              .createHmac('sha256', process.env.OAUTH_STATE_SECRET)
-              .update(JSON.stringify(stateWithSignature.data))
-              .digest('hex');
-            if (stateWithSignature.sig === expectedSig && stateWithSignature.data.platform === 'desktop') {
-              isDesktopRequest = true;
-            }
-          }
-        } catch {
-          // Invalid state — fall through to web error redirect
-        }
-      }
+      const isDesktopRequest = isDesktopOAuthState(state);
 
       if (isDesktopRequest) {
         const deepLinkUrl = new URL('pagespace://auth-error');
@@ -88,40 +71,15 @@ export async function POST(req: Request) {
     let deviceName: string | undefined;
 
     if (state) {
-      try {
-        const stateWithSignature = JSON.parse(
-          Buffer.from(state, 'base64').toString('utf-8')
-        );
-
-        if (stateWithSignature.data && stateWithSignature.sig) {
-          const { data, sig } = stateWithSignature;
-          const expectedSignature = crypto
-            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-            .update(JSON.stringify(data))
-            .digest('hex');
-
-          if (sig !== expectedSignature) {
-            loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
-            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-          }
-
-          returnUrl = data.returnUrl || '/dashboard';
-          platform = data.platform || 'web';
-          deviceId = data.deviceId;
-          deviceName = data.deviceName;
-        } else {
-          // SECURITY: State without signature is invalid - reject and use safe defaults
-          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
-            hasData: !!stateWithSignature.data,
-            hasSig: !!stateWithSignature.sig,
-          });
-          returnUrl = '/dashboard';
-          platform = 'web';
-        }
-      } catch {
-        // SECURITY: Malformed state is invalid - reject and use safe defaults
-        loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
+      const verifiedData = verifyOAuthState(state);
+      if (verifiedData) {
+        returnUrl = verifiedData.returnUrl || '/dashboard';
+        platform = verifiedData.platform || 'web';
+        deviceId = verifiedData.deviceId;
+        deviceName = verifiedData.deviceName;
+      } else {
+        // Unsigned or invalid state — use safe defaults
+        loggers.auth.warn('Apple OAuth state invalid or unsigned - using safe defaults', {
           stateLength: state?.length,
         });
         returnUrl = '/dashboard';

@@ -171,7 +171,7 @@ describe('POST /api/auth/login - desktop platform (unified path)', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.sessionToken).toBe('ps_sess_mock');
+    expect(body.sessionToken).toBeUndefined();
     expect(body.csrfToken).toBe('mock-csrf');
     expect(body.deviceToken).toBeUndefined();
     expect(createDeviceToken).not.toHaveBeenCalled();

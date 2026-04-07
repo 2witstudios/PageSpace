@@ -50,5 +50,5 @@ export async function createDeviceToken(params: {
   return result.deviceToken;
 }
 
-/** @deprecated Use createDeviceToken instead. */
+/** @deprecated Use createDeviceToken instead. Remove after migrating: device/register, signup, google/callback, apple/callback. */
 export const createWebDeviceToken = createDeviceToken;
