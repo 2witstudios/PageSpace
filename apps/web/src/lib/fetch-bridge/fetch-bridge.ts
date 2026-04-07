@@ -90,11 +90,11 @@ export class FetchBridge {
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
           const activityTimeout = setTimeout(() => {
-            this.cleanupRequest(requestId, new Error('Fetch activity timeout: no data received for 120s'));
+            this.cleanupRequest(requestId, new Error(`Fetch activity timeout: no data received for ${ACTIVITY_TIMEOUT_MS / 1000}s`));
           }, ACTIVITY_TIMEOUT_MS);
 
           const overallTimeout = setTimeout(() => {
-            this.cleanupRequest(requestId, new Error('Fetch overall timeout after 120s'));
+            this.cleanupRequest(requestId, new Error(`Fetch overall timeout after ${OVERALL_TIMEOUT_MS / 1000}s`));
           }, OVERALL_TIMEOUT_MS);
 
           this.pendingRequests.set(requestId, {
@@ -195,7 +195,7 @@ export class FetchBridge {
     // Reset activity timeout
     clearTimeout(pending.activityTimeout);
     pending.activityTimeout = setTimeout(() => {
-      this.cleanupRequest(msg.id, new Error('Fetch activity timeout: no data received for 120s'));
+      this.cleanupRequest(msg.id, new Error(`Fetch activity timeout: no data received for ${ACTIVITY_TIMEOUT_MS / 1000}s`));
     }, ACTIVITY_TIMEOUT_MS);
 
     // Decode base64 chunk and enqueue (inside try to catch malformed base64)
