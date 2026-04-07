@@ -194,16 +194,26 @@ describe('Socket.IO Integration', () => {
       // Mock refreshAuthSession to return success
       mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
 
-      // Mock fetch to return different tokens for different calls to socket-token endpoint
+      // Mock fetch: first call succeeds (initial connect), second fails (trigger fallback),
+      // third succeeds (post-refresh token fetch)
       let socketTokenCallCount = 0;
       global.fetch = vi.fn().mockImplementation((url: string) => {
         if (url === '/api/auth/socket-token') {
           socketTokenCallCount++;
-          // First call returns initial token, subsequent calls return new token
-          const token = socketTokenCallCount === 1 ? 'ps_sock_initial-token' : newToken;
+          if (socketTokenCallCount === 1) {
+            return Promise.resolve({
+              ok: true,
+              json: () => Promise.resolve({ token: 'ps_sock_initial-token', expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            });
+          }
+          if (socketTokenCallCount === 2) {
+            // Second call fails — triggers fallback to refreshAuthSession
+            return Promise.resolve({ ok: false, status: 401 });
+          }
+          // After refresh, return new token
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            json: () => Promise.resolve({ token: newToken, expiresAt: new Date(Date.now() + 300000).toISOString() }),
           });
         }
         return Promise.resolve({ ok: true });

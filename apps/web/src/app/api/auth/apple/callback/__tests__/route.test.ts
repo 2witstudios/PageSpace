@@ -89,10 +89,13 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
   isSafeReturnUrl: vi.fn().mockReturnValue(true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -702,7 +705,7 @@ describe('POST /api/auth/apple/callback', () => {
 
   describe('session management', () => {
     it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(3);
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -712,11 +715,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on Apple OAuth login',
-        expect.objectContaining({ count: 3 })
-      );
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('new-user-id', undefined, 'new_login', 'Apple OAuth');
     });
 
     it('redirects with oauth_error when session validation fails', async () => {

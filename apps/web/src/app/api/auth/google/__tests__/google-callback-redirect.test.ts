@@ -53,6 +53,7 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -61,6 +62,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -73,6 +75,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'mock-device-token',
+    deviceTokenRecordId: 'device-record-id',
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -100,8 +106,14 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
   // Use actual implementation for isSafeReturnUrl so redirect tests are valid
   isSafeReturnUrl: (url: string | undefined): boolean => {
     if (!url) return true;
@@ -235,6 +247,8 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
+
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard',
@@ -247,9 +261,11 @@ describe('GET /api/auth/google/callback', () => {
 
       await GET(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockExistingUser.id,
-        'new_login'
+        undefined,
+        'new_login',
+        'Google OAuth'
       );
     });
 

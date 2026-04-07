@@ -108,6 +108,8 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -387,18 +389,16 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockNewUser.id,
-        'new_login'
-      );
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on Google One Tap login',
-        expect.objectContaining({ count: 2 })
+        undefined,
+        'new_login',
+        'Google One Tap'
       );
     });
 

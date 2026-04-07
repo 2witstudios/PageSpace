@@ -54,6 +54,16 @@ vi.mock('@pagespace/lib/security', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+}));
+
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+    }),
+  },
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -143,7 +153,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
       await POST(createRequest());
 
-      expect(loggers.auth.info).toHaveBeenCalledWith('Revoked existing sessions on passkey login', expect.objectContaining({
+      expect(loggers.auth.info).toHaveBeenCalledWith('Revoked all sessions on passkey login', expect.objectContaining({
         userId: 'user-1',
         count: 3,
       }));
@@ -155,7 +165,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
       await POST(createRequest());
 
       expect(loggers.auth.info).not.toHaveBeenCalledWith(
-        'Revoked existing sessions on passkey login',
+        'Revoked all sessions on passkey login',
         expect.objectContaining({ userId: 'user-1' }),
       );
     });
