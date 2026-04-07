@@ -24,6 +24,7 @@ export interface CreateSessionOptions {
   type: 'user' | 'service' | 'mcp' | 'device';
   scopes: string[];
   expiresInMs: number;
+  deviceId?: string;
   resourceType?: string;
   resourceId?: string;
   driveId?: string;
@@ -53,6 +54,7 @@ export class SessionService {
       tokenHash,
       tokenPrefix,
       userId: options.userId,
+      deviceId: options.deviceId,
       type: options.type,
       scopes: options.scopes,
       resourceType: options.resourceType,
@@ -133,6 +135,15 @@ export class SessionService {
 
   async revokeAllUserSessions(userId: string, reason: string): Promise<number> {
     return sessionRepository.revokeAllForUser(userId, reason);
+  }
+
+  /**
+   * Revoke sessions for a specific device only, enabling multi-device login.
+   * Used by login endpoints when deviceId is available. Falls back to
+   * revokeAllUserSessions when deviceId is absent (backward compat).
+   */
+  async revokeDeviceSessions(userId: string, deviceId: string, reason: string): Promise<number> {
+    return sessionRepository.revokeForUserDevice(userId, deviceId, reason);
   }
 
   async cleanupExpiredSessions(): Promise<number> {

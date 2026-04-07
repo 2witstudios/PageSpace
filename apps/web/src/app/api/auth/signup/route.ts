@@ -20,7 +20,7 @@ import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEm
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createWebDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const signupSchema = z.object({
@@ -35,6 +35,8 @@ const signupSchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service and Privacy Policy',
   }),
+  deviceId: z.string().max(128).optional(),
+  deviceName: z.string().optional(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: 'Passwords do not match',
   path: ['confirmPassword'],
@@ -111,7 +113,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { name, email: validatedEmail, password } = validation.data;
+    const { name, email: validatedEmail, password, deviceId, deviceName } = validation.data;
     email = validatedEmail;
 
     // Distributed rate limiting
@@ -249,6 +251,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -257,6 +260,22 @@ export async function POST(req: Request) {
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId: user.id });
       return Response.json({ error: 'Failed to create session.' }, { status: 500 });
+    }
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createWebDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion ?? 0,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Redirect to dashboard
@@ -268,6 +287,9 @@ export async function POST(req: Request) {
       : '/dashboard';
     const redirectUrl = new URL(dashboardPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
+    if (deviceTokenValue) {
+      redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
+    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);

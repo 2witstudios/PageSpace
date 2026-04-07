@@ -115,10 +115,33 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           // Pause automatic reconnection during token refresh attempt
           newSocket.io.opts.reconnection = false;
 
-          // Attempt token refresh after a delay using the unified auth-fetch mechanism
-          // CRITICAL: Use refreshAuthSession() to share deduplication with other refresh paths
+          // Try getting a fresh socket token first — the session cookie may still be valid,
+          // and only the short-lived socket token (5 min) expired. Calling refreshAuthSession()
+          // directly would trigger a device token refresh which fails for web users without
+          // a device token, causing an unnecessary forced logout.
           setTimeout(async () => {
             try {
+              // Re-check desktop status
+              const isDesktopNow = typeof window !== 'undefined' &&
+                                   window.electron &&
+                                   typeof window.electron.auth?.getSessionToken === 'function';
+
+              if (!isDesktopNow) {
+                // Web: Try getting a fresh socket token first (session cookie may still be valid)
+                const freshToken = await getSocketToken();
+                if (freshToken) {
+                  console.log('🔄 Got fresh socket token, reconnecting socket...');
+                  newSocket.auth = { token: freshToken };
+                  newSocket.io.opts.reconnection = true;
+                  newSocket.io.opts.reconnectionAttempts = 15;
+                  newSocket.connect();
+                  return;
+                }
+                // Socket token fetch failed — session cookie likely expired, fall through to full refresh
+                console.log('🔄 Socket token fetch failed, attempting full session refresh...');
+              }
+
+              // Full session refresh (desktop always uses this; web falls back to it)
               const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
               const result = await refreshAuthSession();
 
@@ -127,11 +150,6 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
 
                 // Clear session cache to ensure fresh token retrieval
                 clearSessionCache();
-
-                // Re-check desktop status
-                const isDesktopNow = typeof window !== 'undefined' &&
-                                     window.electron &&
-                                     typeof window.electron.auth?.getSessionToken === 'function';
 
                 // Re-fetch the new token from storage or socket-token endpoint
                 let newToken: string | undefined;

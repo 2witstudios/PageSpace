@@ -81,6 +81,13 @@ export const sessionRepository = {
     return result.rowCount ?? 0;
   },
 
+  revokeForUserDevice: async (userId: string, deviceId: string, reason: string): Promise<number> => {
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(eq(sessions.userId, userId), eq(sessions.deviceId, deviceId), isNull(sessions.revokedAt)));
+    return result.rowCount ?? 0;
+  },
+
   deleteExpired: async (retentionMs: number): Promise<number> => {
     const result = await db.delete(sessions)
       .where(lt(sessions.expiresAt, new Date(Date.now() - retentionMs)));

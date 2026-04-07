@@ -12,6 +12,7 @@ export const sessions = pgTable('sessions', {
 
   // Identity
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  deviceId: text('device_id'),
 
   // Session metadata
   type: text('type', { enum: ['user', 'service', 'mcp', 'device'] }).notNull(),
@@ -40,6 +41,7 @@ export const sessions = pgTable('sessions', {
   userIdIdx: index('sessions_user_id_idx').on(table.userId),
   expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
   userActiveIdx: index('sessions_user_active_idx').on(table.userId, table.revokedAt, table.expiresAt),
+  userDeviceIdx: index('sessions_user_device_idx').on(table.userId, table.deviceId),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({

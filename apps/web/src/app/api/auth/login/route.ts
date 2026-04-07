@@ -18,13 +18,16 @@ import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { securityAudit, maskEmail } from '@pagespace/lib/audit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1, 'Password is required'),
+  deviceId: z.string().max(128).optional(),
+  deviceName: z.string().optional(),
+  deviceToken: z.string().optional(),
 });
 
 export async function POST(req: Request) {
@@ -84,7 +87,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { email, password } = validation.data;
+    const { email, password, deviceId, deviceName, deviceToken } = validation.data;
 
     // Distributed rate limiting
     const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
@@ -172,11 +175,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'password');
 
     // Create new opaque session token
     const sessionToken = await sessionService.createSession({
@@ -184,6 +183,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -231,6 +231,23 @@ export async function POST(req: Request) {
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
 
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createWebDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          providedDeviceToken: deviceToken,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     let redirectTo: string | undefined;
     try {
       const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
@@ -248,6 +265,7 @@ export async function POST(req: Request) {
       name: user.name,
       email: user.email,
       csrfToken,
+      ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       ...(redirectTo && { redirectTo }),
     }, { status: 200, headers });
 

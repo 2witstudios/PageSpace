@@ -13,13 +13,16 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   csrfToken: z.string().min(1),
+  deviceId: z.string().max(128).optional(),
+  deviceName: z.string().optional(),
 });
 
 /**
@@ -61,7 +64,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, csrfToken } = validation.data;
+    const { response, expectedChallenge, csrfToken, deviceId, deviceName } = validation.data;
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
@@ -107,14 +110,7 @@ export async function POST(req: Request) {
 
     const { userId } = result.data;
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'passkey_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on passkey login', {
-        userId,
-        count: revokedCount,
-      });
-    }
+    await revokeSessionsForLogin(userId, deviceId, 'passkey_login', 'passkey');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
@@ -122,6 +118,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -152,6 +149,25 @@ export async function POST(req: Request) {
       ip: clientIP,
     });
 
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        const user = await authRepository.findUserById(userId);
+        if (user) {
+          deviceTokenValue = await createWebDeviceToken({
+            userId, deviceId, tokenVersion: user.tokenVersion,
+            deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+            userAgent: req.headers.get('user-agent') || undefined,
+            ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // Build response headers with session cookie
     const headers = new Headers();
     headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -170,6 +186,7 @@ export async function POST(req: Request) {
         success: true,
         userId,
         redirectUrl: '/dashboard',
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
     );

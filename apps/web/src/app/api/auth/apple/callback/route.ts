@@ -7,6 +7,7 @@ import {
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
@@ -219,11 +220,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Apple OAuth login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple OAuth');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
@@ -231,6 +228,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -347,11 +345,29 @@ export async function POST(req: Request) {
       return NextResponse.redirect(deepLinkUrl.toString());
     }
 
-    // WEB PLATFORM: Redirect with session cookie
+    let webDeviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        webDeviceTokenValue = await createWebDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     redirectUrl.searchParams.set('csrfToken', csrfToken);
+    if (webDeviceTokenValue) {
+      redirectUrl.searchParams.set('deviceToken', webDeviceTokenValue);
+    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);

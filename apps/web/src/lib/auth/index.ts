@@ -576,6 +576,7 @@ export {
   type MiddlewareOriginValidationResult,
 } from './origin-validation';
 export { getClientIP, isSafeReturnUrl } from './auth-helpers';
+export { revokeSessionsForLogin, createWebDeviceToken } from './device-auth-helpers';
 export { validateLoginCSRFToken } from './login-csrf-utils';
 export {
   COOKIE_CONFIG,

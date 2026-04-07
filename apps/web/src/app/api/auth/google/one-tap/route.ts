@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -260,11 +261,7 @@ export async function POST(req: Request) {
     }
 
     // WEB PLATFORM: Use session-based authentication
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Google One Tap login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
@@ -272,6 +269,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -283,6 +281,22 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createWebDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
@@ -297,6 +311,7 @@ export async function POST(req: Request) {
           emailVerified: user.emailVerified,
         },
         csrfToken,
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
         isNewUser,
       },

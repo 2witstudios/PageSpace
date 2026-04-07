@@ -7,6 +7,9 @@ import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 
+// Module-level flag to prevent concurrent lazy device registration attempts
+let deviceRegistrationInFlight = false;
+
 interface User {
   id: string;
   name: string | null;
@@ -325,6 +328,53 @@ export function useAuth(): {
       window.history.replaceState({}, '', newUrl.toString());
     }
   }, []);
+
+  // Lazy device registration: if authenticated but no device token (e.g., magic link login),
+  // register the device to enable session recovery when the cookie expires.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+    if (!isAuthenticated || !hasHydrated) return;
+    if (window.electron?.isDesktop) return;
+    if (deviceRegistrationInFlight) return;
+
+    const existingToken = localStorage.getItem('deviceToken');
+    if (existingToken) return;
+
+    deviceRegistrationInFlight = true;
+
+    const registerDevice = async () => {
+      try {
+        // Skip for Capacitor apps — they handle device tokens via platform-specific mechanisms
+        const { isCapacitorApp } = await import('@/lib/capacitor-bridge');
+        if (isCapacitorApp()) return;
+
+        const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics/device-fingerprint');
+        const deviceId = getOrCreateDeviceId();
+        const deviceName = getDeviceName();
+
+        const response = await fetch('/api/auth/device/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ deviceId, deviceName }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.deviceToken) {
+            localStorage.setItem('deviceToken', data.deviceToken);
+            console.log('[AUTH_HOOK] Device registered via lazy registration');
+          }
+        }
+      } catch (error) {
+        console.warn('[AUTH_HOOK] Lazy device registration failed:', error);
+      } finally {
+        deviceRegistrationInFlight = false;
+      }
+    };
+
+    void registerDevice();
+  }, [isAuthenticated, hasHydrated]);
 
   // Initial auth check - simplified with store-level deduplication
   // Desktop OAuth now uses secure exchange codes handled in Electron main process
