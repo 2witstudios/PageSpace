@@ -348,7 +348,6 @@ export function useAuth(): {
         const { isCapacitorApp } = await import('@/lib/capacitor-bridge');
         if (isCapacitorApp()) return;
 
-        const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics/device-fingerprint');
         const deviceId = getOrCreateDeviceId();
         const deviceName = getDeviceName();
 
