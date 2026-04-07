@@ -399,12 +399,14 @@ export async function GET(req: Request) {
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     redirectUrl.searchParams.set('csrfToken', csrfToken);
-    if (webDeviceTokenValue) {
-      redirectUrl.searchParams.set('deviceToken', webDeviceTokenValue);
-    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
+    if (webDeviceTokenValue) {
+      const isProduction = process.env.NODE_ENV === 'production';
+      const secureFlag = isProduction ? '; Secure' : '';
+      headers.append('Set-Cookie', `ps_device_token=${webDeviceTokenValue}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
+    }
 
     return NextResponse.redirect(redirectUrl, { headers });
 

@@ -13,7 +13,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createWebDeviceToken } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
@@ -110,7 +110,11 @@ export async function POST(req: Request) {
 
     const { userId } = result.data;
 
-    await revokeSessionsForLogin(userId, deviceId, 'passkey_login', 'passkey');
+    // Passkey is the strongest auth flow — hard-reset all sessions across devices
+    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'passkey_login');
+    if (revokedCount > 0) {
+      loggers.auth.info('Revoked all sessions on passkey login', { userId, count: revokedCount });
+    }
 
     // Create new session
     const sessionToken = await sessionService.createSession({

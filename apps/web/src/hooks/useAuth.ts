@@ -312,20 +312,15 @@ export function useAuth(): {
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
 
-  // Capture device token from URL (signup redirect) and store in localStorage
+  // Capture device token from cookie (set by OAuth/signup redirect) and persist to localStorage
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const params = new URLSearchParams(window.location.search);
-    const deviceTokenParam = params.get('deviceToken');
-
-    if (deviceTokenParam) {
-      localStorage.setItem('deviceToken', deviceTokenParam);
-      // Clean up URL
-      params.delete('deviceToken');
-      const newUrl = new URL(window.location.href);
-      newUrl.search = params.toString();
-      window.history.replaceState({}, '', newUrl.toString());
+    const match = document.cookie.match(/(?:^|;\s*)ps_device_token=([^;]+)/);
+    if (match?.[1]) {
+      localStorage.setItem('deviceToken', match[1]);
+      // Clear the short-lived cookie
+      document.cookie = 'ps_device_token=; Path=/; Max-Age=0';
     }
   }, []);
 
@@ -351,19 +346,10 @@ export function useAuth(): {
         const deviceId = getOrCreateDeviceId();
         const deviceName = getDeviceName();
 
-        const response = await fetch('/api/auth/device/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ deviceId, deviceName }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.deviceToken) {
-            localStorage.setItem('deviceToken', data.deviceToken);
-            console.log('[AUTH_HOOK] Device registered via lazy registration');
-          }
+        const data = await post<{ deviceToken?: string }>('/api/auth/device/register', { deviceId, deviceName });
+        if (data?.deviceToken) {
+          localStorage.setItem('deviceToken', data.deviceToken);
+          console.log('[AUTH_HOOK] Device registered via lazy registration');
         }
       } catch (error) {
         console.warn('[AUTH_HOOK] Lazy device registration failed:', error);

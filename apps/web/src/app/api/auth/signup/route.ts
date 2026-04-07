@@ -287,12 +287,14 @@ export async function POST(req: Request) {
       : '/dashboard';
     const redirectUrl = new URL(dashboardPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
-    if (deviceTokenValue) {
-      redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
-    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
+    if (deviceTokenValue) {
+      const isProduction = process.env.NODE_ENV === 'production';
+      const secureFlag = isProduction ? '; Secure' : '';
+      headers.append('Set-Cookie', `ps_device_token=${deviceTokenValue}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
+    }
 
     return NextResponse.redirect(redirectUrl, {
       status: 303,
