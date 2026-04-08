@@ -129,6 +129,13 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | 100 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `state` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
 | 101 | js/user-controlled-bypass | high | integrations/callback/route.ts:57 | CWE-807 | Dismissed — `verifySignedState()` uses HMAC-SHA256 + timingSafeEqual | Cryptographic verification IS the security check | DISMISSED (S4) |
 
+### Round 4: Batch 5 triage — SSRF + HTTP-to-File (138-139)
+
+| Alert | Rule | Severity | File | CWE | Triage Rationale | Status |
+|-------|------|----------|------|-----|-----------------|--------|
+| 138 | js/http-to-file-access | medium | page-content-store.ts:161 | CWE-073 | Content-addressable storage: file path is SHA-256 hash validated by `/^[a-f0-9]{64}$/i` (path traversal impossible). All callers require authentication + `canUserEditPage()` authorization. Atomic `wx` flag write. CodeQL can't model hash derivation breaking taint chain | DISMISSED (false positive) |
+| 139 | js/request-forgery | critical | fetch-proxy-handler.ts:49 | CWE-918 | URL validated by `isAllowedFetchProxyURL()` before fetch — strict allowlist (localhost/private IPs, http/https only). Redirects blocked (lines 57-61). Not exposed to renderer; requires authenticated WebSocket. 102+ test cases cover validation. CodeQL can't model allowlist breaking taint chain | DISMISSED (false positive) |
+
 ---
 
 ### Files Modified (26 files)
