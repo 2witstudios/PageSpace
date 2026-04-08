@@ -184,10 +184,16 @@ const mockExistingUser = {
   emailVerified: new Date(),
 };
 
+const defaultSignedState = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+
 const createCallbackRequest = (
   params: Record<string, string> = {}
 ) => {
   const url = new URL('http://localhost/api/auth/google/callback');
+  // Include signed state by default for valid callbacks
+  if (!('state' in params) && ('code' in params)) {
+    url.searchParams.set('state', defaultSignedState);
+  }
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
@@ -311,8 +317,8 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'OAuth error',
-        expect.objectContaining({ error: longError.slice(0, 100) })
+        'OAuth callback rejected',
+        expect.objectContaining({ errorHint: longError.slice(0, 100) })
       );
     });
 
@@ -330,22 +336,23 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('validation of callback parameters', () => {
-    it('redirects with invalid_request when code is missing', async () => {
+    it('rejects when code is missing', async () => {
       const request = createCallbackRequest({});
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('redirects with invalid_request when code is empty string', async () => {
-      const request = createCallbackRequest({ code: '' });
+    it('rejects when code is empty string', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ code: '', state });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
   });
 
@@ -371,10 +378,10 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('falls back to stateWithSignature.returnUrl when no sig present', async () => {
+    it('rejects unsigned state', async () => {
       const unsignedState = Buffer.from(JSON.stringify({
         returnUrl: '/custom-url',
       })).toString('base64');
@@ -384,29 +391,28 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/custom-url');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('uses state as raw returnUrl when JSON parse fails', async () => {
-      // When state is not valid base64-JSON, catch block uses stateParam as returnUrl
-      // But isSafeReturnUrl will reject it, falling back to /dashboard
-      vi.mocked(isSafeReturnUrl).mockReturnValue(false);
-
+    it('rejects malformed state', async () => {
       const request = createCallbackRequest({ code: 'valid-code', state: 'not-json' });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/dashboard');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('uses /dashboard when state is not provided', async () => {
-      const request = createCallbackRequest({ code: 'valid-code' });
+    it('rejects when state is not provided', async () => {
+      // Explicitly pass empty state to prevent default signed state
+      const url = new URL('http://localhost/api/auth/google/callback');
+      url.searchParams.set('code', 'valid-code');
+      const request = new Request(url.toString(), { method: 'GET', headers: { 'User-Agent': 'TestBrowser/1.0' } });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/dashboard');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
     it('extracts deviceId and deviceName from valid state', async () => {
@@ -449,10 +455,7 @@ describe('GET /api/auth/google/callback', () => {
 
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard');
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Unsafe returnUrl in OAuth callback - falling back to dashboard',
-        { returnUrl: 'https://evil.com', hasState: true }
-      );
+      expect(location).not.toContain('evil.com');
     });
   });
 

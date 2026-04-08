@@ -3,7 +3,15 @@
  */
 
 import { describe, expect, test, beforeEach, vi } from 'vitest';
+import crypto from 'crypto';
 import { GET } from '../google/callback/route';
+
+function createSignedState(data: Record<string, unknown>): string {
+  const payload = JSON.stringify(data);
+  const sig = crypto.createHmac('sha256', 'test-oauth-state-secret').update(payload).digest('hex');
+  return Buffer.from(JSON.stringify({ data, sig })).toString('base64');
+}
+const defaultState = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
@@ -50,6 +58,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -134,6 +143,7 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.OAUTH_STATE_SECRET = 'test-oauth-state-secret';
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
@@ -156,7 +166,7 @@ describe('/api/auth/google/callback redirect', () => {
 
   test('given new user, should redirect to Getting Started drive', async () => {
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 
@@ -184,7 +194,7 @@ describe('/api/auth/google/callback redirect', () => {
     } as never);
 
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 
@@ -198,7 +208,7 @@ describe('/api/auth/google/callback redirect', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 

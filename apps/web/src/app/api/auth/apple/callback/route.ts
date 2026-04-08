@@ -12,7 +12,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
+import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
@@ -37,73 +37,38 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
     const state = formData.get('state') as string | null;
-    const error = formData.get('error') as string | null;
     const userJson = formData.get('user') as string | null;
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
 
-    // Handle errors from Apple
-    if (error) {
-      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
-      const errorType = error === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+    // Verify state HMAC upfront — this is the server-side security gate
+    const stateResult = state ? verifyOAuthState(state) : null;
+    const verifiedState = stateResult?.status === 'valid' ? stateResult.data : null;
 
-      if (isDesktopOAuthState(state)) {
+    // Single rejection guard: id_token + HMAC-verified state required
+    // `error` is never a branch condition — only read as a UX hint inside
+    if (!idToken || !verifiedState) {
+      const errorHint = formData.get('error') as string | null;
+      loggers.auth.warn('Apple OAuth callback rejected', {
+        hasIdToken: !!idToken,
+        hasState: !!state,
+        stateStatus: stateResult?.status ?? 'missing',
+        errorHint: errorHint ? String(errorHint).slice(0, 100) : 'none',
+      });
+      const errorType = errorHint === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+
+      if (verifiedState?.platform === 'desktop') {
         return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
       }
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
 
-    // Validate required fields
-    if (!idToken) {
-      loggers.auth.warn('Apple OAuth callback missing id_token');
-      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-    }
-
-    // Parse state parameter
-    let returnUrl = '/dashboard';
-    let platform = 'web';
-    let deviceId: string | undefined;
-    let deviceName: string | undefined;
-
-    if (state) {
-      const stateResult = verifyOAuthState(state);
-
-      switch (stateResult.status) {
-        case 'valid':
-          returnUrl = stateResult.data.returnUrl || '/dashboard';
-          platform = stateResult.data.platform || 'web';
-          deviceId = stateResult.data.deviceId;
-          deviceName = stateResult.data.deviceName;
-          break;
-
-        case 'invalid_signature':
-          loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
-          return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-
-        case 'unsigned':
-          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
-            hasData: true, hasSig: false,
-          });
-          returnUrl = '/dashboard';
-          platform = 'web';
-          break;
-
-        case 'malformed':
-          loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
-            stateLength: state?.length,
-          });
-          returnUrl = '/dashboard';
-          platform = 'web';
-          break;
-      }
-    }
-
-    if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Unsafe returnUrl in Apple OAuth callback - falling back to dashboard', {
-        returnUrl,
-        hasState: !!state,
-      });
-      returnUrl = '/dashboard';
-    }
+    // Past this point: id_token present + HMAC-verified state
+    let returnUrl = isSafeReturnUrl(verifiedState.returnUrl)
+      ? (verifiedState.returnUrl || '/dashboard')
+      : '/dashboard';
+    const platform = verifiedState.platform || 'web';
+    const deviceId = verifiedState.deviceId;
+    const deviceName = verifiedState.deviceName;
 
     const clientIP = getClientIP(req);
 
