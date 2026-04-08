@@ -12,6 +12,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { execGit } from "./git-exec";
 
 interface FileCommit {
@@ -345,4 +346,6 @@ async function main() {
   console.log("✓ Generated file index");
 }
 
-main().catch(console.error);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(console.error);
+}
