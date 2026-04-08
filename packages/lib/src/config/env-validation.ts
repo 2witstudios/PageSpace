@@ -50,7 +50,7 @@ export const serverEnvSchema = z
     MONITORING_INGEST_DISABLED: z.enum(['true', 'false']).optional(),
 
     // Optional OAuth state
-    OAUTH_STATE_SECRET: z.string().min(1).optional(),
+    OAUTH_STATE_SECRET: z.string().min(32).optional(),
     APPLE_SERVICE_ID: z.string().min(1).optional(),
 
     // Optional Stripe

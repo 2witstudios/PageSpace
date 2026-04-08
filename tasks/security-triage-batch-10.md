@@ -2,16 +2,20 @@
 
 ## Summary
 
-Both alerts are **S3 — False Positive**. CodeQL's `js/insufficient-password-hash` rule misidentifies HMAC-SHA256 message authentication as password hashing. No code changes required.
+CodeQL's `js/insufficient-password-hash` rule misidentifies HMAC-SHA256 message authentication as password hashing — the specific alert is a **false positive (S3)**. However, zero-trust review of the flagged code revealed a timing side-channel in the signature comparison: the length check short-circuits before `timingSafeEqual`, leaking length information. Upgraded to **S2 — Should Fix** and implemented double-hash hardening.
 
 ## Alert #96 — js/insufficient-password-hash
 - **File**: `packages/lib/src/integrations/oauth/oauth-state.ts:65`
-- **Rating**: S3 — False Positive
-- **Rationale**: This is HMAC-SHA256 message authentication (`crypto.createHmac('sha256', signingKey)`) for OAuth CSRF state tokens, not password hashing. The signing key is a server-controlled secret (e.g., `process.env.OAUTH_STATE_SECRET`), not a user password. HMAC-SHA256 is the industry standard for message authentication codes. The implementation also uses `crypto.timingSafeEqual` for signature comparison and enforces 10-minute token expiry. Actual password hashing in PageSpace uses bcryptjs (confirmed in `apps/web/src/app/api/auth/login/route.ts`, `signup/route.ts`, etc.).
-- **Action**: Dismiss — "False positive: This is HMAC-SHA256 message authentication (crypto.createHmac) for OAuth CSRF state tokens, not password hashing. The signing key is a server-controlled secret, not a user password. HMAC-SHA256 is the standard algorithm for state token signing. Actual password hashing uses bcryptjs."
+- **Rating**: S2 — Should Fix (upgraded from S3)
+- **Rationale**: The CodeQL alert itself is a false positive — this is HMAC-SHA256 message authentication, not password hashing. However, the `verifySignedState` function had a timing side-channel: `sigBuffer.length !== expectedBuffer.length` short-circuits before `timingSafeEqual`, leaking length information to attacker-controlled input. Fixed by double-hashing both sides with SHA-256 before `timingSafeEqual`, guaranteeing constant-length buffers.
+- **Action**: Fixed — double-hash comparison in `verifySignedState`. Also hardened `OAUTH_STATE_SECRET` env validation from `min(1)` to `min(32)`.
 
 ## Alert #97 — js/insufficient-password-hash
 - **File**: `packages/lib/src/integrations/oauth/oauth-state.test.ts:80`
 - **Rating**: S3 — False Positive
-- **Rationale**: Test file replicating the same HMAC-SHA256 signing to validate the expiration code path. Same false positive as #96 — HMAC signing, not password hashing. Additionally, this is a test file with no production exposure.
-- **Action**: Dismiss — "False positive: Test file exercising HMAC-SHA256 state signing (same as #96). No production exposure."
+- **Rationale**: Test file exercising HMAC-SHA256 state signing. No production exposure. The test's `createHmac` usage is correct for re-signing test data.
+- **Action**: Dismiss — "False positive: Test file exercising HMAC-SHA256 state signing. No production exposure."
+
+## Additional hardening (found during zero-trust review)
+- **`packages/lib/src/auth/csrf-utils.ts:72-79`**: Same timing side-channel pattern — length check before `timingSafeEqual`. Fixed with double-hash comparison.
+- **`packages/lib/src/config/env-validation.ts:53`**: `OAUTH_STATE_SECRET` validated as `min(1)` — upgraded to `min(32)` to enforce minimum key entropy.
