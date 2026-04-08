@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import {
@@ -15,6 +16,11 @@ import {
 import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
+const integrationCallbackSchema = z.object({
+  code: z.string().min(1, 'Authorization code is required'),
+  state: z.string().min(1, 'State parameter is required'),
+});
+
 /**
  * GET /api/user/integrations/callback
  * OAuth callback handler for integration connections.
@@ -30,19 +36,24 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const code = searchParams.get('code');
-    const state = searchParams.get('state');
     const error = searchParams.get('error');
 
     if (error) {
-      loggers.auth.warn('OAuth integration error', { error });
+      loggers.auth.warn('OAuth integration error', { error: String(error).slice(0, 100) });
       const errorParam = error === 'access_denied' ? 'access_denied' : 'oauth_error';
       return NextResponse.redirect(new URL(`${defaultReturn}?error=${errorParam}`, baseUrl));
     }
 
-    if (!code || !state) {
+    const validation = integrationCallbackSchema.safeParse({
+      code: searchParams.get('code'),
+      state: searchParams.get('state'),
+    });
+
+    if (!validation.success) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_request`, baseUrl));
     }
+
+    const { code, state } = validation.data;
 
     // Verify and decode state
     const stateData = verifySignedState<{
@@ -54,6 +65,7 @@ export async function GET(request: Request) {
       returnUrl: string;
     }>(state, process.env.OAUTH_STATE_SECRET);
 
+    // codeql[js/user-controlled-bypass] stateData is HMAC-SHA256 verified via verifySignedState()
     if (!stateData) {
       loggers.auth.warn('Invalid or expired OAuth state for integration callback');
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_state`, baseUrl));
