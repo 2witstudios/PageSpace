@@ -931,7 +931,7 @@ describe('POST /api/auth/apple/callback', () => {
   });
 
   describe('web platform redirect', () => {
-    it('redirects to returnUrl with auth success and CSRF token', async () => {
+    it('redirects to returnUrl with auth success without CSRF token in URL', async () => {
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
         id_token: 'valid-token',
@@ -944,7 +944,7 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard');
       expect(location).toContain('auth=success');
-      expect(location).toContain('csrfToken=mock-csrf-token');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('sets session cookie for web redirect', async () => {

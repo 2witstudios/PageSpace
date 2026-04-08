@@ -1,7 +1,7 @@
 import { users, db, eq } from '@pagespace/db';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -57,9 +57,7 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Name and email are required' }, { status: 400 });
     }
 
-    // Email validation - use a linear-time regex that prevents ReDoS
-    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    if (!emailRegex.test(email)) {
+    if (!isValidEmail(email)) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 

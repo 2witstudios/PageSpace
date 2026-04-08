@@ -202,7 +202,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('session-based authentication', () => {
-    it('given successful OAuth, should create session and redirect with CSRF token', async () => {
+    it('given successful OAuth, should create session and redirect without CSRF token in URL', async () => {
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard',
@@ -233,8 +233,8 @@ describe('GET /api/auth/google/callback', () => {
       expect(response.status).toBe(307);
 
       const location = response.headers.get('location')!;
-      expect(location).toContain('csrfToken=mock-csrf-token');
       expect(location).toContain('auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {

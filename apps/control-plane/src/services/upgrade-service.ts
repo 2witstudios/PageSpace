@@ -1,4 +1,5 @@
 import type { ShellExecutor } from './shell-executor'
+import { validateSlug } from '../validation/tenant-validation'
 
 type UpgradeRepo = {
   listActiveTenants(): Promise<Array<{ id: string; slug: string; status: string }>>
@@ -37,6 +38,11 @@ export function createUpgradeService(deps: UpgradeDeps) {
   }
 
   async function upgradeTenant(tenant: TenantRef, imageTag: string): Promise<void> {
+    const slugResult = validateSlug(tenant.slug)
+    if (!slugResult.valid) {
+      throw new Error(`Invalid slug: ${slugResult.error}`)
+    }
+
     const envOpts = { cwd: basePath, env: { IMAGE_TAG: imageTag } }
 
     // Pull new images

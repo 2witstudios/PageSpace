@@ -42,10 +42,19 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createUserServiceToken: vi.fn(),
-  deleteAiUsageLogsForUser: vi.fn(),
-}));
+vi.mock('@pagespace/lib', () => {
+  const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return {
+    isValidEmail: (email: string) => {
+      if (!email || email.length > 254) return false;
+      if (!EMAIL_PATTERN.test(email)) return false;
+      return email.slice(email.lastIndexOf('@') + 1).includes('.');
+    },
+    createUserServiceToken: vi.fn(),
+    deleteAiUsageLogsForUser: vi.fn(),
+    deleteMonitoringDataForUser: vi.fn(),
+  };
+});
 
 vi.mock('@pagespace/lib/compliance/anonymize', () => ({
   createAnonymizedActorEmail: vi.fn(() => 'deleted_user_abc123'),

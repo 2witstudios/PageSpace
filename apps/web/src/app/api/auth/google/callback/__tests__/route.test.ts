@@ -776,7 +776,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('web platform redirect', () => {
-    it('redirects to returnUrl with auth success and CSRF token', async () => {
+    it('redirects to returnUrl with auth success without CSRF token in URL', async () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
 
@@ -784,7 +784,7 @@ describe('GET /api/auth/google/callback', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard');
       expect(location).toContain('auth=success');
-      expect(location).toContain('csrfToken=mock-csrf-token');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('sets session cookie for web redirect', async () => {

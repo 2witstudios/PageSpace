@@ -23,6 +23,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@pagespace/lib/validators': path.resolve(__dirname, '../../packages/lib/src/validators/index.ts'),
       '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src/index.ts'),
     },
   },

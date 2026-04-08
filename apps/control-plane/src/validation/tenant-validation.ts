@@ -1,3 +1,5 @@
+import { isValidEmail } from '@pagespace/lib/validators'
+
 export type ValidationResult = {
   valid: boolean
   error?: string
@@ -37,8 +39,7 @@ export const validateEmail = (email: string): ValidationResult => {
     return { valid: false, error: 'Email is required' }
   }
 
-  const emailPattern = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/
-  if (!emailPattern.test(email)) {
+  if (!isValidEmail(email)) {
     return { valid: false, error: 'Invalid email format' }
   }
 

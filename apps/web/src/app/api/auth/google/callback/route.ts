@@ -372,7 +372,6 @@ export async function GET(req: Request) {
 
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
-    redirectUrl.searchParams.set('csrfToken', csrfToken);
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);

@@ -114,4 +114,44 @@ describe('ShellExecutor', () => {
       expect(executor.history[0].options).toEqual({ cwd: '/tmp' })
     })
   })
+
+  describe('execFile', () => {
+    test('given execFile is called on mock executor, should return stdout, stderr, and exitCode', async () => {
+      const executor = createMockExecutor([
+        { stdout: 'hello\n', stderr: '', exitCode: 0 },
+      ])
+
+      const result = await executor.execFile('echo', ['hello'])
+
+      expect(result).toEqual({ stdout: 'hello\n', stderr: '', exitCode: 0 })
+    })
+
+    test('given execFile is called, should record command and args in history', async () => {
+      const executor = createMockExecutor([
+        { stdout: '', stderr: '', exitCode: 0 },
+      ])
+
+      await executor.execFile('docker', ['compose', 'up', '-d'])
+
+      expect(executor.history).toHaveLength(1)
+      expect(executor.history[0].command).toBe('docker')
+      expect(executor.history[0].args).toEqual(['compose', 'up', '-d'])
+    })
+
+    test('given createShellExecutor, should return an object with execFile method', () => {
+      const executor = createShellExecutor()
+
+      expect(typeof executor.execFile).toBe('function')
+    })
+
+    test('given execFile with options, should record options in history', async () => {
+      const executor = createMockExecutor([
+        { stdout: '', stderr: '', exitCode: 0 },
+      ])
+
+      await executor.execFile('ls', ['-la'], { cwd: '/tmp' })
+
+      expect(executor.history[0].options).toEqual({ cwd: '/tmp' })
+    })
+  })
 })

@@ -1,6 +1,14 @@
 import { Resend } from "resend";
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from "@pagespace/lib/security";
 
+// Bounded-quantifier RFC 5322 regex — O(N), no ReDoS risk
+const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+function isValidEmail(email: string): boolean {
+  if (!email || email.length > 254) return false;
+  if (!EMAIL_PATTERN.test(email)) return false;
+  return email.slice(email.lastIndexOf("@") + 1).includes(".");
+}
+
 const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@pagespace.ai";
 const TO_EMAIL = process.env.CONTACT_EMAIL || "hello@pagespace.ai";
 
@@ -38,7 +46,7 @@ export async function POST(request: Request) {
     if (!name || typeof name !== "string" || name.trim().length === 0 || name.length > 100) {
       return Response.json({ error: "Valid name is required (max 100 characters)" }, { status: 400 });
     }
-    if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email)) {
+    if (!email || typeof email !== "string" || !isValidEmail(email)) {
       return Response.json({ error: "Valid email is required" }, { status: 400 });
     }
     if (!subject || typeof subject !== "string" || subject.trim().length === 0 || subject.length > 200) {
