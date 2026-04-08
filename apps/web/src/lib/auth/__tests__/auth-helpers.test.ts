@@ -257,6 +257,27 @@ describe('isSafeReturnUrl', () => {
       expect(isSafeReturnUrl('/action?callback=javascript:alert(1)')).toBe(false);
     });
   });
+
+  describe('ReDoS resistance (polynomial backtracking prevention)', () => {
+    it('isSafeReturnUrl_longLetterSequence_completesInLinearTime', () => {
+      // Crafted input that triggers O(N^2) backtracking in /[a-z]+:/i
+      const malicious = '/' + 'a'.repeat(50_000);
+      const start = performance.now();
+      const result = isSafeReturnUrl(malicious);
+      const elapsed = performance.now() - start;
+      expect(result).toBe(true); // No protocol, so it's safe
+      expect(elapsed).toBeLessThan(50); // Should be < 1ms, 50ms generous bound
+    });
+
+    it('isSafeReturnUrl_longLetterSequenceDecoded_completesInLinearTime', () => {
+      // This input also passes through the decoded regex path
+      const malicious = '/' + 'b'.repeat(50_000);
+      const start = performance.now();
+      isSafeReturnUrl(malicious);
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(50);
+    });
+  });
 });
 
 describe('getClientIP', () => {
