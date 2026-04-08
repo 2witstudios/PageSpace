@@ -23,7 +23,8 @@ import {
 } from './setup';
 import { exportData } from '../tenant-export';
 import { runImport } from '../tenant-import';
-import type { DbClient } from '../lib/migration-types';
+import { validateChecksums } from '../lib/migration-utils';
+import type { DbClient, ExportManifest } from '../lib/migration-types';
 
 let db: TestDb;
 let tmpDir: string;
@@ -253,6 +254,25 @@ describe('runImport', () => {
     ));
     const rows = result.rows as Record<string, unknown>[];
     expect(rows[0].content).toBe(contentWithSemicolons);
+  });
+
+  it('flags path traversal in manifest checksums as INVALID_PATH', async () => {
+    // Given: a manifest with a traversal path in fileChecksums
+    // Should: report the traversal entry as INVALID_PATH mismatch
+    const manifestRaw = await readFile(path.join(bundleDir, 'manifest.json'), 'utf-8');
+    const manifest: ExportManifest = JSON.parse(manifestRaw);
+
+    manifest.fileChecksums.push({
+      path: '../../etc/passwd',
+      sha256: 'aaaa',
+      sizeBytes: 100,
+    });
+
+    const mismatches = await validateChecksums(bundleDir, manifest);
+
+    const traversalMismatch = mismatches.find((m) => m.path === '../../etc/passwd');
+    expect(traversalMismatch).toBeDefined();
+    expect(traversalMismatch!.actual).toBe('INVALID_PATH');
   });
 
   it('rolls back on SQL error (all-or-nothing)', async () => {

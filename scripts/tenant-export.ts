@@ -19,7 +19,7 @@ import { sql } from 'drizzle-orm';
 import { mkdir, writeFile, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import { resolvePathWithinSync } from '@pagespace/lib/security';
+import { resolvePathWithin } from '@pagespace/lib/security';
 import type {
   ExportOptions,
   ExportManifest,
@@ -453,7 +453,7 @@ export async function exportData(
     if (!storagePath) continue;
 
     // Path containment: reject storagePath with traversal (e.g. ../../etc/passwd)
-    const srcPath = resolvePathWithinSync(fileStoragePath, storagePath);
+    const srcPath = await resolvePathWithin(fileStoragePath, storagePath);
     if (!srcPath) {
       console.warn(`WARNING: skipping file with path traversal in storagePath: ${storagePath}`);
       continue;
@@ -464,7 +464,7 @@ export async function exportData(
       continue;
     }
 
-    const destPath = resolvePathWithinSync(path.join(outputDir, 'files'), storagePath);
+    const destPath = await resolvePathWithin(path.join(outputDir, 'files'), storagePath);
     if (!destPath) {
       console.warn(`WARNING: skipping file with unsafe destination path: ${storagePath}`);
       continue;
