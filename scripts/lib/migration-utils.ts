@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile, writeFile, stat } from 'fs/promises';
 import path from 'path';
+import { resolvePathWithin } from '@pagespace/lib/security';
 import type { ExportManifest, FileChecksum } from './migration-types';
 
 /**
@@ -147,7 +148,11 @@ export async function validateChecksums(
   const mismatches: { path: string; expected: string; actual: string }[] = [];
 
   for (const entry of manifest.fileChecksums) {
-    const filePath = path.join(bundleDir, 'files', entry.path);
+    const filePath = await resolvePathWithin(path.join(bundleDir, 'files'), entry.path);
+    if (!filePath) {
+      mismatches.push({ path: entry.path, expected: entry.sha256, actual: 'INVALID_PATH' });
+      continue;
+    }
     try {
       const actual = await fileChecksum(filePath);
       if (actual !== entry.sha256) {

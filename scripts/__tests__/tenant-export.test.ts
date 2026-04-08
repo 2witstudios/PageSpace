@@ -365,4 +365,60 @@ describe('exportData', () => {
       }),
     ).rejects.toThrow('No drives found');
   });
+
+  describe('path traversal protection', () => {
+    async function seedTraversalFile(db: TestDb, storagePath: string, fileId: string): Promise<void> {
+      const { sql: sqlFn } = await import('drizzle-orm');
+      await db.execute(sqlFn.raw(
+        `INSERT INTO files (id, "driveId", "sizeBytes", "mimeType", "storagePath", "createdBy", "createdAt", "updatedAt")
+         VALUES ('${fileId}', '${FIXTURES.drives.shared.id}', 10, 'text/plain', '${storagePath}', '${FIXTURES.users.owner.id}', NOW(), NOW())`,
+      ));
+      await db.execute(sqlFn.raw(
+        `INSERT INTO file_pages ("fileId", "pageId", "linkedBy", "linkedAt")
+         VALUES ('${fileId}', '${FIXTURES.pages.root.id}', '${FIXTURES.users.owner.id}', NOW())`,
+      ));
+    }
+
+    it('skips files with ../../etc/passwd traversal in storagePath', async () => {
+      await seedTraversalFile(db, '../../etc/passwd', 'test_file_traversal_001');
+
+      const outputDir = path.join(tmpDir, 'bundle-traversal-1');
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      // The traversal file should be skipped — only the legitimate file should be in checksums
+      const traversalChecksum = result.manifest.fileChecksums.find(
+        (c) => c.path === '../../etc/passwd',
+      );
+      expect(traversalChecksum).toBeUndefined();
+
+      // The legitimate file should still be exported
+      expect(result.manifest.fileChecksums).toHaveLength(1);
+      expect(result.manifest.fileChecksums[0].path).toBe('test_file_blob_001/data.txt');
+    });
+
+    it('skips files with ../../../etc/shadow deep traversal', async () => {
+      await seedTraversalFile(db, '../../../etc/shadow', 'test_file_traversal_002');
+
+      const outputDir = path.join(tmpDir, 'bundle-traversal-2');
+      const result = await exportData(db as unknown as DbClient, {
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        outputDir,
+        fileStoragePath,
+        databaseUrl: getTestDatabaseUrl(),
+        dryRun: false,
+      });
+
+      const traversalChecksum = result.manifest.fileChecksums.find(
+        (c) => c.path === '../../../etc/shadow',
+      );
+      expect(traversalChecksum).toBeUndefined();
+      expect(result.manifest.fileChecksums).toHaveLength(1);
+    });
+  });
 });
