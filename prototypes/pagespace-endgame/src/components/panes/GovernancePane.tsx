@@ -115,6 +115,50 @@ export function GovernancePane() {
         />
       </FeatureRow>
 
+      <h3 style={{ marginBottom: 12 }}>Per-user agent isolation</h3>
+      <Card accent="green" style={{ marginBottom: 8 }}>
+        <h4>Agents run with the requesting user&apos;s permissions</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          When two users share an agent in the same drive, each invocation
+          runs with <strong>that user&apos;s permissions</strong> &mdash; in
+          PageSpace and in connected integrations (Slack, GitHub, etc.).
+          Same agent, different access. Enforced at the tool execution layer,
+          not just the UI. <strong>Fail-closed:</strong> no explicit permission
+          grant = no access.
+        </p>
+      </Card>
+      <div className="g2" style={{ marginBottom: 12 }}>
+        <Card accent="green">
+          <h4>Private drives = per-user workspace</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            A private drive is single-owner. An agent in your private drive
+            is unreachable by anyone else entirely. Your agent, your data,
+            your Slack/GitHub tokens. Complete isolation.
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>Shared drives = shared skills, not shared data</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Both users can invoke the same agent in a shared drive. But when
+            User B invokes it, the agent can only read what User B has access
+            to. The agent is shared, the access is not. This is how you get
+            shared skills without shared PII.
+          </p>
+        </Card>
+      </div>
+
+      <Card style={{ borderColor: "var(--border2)", marginBottom: 12 }}>
+        <h4 style={{ color: "var(--dim)" }}>Why this matters</h4>
+        <p style={{ fontSize: 12, color: "var(--dim)" }}>
+          Competing platforms use &ldquo;shared team memory&rdquo; models where
+          the AI agent has access to everything in the workspace. This means
+          an agent asked to build a company directory can surface PII from
+          private DMs. PageSpace&apos;s per-user permission enforcement at the
+          tool layer prevents this by design &mdash; the agent never sees data
+          the requesting user can&apos;t see.
+        </p>
+      </Card>
+
       <hr />
 
       {/* ═══════════════════════════════════════════════════════ */}
@@ -155,10 +199,24 @@ export function GovernancePane() {
           description="Agents can call any enabled tool without rate or scope limits. No runtime enforcement of 'this agent can only read, never write' or 'max 10 tool calls per turn'."
         />
         <Feature
+          icon="&#x1F512;"
+          name="No Enterprise SSO"
+          nameColor="var(--red)"
+          description="No SAML 2.0 or OIDC for Okta, Azure AD, or OneLogin. Mid-market enterprise sales blocker. Depends on Organizations epic (#590), which has no dependencies and can start immediately."
+        />
+      </FeatureRow>
+      <FeatureRow columns={2}>
+        <Feature
           icon="&#x1F511;"
           name="No container-level auth"
           nameColor="var(--amber)"
           description="No scoped service tokens for agents running inside VMs. When containers exist, agents will need a way to authenticate back to the PageSpace API with limited permissions."
+        />
+        <Feature
+          icon="&#x1F441;"
+          name="Page AI visibility not discoverable"
+          nameColor="var(--amber)"
+          description="visibleToGlobalAssistant and excludeFromSearch columns exist and work. UI toggle exists but isn't discoverable. 'Hide from humans' not implemented."
         />
       </FeatureRow>
 
@@ -287,10 +345,10 @@ export function GovernancePane() {
           description="Declare what tools an agent can use and with what limits. Runtime enforces: 'read-only agent', 'max 20 tool calls', 'no external search'. Not just configuration &mdash; enforcement."
         />
         <Feature
-          icon="&#x1F511;"
-          name="Container auth"
+          icon="&#x1F512;"
+          name="Enterprise SSO"
           nameColor="var(--violet)"
-          description="Scoped service tokens for agent-to-PageSpace API calls from inside VMs. Limited permissions, time-bound, automatically rotated. Agents in containers authenticate like service accounts."
+          description="SAML 2.0 + OIDC for Okta, Azure AD, OneLogin. Org admins configure SSO via UI. Email domain routing (user@acme.com &rarr; Acme's Okta). Per-org SSO enforcement."
         />
         <Feature
           icon="&#x1F517;"

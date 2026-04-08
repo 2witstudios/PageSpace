@@ -339,25 +339,23 @@ const epics: EpicDef[] = [
     ],
   },
 
-  /* ── Phase 4: Workflow Engine + Skills ── */
+  /* ── Phase 4: DAG Workflows + Skills ── */
   {
-    id: "E4.1", title: "Workflow Engine", phase: 4, status: "planned",
-    description: "A general-purpose workflow engine that executes multi-step processes with branching, fan-out, error handling, and variable passing.",
+    id: "E4.1", title: "DAG Workflows", phase: 4, status: "planned",
+    description: "Human-enforced rule pipelines for repeatable, deterministic processes. Not agent orchestration (agents orchestrate themselves via loop + existing tools) — this is guardrails humans define that agents can't skip.",
     tasks: [
-      { title: "Workflow definition schema", description: "Define a schema for workflows as DAGs: steps, edges, conditions, and variable bindings persisted in the database.", files: ["packages/db/src/schema/", "apps/runtime/src/workflow-engine.ts"], status: "not-started" },
-      { title: "Step execution: sequential, fan-out, fan-in, conditional, loop", description: "Implement all step execution modes including parallel fan-out with configurable concurrency and join conditions.", status: "not-started" },
-      { title: "Error modes: fail, skip, retry with backoff", description: "Per-step error handling configuration: fail the workflow, skip and continue, or retry with exponential backoff.", status: "not-started" },
-      { title: "Variable passing between steps", description: "Pass outputs from one step as inputs to the next, with JSONPath-style selectors and type validation.", status: "not-started" },
+      { title: "DAG definition schema", description: "Schema for workflows as DAGs: steps, edges, conditions. Steps can be skills, agent prompts, or shell commands. Persisted in the database.", files: ["packages/db/src/schema/", "apps/runtime/src/dag-workflows.ts"], status: "not-started" },
+      { title: "Step execution with enforced ordering", description: "Sequential execution with gates: a step must pass before the next runs. Support parallel branches that rejoin. Retry with backoff on failure.", status: "not-started" },
+      { title: "Gate conditions", description: "Per-step gate checks: test suite must pass, review score above threshold, human approval required. The rules agents can't bypass.", status: "not-started" },
     ],
   },
   {
-    id: "E4.2", title: "Visual Workflow Builder", phase: 4, status: "planned",
-    description: "A React Flow-based visual editor for building workflows by dragging skill nodes onto a canvas and connecting them.",
+    id: "E4.2", title: "DAG Workflow Editor", phase: 4, status: "planned",
+    description: "Visual editor for building rule pipelines. Non-technical team leads define repeatable processes without code.",
     tasks: [
-      { title: "React Flow canvas for DAG editing", description: "Build a visual canvas using React Flow where users drag, drop, and connect workflow steps as nodes and edges.", files: ["apps/web/src/app/(workspace)/workflows/"], status: "not-started" },
-      { title: "Drag skill nodes from catalog", description: "A skill catalog sidebar that lists available skills. Dragging a skill onto the canvas creates a configured workflow step.", status: "not-started" },
-      { title: "Configure triggers, thresholds, routing", description: "UI panels for configuring when workflows run (triggers), their concurrency limits, and conditional routing between steps.", status: "not-started" },
-      { title: "Serialize to workflow definitions", description: "Convert the visual canvas state to the workflow definition schema and back, enabling round-trip editing.", status: "not-started" },
+      { title: "Visual DAG editor", description: "Build a visual canvas where users drag steps and connect them. Each step is a skill, command, or gate.", files: ["apps/web/src/app/(workspace)/workflows/"], status: "not-started" },
+      { title: "Template library", description: "Pre-built workflow templates: PR review pipeline, onboarding sequence, content approval, deploy pipeline. One-click to add, customize from there.", status: "not-started" },
+      { title: "Serialize and execute", description: "Convert visual canvas to DAG schema and back. Execute button runs the pipeline. Status shown per-step in real time.", status: "not-started" },
     ],
   },
   {
@@ -371,13 +369,12 @@ const epics: EpicDef[] = [
     ],
   },
   {
-    id: "E4.4", title: "Trigger Engine", phase: 4, status: "planned",
-    description: "A flexible event system that connects code changes, agent lifecycle events, and system events to automated actions.",
+    id: "E4.4", title: "Calendar as Triggers", phase: 4, status: "planned",
+    description: "Calendar events become workflow triggers. Agents schedule future work by creating calendar events, which fire when the time comes.",
     tasks: [
-      { title: "Event sources: code, agent, system", description: "Define event sources: code (file changed, commit pushed), agent (spawned, finished, errored), system (cron, webhook, page lifecycle).", files: ["apps/runtime/src/"], status: "not-started" },
-      { title: "Condition evaluation", description: "Evaluate conditions on events before firing triggers: file path patterns, branch names, agent states, custom predicates.", status: "not-started" },
-      { title: "Action dispatch", description: "When a trigger fires, dispatch actions: run a skill, spawn an agent, write to memory, record a rating score.", status: "not-started" },
-      { title: "Priority and debouncing", description: "Support trigger priority ordering and debouncing to prevent action storms from rapid-fire events.", status: "not-started" },
+      { title: "Calendar event trigger type", description: "Add 'calendar' as a trigger type alongside cron and event. When a calendar event fires, execute the linked workflow/agent.", files: ["packages/db/src/schema/workflows.ts", "apps/web/src/lib/workflows/"], status: "not-started" },
+      { title: "Agent-created calendar triggers", description: "Agents can create calendar events that trigger other agents or workflows. The agent schedules its own future work.", status: "not-started" },
+      { title: "Recurring calendar workflows", description: "Calendar events with recurrence (daily standup, weekly review) that trigger agents on each occurrence.", status: "not-started" },
     ],
   },
 
@@ -423,6 +420,29 @@ const epics: EpicDef[] = [
     ],
   },
 
+  {
+    id: "E5.5", title: "Enterprise SSO", phase: 5, status: "planned",
+    description: "SAML 2.0 and OIDC SSO integration for enterprise identity providers (Okta, Azure AD, OneLogin). Depends on Org/Team Layer (E5.2). Mid-market enterprise unlock.",
+    tasks: [
+      { title: "SAML 2.0 integration", description: "Enterprise IdP integration via SAML 2.0. Service provider metadata, assertion parsing, attribute mapping. Test with Okta and Azure AD.", files: ["packages/lib/src/auth/"], status: "not-started" },
+      { title: "OIDC integration", description: "OpenID Connect SSO for providers that support it. Often simpler than SAML. Authorization code flow with PKCE.", files: ["packages/lib/src/auth/"], status: "not-started" },
+      { title: "SSO configuration UI", description: "Org admin UI to configure SSO connection, upload IdP metadata, test connection. Wizard-style flow.", files: ["apps/web/src/app/(workspace)/"], status: "not-started" },
+      { title: "Email domain routing", description: "Email domain → auto-redirect to correct SSO provider. 'user@acme.com' → Acme's Okta. Domain claim verification.", status: "not-started" },
+      { title: "SSO enforcement per org", description: "Org setting: 'Require SSO' — disable password/passkey login for org members, force SSO.", status: "not-started" },
+    ],
+  },
+  {
+    id: "E5.6", title: "Compliance Hardening", phase: 5, status: "planned",
+    description: "Fix known security bugs and operationalize compliance infrastructure. Wire SecurityAuditService to all routes, fix hash chain integrity, connect SIEM adapter.",
+    tasks: [
+      { title: "Fix activity log hash chain race (#542)", description: "Add FOR UPDATE row locking to activity log hash chain writes, matching the security audit pattern. Prevents chain forking under concurrent writes.", files: ["packages/lib/src/monitoring/activity-logger.ts"], status: "not-started" },
+      { title: "Fix GDPR anonymization chain break (#541)", description: "Ensure account deletion anonymization preserves hash chain integrity. Hash over anonymization-stable fields or maintain chain links through the process.", files: ["packages/lib/src/repositories/activity-log-repository.ts"], status: "not-started" },
+      { title: "Durable audit alerting (#544)", description: "Route chain verification failures to structured alerting (webhook, SIEM, paging) instead of console.error. Machine-parseable payloads.", files: ["apps/web/src/app/api/cron/verify-audit-chain/route.ts"], status: "not-started" },
+      { title: "Wire SecurityAuditService to core routes", description: "Expand security audit coverage from 5 routes (~2%) to all security-relevant routes: page CRUD, permission changes, file operations, admin actions, settings changes.", files: ["packages/lib/src/audit/"], status: "not-started" },
+      { title: "Connect SIEM adapter to logging pipeline", description: "Wire the existing SIEM adapter (webhook + syslog, HMAC-signed) to the audit logging pipeline. Zero code to write — just plumbing.", files: ["apps/processor/src/services/siem-adapter.ts"], status: "not-started" },
+    ],
+  },
+
   /* ── Phase 6: CMS + Generated Interfaces ── */
   {
     id: "E6.1", title: "Publishing Pipeline", phase: 6, status: "planned",
@@ -450,7 +470,7 @@ const epics: EpicDef[] = [
     tasks: [
       { title: "Contact/lead page type or schema", description: "Define a contact/lead data model either as a new page type or as structured schema tables with custom fields.", status: "not-started" },
       { title: "Pipeline/stage management", description: "Build visual pipeline management with customizable stages, drag-and-drop deal movement, and stage-based automations.", status: "not-started" },
-      { title: "Email sequence automation via workflows", description: "Use the workflow engine to define and execute email sequences triggered by lead actions or pipeline stage changes.", status: "not-started" },
+      { title: "Email sequence automation via DAG workflows", description: "Use DAG workflows to define and execute email sequences triggered by lead actions or pipeline stage changes. Human-enforced rules for outreach cadence.", status: "not-started" },
       { title: "Agent-driven lead scoring", description: "Deploy agents that analyze lead behavior, content engagement, and interaction history to assign and update lead scores.", status: "not-started" },
     ],
   },
@@ -473,7 +493,7 @@ function PhaseSummary() {
     { phase: 1, title: "IDE / Coder Interface", subtitle: "THE UNLOCK" },
     { phase: 2, title: "Agent Runtime", subtitle: "autonomous agents" },
     { phase: 3, title: "Memory + Entity State", subtitle: "learning + traceability" },
-    { phase: 4, title: "Workflow Engine + Skills", subtitle: "orchestration" },
+    { phase: 4, title: "DAG Workflows + Skills", subtitle: "guardrails + capabilities" },
     { phase: 5, title: "Database Split + AWS", subtitle: "scale + isolation" },
     { phase: 6, title: "CMS + Generated Interfaces", subtitle: "deployable products" },
   ];
@@ -515,7 +535,7 @@ export function EpicsPane() {
     <div className="pane">
       <div className="sl">Work Breakdown</div>
       <h2>
-        24 epics. 88 tasks.{" "}
+        26 epics. 98 tasks.{" "}
         <span className="hl">Six phases to the end game.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
@@ -539,7 +559,7 @@ export function EpicsPane() {
       {epics.filter((e) => e.phase === 3).map((e) => <Epic key={e.id} {...e} />)}
 
       {/* Phase 4 */}
-      <PhaseHeader phase={4} title="Workflow Engine + Skills" weeks="4-6 weeks" color="var(--violet)" />
+      <PhaseHeader phase={4} title="DAG Workflows + Skills" weeks="4-6 weeks" color="var(--violet)" />
       {epics.filter((e) => e.phase === 4).map((e) => <Epic key={e.id} {...e} />)}
 
       {/* Phase 5 */}

@@ -119,9 +119,9 @@ export function RuntimePane() {
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--amber)"
-          name="Scheduling is limited"
-          description="Workflows support cron + event triggers, but they fire tool-call agents, not CLI loops. No autonomous multi-step execution. The scheduling infra exists — the runtime to power it doesn't."
+          nameColor="var(--green)"
+          name="Scheduling works"
+          description="Cron scheduling (5-min polling, nextRunAt, batch execution). Event triggers on activity log (operation + resourceType match, folder scoping, debounce). Both fire tool-call agents. Gap: they can't fire CLI loops yet."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
@@ -141,12 +141,14 @@ export function RuntimePane() {
             real development environment.
           </p>
         </Card>
-        <Card accent="amber">
-          <h4>Workflows lack DAG execution</h4>
+        <Card accent="green">
+          <h4>Orchestration via existing tools</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Workflow schema exists (cron, triggers, folder watches) but no
-            multi-step pipelines, fan-out/fan-in, conditionals, or retry logic.
-            The scheduling plumbing is there &mdash; the execution engine isn't.
+            An agent in a loop doesn&apos;t need a DAG engine &mdash; it needs
+            the tools it already has. Create calendar events = schedule future
+            work. Write to task lists = decompose and delegate. Call ask_agent
+            = trigger other agents. <strong>The workspace IS the orchestration
+            layer.</strong> Add a loop and it comes alive.
           </p>
         </Card>
         <Card accent="red">
@@ -185,7 +187,7 @@ export function RuntimePane() {
             titleColor="var(--green)"
             borderColor="rgba(61,214,140,0.3)"
             status={<StatusBadge variant="live" />}
-            detail="Next.js 15 &middot; UI + API routes<br>Agent config, skill editing, dashboards<br>Workflow builder, monitoring<br>The human interface"
+            detail="Next.js 15 &middot; UI + API routes<br>Agent config, skill editing, dashboards<br>DAG workflow editor, monitoring<br>The human interface"
           />
           <ArchNode
             title="apps/runtime"
@@ -250,8 +252,8 @@ export function RuntimePane() {
         />
         <Feature
           nameColor="var(--violet)"
-          name="Workflows"
-          description="Multi-step pipelines with fan-out (parallel), fan-in (collect), conditionals, loops, gates, and retry logic. Visual builder in the web UI."
+          name="DAG Workflows"
+          description="Human-defined rule pipelines: repeatable, deterministic, enforced. &ldquo;Every PR gets security review before merge.&rdquo; The guardrails agents can't skip. Visual editor for non-technical users."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
