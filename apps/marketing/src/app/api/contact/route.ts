@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   try {
     const rateLimitResult = await checkDistributedRateLimit(
       `contact:ip:${clientIP}`,
-      DISTRIBUTED_RATE_LIMITS.CONTACT_FORM
+      DISTRIBUTED_RATE_LIMITS.MARKETING_CONTACT_FORM
     );
 
     if (!rateLimitResult.allowed) {

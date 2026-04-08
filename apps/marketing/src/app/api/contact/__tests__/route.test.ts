@@ -19,7 +19,7 @@ vi.mock('resend', () => ({
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
-    CONTACT_FORM: { maxAttempts: 10, windowMs: 60000 },
+    MARKETING_CONTACT_FORM: { maxAttempts: 5, windowMs: 3_600_000 },
   },
 }));
 
@@ -58,7 +58,7 @@ describe('marketing /api/contact rate limiting', () => {
 
     expect(checkDistributedRateLimit).toHaveBeenCalledWith(
       expect.stringContaining('192.168.1.1'),
-      expect.objectContaining({ maxAttempts: 10, windowMs: 60000 })
+      expect.objectContaining({ maxAttempts: 5, windowMs: 3_600_000 })
     );
   });
 
