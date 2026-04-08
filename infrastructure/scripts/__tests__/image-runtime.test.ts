@@ -13,7 +13,7 @@
  *   cd infrastructure && npx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000
  */
 import { describe, it, expect, afterAll } from 'vitest';
-import { execSync, ExecSyncOptions } from 'child_process';
+import { execSync, execFileSync, ExecSyncOptions } from 'child_process';
 import { resolve } from 'path';
 import { readFileSync } from 'fs';
 
@@ -21,21 +21,19 @@ const COMPOSE_FILE = resolve(__dirname, '../../docker-compose.test.yml');
 const PROJECT_NAME = `ps-image-test-${Date.now()}`;
 const EXEC_OPTS: ExecSyncOptions = { stdio: 'pipe', timeout: 120_000 };
 
-function run(cmd: string): string {
-  return execSync(cmd, EXEC_OPTS).toString().trim();
+function composeArgs(subcommand: string): string[] {
+  return ['compose', '-p', PROJECT_NAME, '-f', COMPOSE_FILE, ...subcommand.split(' ')];
 }
 
-function composeCmd(subcommand: string): string {
-  return `docker compose -p ${PROJECT_NAME} -f ${COMPOSE_FILE} ${subcommand}`;
+function composeRun(subcommand: string): string {
+  return execFileSync('docker', composeArgs(subcommand), EXEC_OPTS).toString().trim();
 }
 
 function waitForHealthy(service: string, maxWaitSec = 60): void {
   const deadline = Date.now() + maxWaitSec * 1000;
   while (Date.now() < deadline) {
     try {
-      const health = run(
-        composeCmd(`ps --format json ${service}`),
-      );
+      const health = composeRun(`ps --format json ${service}`);
       // docker compose ps --format json may return one JSON object per line
       const lines = health.split('\n').filter(Boolean);
       for (const line of lines) {
@@ -54,7 +52,7 @@ function waitForHealthy(service: string, maxWaitSec = 60): void {
 
 function cleanup(): void {
   try {
-    execSync(composeCmd('down -v --remove-orphans'), { stdio: 'ignore', timeout: 30_000 });
+    execFileSync('docker', composeArgs('down -v --remove-orphans'), { stdio: 'ignore', timeout: 30_000 });
   } catch {
     // best-effort cleanup
   }
@@ -88,22 +86,25 @@ describe.skipIf(!canRun)('Image runtime env verification', () => {
 
   it('should start processor with runtime env vars and pass health check', () => {
     cleanup();
-    run(composeCmd('up -d processor-test'));
+    composeRun('up -d processor-test');
     waitForHealthy('processor-test', 60);
 
-    const response = run(`docker compose -p ${PROJECT_NAME} -f ${COMPOSE_FILE} exec processor-test node -e "require('http').get('http://localhost:3003/health', (r) => { let d=''; r.on('data', c => d+=c); r.on('end', () => { console.log(r.statusCode); process.exit(r.statusCode === 200 ? 0 : 1); }); })"`);
+    const response = execFileSync('docker', [
+      ...composeArgs('exec processor-test node -e'),
+      "require('http').get('http://localhost:3003/health', (r) => { let d=''; r.on('data', c => d+=c); r.on('end', () => { console.log(r.statusCode); process.exit(r.statusCode === 200 ? 0 : 1); }); })",
+    ], EXEC_OPTS).toString().trim();
     expect(response).toContain('200');
   }, 90_000);
 
   it('should start web with runtime env vars without crashing', () => {
-    run(composeCmd('up -d web-test'));
+    composeRun('up -d web-test');
 
     // Web needs postgres - check that container stays running for 10s
     const deadline = Date.now() + 15_000;
     let lastState = '';
     while (Date.now() < deadline) {
       try {
-        const output = run(composeCmd('ps --format json web-test'));
+        const output = composeRun('ps --format json web-test');
         const lines = output.split('\n').filter(Boolean);
         for (const line of lines) {
           const parsed = JSON.parse(line);
@@ -122,13 +123,13 @@ describe.skipIf(!canRun)('Image runtime env verification', () => {
   }, 30_000);
 
   it('should start realtime with runtime env vars without crashing', () => {
-    run(composeCmd('up -d realtime-test'));
+    composeRun('up -d realtime-test');
 
     const deadline = Date.now() + 15_000;
     let lastState = '';
     while (Date.now() < deadline) {
       try {
-        const output = run(composeCmd('ps --format json realtime-test'));
+        const output = composeRun('ps --format json realtime-test');
         const lines = output.split('\n').filter(Boolean);
         for (const line of lines) {
           const parsed = JSON.parse(line);
