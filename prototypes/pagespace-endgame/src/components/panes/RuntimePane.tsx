@@ -4,6 +4,7 @@ import {
   ArchDiagram,
   ArchRow,
   ArchNode,
+  ArchConnector,
 } from "../ui/ArchDiagram";
 import { FeatureRow, Feature } from "../ui/FeatureRow";
 
@@ -13,308 +14,376 @@ export function RuntimePane() {
       {/* ── Current ── */}
       <div className="sl">Current</div>
       <h2>
-        Multi-tool agents, but{" "}
-        <span className="hl">request-bound execution.</span>
+        The agentic loop{" "}
+        <span className="hl">already exists.</span>
       </h2>
       <p style={{ marginBottom: 12, maxWidth: 720 }}>
-        PageSpace AI is more capable than a simple chatbot. Each request can
-        trigger multiple tool calls, agents delegate to other agents via
-        <code> ask_agent</code> (up to 2 levels deep), and task management
-        tools let agents track work across conversations. Workflows exist with
-        cron scheduling. But all execution is <strong>request-bound</strong>
-        &mdash; a human initiates it, <code>streamText()</code> runs the tools,
-        and the LLM decides when to stop. No autonomous loops, no CLI
-        execution, no skill registry, no budget tracking.
+        PageSpace AI isn&apos;t a chatbot waiting for a runtime to be built.
+        Agents run in a <strong>finish-tool-driven loop</strong> &mdash; the
+        LLM plans, calls tools, evaluates results, and keeps going until{" "}
+        <em>it</em> decides the work is done and calls <code>finish()</code>.
+        The agent controls the loop, not a step counter. Agents delegate to
+        other agents via <code>ask_agent</code> (2 levels deep, persistent
+        conversations). Workflows already run on <strong>cron schedules</strong>{" "}
+        and <strong>event triggers</strong>. The system is a lot closer to
+        always-on than it looks.
       </p>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         Entry points:{" "}
-        <code>apps/web/src/app/api/ai/chat/route.ts</code> (per-page chat) and{" "}
+        <code>apps/web/src/app/api/ai/chat/route.ts</code> (per-page agent) and{" "}
         <code>apps/web/src/app/api/ai/global/[id]/messages/route.ts</code>{" "}
-        (global assistant).
+        (global assistant). Both use <code>streamText()</code> with{" "}
+        <code>hasToolCall(&apos;finish&apos;)</code> as the stop condition.
       </p>
 
       <Card style={{ marginBottom: 24, padding: "20px 24px" }}>
         <pre>
-          {"User message\n"}
+          {"trigger (user / cron / event / ??? new triggers below)\n"}
           {"  |\n"}
           {"  v\n"}
-          {"streamText(model, messages, tools)\n"}
+          {"streamText(model, messages, 40 tools)\n"}
           {"  |\n"}
           {"  v\n"}
-          {"LLM response (may include tool calls)\n"}
+          {"LLM reasons → calls tools → gets results  <--+\n"}
+          {"  |                                           |\n"}
+          {"  v                                           |\n"}
+          {"Execute tools (40 tools, 14 modules)          |\n"}
+          {"  |                                           |\n"}
+          {"  v                                           |\n"}
+          {"LLM evaluates results → needs more work? -----+\n"}
           {"  |\n"}
           {"  v\n"}
-          {"Tool calls execute (in Node.js process, no sandbox)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"Response to user (done — single turn, no loop)"}
+          {"Agent calls finish() → done\n"}
+          {"\n"}
+          {"THE AGENT DECIDES WHEN TO STOP. The gap is: what triggers it."}
         </pre>
       </Card>
 
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="green">
-          <h4>What works</h4>
+          <h4>40 tools across 14 modules</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            33+ tools across page CRUD, search, navigation, task management,
-            and integrations. Multi-provider support (Anthropic, OpenAI, Google,
-            xAI, OpenRouter, Ollama). 100+ models. Drive-scoped system prompts.
+            Drive CRUD, page read/write, search (glob, regex, multi-drive),
+            task management, agent communication, calendar (full CRUD),
+            channels, activity history, GitHub import, web search, and a{" "}
+            <code>finish</code> signal. Tools gated per agent via{" "}
+            <code>enabledTools</code>.
           </p>
         </Card>
         <Card accent="green">
-          <h4>Agent awareness</h4>
+          <h4>Agent-to-agent delegation</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Agents see the page tree, other agents in the drive, and can call{" "}
-            <code>ask_agent</code> for cross-agent delegation. Agent list and
-            page tree are cached in Redis with a 5-minute TTL.
+            <code>ask_agent</code> calls another AI_CHAT page with its own
+            model, prompt, and tools. <strong>Persistent conversations</strong>{" "}
+            via <code>conversationId</code>. 2-level depth, 20 steps per
+            nested call. Agent lists cached in Redis (5-min TTL).
+          </p>
+        </Card>
+      </div>
+      <div className="g2" style={{ marginBottom: 8 }}>
+        <Card accent="green">
+          <h4>Cron scheduling (live)</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            <code>workflows</code> table with <code>cronExpression</code>,
+            timezone, <code>nextRunAt</code>. Polled every 5 minutes via
+            HMAC-signed cron container. Batch execution (5 concurrent),
+            stuck-workflow recovery (10-min timeout), atomic claiming via
+            UPDATE&hellip;RETURNING.
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>Event triggers (live)</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Activity log hook fires on any operation + resource type match.{" "}
+            <code>watchedFolderIds</code> for folder scoping.{" "}
+            <code>eventDebounceSecs</code> (default 30s) prevents trigger
+            storms. Recursive trigger prevention for AI-generated events.
+            Wired up in <code>instrumentation.ts</code> at startup.
           </p>
         </Card>
       </div>
       <div className="g2" style={{ marginBottom: 12 }}>
         <Card accent="green">
-          <h4>Workflows + cron</h4>
+          <h4>10 providers, 100+ models</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Workflows table has <code>cronExpression</code>, timezone, event
-            triggers, and folder watches. The cron container fires workflow
-            execution every 5 minutes via
-            <code> POST /api/cron/workflows</code>. Schema is there &mdash;
-            but workflows still trigger tool-call agents, not CLI loops.
+            PageSpace (GLM), OpenRouter, Anthropic, OpenAI, Google, xAI,
+            Ollama, LMStudio, GLM (Zhipu), MiniMax. Drive-scoped system
+            prompts, personalization, page tree context, timezone awareness.
+            MCP tool injection via desktop WebSocket bridge.
           </p>
         </Card>
         <Card accent="green">
-          <h4>Real-time streaming</h4>
+          <h4>Usage tracking + tier limits</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Responses stream to the browser via the Vercel AI SDK&apos;s
-            streaming protocol. Socket.IO broadcasts updates to other
-            viewers of the same page. Live collaboration works today.
+            <code>aiUsageLogs</code>: tokens, cost, duration, context size
+            per request. Tier limits (free: 50, pro: 200, business: 1000/day)
+            via Redis atomic increment. Provider pricing tables for cost
+            calculation. Real-time streaming via SSE + Socket.IO broadcast.
           </p>
         </Card>
       </div>
 
       <hr />
 
-      {/* ── Gaps ── */}
-      <div className="sl">Gaps</div>
+      {/* ── The Gap ── */}
+      <div className="sl">The Gap</div>
       <h2>
-        Powerful per-request, but{" "}
-        <span className="hl">no autonomous execution.</span>
+        Four new triggers.{" "}
+        <span className="hl">That&apos;s it.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        Agents can do a lot within a single request &mdash; multiple tool calls,
-        cross-agent delegation, task management. But they can&apos;t loop back to
-        evaluate their own work, schedule themselves, or operate without a human
-        trigger. The gaps are about autonomy, not capability.
+        The agentic loop exists. Cron triggers exist. Event triggers exist.
+        The agent-to-agent delegation exists. What&apos;s missing is four
+        more ways to fire the loop &mdash; each one unlocking a different
+        kind of always-on behavior. These aren&apos;t new systems. They&apos;re
+        new entries into the same execution engine.
       </p>
 
       <FeatureRow columns={4}>
         <Feature
-          nameColor="var(--red)"
-          name="No autonomous loops"
-          description="Agents execute within a single request. They can't loop back to evaluate, retry, or refine without a human re-prompting. No plan/execute/evaluate cycle."
+          nameColor="var(--amber)"
+          name="Background loops"
+          description="A bash-style loop that keeps an agent running: execute, wait, re-trigger, repeat. The agent doesn't stop when the request ends &mdash; it becomes a persistent background process. Think systemd for agents."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--red)"
-          name="No plan/evaluate"
-          description="No ability to break a task into steps, execute them, evaluate results, and adjust. No gate checks, no success criteria, no escalation."
+          nameColor="var(--amber)"
+          name="Task list triggers"
+          description="When a task is created or updated on a task list, fire the assigned agent. The task list becomes a work queue. Agents pick up tasks, execute them, mark them done. Humans and agents feed the same queue."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--green)"
-          name="Scheduling works"
-          description="Cron scheduling (5-min polling, nextRunAt, batch execution). Event triggers on activity log (operation + resourceType match, folder scoping, debounce). Both fire tool-call agents. Gap: they can't fire CLI loops yet."
+          nameColor="var(--amber)"
+          name="Calendar event triggers"
+          description="When a calendar event fires, trigger the associated agent. Daily standup summaries. Weekly report generation. Meeting prep that runs 30 minutes before the event. Agents use the calendar they already have."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--red)"
-          name="No budget enforcement"
-          description="No per-agent cost limits, no token caps per hour or day. No automatic pause when budget exhausted. No usage reports per agent."
+          nameColor="var(--amber)"
+          name="Webhook triggers (Slack)"
+          description="External events (Slack messages, GitHub webhooks, inbound email) trigger agents. A Slack message in a channel becomes a task. A GitHub PR triggers a review agent. The outside world feeds the loop."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
       </FeatureRow>
 
-      <div className="g3" style={{ marginBottom: 12 }}>
-        <Card accent="red">
-          <h4>No CLI-based execution</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Tools run inside the Node.js API process. No shell, no filesystem,
-            no git. Agents manipulate pages through API tools, not through a
-            real development environment.
-          </p>
-        </Card>
-        <Card accent="green">
-          <h4>Orchestration via existing tools</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            An agent in a loop doesn&apos;t need a DAG engine &mdash; it needs
-            the tools it already has. Create calendar events = schedule future
-            work. Write to task lists = decompose and delegate. Call ask_agent
-            = trigger other agents. <strong>The workspace IS the orchestration
-            layer.</strong> Add a loop and it comes alive.
-          </p>
-        </Card>
-        <Card accent="red">
-          <h4>No skill discovery</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Tools are hardcoded per agent type. No dynamic skill registry, no
-            skill composition, no ability for agents to discover and load new
-            capabilities at runtime.
-          </p>
-        </Card>
-      </div>
+      <Card accent="blue" style={{ marginBottom: 12 }}>
+        <h4 style={{ color: "var(--blue)" }}>Why this is close, not far</h4>
+        <p style={{ fontSize: 12 }}>
+          Each of these triggers feeds into the <em>same</em> execution
+          path that cron and event triggers already use:{" "}
+          <code>executeWorkflow()</code> calls <code>generateText()</code>{" "}
+          with the agent&apos;s model, prompt, tools, and context. The
+          workflow executor already handles status tracking, error recovery,
+          usage logging, and tool filtering. A new trigger type is a new
+          row in the <code>triggerType</code> enum and a new listener &mdash;
+          not a new execution engine.
+        </p>
+      </Card>
+
+      <hr />
+
+      {/* ── Competitive Context ── */}
+      <div className="sl">Competitive Context</div>
+      <h2>
+        The market is building{" "}
+        <span className="hl">agent runtimes from scratch.</span>
+      </h2>
+      <p style={{ marginBottom: 20, maxWidth: 720 }}>
+        Competitors are spending massive effort building the runtime layer
+        that PageSpace already has. They&apos;re wiring up tool execution,
+        multi-step loops, and scheduling. PageSpace shipped all of that.
+        The competitive edge: agents already live inside the workspace with
+        real data, real tools, and real state.
+      </p>
+
+      <FeatureRow columns={3} style={{ marginBottom: 0 }}>
+        <Feature
+          nameColor="var(--red)"
+          name="OpenFang"
+          description="Rust single-binary agent OS. Autonomous &ldquo;Hands&rdquo; on schedules. WASM dual-metered sandbox. Per-agent budgets. FangHub skill marketplace. 38 built-in tools. Impressive runtime, but agents connect to external data &mdash; they don't live inside a workspace."
+          style={{ padding: "20px 16px", fontSize: 14 }}
+        />
+        <Feature
+          nameColor="var(--amber)"
+          name="Devin / Cursor"
+          description="Full VM sandboxes for code execution. Devin: test-debug-fix loop in cloud VMs. Cursor: background agents that clone repos and open PRs. Both prove containers matter &mdash; but they're pure dev tools, not workspace-native agents."
+          style={{ padding: "20px 16px", fontSize: 14 }}
+        />
+        <Feature
+          nameColor="var(--cyan)"
+          name="Viktor AI"
+          description="Slack-native autonomous agent with persistent cloud VM. Learns skills through conversation. Confirmation gates on high-stakes actions. 3,000+ integrations. Closest to the &ldquo;always-on coworker&rdquo; model. The UX to study."
+          style={{ padding: "20px 16px", fontSize: 14 }}
+        />
+      </FeatureRow>
+      <FeatureRow columns={2}>
+        <Feature
+          nameColor="var(--violet)"
+          name="LangGraph / CrewAI"
+          description="Developer frameworks for multi-agent orchestration. LangGraph: stateful graphs with checkpointing. CrewAI: role-based agent crews. Both powerful but they're frameworks, not platforms &mdash; you still need to build the workspace, the tools, and the data layer."
+          style={{ padding: "20px 16px", fontSize: 14 }}
+        />
+        <Feature
+          nameColor="var(--green)"
+          name="OpenClaw"
+          description="Self-hosted Node.js agent with multi-channel inbox (Slack, Discord, WhatsApp, iMessage). Per-session workspaces. Precedence-ordered skill directories. The Claude Code fork for personal agents &mdash; powerful individually but no shared workspace or persistent state."
+          style={{ padding: "20px 16px", fontSize: 14 }}
+        />
+      </FeatureRow>
+
+      <Card style={{ borderColor: "var(--border2)", marginBottom: 12 }}>
+        <h4 style={{ color: "var(--dim)" }}>PageSpace&apos;s structural advantage</h4>
+        <p style={{ fontSize: 12, color: "var(--dim)" }}>
+          Every competitor above builds a runtime that connects to external
+          data. PageSpace agents already live inside the workspace &mdash;
+          40 tools, 89-table database, page tree as filesystem, persistent
+          conversations, real-time collaboration, cron + event workflows.
+          They&apos;re building the foundation PageSpace already shipped.
+          PageSpace just needs four more trigger types to go always-on.
+        </p>
+      </Card>
 
       <hr />
 
       {/* ── End Game ── */}
       <div className="sl">End Game</div>
       <h2>
-        The engine that runs agents.{" "}
-        <span className="hl">Built into PageSpace.</span>
+        Always on.{" "}
+        <span className="hl">Constantly learning.</span>
       </h2>
       <p style={{ marginBottom: 12, maxWidth: 720 }}>
-        The runtime service adds everything missing as a new app in the
-        monorepo: <code>apps/runtime/</code>. It shares the same database,
-        auth, and types as the rest of the platform. This is the major new work.
+        With the four triggers added, PageSpace agents become persistent
+        processes in the OS metaphor. They watch task lists, respond to
+        calendar events, listen on Slack, and loop in the background. They
+        use the same 40 tools, the same workspace, the same page tree. The
+        agent loop doesn&apos;t change &mdash; it just never stops.
       </p>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
-        The implementation lives in PageSpace&apos;s TypeScript monorepo as a new
-        service, sharing the same database, auth, and types as the rest of
-        the platform.
+        The workspace becomes a living system. Agents learn from activity,
+        build context over time, and operate continuously. Not a chatbot
+        you talk to &mdash; a team member that&apos;s always working.
       </p>
 
       <ArchDiagram>
-        <ArchRow label="PageSpace" labelSub="monorepo" style={{ marginBottom: 8 }}>
+        <ArchRow label="Triggers" labelSub="what starts the loop">
           <ArchNode
-            title="apps/web"
+            title="Human"
             titleColor="var(--green)"
             borderColor="rgba(61,214,140,0.3)"
             status={<StatusBadge variant="live" />}
-            detail="Next.js 15 &middot; UI + API routes<br>Agent config, skill editing, dashboards<br>DAG workflow editor, monitoring<br>The human interface"
+            detail="Chat message to any agent<br>Manual workflow trigger<br>ask_agent delegation"
           />
           <ArchNode
-            title="apps/runtime"
-            titleColor="var(--blue)"
-            borderColor="rgba(77,142,255,0.3)"
+            title="Cron"
+            titleColor="var(--green)"
+            borderColor="rgba(61,214,140,0.3)"
+            status={<StatusBadge variant="live" />}
+            detail="cronExpression + timezone<br>5-min polling, batch execution<br>HMAC-signed, atomic claiming"
+          />
+          <ArchNode
+            title="Events"
+            titleColor="var(--green)"
+            borderColor="rgba(61,214,140,0.3)"
+            status={<StatusBadge variant="live" />}
+            detail="Activity log hooks<br>operation + resourceType match<br>Folder scoping, debounce"
+          />
+          <ArchNode
+            title="New Triggers"
+            titleColor="var(--amber)"
+            borderColor="rgba(255,184,77,0.4)"
             status={<StatusBadge variant="planned" />}
-            detail="Agent loops &middot; scheduling &middot; workflows<br>Tool execution &middot; LLM routing<br>Budget metering &middot; trigger engine<br>The agent execution engine"
+            detail="Background loops (persistent)<br>Task list changes<br>Calendar events<br>Webhooks (Slack, GitHub)"
+          />
+        </ArchRow>
+
+        <ArchConnector text="all triggers feed the same execution engine" />
+
+        <ArchRow label="Engine" labelSub="already built">
+          <ArchNode
+            title="Workflow Executor"
+            titleColor="var(--green)"
+            borderColor="rgba(61,214,140,0.4)"
+            style={{ border: "2px solid rgba(61,214,140,0.4)", flex: 2 }}
+            status={<StatusBadge variant="live" />}
+            detail="executeWorkflow() &rarr; generateText() with 40 tools<br>Finish-tool-driven loop &middot; multi-provider &middot; budget tracking<br>Status tracking &middot; error recovery &middot; usage logging<br>The same engine for every trigger type"
           />
           <ArchNode
-            title="apps/realtime"
+            title="Realtime"
             titleColor="var(--cyan)"
             borderColor="rgba(34,211,238,0.3)"
             status={<StatusBadge variant="live" />}
-            detail="Socket.IO server<br>Streams runtime output to browsers<br>Per-event auth &middot; presence<br>The bridge to humans"
-          />
-          <ArchNode
-            title="packages/db"
-            titleColor="var(--amber)"
-            borderColor="rgba(255,184,77,0.3)"
-            status={<StatusBadge variant="live" />}
-            detail="Drizzle ORM &middot; PostgreSQL<br>Shared schema across all apps<br>Agent state, workflows, triggers<br>Single source of truth"
+            detail="Socket.IO &middot; 13 event handlers<br>Streams output to browsers<br>Per-event auth &middot; presence<br>Human sees what agents do"
           />
         </ArchRow>
       </ArchDiagram>
 
-      <div className="sl">The Agent Loop</div>
+      <div className="sl">What Changes</div>
       <h2>
-        Plan &rarr; execute &rarr; evaluate &rarr;{" "}
-        <span className="hl">loop or stop.</span>
-      </h2>
-
-      <Card style={{ marginBottom: 24, padding: "20px 24px" }}>
-        <pre>
-          {"receive task (from user, schedule, trigger, or parent agent)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"build context (system prompt + skills + memory + page tree)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"call LLM (multi-provider, failover, context overflow recovery)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"parse response (text, tool calls, delegation requests)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"execute tools (sandboxed, capability-gated, budget-checked)\n"}
-          {"  |\n"}
-          {"  v\n"}
-          {"evaluate (gate check: pass/partial/fail)\n"}
-          {"  |          |            |\n"}
-          {"  v          v            v\n"}
-          {"done    loop (fix)    escalate (to parent or human)\n"}
-        </pre>
-      </Card>
-
-      <FeatureRow columns={4}>
-        <Feature
-          nameColor="var(--blue)"
-          name="Scheduling"
-          description="Cron expressions, event triggers, autonomous modes. Agents run on schedules, react to events, or loop continuously. Persistent across restarts."
-          style={{ padding: "20px 16px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--violet)"
-          name="DAG Workflows"
-          description="Human-defined rule pipelines: repeatable, deterministic, enforced. &ldquo;Every PR gets security review before merge.&rdquo; The guardrails agents can't skip. Visual editor for non-technical users."
-          style={{ padding: "20px 16px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--amber)"
-          name="Budget / Metering"
-          description="Token limits per agent, per hour, per day. Cost tracking across providers. Automatic pause when budget exhausted. Reports usage to billing."
-          style={{ padding: "20px 16px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--green)"
-          name="Tool Execution"
-          description="Capability-gated tool calls. Each agent declares what tools it needs. Runtime enforces the boundary. Sandboxed execution for untrusted tools."
-          style={{ padding: "20px 16px", fontSize: 14 }}
-        />
-      </FeatureRow>
-
-      <div className="sl">Key Design Decisions</div>
-      <h2>
-        Patterns that make the loop{" "}
-        <span className="hl">production-grade.</span>
+        Four triggers and a{" "}
+        <span className="hl">background process model.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        A reliable agent loop needs more than &quot;call LLM, run tools, repeat.&quot;
-        These are the design decisions that keep agents from running off the rails:
+        The execution engine stays the same. What changes is how agents get
+        activated and how long they stay alive. Each trigger is a small
+        addition to the existing workflow system.
       </p>
 
-      <div className="g3" style={{ marginBottom: 12 }}>
-        <Card accent="blue">
-          <h4>Loop guards</h4>
+      <div className="g2" style={{ marginBottom: 8 }}>
+        <Card accent="amber">
+          <h4>Background loops</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            SHA256 hashing of tool calls to detect cycles. If an agent
-            makes the same tool call twice in a row, it&apos;s stuck. Break the
-            loop. Prevents runaway execution and wasted tokens.
+            A persistent process that calls <code>executeWorkflow()</code>
+            in a loop with a configurable interval. The agent runs, sleeps,
+            runs again. Survives across requests. The simplest path to
+            &ldquo;always-on&rdquo; &mdash; a <code>setInterval</code> on
+            the server that feeds the existing engine.
           </p>
         </Card>
-        <Card accent="blue">
-          <h4>Context overflow</h4>
+        <Card accent="amber">
+          <h4>Task list triggers</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            When the context window fills up, truncate tool results
-            first, then older messages. Dynamic trimming based on model limits.
-            Graceful degradation instead of hard failures.
+            Extend event triggers to watch task list mutations specifically.
+            When a task is created or its status changes, fire the assigned
+            agent with the task as context. The <code>update_task</code> and{" "}
+            <code>get_assigned_tasks</code> tools already exist &mdash; this
+            closes the loop so agents pick up work autonomously.
           </p>
         </Card>
-        <Card accent="blue">
-          <h4>Session compaction</h4>
+      </div>
+      <div className="g2" style={{ marginBottom: 12 }}>
+        <Card accent="amber">
+          <h4>Calendar triggers</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Sliding window keeps recent 50 messages. Older messages summarized.
-            Multi-phase repair if a session corrupts. Adapted for PostgreSQL-backed
-            conversations with full team visibility.
+            When a calendar event fires, trigger the associated agent. Seven
+            calendar tools already exist (list, get, create, update, delete,
+            invite, RSVP). Add a trigger that checks upcoming events and fires
+            agents at the scheduled time. Agents that prepare for meetings,
+            generate reports, or send daily summaries.
+          </p>
+        </Card>
+        <Card accent="amber">
+          <h4>Webhook triggers</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            An inbound webhook endpoint that maps external events to agent
+            triggers. Slack message &rarr; agent processes it. GitHub PR &rarr;
+            review agent fires. Inbound email &rarr; support agent responds.
+            The <code>send_channel_message</code> tool already lets agents
+            communicate back &mdash; webhooks let the outside world talk in.
           </p>
         </Card>
       </div>
 
       <Card style={{ borderColor: "var(--border2)" }}>
-        <h4 style={{ color: "var(--dim)" }}>Why TypeScript?</h4>
+        <h4 style={{ color: "var(--dim)" }}>The constantly-learning part</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          The runtime shares types, schema, and auth with the rest of PageSpace.
-          Same Drizzle models, same token validation, same permission functions.
-          No API boundary, no type duplication. The hot path (LLM calls) is
-          I/O-bound, not CPU-bound &mdash; TypeScript performs well here and
-          keeps the entire stack in one language.
+          Always-on agents don&apos;t just execute &mdash; they accumulate
+          context. An agent watching a task list learns the team&apos;s
+          patterns. An agent processing Slack messages builds institutional
+          knowledge. An agent on a cron loop sees trends over time. The
+          existing conversation persistence, drive-scoped prompts, and
+          activity tools (<code>get_activity</code> with 30-day lookback)
+          already provide the memory substrate. The triggers turn passive
+          memory into active learning.
         </p>
       </Card>
     </div>

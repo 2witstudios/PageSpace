@@ -39,28 +39,32 @@ export type PaneId =
   | "story"
   | "runtime"
   | "memory"
-  | "rag"
   | "governance"
   | "security"
   | "observability"
   | "integrations"
   | "database"
   | "interfaces"
+  | "agent-tools"
+
   | "gdpr"
   | "soc2"
   | "hipaa"
-  | "stories"
-  | "epics";
+  | "stories";
 
 const infraChildren: { id: PaneId; label: string }[] = [
+  // Engine — what runs and what it can do
   { id: "runtime", label: "Runtime" },
-  { id: "memory", label: "Memory" },
-  { id: "rag", label: "RAG & Search" },
-  { id: "governance", label: "Governance" },
-  { id: "security", label: "Security" },
-  { id: "observability", label: "Observability" },
-  { id: "integrations", label: "Integrations" },
+  { id: "agent-tools", label: "Agent Tools" },
+  { id: "memory", label: "Memory & Retrieval" },
   { id: "database", label: "Database" },
+  // Connections — how it reaches out
+  { id: "integrations", label: "Integrations" },
+  // Controls — who governs, what's visible, is it safe
+  { id: "governance", label: "Governance" },
+  { id: "observability", label: "Observability" },
+  { id: "security", label: "Security" },
+  // Future — the lenses on the engine
   { id: "interfaces", label: "Interfaces" },
 ];
 
@@ -79,7 +83,6 @@ const topTabs: { id: PaneId | "infra" | "compliance-menu"; label: string }[] = [
   { id: "infra", label: "Infrastructure" },
   { id: "compliance-menu", label: "Compliance" },
   { id: "stories", label: "User Stories" },
-  { id: "epics", label: "Epics & Tasks" },
 ];
 
 const dropdownStyle: CSSProperties = {

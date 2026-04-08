@@ -59,7 +59,7 @@ export function Header() {
             letterSpacing: 0.5,
           }}
         >
-          End-Game Architecture
+          The Master Plan
         </span>
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

@@ -55,7 +55,7 @@ export function Soc2Pane() {
         <Feature
           nameColor="var(--green)"
           name="Sandboxing"
-          description="Processor service: read-only filesystem with tmpfs. Path traversal protection (blocks ../, URL-encoded, null bytes). MIME filtering (blocks XSS vectors). Non-root execution (UID 1000)."
+          description="Processor service: non-root execution (UID 1000). Path traversal protection (blocks ../, URL-encoded, double-encoded, null bytes, absolute paths). MIME filtering (blocks HTML/SVG/XML XSS vectors). Application-level isolation &mdash; no OS-level read-only filesystem yet."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -68,8 +68,9 @@ export function Soc2Pane() {
         <Card accent="green">
           <h4>Security audit log</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Tamper-evident SHA-256 hash chain with <code>FOR UPDATE</code>{" "}
-            row locking to prevent chain forking. 27 event types across auth,
+            Tamper-evident SHA-256 hash chain with{" "}
+            <code>pg_advisory_xact_lock</code> serialization to prevent chain
+            forking (works even on empty tables). 35 event types across auth,
             authorization, data access, admin, and security categories. Risk
             scoring and anomaly flags per event.
           </p>
@@ -91,7 +92,7 @@ export function Soc2Pane() {
         <Card accent="green">
           <h4>Activity logs</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            26+ operation types tracked: create, update, delete, restore,
+            28 operation types tracked: create, update, delete, restore,
             reorder, permission changes, trash, move, agent config, membership,
             auth, files, messages, rollbacks. Content snapshots with
             <code> previousValues</code>/<code>newValues</code>. AI attribution
@@ -100,11 +101,13 @@ export function Soc2Pane() {
           </p>
         </Card>
         <Card accent="green">
-          <h4>Chain verification</h4>
+          <h4>Chain verification + webhook alerting</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Daily cron job recomputes every entry&apos;s hash and verifies chain
             links. Detects break points with position, stored vs. computed hash.
             HMAC-signed cron request prevents unauthorized triggering.
+            On failure: webhook alert to <code>AUDIT_ALERT_WEBHOOK_URL</code>
+            {" "}(HTTPS-only, fire-and-forget via <code>after()</code>).
           </p>
         </Card>
       </div>
@@ -138,8 +141,8 @@ export function Soc2Pane() {
         <Card accent="green">
           <h4>CodeQL: 156 &rarr; 0</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            156 CodeQL alerts triaged to zero remaining. 64 fixed via code,
-            36 dismissed as mitigated, 42 true false positives. 12 security
+            156 CodeQL alerts triaged to zero remaining. 107 fixed via code,
+            8 dismissed as mitigated, 18 true false positives. 12 security
             PRs merged. Covers SSRF, ReDoS, shell injection, timing attacks,
             OAuth state.
           </p>
@@ -194,10 +197,11 @@ export function Soc2Pane() {
         <span className="hl">Operationalization doesn&apos;t.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The security infrastructure is solid. The gap is making it
-        comprehensive: wiring the audit service to all routes, connecting the
-        SIEM adapter, fixing known integrity issues, and formalizing what
-        exists into auditable controls.
+        Recent PRs closed 4 gaps (distributed rate limiting, webhook
+        alerting, rate-limit audit events, admin read auditing). What
+        remains: wiring the audit service to all routes, connecting the
+        SIEM adapter, fixing the activity log chain fork, and formalizing
+        an SLA.
       </p>
 
       <FeatureRow columns={3}>
@@ -210,7 +214,7 @@ export function Soc2Pane() {
         <Feature
           nameColor="var(--red)"
           name="Activity chain can fork"
-          description="Activity log hash chain writes not serialized with row locking (#542). Concurrent writes can create forks. Security audit chain is safe (uses FOR UPDATE). Activity logs do not."
+          description="Activity log hash chain writes not serialized with row locking (#542). Concurrent writes can create forks. Security audit chain is safe (uses pg_advisory_xact_lock). Activity logs do not."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
@@ -221,34 +225,7 @@ export function Soc2Pane() {
         />
       </FeatureRow>
 
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="red">
-          <h4>Verification alerting (#544)</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Chain verification failures only go to <code>console.error</code>.
-            A broken audit chain is a high-severity compliance event. No
-            durable alerting, no webhook routing, no paging integration.
-          </p>
-        </Card>
-        <Card accent="red">
-          <h4>Missing audit events (#535-537)</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Login rate-limit denials (429s) not logged as security audit events.
-            Privileged admin reads (viewing other users&apos; data) not covered.
-            These are compliance-relevant operations with no audit trail.
-          </p>
-        </Card>
-      </div>
       <div className="g2" style={{ marginBottom: 12 }}>
-        <Card accent="amber">
-          <h4>In-memory rate limiting (#842)</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Marketing contact route (public, unauthenticated) uses
-            <code> Map()</code> instead of Redis. State lost on deploy. Not
-            shared across instances. Distributed rate limiter exists and is
-            used elsewhere &mdash; just not wired here.
-          </p>
-        </Card>
         <Card accent="amber">
           <h4>No formal SLA</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
@@ -283,21 +260,12 @@ export function Soc2Pane() {
         <Feature
           nameColor="var(--cyan)"
           name="Chain integrity"
-          description="Fix activity log hash chain: add FOR UPDATE locking (matching security audit pattern). Fix GDPR anonymization chain break. Both chains verified and non-forkable."
+          description="Fix activity log hash chain: add pg_advisory_xact_lock serialization (matching security audit pattern). Fix GDPR anonymization chain break. Both chains verified and non-forkable."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
 
       <div className="g2">
-        <Card accent="blue">
-          <h4>Durable alerting</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Chain verification failures route to structured alerting:
-            webhook, SIEM, paging integration. Machine-parseable payloads
-            with environment, break point, and severity. Not just
-            <code> console.error</code>.
-          </p>
-        </Card>
         <Card accent="blue">
           <h4>Formal SLA + evidence collection</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
@@ -311,12 +279,13 @@ export function Soc2Pane() {
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>The pattern</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          Most SOC 2 gaps are &ldquo;built but not connected&rdquo; or
-          &ldquo;connected but not comprehensive.&rdquo; The SIEM adapter
-          exists but isn&apos;t wired. The audit service exists but only
-          covers 2% of routes. The rate limiter exists but one route
-          doesn&apos;t use it. The fix is operationalization, not new
-          infrastructure.
+          Most remaining SOC 2 gaps are &ldquo;built but not
+          connected&rdquo; or &ldquo;connected but not
+          comprehensive.&rdquo; The SIEM adapter exists but isn&apos;t
+          wired. The audit service exists but only covers 2% of routes.
+          Recent fixes closed 4 gaps (rate limiting, webhook alerting,
+          rate-limit audit events, admin read auditing). The remaining
+          fix is operationalization, not new infrastructure.
         </p>
       </Card>
     </div>

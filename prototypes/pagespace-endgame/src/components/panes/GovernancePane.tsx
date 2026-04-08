@@ -16,15 +16,16 @@ export function GovernancePane() {
 
       <div className="sl">Governance</div>
       <h2>
-        Permissions, access control, and{" "}
+        Permissions, rate limits, and{" "}
         <span className="hl">agent boundaries.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
         PageSpace has production-grade RBAC with drive membership, page-level
-        permissions, Redis-cached resolution, and security audit logging.
-        Agent scope is determined by the page tree. What's missing is the
-        layer above &mdash; org/team governance, per-agent budgets, and
-        capability gates.
+        permissions, cached resolution, tamper-evident audit logging,
+        distributed rate limiting, per-agent tool gates, and encrypted
+        integration credential governance. What&apos;s missing is the layer
+        above &mdash; org hierarchy, per-agent budget <em>enforcement</em>,
+        and scope inheritance through agent delegation chains.
       </p>
 
       <h3 style={{ marginBottom: 12 }}>Permission resolution flow</h3>
@@ -50,7 +51,7 @@ export function GovernancePane() {
           />
           <ArchNode
             title="No access"
-            detail="Default: denied"
+            detail="Default: denied (fail-closed)"
             titleColor="var(--red)"
             borderColor="var(--red)"
           />
@@ -59,12 +60,12 @@ export function GovernancePane() {
         <ArchRow label="Caching">
           <ArchNode
             title="L1 memory cache"
-            detail="In-process &middot; fastest path"
+            detail="In-process Map &middot; 1000 max entries"
             borderColor="var(--cyan)"
           />
           <ArchNode
             title="L2 Redis cache"
-            detail="5-minute TTL &middot; shared across instances"
+            detail="60-second TTL &middot; shared across instances"
             borderColor="var(--cyan)"
           />
           <ArchNode
@@ -79,19 +80,19 @@ export function GovernancePane() {
           icon="&#x1F464;"
           name="Drive membership"
           nameColor="var(--green)"
-          description="Three roles: <strong style='color:var(--text)'>Owner</strong> (full control), <strong style='color:var(--text)'>Admin</strong> (manage members + content), <strong style='color:var(--text)'>Member</strong> (read/write within permissions). Assigned per-drive."
+          description="Three roles: <strong style='color:var(--text)'>Owner</strong> (full control), <strong style='color:var(--text)'>Admin</strong> (manage members + content), <strong style='color:var(--text)'>Member</strong> (read/write within page-level grants). Custom role templates via <code>drive_roles</code> table."
         />
         <Feature
           icon="&#x1F4C4;"
           name="Page permissions"
           nameColor="var(--blue)"
-          description="Granular: canView, canEdit, canShare, canDelete. Each can have an expiration date. Permissions are on specific pages, not entire trees."
+          description="Granular: canView, canEdit, canShare, canDelete. Each can have an <code>expiresAt</code> date &mdash; expired permissions are denied at query time. Granted-by tracking for audit."
         />
         <Feature
           icon="&#x1F916;"
-          name="Agent scope"
+          name="Agent tool gates"
           nameColor="var(--violet)"
-          description="Page tree determines what agents can see. <code>ask_agent</code> has MAX_DEPTH=2 to prevent recursion. Tools are configurable per AI_CHAT page."
+          description="Each AI_CHAT page has an <code>enabledTools</code> array. Tools are validated against the available set. Read-only mode filters write tools globally. <code>MAX_AGENT_DEPTH=2</code> prevents recursion."
         />
       </FeatureRow>
       <FeatureRow columns={3}>
@@ -99,19 +100,19 @@ export function GovernancePane() {
           icon="&#x1F6E1;"
           name="Security audit log"
           nameColor="var(--amber)"
-          description="Hash chain verification for tamper detection. Audit entries are cryptographically linked. Verified on a cron schedule."
+          description="SHA-256 hash chain with <code>FOR UPDATE</code> locking to prevent forking. 47 event types. Chain verifier with break-point detection. Separate integration audit log for every external API call."
+        />
+        <Feature
+          icon="&#x26A1;"
+          name="Distributed rate limiting"
+          nameColor="var(--cyan)"
+          description="Redis-based sliding window with 16 predefined configs (login, signup, API, file upload, passkeys, etc.). Fail-closed in production &mdash; denies requests when Redis is unavailable."
         />
         <Feature
           icon="&#x1F50C;"
-          name="Redis-cached resolution"
-          nameColor="var(--cyan)"
-          description="Two-layer cache: in-memory (L1) + Redis (L2) with 5-minute TTL. Permission checks are fast even under high agent concurrency."
-        />
-        <Feature
-          icon="&#x1F527;"
-          name="Configurable tools"
+          name="Integration credentials"
           nameColor="var(--red)"
-          description="Each AI_CHAT page has an enabled tools list. Admins control which of the 33+ tools an agent can access. No global tool access."
+          description="User-scoped or drive-scoped (enforced by CHECK constraint). AES-256-GCM encrypted. Per-agent grants with <code>allowedTools</code>, <code>deniedTools</code>, <code>readOnly</code>, and <code>rateLimitOverride</code>."
         />
       </FeatureRow>
 
@@ -141,23 +142,34 @@ export function GovernancePane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Both users can invoke the same agent in a shared drive. But when
             User B invokes it, the agent can only read what User B has access
-            to. The agent is shared, the access is not. This is how you get
-            shared skills without shared PII.
+            to. The agent is shared, the access is not.
           </p>
         </Card>
       </div>
 
-      <Card style={{ borderColor: "var(--border2)", marginBottom: 12 }}>
-        <h4 style={{ color: "var(--dim)" }}>Why this matters</h4>
-        <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          Competing platforms use &ldquo;shared team memory&rdquo; models where
-          the AI agent has access to everything in the workspace. This means
-          an agent asked to build a company directory can surface PII from
-          private DMs. PageSpace&apos;s per-user permission enforcement at the
-          tool layer prevents this by design &mdash; the agent never sees data
-          the requesting user can&apos;t see.
-        </p>
-      </Card>
+      <h3 style={{ marginBottom: 12 }}>AI usage metering</h3>
+      <div className="g2" style={{ marginBottom: 12 }}>
+        <Card accent="blue">
+          <h4 style={{ color: "var(--blue)" }}>Every AI call is logged</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            <code>aiUsageLogs</code> table records input/output/total tokens,
+            dollar cost, provider, model, userId, pageId, driveId, duration,
+            context size, and truncation strategy. Cost calculated from
+            real-time per-model pricing (100+ models across 11 providers).
+          </p>
+        </Card>
+        <Card accent="amber">
+          <h4 style={{ color: "var(--amber)" }}>Subscription tier enforcement</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Four tiers: <strong>free</strong> (500 MB / 20 MB files),{" "}
+            <strong>pro</strong> (2 GB / 50 MB),{" "}
+            <strong>founder</strong> (10 GB / 50 MB),{" "}
+            <strong>business</strong> (50 GB / 100 MB).
+            Storage quotas, concurrent upload limits, and file counts
+            enforced at upload time with warning levels at 80% and 95%.
+          </p>
+        </Card>
+      </div>
 
       <hr />
 
@@ -167,111 +179,117 @@ export function GovernancePane() {
 
       <div className="sl">Gaps</div>
       <h2>
-        No org layer.{" "}
-        <span className="hl">No agent budgets. No capability gates.</span>
+        Org layer unmerged.{" "}
+        <span className="hl">No budget enforcement. No scope inheritance.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
-        The current system governs <em>access</em> well but doesn't govern
-        <em> cost</em>, <em>scope</em>, or <em>organizational hierarchy</em>.
-        There's no way to group drives under teams, limit what agents spend,
-        or enforce fine-grained capability boundaries at runtime.
+        The current system governs <em>access</em> and <em>tools</em> well.
+        AI usage is metered comprehensively. The org layer is built but
+        unmerged. The metering has no enforcement &mdash; no spending caps,
+        no per-agent budgets. And there&apos;s no scope narrowing when agents
+        delegate to other agents.
       </p>
 
       <FeatureRow columns={2}>
         <Feature
           icon="&#x1F3E2;"
-          name="No org/team layer"
-          nameColor="var(--red)"
-          description="Drives exist in isolation. No GitHub-style orgs to group drives, manage team billing, or share integration credentials. Users can't see all their orgs from one dashboard."
+          name="Org layer in progress"
+          nameColor="var(--amber)"
+          description="Schema, API routes, auth middleware, Stripe per-seat billing, and guardrails implemented on <code>ppg/orgs-billing</code> branch (~60 commits ahead). Tables: <code>organizations</code>, <code>orgMembers</code>, <code>orgDrives</code>, <code>orgSubscriptions</code>. Guardrails for AI provider allowlists, storage limits, domain restrictions. Not yet merged to master."
         />
         <Feature
           icon="&#x1F4B0;"
-          name="No per-agent budgets"
+          name="No budget enforcement"
           nameColor="var(--red)"
-          description="No token/hour limits, no cost ceilings per agent. A single runaway agent can exhaust the workspace's AI budget with no safeguard."
+          description="AI usage is tracked per-user with full cost attribution (tokens, dollars, provider, model). But there are no spending caps &mdash; no per-agent limits, no per-org budgets, no circuit breaker on runaway agents. Metering exists, enforcement doesn't."
         />
       </FeatureRow>
       <FeatureRow columns={2}>
         <Feature
-          icon="&#x1F6AB;"
-          name="No capability gates"
+          icon="&#x1F517;"
+          name="No scope inheritance"
           nameColor="var(--red)"
-          description="Agents can call any enabled tool without rate or scope limits. No runtime enforcement of 'this agent can only read, never write' or 'max 10 tool calls per turn'."
+          description="MAX_DEPTH=2 prevents infinite recursion, but when Agent A calls Agent B via <code>ask_agent</code>, Agent B doesn't inherit A's permission boundary. No scope narrowing through delegation chains. OWASP identifies this as 'cascading failures' risk."
         />
         <Feature
           icon="&#x1F512;"
           name="No Enterprise SSO"
           nameColor="var(--red)"
-          description="No SAML 2.0 or OIDC for Okta, Azure AD, or OneLogin. Mid-market enterprise sales blocker. Depends on Organizations epic (#590), which has no dependencies and can start immediately."
-        />
-      </FeatureRow>
-      <FeatureRow columns={2}>
-        <Feature
-          icon="&#x1F511;"
-          name="No container-level auth"
-          nameColor="var(--amber)"
-          description="No scoped service tokens for agents running inside VMs. When containers exist, agents will need a way to authenticate back to the PageSpace API with limited permissions."
-        />
-        <Feature
-          icon="&#x1F441;"
-          name="Page AI visibility not discoverable"
-          nameColor="var(--amber)"
-          description="visibleToGlobalAssistant and excludeFromSearch columns exist and work. UI toggle exists but isn't discoverable. 'Hide from humans' not implemented."
+          description="No SAML 2.0 or OIDC for Okta, Azure AD, or OneLogin. Session infrastructure supports scoped tokens (service, MCP, device types) but no external identity federation. Mid-market enterprise sales blocker."
         />
       </FeatureRow>
 
-      <div className="g2" style={{ marginBottom: 28 }}>
-        <Card accent="red">
-          <h4 style={{ color: "var(--red)" }}>No integration credential governance</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Integration credentials (GitHub OAuth, API keys, MCP server
-            configs) are per-drive. No team-level credential management,
-            no shared vault, no rotation policies.
-          </p>
-        </Card>
-        <Card accent="amber">
-          <h4 style={{ color: "var(--amber)" }}>AI billing not separated</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            AI usage costs are not tracked separately from platform billing.
-            No per-org AI budgets, no per-agent cost attribution, no way
-            to see which agent spent how much.
-          </p>
-        </Card>
-      </div>
+      <Card accent="amber" style={{ marginBottom: 12 }}>
+        <h4 style={{ color: "var(--amber)" }}>The metering-to-enforcement gap</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          PageSpace already knows what every AI call costs (per-user, per-model,
+          per-page, per-drive). The infrastructure to <em>record</em> cost is
+          production-grade. What&apos;s missing is the policy layer that says
+          &ldquo;this agent has a $50/month budget&rdquo; and stops it when
+          it&apos;s spent. The org guardrails branch has <code>maxAITokensPerDay</code>{" "}
+          on the org schema &mdash; but enforcement at the AI call boundary
+          hasn&apos;t been wired up yet.
+        </p>
+      </Card>
 
       <hr />
 
       {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 3: End game                                    */}
+      {/* SECTION 4: End game                                    */}
       {/* ═══════════════════════════════════════════════════════ */}
 
       <div className="sl">End game</div>
       <h2>
         Org hierarchy.{" "}
-        <span className="hl">Budget controls. Scoped tokens.</span>
+        <span className="hl">Budget enforcement. Scope inheritance.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
-        The target is GitHub-style organizational governance extended to
-        AI agents. Teams own drives, orgs control budgets, agents get
-        scoped permissions, and every layer has cost and capability
-        boundaries enforced at runtime.
+        The roadmap requires per-org isolation before containers can exist.
+        Governance rides the same dependency chain: orgs enable team-level
+        budgets, which enable per-agent spending caps, which enable autonomous
+        agents that run in loops without human babysitting. The org branch
+        is close &mdash; merge it, wire up budget enforcement on the existing
+        metering, and add scope inheritance to <code>ask_agent</code>.
       </p>
 
-      <h3 style={{ marginBottom: 12 }}>Target org hierarchy</h3>
+      <h3 style={{ marginBottom: 12 }}>Two-tier role model</h3>
+      <div className="g2" style={{ marginBottom: 12 }}>
+        <Card accent="blue">
+          <h4 style={{ color: "var(--blue)" }}>Org roles = governance</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Org-level roles control <strong>policy</strong>: who manages
+            billing, who sets AI budgets, who configures SSO, who approves
+            provider allowlists. These are the roles that determine what
+            the organization <em>allows</em>. Think GitHub org owners vs
+            members &mdash; it&apos;s about governance, not content.
+          </p>
+          <p style={{ marginTop: 6, fontSize: 11, color: "var(--dim)" }}>
+            Owner &middot; Admin &middot; Member &mdash; controls budget
+            ceilings, SSO policy, AI provider access, domain restrictions
+          </p>
+        </Card>
+        <Card accent="cyan">
+          <h4 style={{ color: "var(--cyan)" }}>Drive roles = titles</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Drive-level roles are more like <strong>Discord roles</strong>
+            &mdash; flexible titles that determine what you can do within
+            a specific drive. Content access, tool configuration, agent
+            invocation rights. The <code>drive_roles</code> custom role
+            templates already support this pattern.
+          </p>
+          <p style={{ marginTop: 6, fontSize: 11, color: "var(--dim)" }}>
+            Custom per-drive &middot; assignable permissions bundles &middot;
+            canView / canEdit / canShare per role template
+          </p>
+        </Card>
+      </div>
+
+      <h3 style={{ marginBottom: 12 }}>Target governance stack</h3>
       <ArchDiagram>
-        <ArchRow label="User">
-          <ArchNode
-            title="User dashboard"
-            detail="Aggregates all orgs &middot; single view across everything"
-            titleColor="var(--green)"
-            borderColor="var(--green)"
-          />
-        </ArchRow>
-        <ArchConnector text="user belongs to multiple orgs" />
-        <ArchRow label="Org">
+        <ArchRow label="Org" labelSub="governance roles">
           <ArchNode
             title="Org: Acme Corp"
-            detail="AI budget: $500/mo &middot; API keys &middot; integration credentials &middot; team management"
+            detail="AI budget: $500/mo &middot; SSO: Okta &middot; provider allowlist &middot; domain restrictions"
             titleColor="var(--blue)"
             borderColor="var(--blue)"
           />
@@ -282,37 +300,52 @@ export function GovernancePane() {
             borderColor="var(--blue)"
           />
         </ArchRow>
-        <ArchConnector text="orgs contain teams with multiple drives" />
-        <ArchRow label="Team">
+        <ArchConnector text="org roles set budget + policy ceiling" />
+        <ArchRow label="Drive" labelSub="title roles">
           <ArchNode
-            title="Engineering"
-            detail="3 drives &middot; shared credentials &middot; team AI budget slice"
-            borderColor="var(--cyan)"
-          />
-          <ArchNode
-            title="Design"
-            detail="2 drives &middot; separate tool config"
+            title="Platform Dev"
+            detail="Roles: Maintainer, Reviewer, Contributor &middot; custom tool access per role"
             borderColor="var(--cyan)"
           />
           <ArchNode
             title="Marketing"
-            detail="1 drive &middot; read-only integrations"
+            detail="Roles: Editor, Publisher, Viewer &middot; CMS creds &middot; read-only code"
+            borderColor="var(--cyan)"
+          />
+          <ArchNode
+            title="Support KB"
+            detail="Roles: Author, Responder &middot; Zendesk integration"
             borderColor="var(--cyan)"
           />
         </ArchRow>
-        <ArchConnector text="drives contain pages + agents" />
-        <ArchRow label="Agent">
+        <ArchConnector text="drive roles scope content access + tools" />
+        <ArchRow label="Agent" labelSub="within drive scope">
           <ArchNode
             title="Agent: deploy-bot"
-            detail="Budget: 10k tokens/hr &middot; tools: shell, git &middot; scoped token"
+            detail="Budget: $5/day &middot; tools: shell, git &middot; approval: deploys"
             titleColor="var(--violet)"
             borderColor="var(--violet)"
           />
           <ArchNode
             title="Agent: reviewer"
-            detail="Budget: 50k tokens/hr &middot; tools: read_page, search &middot; read-only"
+            detail="Budget: $10/day &middot; tools: read_page, search &middot; read-only"
             titleColor="var(--violet)"
             borderColor="var(--violet)"
+          />
+          <ArchNode
+            title="Agent: researcher"
+            detail="Budget: $3/day &middot; tools: web_search, create_page &middot; no integrations"
+            titleColor="var(--violet)"
+            borderColor="var(--violet)"
+          />
+        </ArchRow>
+        <ArchConnector text="child agents inherit parent's scope ceiling" />
+        <ArchRow label="Delegation">
+          <ArchNode
+            title="Spawned sub-agent"
+            detail="Scope &le; parent &middot; budget &le; parent's remaining &middot; tools &sube; parent's tools"
+            titleColor="var(--dim)"
+            borderColor="var(--border2)"
           />
         </ArchRow>
       </ArchDiagram>
@@ -320,51 +353,54 @@ export function GovernancePane() {
       <FeatureRow columns={3}>
         <Feature
           icon="&#x1F3E2;"
-          name="Org layer"
+          name="Org roles + budget"
           nameColor="var(--green)"
-          description="Teams with multiple drives, like GitHub orgs. AI billing budgets, API keys, and integration credentials managed per-org. Teams share credentials without exposing secrets to individuals."
+          description="Org roles govern policy: billing, AI budgets, SSO, provider allowlists, domain restrictions. Budget enforcement wired to existing AI metering &mdash; agents that hit their cap get denied, not just logged. Circuit breaker for runaway loops."
         />
         <Feature
-          icon="&#x1F4CA;"
-          name="User aggregation"
-          nameColor="var(--blue)"
-          description="Dashboard shows all orgs a user belongs to &mdash; not workspace switching. One view across all teams, drives, and activity."
-        />
-        <Feature
-          icon="&#x1F4B0;"
-          name="Per-agent budgets"
-          nameColor="var(--amber)"
-          description="Token/hour limits and cost ceilings per agent. Runtime enforces spending limits. Runaway agents get stopped, not just logged."
-        />
-      </FeatureRow>
-      <FeatureRow columns={3}>
-        <Feature
-          icon="&#x1F6E1;"
-          name="Capability gates"
+          icon="&#x1F3AD;"
+          name="Drive role titles"
           nameColor="var(--cyan)"
-          description="Declare what tools an agent can use and with what limits. Runtime enforces: 'read-only agent', 'max 20 tool calls', 'no external search'. Not just configuration &mdash; enforcement."
-        />
-        <Feature
-          icon="&#x1F512;"
-          name="Enterprise SSO"
-          nameColor="var(--violet)"
-          description="SAML 2.0 + OIDC for Okta, Azure AD, OneLogin. Org admins configure SSO via UI. Email domain routing (user@acme.com &rarr; Acme's Okta). Per-org SSO enforcement."
+          description="Discord-style roles per drive. Custom permission bundles: Maintainer, Reviewer, Editor, Publisher &mdash; whatever the drive needs. Extends existing <code>drive_roles</code> table with richer semantics beyond Owner/Admin/Member."
         />
         <Feature
           icon="&#x1F517;"
           name="Scope inheritance"
+          nameColor="var(--violet)"
+          description="Child agents inherit parent's permission ceiling. Scope only narrows, never widens, down the delegation chain. Budget draws from parent's remaining allocation. Org budget &rarr; drive budget &rarr; agent budget &rarr; sub-agent budget."
+        />
+      </FeatureRow>
+      <FeatureRow columns={3}>
+        <Feature
+          icon="&#x1F512;"
+          name="Enterprise SSO"
+          nameColor="var(--blue)"
+          description="SAML 2.0 + OIDC for Okta, Azure AD, OneLogin. Email domain routing (user@acme.com &rarr; Acme's Okta). Per-org SSO enforcement. Builds on existing session infrastructure (scoped tokens, resource binding)."
+        />
+        <Feature
+          icon="&#x2705;"
+          name="Approval gates"
+          nameColor="var(--green)"
+          description="Human-in-the-loop for high-risk operations. Configurable per-agent: which tools require approval, timeout behavior, risk levels. Workspace-level enforcement at the tool execution boundary."
+        />
+        <Feature
+          icon="&#x1F6E1;"
+          name="OWASP coverage"
           nameColor="var(--red)"
-          description="Child agents inherit parent's permission boundary. An agent spawned by a read-only agent can't write. Scope only narrows, never widens, down the delegation chain."
+          description="Systematic coverage of all 10 OWASP agentic risks. Goal hijacking (scope gates), tool misuse (capability enforcement), identity abuse (per-user isolation), cascading failures (scope inheritance), rogue agents (budget + kill switch)."
         />
       </FeatureRow>
 
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
-        <h4 style={{ color: "var(--blue)" }}>From access control to full governance</h4>
+        <h4 style={{ color: "var(--blue)" }}>Why two tiers, not one</h4>
         <p style={{ fontSize: 12 }}>
-          Today: who can see what. Target: who can see what, how much they
-          can spend, what actions they can take, and how those boundaries
-          cascade through agent hierarchies. The same RBAC engine, extended
-          with cost controls, capability gates, and organizational hierarchy.
+          Org roles and drive roles serve different purposes. An org admin
+          sets the AI budget ceiling and configures SSO &mdash; they don&apos;t
+          need edit access to every drive. A drive &ldquo;Maintainer&rdquo;
+          can merge PRs and configure agents &mdash; they don&apos;t need
+          billing access. Collapsing these into one role system forces
+          over-permissioning at one level to satisfy the other. Two tiers
+          means governance scales independently from content access.
         </p>
       </Card>
     </div>

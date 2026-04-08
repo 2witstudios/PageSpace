@@ -108,7 +108,7 @@ export function DatabasePane() {
         <span className="hl">tiered org isolation on AWS.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
-        Current state, what&apos;s missing, and the end-game architecture.
+        Current state, competitive landscape, and the end-game architecture.
         The migration path from a single VPS to per-org database isolation
         with a global control plane on AWS.
       </p>
@@ -119,7 +119,7 @@ export function DatabasePane() {
 
       <div className="sl">Current</div>
       <h3 style={{ marginBottom: 16 }}>
-        Single VPS. Single Postgres. 8 containers.{" "}
+        Single VPS. Single Postgres. 75 tables. 8 running containers.{" "}
         <span style={{ color: "var(--dim)", fontWeight: 400 }}>No agent runtime, no container execution, no org isolation.</span>
       </h3>
 
@@ -140,14 +140,14 @@ export function DatabasePane() {
           <Zone label="Docker Compose" color="var(--blue)" badge="single VPS">
             <Zone label="Frontend Network" color="var(--cyan)" badge="exposed to Caddy" style={{ marginBottom: 8 }}>
               <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 6 }}>
-                <Svc name="Web (Next.js)" detail="API routes - AI chat - 33+ tools - Brave search" color="var(--cyan)" port=":3000" mem="768M" />
+                <Svc name="Web (Next.js)" detail="API routes - AI chat - 33+ tools" color="var(--cyan)" port=":3000" mem="768M" />
                 <Svc name="Realtime" detail="Socket.IO - presence - per-event auth" color="var(--cyan)" port=":3001" mem="256M" />
                 <Svc name="Marketing" detail="Landing pages - docs - pricing" color="var(--cyan)" port=":3004" mem="256M" />
               </div>
             </Zone>
             <Zone label="Internal Network" color="var(--violet)" badge="no external access">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 6 }}>
-                <Svc name="PostgreSQL 17.5" detail="Single instance - 89 tables - all data" color="var(--green)" port=":5432" mem="200M" />
+                <Svc name="PostgreSQL 17.5" detail="Single instance - 75 tables - all data" color="var(--green)" port=":5432" mem="200M" />
                 <Svc name="Redis (cache)" detail="Rate limiting - general cache" color="var(--red)" port=":6379" mem="160M" />
                 <Svc name="Redis (sessions)" detail="Session storage - no persistence" color="var(--red)" port=":6379" mem="96M" />
               </div>
@@ -175,10 +175,10 @@ export function DatabasePane() {
             8 Cron Jobs
           </div>
           <div style={{ background: "var(--s1)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
-            <CronJob schedule="*/5m" name="Calendar sync" endpoint="/api/cron/calendar-sync" />
-            <CronJob schedule="*/5m" name="Workflows" endpoint="/api/cron/workflows" />
-            <CronJob schedule="1h" name="Token cleanup" endpoint="/api/cron/cleanup-tokens" />
-            <CronJob schedule="6h" name="Pulse" endpoint="/api/pulse/cron" />
+            <CronJob schedule="*/5 min" name="Calendar sync" endpoint="/api/cron/calendar-sync" />
+            <CronJob schedule="*/5 min" name="Workflows" endpoint="/api/cron/workflows" />
+            <CronJob schedule="hourly" name="Token cleanup" endpoint="/api/cron/cleanup-tokens" />
+            <CronJob schedule="*/6h" name="Pulse" endpoint="/api/pulse/cron" />
             <CronJob schedule="2am" name="Audit verify" endpoint="/api/cron/verify-audit-chain" />
             <CronJob schedule="3am" name="AI log purge" endpoint="/api/cron/purge-ai-usage-logs" />
             <CronJob schedule="4am" name="Msg purge" endpoint="/api/cron/purge-deleted-messages" />
@@ -197,20 +197,20 @@ export function DatabasePane() {
           </div>
 
           <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: "var(--green)", textTransform: "uppercase" as CSSProperties["textTransform"], marginBottom: 10 }}>
-            89 tables, 1 Postgres
+            75 tables, 1 Postgres
           </div>
           <div style={{
             background: "var(--s1)", border: "1px solid var(--border)", borderRadius: 10,
             padding: "10px 12px",
             fontSize: 8, color: "var(--mid)", fontFamily: "var(--mono)", lineHeight: 1.7,
           }}>
-            <strong style={{ color: "var(--green)" }}>Auth:</strong> users, sessions, passkeys, tokens<br />
-            <strong style={{ color: "var(--blue)" }}>Core:</strong> drives, pages, versions, files<br />
-            <strong style={{ color: "var(--cyan)" }}>Chat:</strong> conversations, messages, channels<br />
-            <strong style={{ color: "var(--violet)" }}>Tasks:</strong> taskLists, taskItems, assignees<br />
-            <strong style={{ color: "var(--amber)" }}>Calendar:</strong> events, attendees, google<br />
-            <strong style={{ color: "var(--red)" }}>Billing:</strong> subscriptions, stripeEvents<br />
-            <strong style={{ color: "var(--dim)" }}>+60 more</strong>
+            <strong style={{ color: "var(--green)" }}>Auth (9):</strong> users, sessions, passkeys, tokens<br />
+            <strong style={{ color: "var(--blue)" }}>Core (9):</strong> drives, pages, tags, favorites<br />
+            <strong style={{ color: "var(--cyan)" }}>Chat (3):</strong> channels, reactions, read status<br />
+            <strong style={{ color: "var(--violet)" }}>Tasks (4):</strong> taskLists, taskItems, assignees<br />
+            <strong style={{ color: "var(--amber)" }}>Calendar (3):</strong> events, attendees, google<br />
+            <strong style={{ color: "var(--red)" }}>Billing (2):</strong> subscriptions, stripeEvents<br />
+            <strong style={{ color: "var(--dim)" }}>+45 more</strong> across 28 schema files
           </div>
         </div>
       </div>
@@ -231,7 +231,7 @@ export function DatabasePane() {
         <Card accent="red">
           <h4 style={{ color: "var(--red)" }}>No database isolation</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            All 89 tables live in a single PostgreSQL instance. Every tenant,
+            All 75 tables live in a single PostgreSQL instance. Every tenant,
             every drive, every user shares the same database. No per-org
             separation, no tiered isolation.
           </p>
@@ -258,17 +258,135 @@ export function DatabasePane() {
       <Card style={{ borderColor: "var(--border2)", marginBottom: 28 }}>
         <h4 style={{ color: "var(--dim)" }}>What IS already built toward this</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          Control plane with <code>Provisioner</code> interface already abstracted
-          for the AWS swap (<code>PROVISIONER_TYPE</code> env var). Data migration
-          tooling exists: export script (tenant-export.ts), import script
-          (tenant-import.ts), and validation script (tenant-validate.ts). CUID2 IDs
-          ensure no collisions across databases. The provisioning engine generates
-          22 env vars per tenant including 8 cryptographic secrets.
+          Control plane with <code>createProvisioningEngine(deps)</code> using
+          dependency injection &mdash; the provisioner is backend-agnostic by
+          design. Tenant lifecycle management (<code>createTenantLifecycle</code>)
+          supports suspend, resume, upgrade, and destroy with automatic
+          pg_dump backup before teardown. Data migration tooling exists:
+          export (<code>tenant-export.ts</code>), import (<code>tenant-import.ts</code>),
+          and validation (<code>tenant-validate.ts</code>) scripts with tests.
+          CUID2 IDs ensure no collisions across databases.
         </p>
       </Card>
 
       {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 3: END GAME                                    */}
+      {/* SECTION 3: COMPETITIVE LANDSCAPE                       */}
+      {/* ═══════════════════════════════════════════════════════ */}
+
+      <hr />
+
+      <div className="sl">Competitive Landscape</div>
+      <h2>
+        Agent frameworks vs.{" "}
+        <span className="hl">a complete platform.</span>
+      </h2>
+      <p style={{ marginBottom: 20, maxWidth: 720 }}>
+        The emerging agent ecosystem builds personal runtimes &mdash; single-user,
+        local databases, no shared state. PageSpace builds the team platform
+        those agents need to operate: cloud Postgres, real-time collaboration,
+        shared data that multiple humans and agents access simultaneously.
+      </p>
+
+      <Card style={{ overflow: "auto", marginBottom: 16, padding: 0 }}>
+        <DataTable headers={["", "PageSpace", "OpenFang", "OpenClaw"]}>
+          <CompareRow
+            capability="Architecture"
+            pagespace="Full SaaS platform &mdash; Next.js + Postgres + Redis + Socket.IO"
+            col2="Single Rust binary &mdash; 137K lines, compiles to one executable"
+            verdict="Local-first agent &mdash; runs on user machine or private server"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Data layer"
+            pagespace="Cloud Postgres &mdash; 75 tables, team-shared, multi-user concurrent access"
+            col2="SQLite &mdash; embedded in binary, single-user, personal only"
+            verdict="Local files &mdash; one user&apos;s interaction history on disk"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Multi-tenancy"
+            pagespace="Cloud-native &mdash; control plane, tenant provisioning, team shared state"
+            col2="None &mdash; one agent, one user, one machine"
+            verdict="None &mdash; one bot per install, no team access"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Real-time"
+            pagespace="Socket.IO &mdash; presence, cursors, per-event auth, streaming"
+            col2="40 channel adapters &mdash; Slack, Discord, email, etc."
+            verdict="Channel adapter layer &mdash; messaging platform integration"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Memory"
+            pagespace="Team-shared &mdash; conversations, versions, audit logs visible to whole org"
+            col2="Personal &mdash; episodic + semantic + procedural, one user only"
+            verdict="Personal &mdash; local sessions, no team visibility"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Security"
+            pagespace="RBAC, opaque sessions, HMAC cron, audit chain, rate limiting"
+            col2="16-layer &mdash; WASM sandbox, Merkle audit, prompt injection scanner"
+            verdict="SSL in transit, encrypted at rest, no external calls by default"
+            verdictColor="var(--mid)"
+          />
+          <CompareRow
+            capability="Scale model"
+            pagespace="Cloud teams &rarr; per-org isolation &rarr; enterprise dedicated infra"
+            col2="Personal binary &rarr; peer-to-peer agent networking"
+            verdict="Personal install &rarr; 250K+ stars &rarr; community plugins"
+            verdictColor="var(--mid)"
+          />
+        </DataTable>
+      </Card>
+
+      <div className="g3" style={{ marginBottom: 24 }}>
+        <Card accent="cyan">
+          <h4 style={{ color: "var(--cyan)" }}>OpenFang</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Rust agent OS. 180ms cold start, 40MB RAM. SQLite memory,
+            WASM sandbox, MCP client/server. <strong>Personal database only</strong> &mdash;
+            one agent, one user, one machine. No shared state, no team
+            access, no web UI. A runtime, not a platform.
+          </p>
+        </Card>
+        <Card accent="violet">
+          <h4 style={{ color: "var(--violet)" }}>OpenClaw</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Fastest-growing GitHub project in history (250K+ stars in 60 days).
+            Four-layer architecture: channel adapter, agent core, skill plugins,
+            memory. <strong>Runs on one person&apos;s machine</strong> &mdash; config and
+            history stored locally. No cloud database, no team collaboration,
+            no shared workspace.
+          </p>
+        </Card>
+        <Card accent="amber">
+          <h4 style={{ color: "var(--amber)" }}>Viktor AI</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Low-code engineering platform (Python SDK). Enterprise SSO,
+            multi-regional cloud. Focused on AEC industry &mdash; structural
+            engineering, automation workflows. Not a general-purpose SaaS
+            platform. Different market entirely.
+          </p>
+        </Card>
+      </div>
+
+      <Card accent="green" style={{ marginBottom: 12 }}>
+        <h4 style={{ color: "var(--green)" }}>PageSpace differentiator: cloud, team-accessible data</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          OpenFang and OpenClaw give you a personal agent with a personal database.
+          PageSpace gives you a <strong>team database in the cloud</strong> &mdash;
+          75 tables of shared state that humans and agents access concurrently.
+          When an agent writes a page, the whole team sees it in real-time. When a
+          teammate updates a task, the agent reacts. Shared data is the primitive
+          that makes agents useful at work, not just useful alone. Their data is
+          personal. Ours is organizational.
+        </p>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 4: END GAME                                    */}
       {/* ═══════════════════════════════════════════════════════ */}
 
       <hr />
@@ -279,9 +397,11 @@ export function DatabasePane() {
         <span className="hl">AWS. Firecracker. Tiered databases.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The end-game splits 89 tables into ~40 global + ~45 per-org, with
-        tiered isolation by plan. The container hierarchy nests
-        Org &gt; Drive &gt; Repo &gt; Branch &gt; Page &gt; Agent.
+        The end-game splits 75 tables into ~33 global + ~36 per-org + ~6
+        dual-scoped, with tiered isolation by plan. The container hierarchy
+        nests Org &gt; Drive &gt; Repo &gt; Branch &gt; Page &gt; Agent.
+        Every interface &mdash; IDE, CMS, CRM &mdash; is a lens on the same
+        OS, backed by the same data.
       </p>
 
       {/* End-game infra diagram */}
@@ -296,7 +416,7 @@ export function DatabasePane() {
           {/* GLOBAL */}
           <Zone label="Global" color="var(--green)" badge="shared across all orgs">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 10 }}>
-              <Svc name="Global Postgres (RDS)" detail="~40 tables: users, auth, billing, DMs, monitoring" color="var(--green)" />
+              <Svc name="Global Postgres (RDS)" detail="~33 tables: users, auth, billing, DMs, monitoring" color="var(--green)" />
               <Svc name="Auth" detail="Opaque tokens - passkeys - OAuth - sessions" color="var(--red)" />
               <Svc name="Billing" detail="Stripe - subscriptions - tiers" color="var(--amber)" />
               <Svc name="Control Plane" detail="Provisioner - lifecycle - health" color="var(--amber)" />
@@ -326,7 +446,7 @@ export function DatabasePane() {
               {/* TEAM ORG */}
               <Zone label="Team Org" color="var(--blue)" badge="paid - dedicated">
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5, marginBottom: 8 }}>
-                  <Svc name="Org Postgres (RDS)" detail="~45 tables - dedicated - AI billing, API keys" color="var(--blue)" />
+                  <Svc name="Org Postgres (RDS)" detail="~36 tables - dedicated - content, collab, tasks" color="var(--blue)" />
                   <Svc name="Redis" detail="ElastiCache - dedicated" color="var(--cyan)" />
                   <Svc name="S3" detail="File storage" color="var(--amber)" />
                 </div>
@@ -370,7 +490,7 @@ export function DatabasePane() {
             background: "var(--s2)", borderRadius: 8, border: "1px solid var(--border)",
             fontSize: 9, color: "var(--mid)", fontFamily: "var(--mono)",
           }}>
-            <span><strong style={{ color: "var(--green)" }}>Global:</strong> 1x RDS - ~40 tables</span>
+            <span><strong style={{ color: "var(--green)" }}>Global:</strong> 1x RDS - ~33 tables</span>
             <span style={{ color: "var(--border)" }}>|</span>
             <span><strong style={{ color: "var(--blue)" }}>Per org:</strong> 1x RDS - 1x Redis - 1x S3 - 4x ECS - Nx VMs</span>
             <span style={{ color: "var(--border)" }}>|</span>
@@ -399,10 +519,12 @@ export function DatabasePane() {
             deployable site. Ship from where you build.
           </Callout>
 
-          <Callout title="External integrations, three ways in" color="var(--violet)">
-            Natively via Runtime, via PageSpace integrations (OAuth, API
-            keys, MCP), or via installable CLIs inside containers.
-            Same capabilities, governed by RBAC.
+          <Callout title="What personal databases can't do" color="var(--violet)">
+            OpenFang and OpenClaw give agents a personal SQLite. PageSpace
+            gives agents a team Postgres &mdash; shared state, real-time sync,
+            RBAC, audit logs. Agent work is visible to the whole org
+            the moment it happens. That&apos;s the difference between
+            a personal tool and a team OS.
           </Callout>
 
           <Callout title="Always-on, not just chat" color="var(--green)">
@@ -431,24 +553,24 @@ export function DatabasePane() {
 
       <div className="sl">Schema Split</div>
       <h2>
-        ~85 tables across two databases.{" "}
+        75 tables across two databases.{" "}
         <span className="hl">What goes where.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The current PageSpace schema has ~85 tables in one PostgreSQL database.
-        Splitting into Global + Org databases means deciding which tables live
-        where. The rule: <strong>user identity and billing are global, content
-        and collaboration are per-org.</strong>
+        The current schema has 75 <code>pgTable()</code> definitions across
+        28 schema files. Splitting into Global + Org databases means deciding
+        which tables live where. The rule: <strong>user identity and billing
+        are global, content and collaboration are per-org.</strong>
       </p>
 
       <Card style={{ overflow: "auto", marginBottom: 24, padding: 0 }}>
         <DataTable headers={["Tables", "Database", "Count", "Notes"]}>
-          <SectionHeader text="Global Postgres (~40 tables)" color="var(--green)" />
+          <SectionHeader text="Global Postgres (~33 tables)" color="var(--green)" />
           <CompareRow
             capability="Auth & tokens"
-            pagespace="users, sessions, passkeys, deviceTokens, mcpTokens, verificationTokens, socketTokens, emailUnsubscribeTokens"
+            pagespace="users, sessions, passkeys, deviceTokens, mcpTokens, mcpTokenDrives, verificationTokens, socketTokens, emailUnsubscribeTokens"
             col2="Global"
-            verdict="8 tables"
+            verdict="9 tables"
             verdictColor="var(--green)"
           />
           <CompareRow
@@ -460,7 +582,7 @@ export function DatabasePane() {
           />
           <CompareRow
             capability="User preferences"
-            pagespace="userProfiles, userPersonalization, displayPreferences, userHotkeyPreferences, userAiSettings, userDashboards"
+            pagespace="userPersonalization, displayPreferences, userHotkeyPreferences, userAiSettings, userDashboards, pulseSummaries"
             col2="Global"
             verdict="6 tables"
             verdictColor="var(--green)"
@@ -481,32 +603,46 @@ export function DatabasePane() {
           />
           <CompareRow
             capability="Monitoring"
-            pagespace="securityAuditLog, systemLogs, apiMetrics, userActivities, aiUsageLogs, errorLogs"
+            pagespace="securityAuditLog, systemLogs, apiMetrics, userActivities, aiUsageLogs, errorLogs, activityLogs"
             col2="Global"
-            verdict="6 tables"
+            verdict="7 tables"
             verdictColor="var(--green)"
           />
           <CompareRow
             capability="Other"
-            pagespace="contactSubmissions, feedbackSubmissions, pulseSummaries"
+            pagespace="contactSubmissions, feedbackSubmissions"
             col2="Global"
-            verdict="3 tables"
+            verdict="2 tables"
             verdictColor="var(--green)"
           />
 
-          <SectionHeader text="Org Postgres (~45 tables - per team or shared)" color="var(--blue)" />
+          <SectionHeader text="Org Postgres (~36 tables - per team or shared)" color="var(--blue)" />
           <CompareRow
             capability="Core content"
-            pagespace="drives, pages, tags, pageTags, favorites, mentions, userMentions"
+            pagespace="drives, pages, chatMessages, tags, pageTags, storageEvents, favorites, mentions, userMentions"
             col2="Per-org"
-            verdict="7 tables"
+            verdict="9 tables"
+            verdictColor="var(--blue)"
+          />
+          <CompareRow
+            capability="Members"
+            pagespace="userProfiles, driveRoles, driveMembers, pagePermissions"
+            col2="Per-org"
+            verdict="4 tables"
+            verdictColor="var(--blue)"
+          />
+          <CompareRow
+            capability="Permissions"
+            pagespace="permissions"
+            col2="Per-org"
+            verdict="1 table"
             verdictColor="var(--blue)"
           />
           <CompareRow
             capability="Conversations"
-            pagespace="conversations, messages, chatMessages"
+            pagespace="conversations, messages"
             col2="Per-org"
-            verdict="3 tables"
+            verdict="2 tables"
             verdictColor="var(--blue)"
           />
           <CompareRow
@@ -517,17 +653,10 @@ export function DatabasePane() {
             verdictColor="var(--blue)"
           />
           <CompareRow
-            capability="Permissions"
-            pagespace="driveRoles, driveMembers, pagePermissions"
-            col2="Per-org"
-            verdict="3 tables"
-            verdictColor="var(--blue)"
-          />
-          <CompareRow
             capability="Storage"
-            pagespace="files, filePages, storageEvents"
+            pagespace="files, filePages"
             col2="Per-org"
-            verdict="3 tables"
+            verdict="2 tables"
             verdictColor="var(--blue)"
           />
           <CompareRow
@@ -545,21 +674,14 @@ export function DatabasePane() {
             verdictColor="var(--blue)"
           />
           <CompareRow
-            capability="Integrations"
-            pagespace="integrationToolGrants, integrationAuditLog"
-            col2="Per-org"
-            verdict="2 tables"
-            verdictColor="var(--blue)"
-          />
-          <CompareRow
             capability="Other"
-            pagespace="workflows, calendarEvents, eventAttendees, activityLogs, userPageViews"
+            pagespace="workflows, calendarEvents, eventAttendees, userPageViews"
             col2="Per-org"
-            verdict="5 tables"
+            verdict="4 tables"
             verdictColor="var(--blue)"
           />
 
-          <SectionHeader text="Edge cases (need design decision)" color="var(--amber)" />
+          <SectionHeader text="Edge cases (need design decision) — 6 tables" color="var(--amber)" />
           <CompareRow
             capability="integrationProviders"
             pagespace="Can be system-wide (MCP) or drive-specific (custom)"
@@ -572,6 +694,20 @@ export function DatabasePane() {
             pagespace="User-scoped OAuth OR drive-scoped API keys"
             col2="Both?"
             verdict="Dual-scoped"
+            verdictColor="var(--amber)"
+          />
+          <CompareRow
+            capability="integrationToolGrants"
+            pagespace="Per-drive tool permissions for integrations"
+            col2="Per-org?"
+            verdict="Likely per-org"
+            verdictColor="var(--amber)"
+          />
+          <CompareRow
+            capability="integrationAuditLog"
+            pagespace="Audit trail for integration actions"
+            col2="Per-org?"
+            verdict="Likely per-org"
             verdictColor="var(--amber)"
           />
           <CompareRow
@@ -687,37 +823,38 @@ export function DatabasePane() {
         <span className="hl">ECS + RDS + ElastiCache.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The control plane already has a <code>Provisioner</code> interface
-        designed for exactly this migration. The current
-        <code> DockerComposeProvisioner</code> is swapped for an
-        <code> AwsProvisioner</code> via <code>PROVISIONER_TYPE</code> env var.
-        Both provisioner types can coexist.
+        The control plane uses dependency injection &mdash;
+        <code> createProvisioningEngine(deps)</code> accepts a{" "}
+        <code>ShellExecutor</code> and <code>TenantRepo</code>. Today it
+        runs <code>docker compose up</code>. Tomorrow the same interface
+        provisions ECS tasks and RDS instances. No interface changes needed
+        &mdash; just a new executor implementation.
       </p>
 
       <ArchDiagram>
         <ArchRow label="Control" labelSub="plane" style={{ marginBottom: 8 }}>
           <ArchNode
-            title="Provisioner Interface"
+            title="Provisioning Engine"
             titleColor="var(--green)"
             borderColor="rgba(61,214,140,0.3)"
             status={<StatusBadge variant="live" />}
-            detail="provision() - suspend() - resume() - destroy()<br>upgrade() - healthCheck()<br>Already abstracted, ready for AWS<br>PROVISIONER_TYPE selects backend"
+            detail="provision() &rarr; generate env &rarr; compose up &rarr; poll health &rarr; seed admin<br>Tenant lifecycle: suspend, resume, upgrade, destroy<br>Dependency injection: ShellExecutor + TenantRepo<br>Automatic pg_dump backup before destroy"
           />
         </ArchRow>
 
-        <ArchConnector text="same API, different backends" />
+        <ArchConnector text="same deps pattern, different executor" />
 
         <ArchRow label="Current" labelSub="VPS" style={{ marginBottom: 8 }}>
           <ArchNode
-            title="DockerComposeProvisioner"
+            title="Docker Compose Backend"
             titleColor="var(--amber)"
             borderColor="rgba(255,184,77,0.3)"
             status={<StatusBadge variant="live" />}
-            detail="docker compose -p ps-{slug} up -d<br>8 containers per tenant<br>22 env vars generated per tenant<br>Capacity: ~18-20 tenants per VPS"
+            detail="docker compose -p ps-{slug} up -d<br>10 services per tenant (8 running + 2 one-shot)<br>generate-tenant-env.sh creates per-tenant .env<br>Capacity: ~18-20 tenants per VPS"
           />
         </ArchRow>
 
-        <ArchConnector text="migrate when VPS capacity exhausted" />
+        <ArchConnector text="swap executor when VPS capacity exhausted" />
 
         <ArchRow label="Target" labelSub="AWS">
           <ArchNode
@@ -725,14 +862,14 @@ export function DatabasePane() {
             titleColor="var(--blue)"
             borderColor="rgba(77,142,255,0.3)"
             status={<StatusBadge variant="planned" />}
-            detail="Container orchestration<br>Same Docker images<br>No EC2 management<br>Per-tenant task definitions"
+            detail="Container orchestration<br>Same Docker images (ghcr.io/2witstudios/)<br>No EC2 management<br>Per-tenant task definitions"
           />
           <ArchNode
             title="RDS PostgreSQL"
             titleColor="var(--blue)"
             borderColor="rgba(77,142,255,0.3)"
             status={<StatusBadge variant="planned" />}
-            detail="Global RDS (auth, billing)<br>Shared RDS (free users)<br>Dedicated RDS (paid teams)<br>Managed backups + replicas"
+            detail="Global RDS (~33 tables: auth, billing)<br>Shared RDS (free: row isolation)<br>Dedicated RDS (paid: ~36 tables)<br>Managed backups + replicas"
           />
           <ArchNode
             title="ElastiCache + S3"
