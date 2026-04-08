@@ -122,8 +122,21 @@ function getRedirectUrl(response: Response): URL {
 }
 
 describe('GET /api/user/integrations/callback', () => {
+  const envKeys = [
+    'OAUTH_STATE_SECRET',
+    'WEB_APP_URL',
+    'INTEGRATION_GITHUB_CLIENT_ID',
+    'INTEGRATION_GITHUB_CLIENT_SECRET',
+  ] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
     vi.clearAllMocks();
+
+    // Save original env
+    for (const key of envKeys) {
+      savedEnv[key] = process.env[key];
+    }
 
     // Default env
     process.env.OAUTH_STATE_SECRET = 'test-oauth-secret';
@@ -135,6 +148,16 @@ describe('GET /api/user/integrations/callback', () => {
     mockGetProviderById.mockResolvedValue(mockProvider);
     mockVerifySignedState.mockReturnValue(mockStateData);
     mockGetDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true });
+  });
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
+    }
   });
 
   // ── Alert #98: OAuth error handling ──────────────────────────────

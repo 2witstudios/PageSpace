@@ -21,6 +21,9 @@ const integrationCallbackSchema = z.object({
   state: z.string().min(1, 'State parameter is required'),
 });
 
+const visibilityValues = ['private', 'owned_drives', 'all_drives'] as const;
+type ConnectionVisibility = typeof visibilityValues[number];
+
 /**
  * GET /api/user/integrations/callback
  * OAuth callback handler for integration connections.
@@ -71,7 +74,10 @@ export async function GET(request: Request) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_state`, baseUrl));
     }
 
-    const { userId, providerId, name, visibility, driveId, returnUrl } = stateData;
+    const { userId, providerId, name, driveId, returnUrl } = stateData;
+    const visibility: ConnectionVisibility = visibilityValues.includes(stateData.visibility as ConnectionVisibility)
+      ? (stateData.visibility as ConnectionVisibility)
+      : 'owned_drives';
 
     // Load provider
     const provider = await getProviderById(db, providerId);
@@ -161,7 +167,7 @@ export async function GET(request: Request) {
           name,
           status: 'active',
           credentials: encrypted,
-          visibility: (visibility as 'private' | 'owned_drives' | 'all_drives') || 'owned_drives',
+          visibility,
           connectedBy: userId,
           connectedAt: new Date(),
         });
