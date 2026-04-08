@@ -1,15 +1,20 @@
 import crypto from 'crypto';
 
+// State expires after 10 minutes — prevents replay attacks
+const STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
 export interface OAuthStateData {
   returnUrl?: string;
   platform?: 'web' | 'desktop' | 'ios';
   deviceId?: string;
   deviceName?: string;
+  timestamp?: number;
 }
 
 export type VerifyOAuthStateResult =
   | { status: 'valid'; data: OAuthStateData }
   | { status: 'invalid_signature' }
+  | { status: 'expired' }
   | { status: 'unsigned'; returnUrl?: string }
   | { status: 'malformed' };
 
@@ -54,9 +59,16 @@ export function verifyOAuthState(stateBase64: string): VerifyOAuthStateResult {
       Buffer.from(sig, 'utf-8'),
     );
 
-    return isValid
-      ? { status: 'valid', data }
-      : { status: 'invalid_signature' };
+    if (!isValid) {
+      return { status: 'invalid_signature' };
+    }
+
+    // Reject expired state (requires timestamp from createSignedState)
+    if (typeof data.timestamp === 'number' && Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
+      return { status: 'expired' };
+    }
+
+    return { status: 'valid', data };
   } catch {
     return { status: 'malformed' };
   }
