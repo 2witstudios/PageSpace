@@ -49,22 +49,23 @@ export function verifyOAuthState(stateBase64: string): VerifyOAuthStateResult {
       .update(JSON.stringify(data))
       .digest('hex');
 
-    // Timing-safe comparison to prevent timing attacks
-    if (expected.length !== sig.length) {
-      return { status: 'invalid_signature' };
-    }
-
-    const isValid = crypto.timingSafeEqual(
-      Buffer.from(expected, 'utf-8'),
-      Buffer.from(sig, 'utf-8'),
-    );
+    // Double-hash timing-safe comparison: hash both sides to guarantee
+    // equal-length buffers regardless of attacker-controlled sig length
+    const actualHash = crypto.createHash('sha256').update(String(sig)).digest();
+    const expectedHash = crypto.createHash('sha256').update(expected).digest();
+    const isValid = crypto.timingSafeEqual(actualHash, expectedHash);
 
     if (!isValid) {
       return { status: 'invalid_signature' };
     }
 
-    // Reject expired state (requires timestamp from createSignedState)
-    if (typeof data.timestamp === 'number' && Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
+    // Reject state with missing or invalid timestamp
+    if (typeof data.timestamp !== 'number' || !Number.isFinite(data.timestamp)) {
+      return { status: 'expired' };
+    }
+
+    // Reject expired state
+    if (Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
       return { status: 'expired' };
     }
 

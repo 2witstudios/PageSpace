@@ -27,7 +27,7 @@ describe('verifyOAuthState', () => {
   });
 
   it('returns valid for correctly signed state', () => {
-    const state = createState({ returnUrl: '/dashboard', platform: 'web' });
+    const state = createState({ returnUrl: '/dashboard', platform: 'web', timestamp: Date.now() });
     const result = verifyOAuthState(state);
     expect(result.status).toBe('valid');
   });
@@ -73,18 +73,32 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('valid');
   });
 
-  it('returns valid for state without timestamp (legacy compatibility)', () => {
+  it('returns expired for state without timestamp', () => {
     const state = createState({ returnUrl: '/dashboard', platform: 'web' });
     const result = verifyOAuthState(state);
-    expect(result.status).toBe('valid');
+    expect(result.status).toBe('expired');
+  });
+
+  it('returns expired for state with NaN timestamp', () => {
+    const state = createState({ returnUrl: '/dashboard', platform: 'web', timestamp: NaN });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('expired');
+  });
+
+  it('returns expired for state with Infinity timestamp', () => {
+    const state = createState({ returnUrl: '/dashboard', platform: 'web', timestamp: Infinity });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('expired');
   });
 
   it('extracts data fields from valid state', () => {
+    const now = Date.now();
     const state = createState({
       returnUrl: '/settings',
       platform: 'desktop',
       deviceId: 'dev-123',
       deviceName: 'My Mac',
+      timestamp: now,
     });
     const result = verifyOAuthState(state);
     expect(result).toEqual({
@@ -94,6 +108,7 @@ describe('verifyOAuthState', () => {
         platform: 'desktop',
         deviceId: 'dev-123',
         deviceName: 'My Mac',
+        timestamp: now,
       },
     });
   });

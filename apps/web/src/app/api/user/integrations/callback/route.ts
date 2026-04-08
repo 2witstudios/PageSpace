@@ -17,8 +17,8 @@ import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/int
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 const integrationCallbackSchema = z.object({
-  code: z.string().min(1, 'Authorization code is required'),
-  state: z.string().min(1, 'State parameter is required'),
+  code: z.string().min(1, 'Authorization code is required').max(4096),
+  state: z.string().min(1, 'State parameter is required').max(4096),
 });
 
 const visibilityValues = ['private', 'owned_drives', 'all_drives'] as const;

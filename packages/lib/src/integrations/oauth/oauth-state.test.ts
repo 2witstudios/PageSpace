@@ -87,6 +87,57 @@ describe('verifySignedState', () => {
     expect(result).toBeNull();
   });
 
+  it('should return null for state with NaN timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    decoded.data.timestamp = NaN;
+
+    // Re-sign with correct secret (NaN becomes null in JSON)
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const tamperedState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(tamperedState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
+  it('should return null for state with missing timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    delete decoded.data.timestamp;
+
+    // Re-sign without timestamp
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const noTimestampState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(noTimestampState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
+  it('should return null for state with Infinity timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    decoded.data.timestamp = Infinity;
+
+    // Re-sign (Infinity becomes null in JSON)
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const infState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(infState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
   it('should reject forged signatures of different lengths without timing leaks', () => {
     const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
     const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));

@@ -77,8 +77,13 @@ export function verifySignedState<T extends Record<string, unknown> = Record<str
 
     const data = stateWithSignature.data;
 
+    // Reject state with missing or invalid timestamp
+    if (typeof data.timestamp !== 'number' || !Number.isFinite(data.timestamp)) {
+      return null;
+    }
+
     // Check state expiration
-    if (typeof data.timestamp === 'number' && Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
+    if (Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
       return null;
     }
 
