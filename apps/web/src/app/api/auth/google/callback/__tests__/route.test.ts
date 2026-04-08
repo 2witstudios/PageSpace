@@ -75,6 +75,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 

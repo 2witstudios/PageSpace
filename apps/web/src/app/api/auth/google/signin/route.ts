@@ -6,7 +6,7 @@ import {
 } from '@pagespace/lib/security';
 import crypto from 'crypto';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { generatePKCE } from '@pagespace/lib/auth/pkce';
+import { generatePKCE } from '@pagespace/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),

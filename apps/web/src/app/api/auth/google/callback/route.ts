@@ -16,7 +16,7 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
+import { consumePKCEVerifier } from '@pagespace/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const googleCallbackSchema = z.object({
