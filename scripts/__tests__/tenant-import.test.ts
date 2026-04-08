@@ -6,7 +6,7 @@
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -44,7 +44,7 @@ beforeEach(async () => {
   await seedFixtures(db);
 
   // Create temp dirs
-  tmpDir = path.join(os.tmpdir(), `pagespace-import-test-${Date.now()}`);
+  tmpDir = await mkdtemp(path.join(os.tmpdir(), 'pagespace-import-test-'));
   fileStoragePath = path.join(tmpDir, 'source-files');
   bundleDir = path.join(tmpDir, 'bundle');
   await mkdir(fileStoragePath, { recursive: true });
