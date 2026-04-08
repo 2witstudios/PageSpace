@@ -156,3 +156,43 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 - `packages/lib/src/services/notification-email-service.ts` — Log injection prevention
 - `packages/lib/src/file-processing/file-processor.ts` — Hardcoded API URLs
 - `packages/lib/src/security/__tests__/path-validator.test.ts` — Secure temp file creation
+
+---
+
+## Batch 2: Google OAuth User-Controlled Bypass (7 alerts dismissed)
+
+**Branch**: `pu/sec-google-oauth`
+**Date**: 2026-04-08
+**Total Alerts**: 7 (all `js/user-controlled-bypass` HIGH)
+**File**: `apps/web/src/app/api/auth/google/callback/route.ts`
+**Disposition**: All 7 dismissed as **false positives** — standard OAuth protocol patterns
+
+### Analysis
+
+CodeQL's `js/user-controlled-bypass` rule flags conditions where user-provided values control branches guarding sensitive actions. In an OAuth callback handler, this is structurally inevitable — the protocol operates on user-delivered query parameters (`code`, `state`, `error`) that the server must validate and act on.
+
+The callback handler has layered security controls:
+1. **HMAC-SHA256 state signing** — state parameter is signed server-side at `/signin`, verified at `/callback` via `verifyOAuthState` with `crypto.timingSafeEqual`.
+2. **Single rejection guard** — `if (!code || !verifiedState)` rejects requests without both a valid code and HMAC-verified state.
+3. **Server-side code exchange** — OAuth authorization code is validated by Google's token endpoint, not by local conditions.
+4. **PKCE** — code_challenge/code_verifier prevents authorization code interception.
+5. **`isSafeReturnUrl()` defense-in-depth** — blocks open redirect attacks for any returnUrl.
+6. **State expiration** — 10-minute TTL via timestamp injection in `createSignedState`.
+7. **Rate limiting** — distributed rate limiting on callback IP.
+
+### Alert Disposition
+
+| Alert | Line | CWE | Data Flow | Rating | Reason |
+|-------|------|-----|-----------|--------|--------|
+| #145 | 35 | CWE-807 | `searchParams.get('code')` → `client.getToken()` | S4 | Standard OAuth code exchange; Google validates the code server-side |
+| #146 | 40 | CWE-807 | `searchParams.get('error')` → hardcoded redirect | S4 | Error redirect uses hardcoded params (`oauth_error`/`access_denied`), not user values |
+| #147 | 40 | CWE-807 | Same as #146 | S4 | Duplicate alert on same line |
+| #148 | 76 | CWE-807 | `state` → HMAC `sig` vs `expectedSignature` | S4 | HMAC verification IS the security control; uses `crypto.timingSafeEqual` |
+| #151 | 226 | CWE-807 | `sessionService.validateSession(sessionToken)` | S4 | `sessionToken` is server-generated, not user-controlled |
+| #152 | 227 | CWE-807 | Same flow as #151 | S4 | Same flow; CodeQL traces through code exchange but misses trust boundary |
+| #153 | 293 | CWE-807 | `platform === 'desktop'` → `createExchangeCode()` | S4 | `platform` only extracted from HMAC-signed state |
+
+### Existing Test Coverage
+
+- `apps/web/src/app/api/auth/google/callback/__tests__/route.test.ts` — comprehensive callback contract tests
+- `apps/web/src/app/api/auth/google/__tests__/open-redirect-protection.test.ts` — defense-in-depth returnUrl validation
