@@ -88,6 +88,17 @@ describe('isAllowedFetchProxyURL', () => {
       expect(isAllowedFetchProxyURL('http://[::ffff:808:808]:8080')).toBe(false);
     });
 
+    it('should deny cloud metadata endpoints', () => {
+      // AWS/GCP metadata
+      expect(isAllowedFetchProxyURL('http://169.254.169.254/latest/meta-data/')).toBe(false);
+      // AWS IMDSv2 IPv6
+      expect(isAllowedFetchProxyURL('http://[fd00:ec2::254]/latest/meta-data/')).toBe(false);
+      // Alibaba Cloud metadata
+      expect(isAllowedFetchProxyURL('http://100.100.100.200/latest/meta-data/')).toBe(false);
+      // Azure wireserver
+      expect(isAllowedFetchProxyURL('http://168.63.129.16/metadata')).toBe(false);
+    });
+
     it('should deny 172.x outside 16-31 range', () => {
       expect(isAllowedFetchProxyURL('http://172.15.0.1:8080')).toBe(false);
       expect(isAllowedFetchProxyURL('http://172.32.0.1:8080')).toBe(false);

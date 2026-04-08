@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve, sep } from 'path';
 import { hashWithPrefix } from '../utils/hash-utils';
 import {
   compress,
@@ -64,7 +64,13 @@ function getContentPath(ref: string): string {
   assertContentRef(ref);
   const root = getContentRoot();
   const prefix = ref.slice(0, 2);
-  return join(root, prefix, ref);
+  const contentPath = join(root, prefix, ref);
+  // Defense-in-depth: verify resolved path stays within content root
+  const resolvedPath = resolve(contentPath);
+  if (!resolvedPath.startsWith(resolve(root) + sep)) {
+    throw new Error('Content path escapes storage root');
+  }
+  return contentPath;
 }
 
 /**
