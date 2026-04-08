@@ -16,6 +16,7 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const googleCallbackSchema = z.object({
@@ -103,7 +104,19 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
-    const { tokens } = await client.getToken(authCode);
+    // Input validation: bound length and reject unexpected characters
+    if (authCode.length > 512 || !/^[a-zA-Z0-9/_\-\.]+$/.test(authCode)) {
+      loggers.auth.warn('Invalid authorization code format', { codeLength: authCode.length });
+      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
+    }
+
+    // Retrieve PKCE code_verifier (stored during signin, keyed by state)
+    const codeVerifier = stateParam ? await consumePKCEVerifier(stateParam) : null;
+
+    const { tokens } = await client.getToken({
+      code: authCode,
+      ...(codeVerifier && { codeVerifier }),
+    });
 
     if (!tokens.id_token) {
       loggers.auth.error('No ID token received from Google');
