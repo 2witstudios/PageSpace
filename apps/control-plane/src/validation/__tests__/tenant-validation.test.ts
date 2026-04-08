@@ -170,6 +170,18 @@ describe('validateEmail', () => {
     const result = validateEmail('user@example')
     expect(result.valid).toBe(false)
   })
+
+  test('given a ReDoS attack string, should complete in under 100ms', () => {
+    // Trailing space forces regex failure, triggering polynomial backtracking
+    // on vulnerable patterns where [^\s@] overlaps with literal '.'
+    // At 10k repeats the vulnerable regex takes ~900ms; fixed regex takes <1ms
+    const malicious = '!@' + '!.'.repeat(10000) + ' '
+    const start = performance.now()
+    const result = validateEmail(malicious)
+    const elapsed = performance.now() - start
+    expect(result.valid).toBe(false)
+    expect(elapsed).toBeLessThan(100)
+  })
 })
 
 describe('validateTier', () => {
