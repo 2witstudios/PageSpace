@@ -43,6 +43,26 @@ PageSpace is designed with security as a foundational concern, not an afterthoug
 - **Audit logging** — authentication events, permission changes, and AI operations are logged
 - **Rate limiting** — sensitive endpoints have per-IP and per-user rate limits
 
+## Known Tradeoffs
+
+### Plaintext Page Content
+
+Page content, conversation messages, and file metadata are stored as plaintext in PostgreSQL. This is a deliberate design decision — it enables full-text search and AI features like regex search across all user content. API keys and credentials are always encrypted at rest (AES-256-GCM), but page content is not encrypted at the application layer.
+
+**Why**: PageSpace was originally designed as a local-first, self-hosted application where all data stays on your own hardware. Plaintext in your own PostgreSQL instance enables powerful search and AI capabilities without the latency and complexity of searchable encryption.
+
+**Mitigations in place**:
+
+- **Infrastructure encryption** — cloud deployments use volume-level encryption (e.g., AWS EBS, GCP persistent disk) so data is encrypted at rest at the storage layer, transparent to queries
+- **Access controls** — RBAC permissions, opaque session tokens, and two-tier permission caching ensure only authorized users can access content
+- **Backup encryption** — database backups should be encrypted using your infrastructure provider's backup encryption
+- **Audit logging** — tamper-evident SHA-256 hash chain logs all authentication events, permission changes, and AI operations
+- **Network isolation** — real-time collaboration and file processing run entirely within the local Docker network
+
+**Self-hosted deployments**: If you run PageSpace on your own infrastructure, you control encryption at rest at the infrastructure level. PostgreSQL Transparent Data Encryption (TDE) or volume-level encryption protects stored content while preserving full search and AI functionality. Your data never leaves your deployment boundary.
+
+**Cloud deployments**: On PageSpace Cloud, infrastructure-level encryption at rest is enabled by default. All data is stored in encrypted volumes and transmitted over TLS.
+
 ## Section Overview
 
 ### [Authentication](/docs/security/authentication)
