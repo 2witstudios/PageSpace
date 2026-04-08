@@ -12,7 +12,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { verifyOAuthState } from '@/lib/auth/oauth-state';
+import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
@@ -37,10 +37,28 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
     const state = formData.get('state') as string | null;
+    const error = formData.get('error') as string | null;
     const userJson = formData.get('user') as string | null;
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
 
-    // Verify state FIRST — determines platform and redirect strategy via HMAC
+    // Handle errors from Apple
+    if (error) {
+      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
+      const errorType = error === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+
+      if (isDesktopOAuthState(state)) {
+        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+      }
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
+    }
+
+    // Validate required fields
+    if (!idToken) {
+      loggers.auth.warn('Apple OAuth callback missing id_token');
+      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
+    }
+
+    // Parse state parameter
     let returnUrl = '/dashboard';
     let platform = 'web';
     let deviceId: string | undefined;
@@ -77,20 +95,6 @@ export async function POST(req: Request) {
           platform = 'web';
           break;
       }
-    }
-
-    const isDesktopFlow = platform === 'desktop';
-
-    // No id_token — Apple OAuth didn't succeed
-    if (!idToken) {
-      const oauthError = formData.get('error') as string | null;
-      loggers.auth.warn('Apple OAuth callback without id_token', { error: oauthError?.slice(0, 100) });
-      const errorType = oauthError === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
-
-      if (isDesktopFlow) {
-        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
-      }
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
 
     if (!isSafeReturnUrl(returnUrl)) {

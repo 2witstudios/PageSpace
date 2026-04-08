@@ -310,7 +310,7 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'OAuth callback without authorization code',
+        'OAuth error',
         expect.objectContaining({ error: longError.slice(0, 100) })
       );
     });
@@ -329,22 +329,22 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('validation of callback parameters', () => {
-    it('redirects with oauth_error when code is missing', async () => {
+    it('redirects with invalid_request when code is missing', async () => {
       const request = createCallbackRequest({});
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=oauth_error');
+      expect(location).toContain('/auth/signin?error=invalid_request');
     });
 
-    it('redirects with oauth_error when code is empty string', async () => {
+    it('redirects with invalid_request when code is empty string', async () => {
       const request = createCallbackRequest({ code: '' });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=oauth_error');
+      expect(location).toContain('/auth/signin?error=invalid_request');
     });
   });
 
