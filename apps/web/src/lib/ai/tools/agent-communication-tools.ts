@@ -1,4 +1,5 @@
-import { tool, stepCountIs } from 'ai';
+import { tool, stepCountIs, hasToolCall } from 'ai';
+import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
@@ -548,9 +549,9 @@ export const agentCommunicationTools = {
               model,
               system: systemPrompt,
               messages: convertToModelMessages(sanitizedMessages),
-              tools: agentTools as Parameters<typeof generateText>[0]['tools'],
+              tools: { ...agentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
-              stopWhen: stepCountIs(20), // Capped lower than top-level to prevent step explosion
+              stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
               maxRetries: 3,
               onStepFinish: ({ toolCalls }) => {
                 if (toolCalls?.length > 0) {
@@ -570,7 +571,9 @@ export const agentCommunicationTools = {
             });
 
         // 12. Extract response text with error checking
-        const agentResponse = response.text;
+        // Collect text from all steps — response.text only returns the final step,
+        // which may be empty if the model's last action was calling the finish tool
+        const agentResponse = response.steps?.map(s => s.text).filter(Boolean).join('') || '';
 
         // Check for tool execution errors
         const toolErrors = response.steps?.flatMap(step =>

@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('electron', {
     }) => ipcRenderer.invoke('auth:store-session', session),
     clearAuth: () => ipcRenderer.invoke('auth:clear-auth'),
     getDeviceInfo: () => ipcRenderer.invoke('auth:get-device-info'),
+    openExternal: (url: string) => ipcRenderer.invoke('auth:open-external', url),
   },
 
   // MCP Server Management
@@ -150,6 +151,7 @@ export interface ElectronAPI {
       appVersion: string;
       userAgent: string;
     }>;
+    openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

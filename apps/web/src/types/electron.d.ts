@@ -52,6 +52,11 @@ export interface ElectronAPI {
       appVersion: string;
       userAgent: string;
     }>;
+    /**
+     * Opens an OAuth URL in the system browser (allowlisted hostnames only).
+     * Used for Google/Apple OAuth on desktop to support passkeys.
+     */
+    openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

@@ -23,27 +23,32 @@ export async function revokeSessionsForLogin(
 }
 
 /**
- * Create or reuse a web device token for session persistence.
- * Enables recovery when the session cookie expires (7 days).
+ * Create or reuse a device token for session persistence.
+ * Works for all platforms — web, desktop, ios, android.
  */
-export async function createWebDeviceToken(params: {
+export async function createDeviceToken(params: {
   userId: string;
   deviceId: string;
   tokenVersion: number;
+  platform?: 'web' | 'desktop' | 'ios' | 'android';
   providedDeviceToken?: string | null;
   deviceName?: string;
   userAgent?: string;
   ipAddress?: string;
 }): Promise<string> {
+  const platform = params.platform ?? 'web';
   const result = await validateOrCreateDeviceToken({
     providedDeviceToken: params.providedDeviceToken ?? null,
     userId: params.userId,
     deviceId: params.deviceId,
-    platform: 'web',
+    platform,
     tokenVersion: params.tokenVersion,
-    deviceName: params.deviceName || 'Web Browser',
+    deviceName: params.deviceName || (platform === 'web' ? 'Web Browser' : 'Desktop App'),
     userAgent: params.userAgent,
     ipAddress: params.ipAddress,
   });
   return result.deviceToken;
 }
+
+/** @deprecated Use createDeviceToken instead. Remove after migrating: device/register, signup, google/callback, apple/callback. */
+export const createWebDeviceToken = createDeviceToken;

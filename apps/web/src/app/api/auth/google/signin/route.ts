@@ -6,6 +6,7 @@ import {
 } from '@pagespace/lib/security';
 import crypto from 'crypto';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { generatePKCE } from '@pagespace/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
@@ -97,7 +98,10 @@ export async function POST(req: Request) {
 
     const stateParam = Buffer.from(stateWithSignature).toString('base64');
 
-    // Generate OAuth URL
+    // Generate PKCE challenge (code_verifier stored server-side in Redis)
+    const pkce = await generatePKCE(stateParam);
+
+    // Generate OAuth URL (with PKCE when Redis is available)
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,
@@ -106,6 +110,10 @@ export async function POST(req: Request) {
       access_type: 'offline',
       prompt: 'consent',
       state: stateParam,
+      ...(pkce && {
+        code_challenge: pkce.codeChallenge,
+        code_challenge_method: pkce.codeChallengeMethod,
+      }),
     });
 
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;

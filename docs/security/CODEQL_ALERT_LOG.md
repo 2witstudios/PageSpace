@@ -5,8 +5,8 @@
 Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume breach. Fortify every boundary.**
 
 **Branch**: `codeql-hardening`
-**Total Alerts**: 73
-**Resolved**: 73/73
+**Total Alerts**: 77
+**Resolved**: 76/77 (1 dismissed as S4 false positive)
 
 ---
 
@@ -120,7 +120,16 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | 80 | js/user-controlled-bypass | high | verify-email/route.ts:16 | CWE-807 | Unnecessary format check created new alert (false positive fix) | Reverted — `verifyToken()` already validates cryptographically | REVERTED |
 | 81 | js/log-injection | medium | mcp-tool-converter.ts:247 | CWE-117 | `mcpTools.length` tainted as user-controlled array property | Coerce through `Number()` to break taint chain | FIXED |
 
-### Round 3: Batch 5 triage — SSRF + HTTP-to-File (138-139)
+### Round 3: Integration OAuth callback (98-101)
+
+| Alert | Rule | Severity | File | CWE | Fix Summary | Zero-Trust Principle | Status |
+|-------|------|----------|------|-----|-------------|---------------------|--------|
+| 98 | js/user-controlled-bypass | high | integrations/callback/route.ts:37 | CWE-807 | `String(error).slice(0, 100)` for log sanitization | Never log user input without sanitization | FIXED |
+| 99 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `code` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
+| 100 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `state` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
+| 101 | js/user-controlled-bypass | high | integrations/callback/route.ts:57 | CWE-807 | Dismissed — `verifySignedState()` uses HMAC-SHA256 + timingSafeEqual | Cryptographic verification IS the security check | DISMISSED (S4) |
+
+### Round 4: Batch 5 triage — SSRF + HTTP-to-File (138-139)
 
 | Alert | Rule | Severity | File | CWE | Triage Rationale | Status |
 |-------|------|----------|------|-----|-----------------|--------|
@@ -129,16 +138,16 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 
 ---
 
-### Files Modified (25 files)
+### Files Modified (26 files)
 
-**Processor App (6 files):**
+**Processor App (5 files):**
 - `apps/processor/src/cache/content-store.ts` — Path traversal prevention, prototype pollution guards, preset validation
 - `apps/processor/src/api/upload.ts` — Path containment checks for temp files
 - `apps/processor/src/api/avatar.ts` — Rate limiting middleware
 - `apps/processor/src/api/optimize.ts` — Prototype pollution prevention for dynamic presets
 - `apps/processor/src/workers/image-processor.ts` — Log injection prevention with sanitized format strings
 
-**Web App (13 files):**
+**Web App (14 files):**
 - `apps/web/src/lib/canvas/css-sanitizer.ts` — URL scheme blocklist expansion
 - `apps/web/src/lib/ai/core/mention-processor.ts` — Bounded regex quantifiers
 - `apps/web/src/lib/ai/core/mcp-tool-converter.ts` — Prototype pollution + log injection prevention
@@ -148,17 +157,18 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 - `apps/web/src/app/api/account/route.ts` — Safe email regex
 - `apps/web/src/app/api/admin/audit-logs/integrity/route.ts` — Input format validation
 - `apps/web/src/app/api/auth/google/callback/route.ts` — Safe URL construction
+- `apps/web/src/app/api/user/integrations/callback/route.ts` — Zod input validation + log sanitization
 - `apps/web/src/app/api/auth/verify-email/route.ts` — Token format validation
 - `apps/web/src/app/api/avatar/[userId]/[filename]/route.ts` — TOCTOU elimination
 - `apps/web/src/stores/page-agents/usePageAgentDashboardStore.ts` — Agent ID validation
 - `apps/web/public/sw.js` — Message origin verification
 
-**Desktop App (2 files):**
+**Desktop App (3 files):**
 - `apps/desktop/src/offline.html` — URL redirect validation
 - `apps/desktop/src/main/auth-storage.ts` — Session data validation
 - `apps/desktop/src/main/ws-client.ts` — WebSocket URL validation
 
-**Shared Packages (3 files):**
+**Shared Packages (4 files):**
 - `packages/lib/src/services/drive-search-service.ts` — Regex injection prevention + type fix
 - `packages/lib/src/services/notification-email-service.ts` — Log injection prevention
 - `packages/lib/src/file-processing/file-processor.ts` — Hardcoded API URLs

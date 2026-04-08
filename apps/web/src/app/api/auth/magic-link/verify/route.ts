@@ -4,14 +4,17 @@ import {
   sessionService,
   generateCSRFToken,
   SESSION_DURATION_MS,
+  createExchangeCode,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/auth';
-import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -50,7 +53,22 @@ export async function GET(req: Request) {
       return redirectWithError(errorCode);
     }
 
-    const { userId, isNewUser } = result.data;
+    const { userId, isNewUser, metadata } = result.data;
+
+    // Parse desktop metadata if present (stored when magic link was sent from desktop app)
+    let desktopMeta: DesktopMagicLinkMetadata | null = null;
+    if (metadata) {
+      try {
+        const parsed = JSON.parse(metadata) as Partial<DesktopMagicLinkMetadata>;
+        if (parsed.platform !== 'desktop' || !parsed.deviceId) {
+          desktopMeta = null;
+        } else {
+          desktopMeta = parsed as DesktopMagicLinkMetadata;
+        }
+      } catch {
+        loggers.auth.warn('Invalid magic link metadata JSON', { userId, metadata: metadata.slice(0, 100) });
+      }
+    }
 
     // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
     const revokedCount = await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
@@ -87,6 +105,83 @@ export async function GET(req: Request) {
 
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // DESKTOP: additionally create device token + exchange code for desktop token handoff
+    // The web session (cookies) is always created above — this is a supplementary step.
+    // If the magic link opens outside the desktop device, the cookie session still works.
+    if (desktopMeta) {
+      try {
+        const user = await authRepository.findUserById(userId);
+        if (user) {
+          const { deviceToken } = await validateOrCreateDeviceToken({
+            providedDeviceToken: undefined,
+            userId,
+            deviceId: desktopMeta.deviceId!,
+            platform: 'desktop',
+            tokenVersion: user.tokenVersion,
+            deviceName: desktopMeta.deviceName || req.headers.get('user-agent') || 'Desktop App',
+            userAgent: req.headers.get('user-agent') || undefined,
+            ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+          });
+
+          const exchangeCode = await createExchangeCode({
+            sessionToken,
+            csrfToken,
+            deviceToken,
+            provider: 'magic-link',
+            userId,
+            createdAt: Date.now(),
+          });
+
+          // Redirect to the dashboard with exchange code — the dashboard page
+          // will detect this and trigger pagespace://auth-exchange client-side.
+          // If the link was opened on a different device, the exchange code is
+          // ignored and the user still has a valid cookie session.
+          const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          let desktopRedirectPath = '/dashboard';
+          if (isNewUser) {
+            try {
+              const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+              if (provisionedDrive) {
+                desktopRedirectPath = `/dashboard/${provisionedDrive.driveId}`;
+              }
+            } catch (error) {
+              loggers.auth.error('Failed to provision Getting Started drive', error as Error, { userId });
+            }
+          }
+          const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
+          desktopRedirectUrl.searchParams.set('auth', 'success');
+          desktopRedirectUrl.searchParams.set('desktopExchange', exchangeCode);
+          if (isNewUser) {
+            desktopRedirectUrl.searchParams.set('welcome', 'true');
+          }
+
+          logAuthEvent('magic_link_login', userId, undefined, clientIP);
+          trackAuthEvent(userId, 'magic_link_login', {
+            ip: clientIP,
+            isNewUser,
+            platform: 'desktop',
+            userAgent: req.headers.get('user-agent'),
+          });
+
+          loggers.auth.info('Magic link login successful (desktop)', { userId, ip: clientIP });
+
+          const headers = new Headers();
+          appendSessionCookie(headers, sessionToken);
+          const isProduction = process.env.NODE_ENV === 'production';
+          const secureFlag = isProduction ? '; Secure' : '';
+          headers.append('Set-Cookie', `csrf_token=${csrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
+
+          return NextResponse.redirect(desktopRedirectUrl.toString(), { status: 302, headers });
+        }
+      } catch (error) {
+        loggers.auth.warn('Failed to create desktop exchange for magic link', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Fall through to normal web redirect
+      }
+    }
 
     // Log auth event
     logAuthEvent('magic_link_login', userId, undefined, clientIP);

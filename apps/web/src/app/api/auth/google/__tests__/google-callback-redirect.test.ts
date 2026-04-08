@@ -54,6 +54,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -110,26 +111,15 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn(() => '127.0.0.1'),
-  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
-  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
-  // Use actual implementation for isSafeReturnUrl so redirect tests are valid
-  isSafeReturnUrl: (url: string | undefined): boolean => {
-    if (!url) return true;
-    if (!url.startsWith('/')) return false;
-    if (url.startsWith('//') || url.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(url)) return false;
-    try {
-      const decoded = decodeURIComponent(url);
-      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-      if (/[a-z]+:/i.test(decoded)) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  },
-}));
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+  return {
+    getClientIP: vi.fn(() => '127.0.0.1'),
+    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+    isSafeReturnUrl: actual.isSafeReturnUrl,
+  };
+});
 
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');

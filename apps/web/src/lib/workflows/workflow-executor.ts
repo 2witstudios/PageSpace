@@ -1,4 +1,5 @@
-import { convertToModelMessages, generateText, stepCountIs } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { createId } from '@paralleldrive/cuid2';
 import {
   createAIProvider,
@@ -154,12 +155,12 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
             content: m.content,
             parts: [{ type: 'text' as const, text: m.content }],
           }))),
-          tools: availableTools,
+          tools: { ...availableTools, ...finishTool },
           toolChoice: 'auto',
           temperature: 0.7,
           maxRetries: 3,
           experimental_context: executionContext,
-          stopWhen: stepCountIs(100),
+          stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
         })
       : await generateText({
           model: providerResult.model,
@@ -175,7 +176,9 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
           stopWhen: stepCountIs(100),
         });
 
-    const responseText = result.text || '';
+    // Collect text from all steps — result.text only returns the final step,
+    // which may be empty if the model's last action was calling the finish tool
+    const responseText = result.steps?.map(s => s.text).filter(Boolean).join('') || '';
     const toolCallCount = result.steps?.reduce(
       (count, step) => count + (step.toolCalls?.length || 0),
       0

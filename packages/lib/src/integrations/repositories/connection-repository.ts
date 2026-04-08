@@ -206,7 +206,8 @@ export const updateConnectionLastUsed = async (
 export const updateConnectionCredentials = async (
   database: typeof defaultDb,
   connectionId: string,
-  credentials: Record<string, string>
+  credentials: Record<string, string>,
+  visibility?: 'private' | 'owned_drives' | 'all_drives'
 ): Promise<IntegrationConnection | null> => {
   const [updated] = await database
     .update(integrationConnections)
@@ -214,6 +215,7 @@ export const updateConnectionCredentials = async (
       credentials,
       status: 'active',
       statusMessage: null,
+      ...(visibility && { visibility }),
     })
     .where(eq(integrationConnections.id, connectionId))
     .returning();

@@ -59,16 +59,19 @@ export function verifySignedState<T extends Record<string, unknown> = Record<str
       return null;
     }
 
-    // Verify HMAC signature using timing-safe comparison
+    // Verify HMAC signature using double-hash timing-safe comparison.
+    // Hash both sides before comparing to guarantee equal-length buffers
+    // regardless of attacker-controlled sig length — eliminates length-based
+    // timing side-channels.
     const expectedSignature = crypto
       .createHmac('sha256', signingKey)
       .update(JSON.stringify(stateWithSignature.data))
       .digest('hex');
 
-    const sigBuffer = Buffer.from(stateWithSignature.sig, 'utf-8');
-    const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
+    const actualHash = crypto.createHash('sha256').update(String(stateWithSignature.sig)).digest();
+    const expectedHash = crypto.createHash('sha256').update(expectedSignature).digest();
 
-    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+    if (!crypto.timingSafeEqual(actualHash, expectedHash)) {
       return null;
     }
 

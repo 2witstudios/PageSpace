@@ -128,6 +128,8 @@ vi.mock('ai', () => ({
   streamText: vi.fn(),
   convertToModelMessages: vi.fn().mockReturnValue([]),
   stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config) => config),
   createUIMessageStream: vi.fn(),
   createUIMessageStreamResponse: vi.fn(),
 }));

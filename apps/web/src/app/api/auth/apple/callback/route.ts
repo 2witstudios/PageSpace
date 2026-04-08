@@ -10,9 +10,9 @@ import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/l
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
@@ -37,82 +37,38 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
     const state = formData.get('state') as string | null;
-    const error = formData.get('error') as string | null;
     const userJson = formData.get('user') as string | null;
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
 
-    // Handle errors from Apple
-    if (error) {
-      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
-      let errorParam = 'oauth_error';
-      if (error === 'user_cancelled_authorize') {
-        errorParam = 'access_denied';
-      }
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
-    }
+    // Verify state HMAC upfront — this is the server-side security gate
+    const stateResult = state ? verifyOAuthState(state) : null;
+    const verifiedState = stateResult?.status === 'valid' ? stateResult.data : null;
 
-    // Validate required fields
-    if (!idToken) {
-      loggers.auth.warn('Apple OAuth callback missing id_token');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-    }
-
-    // Parse state parameter
-    let returnUrl = '/dashboard';
-    let platform = 'web';
-    let deviceId: string | undefined;
-    let deviceName: string | undefined;
-
-    if (state) {
-      try {
-        const stateWithSignature = JSON.parse(
-          Buffer.from(state, 'base64').toString('utf-8')
-        );
-
-        if (stateWithSignature.data && stateWithSignature.sig) {
-          const { data, sig } = stateWithSignature;
-          const expectedSignature = crypto
-            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-            .update(JSON.stringify(data))
-            .digest('hex');
-
-          if (sig !== expectedSignature) {
-            loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
-            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-          }
-
-          returnUrl = data.returnUrl || '/dashboard';
-          platform = data.platform || 'web';
-          deviceId = data.deviceId;
-          deviceName = data.deviceName;
-        } else {
-          // SECURITY: State without signature is invalid - reject and use safe defaults
-          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
-            hasData: !!stateWithSignature.data,
-            hasSig: !!stateWithSignature.sig,
-          });
-          returnUrl = '/dashboard';
-          platform = 'web';
-        }
-      } catch {
-        // SECURITY: Malformed state is invalid - reject and use safe defaults
-        loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
-          stateLength: state?.length,
-        });
-        returnUrl = '/dashboard';
-        platform = 'web';
-      }
-    }
-
-    if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Unsafe returnUrl in Apple OAuth callback - falling back to dashboard', {
-        returnUrl,
+    // Single rejection guard: id_token + HMAC-verified state required
+    // `error` is never a branch condition — only read as a UX hint inside
+    if (!idToken || !verifiedState) {
+      const errorHint = formData.get('error') as string | null;
+      loggers.auth.warn('Apple OAuth callback rejected', {
+        hasIdToken: !!idToken,
         hasState: !!state,
+        stateStatus: stateResult?.status ?? 'missing',
+        errorHint: errorHint ? String(errorHint).slice(0, 100) : 'none',
       });
-      returnUrl = '/dashboard';
+      const errorType = errorHint === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+
+      if (verifiedState?.platform === 'desktop') {
+        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+      }
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
+
+    // Past this point: id_token present + HMAC-verified state
+    let returnUrl = isSafeReturnUrl(verifiedState.returnUrl)
+      ? (verifiedState.returnUrl || '/dashboard')
+      : '/dashboard';
+    const platform = verifiedState.platform || 'web';
+    const deviceId = verifiedState.deviceId;
+    const deviceName = verifiedState.deviceName;
 
     const clientIP = getClientIP(req);
 
@@ -122,7 +78,6 @@ export async function POST(req: Request) {
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!ipRateLimit.allowed) {
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
@@ -133,7 +88,6 @@ export async function POST(req: Request) {
       loggers.auth.error('Apple ID token verification failed', {
         error: verificationResult.error,
       });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -141,7 +95,6 @@ export async function POST(req: Request) {
 
     if (!email) {
       loggers.auth.error('Missing required email from Apple');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -236,7 +189,6 @@ export async function POST(req: Request) {
     const sessionClaims = await sessionService.validateSession(sessionToken);
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId: user.id });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -265,8 +217,7 @@ export async function POST(req: Request) {
           userId: user.id,
           email: user.email,
         });
-        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+          return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
@@ -361,7 +312,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     redirectUrl.searchParams.set('csrfToken', csrfToken);
@@ -376,7 +326,7 @@ export async function POST(req: Request) {
 
   } catch (error) {
     loggers.auth.error('Apple OAuth callback error', error as Error);
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }
 }

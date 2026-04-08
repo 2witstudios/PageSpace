@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
+import { getDevicePlatformFields } from '@/lib/desktop-auth';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
@@ -74,6 +75,8 @@ export function MagicLinkForm() {
 
       const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
+      const platformFields = await getDevicePlatformFields();
+
       // Send magic link request
       const response = await fetch('/api/auth/magic-link/send', {
         method: 'POST',
@@ -82,7 +85,7 @@ export function MagicLinkForm() {
           'X-Login-CSRF-Token': csrfToken,
         },
         credentials: 'include',
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: email.trim(), ...platformFields }),
       });
 
       if (response.status === 429) {
