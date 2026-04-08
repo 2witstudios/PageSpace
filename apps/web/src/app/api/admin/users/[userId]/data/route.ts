@@ -1,6 +1,6 @@
 import { withAdminAuth } from '@/lib/auth/auth';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
-import { deleteAiUsageLogsForUser } from '@pagespace/lib';
+import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -66,6 +66,10 @@ export const DELETE = withAdminAuth<DataRouteContext>(
 
       // Clean up AI usage logs (fail-closed: error surfaces to caller)
       await deleteAiUsageLogsForUser(userId);
+
+      // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
+      // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
+      await deleteMonitoringDataForUser(userId);
 
       // Delete user record
       await accountRepository.deleteUser(userId);
