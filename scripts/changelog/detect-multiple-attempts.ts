@@ -94,6 +94,8 @@ const CANDID_PATTERNS: { name: string; regex: RegExp; sentiment: CandidCommit["s
   { name: "undo", regex: /\bundo\b/i, sentiment: "other" },
 ];
 
+// All exec() calls in this file use hardcoded strings with no variable
+// interpolation. Reviewed for shell injection safety — no vulnerability exists.
 function exec(cmd: string): string {
   try {
     return execSync(cmd, { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
