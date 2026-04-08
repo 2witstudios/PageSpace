@@ -52,6 +52,7 @@ vi.mock('@pagespace/lib', async (importOriginal) => {
   return {
     ...(actual as object),
     deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
+    deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
   };
 });
 
@@ -61,7 +62,7 @@ import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
 import { accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { deleteAiUsageLogsForUser } from '@pagespace/lib';
+import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 
 const mockAuth = vi.mocked(authenticateSessionRequest);
 const mockAdminValidation = vi.mocked(validateAdminAccess);
@@ -120,6 +121,7 @@ describe('/api/admin/users/[userId]/data', () => {
     );
     expect(activityLogRepository.anonymizeForUser).toHaveBeenCalledWith('user-1', 'deleted_user_c6c289e49e9c');
     expect(deleteAiUsageLogsForUser).toHaveBeenCalledWith('user-1');
+    expect(deleteMonitoringDataForUser).toHaveBeenCalledWith('user-1');
     expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
   });
 

@@ -31,6 +31,8 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib', () => ({
   createUserServiceToken: vi.fn(),
+  deleteAiUsageLogsForUser: vi.fn(),
+  deleteMonitoringDataForUser: vi.fn(),
 }));
 
 import { DELETE } from '../route';
@@ -40,7 +42,7 @@ import {
   activityLogRepository,
 } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken } from '@pagespace/lib';
+import { createUserServiceToken, deleteMonitoringDataForUser } from '@pagespace/lib';
 
 // Type the mocked repositories
 const mockAccountRepo = vi.mocked(accountRepository);
@@ -400,6 +402,53 @@ describe('DELETE /api/account', () => {
         new Error('Database connection lost')
       );
       expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
+    });
+  });
+
+  describe('monitoring data cleanup', () => {
+    it('given account deletion, should delete user rows from monitoring tables', async () => {
+      // Arrange
+      vi.mocked(deleteMonitoringDataForUser).mockResolvedValue({
+        systemLogs: 5,
+        apiMetrics: 10,
+        errorLogs: 2,
+        userActivities: 8,
+      });
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(deleteMonitoringDataForUser).toHaveBeenCalledWith(mockUserId);
+    });
+
+    it('given monitoring cleanup failure, should continue with account deletion', async () => {
+      // Arrange
+      vi.mocked(deleteMonitoringDataForUser).mockRejectedValue(
+        new Error('Connection timeout')
+      );
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert - should still succeed
+      expect(response.status).toBe(200);
+      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Could not delete monitoring data during account deletion:',
+        expect.objectContaining({ message: 'Connection timeout' })
+      );
     });
   });
 
