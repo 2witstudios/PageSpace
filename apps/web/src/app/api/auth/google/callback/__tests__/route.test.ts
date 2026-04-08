@@ -1158,16 +1158,12 @@ describe('GET /api/auth/google/callback', () => {
     it('returns 500 when NEXTAUTH_URL and WEB_APP_URL are both unset in production', async () => {
       delete process.env.NEXTAUTH_URL;
       delete process.env.WEB_APP_URL;
-      process.env.NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
 
-      try {
-        const request = createCallbackRequest({ code: 'valid-code' });
-        const response = await GET(request);
+      const request = createCallbackRequest({ code: 'valid-code' });
+      const response = await GET(request);
 
-        expect(response.status).toBe(500);
-      } finally {
-        process.env.NODE_ENV = 'test';
-      }
+      expect(response.status).toBe(500);
     });
   });
 });
