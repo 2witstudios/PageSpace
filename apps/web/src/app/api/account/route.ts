@@ -1,7 +1,7 @@
 import { users, db, eq } from '@pagespace/db';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -249,6 +249,15 @@ export async function DELETE(req: Request) {
       await deleteAiUsageLogsForUser(userId);
     } catch (error) {
       loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
+    }
+
+    // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
+    // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
+    // (tamper-evident hash chain must remain intact for compliance)
+    try {
+      await deleteMonitoringDataForUser(userId);
+    } catch (error) {
+      loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
     }
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
