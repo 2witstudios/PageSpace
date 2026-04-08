@@ -26,6 +26,20 @@ export async function GET(request: Request) {
         'Entries verified:', result.entriesVerified,
         'Invalid:', result.invalidEntries
       );
+
+      const webhookUrl = process.env.AUDIT_ALERT_WEBHOOK_URL;
+      if (webhookUrl) {
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'audit_chain_integrity_failure',
+            timestamp: new Date().toISOString(),
+            environment: process.env.NODE_ENV,
+            details: result,
+          }),
+        }).catch(() => {});
+      }
     } else {
       console.log(
         `[Cron] Security audit chain verified: ${result.validEntries} entries valid`
