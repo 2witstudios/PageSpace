@@ -1,5 +1,5 @@
 import { verifySecurityAuditChain } from '@pagespace/lib';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
@@ -29,24 +29,34 @@ export async function GET(request: Request) {
 
       const webhookUrl = process.env.AUDIT_ALERT_WEBHOOK_URL;
       if (webhookUrl && webhookUrl.startsWith('https://')) {
-        fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event: 'audit_chain_integrity_failure',
-            timestamp: new Date().toISOString(),
-            environment: process.env.NODE_ENV,
-            details: {
-              isValid: result.isValid,
-              totalEntries: result.totalEntries,
-              entriesVerified: result.entriesVerified,
-              invalidEntries: result.invalidEntries,
-              breakPosition: result.breakPoint?.position ?? null,
-              durationMs: result.durationMs,
-            },
-          }),
-        }).catch((err) => {
-          console.warn('[Cron] Webhook alert delivery failed:', err.message);
+        after(async () => {
+          try {
+            await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                event: 'audit_chain_integrity_failure',
+                timestamp: new Date().toISOString(),
+                environment: process.env.NODE_ENV,
+                details: {
+                  isValid: result.isValid,
+                  totalEntries: result.totalEntries,
+                  entriesVerified: result.entriesVerified,
+                  invalidEntries: result.invalidEntries,
+                  breakPosition: result.breakPoint?.position ?? null,
+                  breakReason: result.breakPoint?.description ?? null,
+                  verificationStartedAt: result.verificationStartedAt.toISOString(),
+                  verificationCompletedAt: result.verificationCompletedAt.toISOString(),
+                  durationMs: result.durationMs,
+                },
+              }),
+            });
+          } catch (err) {
+            console.warn(
+              '[Cron] Webhook alert delivery failed:',
+              err instanceof Error ? err.message : String(err)
+            );
+          }
         });
       }
     } else {
@@ -77,6 +87,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** POST handler — delegates to GET for cron systems that POST. */
 export async function POST(request: Request) {
   return GET(request);
 }

@@ -14,6 +14,7 @@ vi.mock('next/server', () => ({
         headers: { 'content-type': 'application/json' },
       }),
   },
+  after: (fn: () => void | Promise<void>) => fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -109,6 +110,9 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
       entriesVerified: 50,
       invalidEntries: 1,
       breakPosition: 50,
+      breakReason: 'Hash mismatch at position 50',
+      verificationStartedAt: '2026-04-08T12:00:00.000Z',
+      verificationCompletedAt: '2026-04-08T12:00:01.000Z',
       durationMs: 1000,
     });
   });
@@ -184,9 +188,6 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await GET(makeRequest());
-
-    // Allow the microtask (.catch handler) to run
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(warnSpy).toHaveBeenCalledWith(
       '[Cron] Webhook alert delivery failed:',
