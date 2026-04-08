@@ -88,7 +88,7 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
     process.env = originalEnv;
   });
 
-  it('given chain failure with AUDIT_ALERT_WEBHOOK_URL set, should POST JSON payload to webhook URL', async () => {
+  it('given chain failure with AUDIT_ALERT_WEBHOOK_URL set, should POST sanitized payload to webhook URL', async () => {
     process.env.AUDIT_ALERT_WEBHOOK_URL = WEBHOOK_URL;
     mockVerifyChain.mockResolvedValue(CHAIN_FAILURE_RESULT);
 
@@ -103,10 +103,33 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
     expect(body.event).toBe('audit_chain_integrity_failure');
     expect(body.timestamp).toBeDefined();
     expect(body.environment).toBe(process.env.NODE_ENV);
-    expect(body.details).toMatchObject({
+    expect(body.details).toEqual({
       isValid: false,
-      breakPoint: expect.objectContaining({ entryId: 'entry_42' }),
+      totalEntries: 100,
+      entriesVerified: 50,
+      invalidEntries: 1,
+      breakPosition: 50,
+      durationMs: 1000,
     });
+  });
+
+  it('given chain failure with AUDIT_ALERT_WEBHOOK_URL set, should NOT leak hashes, entry IDs, or timestamps', async () => {
+    process.env.AUDIT_ALERT_WEBHOOK_URL = WEBHOOK_URL;
+    mockVerifyChain.mockResolvedValue(CHAIN_FAILURE_RESULT);
+
+    await GET(makeRequest());
+
+    const [, options] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(options?.body as string);
+    const details = body.details;
+
+    expect(details).not.toHaveProperty('breakPoint');
+    expect(details).not.toHaveProperty('firstEntryId');
+    expect(details).not.toHaveProperty('lastEntryId');
+    expect(JSON.stringify(details)).not.toContain('abc123');
+    expect(JSON.stringify(details)).not.toContain('def456');
+    expect(JSON.stringify(details)).not.toContain('prev789');
+    expect(JSON.stringify(details)).not.toContain('entry_42');
   });
 
   it('given chain failure without AUDIT_ALERT_WEBHOOK_URL, should only log to console (no fetch call)', async () => {
@@ -144,5 +167,34 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
     await GET(makeRequest());
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('given non-https webhook URL, should NOT call fetch (SSRF prevention)', async () => {
+    process.env.AUDIT_ALERT_WEBHOOK_URL = 'http://internal-service:8080/hook';
+    mockVerifyChain.mockResolvedValue(CHAIN_FAILURE_RESULT);
+
+    await GET(makeRequest());
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('given webhook POST failure, should log warning for operational visibility', async () => {
+    process.env.AUDIT_ALERT_WEBHOOK_URL = WEBHOOK_URL;
+    mockVerifyChain.mockResolvedValue(CHAIN_FAILURE_RESULT);
+    fetchSpy.mockRejectedValue(new Error('Network timeout'));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await GET(makeRequest());
+
+    // Allow the microtask (.catch handler) to run
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[Cron] Webhook alert delivery failed:',
+      'Network timeout'
+    );
+
+    warnSpy.mockRestore();
   });
 });

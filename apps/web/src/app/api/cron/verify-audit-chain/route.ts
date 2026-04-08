@@ -28,7 +28,7 @@ export async function GET(request: Request) {
       );
 
       const webhookUrl = process.env.AUDIT_ALERT_WEBHOOK_URL;
-      if (webhookUrl) {
+      if (webhookUrl && webhookUrl.startsWith('https://')) {
         fetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -36,9 +36,18 @@ export async function GET(request: Request) {
             event: 'audit_chain_integrity_failure',
             timestamp: new Date().toISOString(),
             environment: process.env.NODE_ENV,
-            details: result,
+            details: {
+              isValid: result.isValid,
+              totalEntries: result.totalEntries,
+              entriesVerified: result.entriesVerified,
+              invalidEntries: result.invalidEntries,
+              breakPosition: result.breakPoint?.position ?? null,
+              durationMs: result.durationMs,
+            },
           }),
-        }).catch(() => {});
+        }).catch((err) => {
+          console.warn('[Cron] Webhook alert delivery failed:', err.message);
+        });
       }
     } else {
       console.log(
