@@ -13,7 +13,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { verifyOAuthState, isDesktopOAuthState } from '@/lib/auth/oauth-state';
+import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -34,40 +34,16 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');
     const state = searchParams.get('state');
-    const error = searchParams.get('error');
+    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
 
-    if (error) {
-      const sanitizedError = String(error).slice(0, 100);
-      loggers.auth.warn('OAuth error', { error: sanitizedError });
-
-      // Desktop: redirect to deep link so Electron can show native error UI
-      if (isDesktopOAuthState(state)) {
-        // Use hardcoded error values — never pass user input into deep links
-        const desktopError = sanitizedError === 'access_denied' ? 'access_denied' : 'oauth_error';
-        return NextResponse.redirect(`pagespace://auth-error?error=${desktopError}`);
-      }
-
-      const webError = sanitizedError === 'access_denied' ? 'access_denied' : 'oauth_error';
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(webError)}`, baseUrl));
-    }
-
-    const validation = googleCallbackSchema.safeParse({ code, state });
-    if (!validation.success) {
-      loggers.auth.warn('Invalid OAuth callback parameters', { errors: validation.error.flatten().fieldErrors });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-    }
-
-    const { code: authCode, state: stateParam } = validation.data;
-
+    // Verify state FIRST — determines platform and redirect strategy via HMAC
     let returnUrl = '/dashboard';
     let platform = 'web';
     let deviceId: string | undefined;
     let deviceName: string | undefined;
 
-    if (stateParam) {
-      const stateResult = verifyOAuthState(stateParam);
+    if (state) {
+      const stateResult = verifyOAuthState(state);
 
       switch (stateResult.status) {
         case 'valid':
@@ -78,25 +54,46 @@ export async function GET(req: Request) {
           break;
 
         case 'invalid_signature':
-          loggers.auth.warn('OAuth state signature mismatch', { stateParam });
-          return NextResponse.redirect(
-            new URL('/auth/signin?error=invalid_request', process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url)
-          );
+          loggers.auth.warn('OAuth state signature mismatch');
+          return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
 
         case 'unsigned':
           returnUrl = stateResult.returnUrl || '/dashboard';
           break;
 
         case 'malformed':
-          returnUrl = stateParam;
+          returnUrl = state;
           break;
       }
     }
 
+    const isDesktopFlow = platform === 'desktop';
+
+    // No authorization code — OAuth didn't succeed
+    if (!code) {
+      const oauthError = searchParams.get('error');
+      loggers.auth.warn('OAuth callback without authorization code', { error: oauthError?.slice(0, 100) });
+      const errorType = oauthError === 'access_denied' ? 'access_denied' : 'oauth_error';
+
+      if (isDesktopFlow) {
+        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+      }
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
+    }
+
+    // Validate code format
+    const validation = googleCallbackSchema.safeParse({ code, state });
+    if (!validation.success) {
+      loggers.auth.warn('Invalid OAuth callback parameters', { errors: validation.error.flatten().fieldErrors });
+      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
+    }
+
+    const { code: authCode } = validation.data;
+
     if (!isSafeReturnUrl(returnUrl)) {
       loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
         returnUrl,
-        hasState: !!stateParam,
+        hasState: !!state,
       });
       returnUrl = '/dashboard';
     }
@@ -108,7 +105,6 @@ export async function GET(req: Request) {
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!ipRateLimit.allowed) {
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
@@ -116,7 +112,6 @@ export async function GET(req: Request) {
 
     if (!tokens.id_token) {
       loggers.auth.error('No ID token received from Google');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -128,7 +123,6 @@ export async function GET(req: Request) {
     const payload = ticket.getPayload();
     if (!payload) {
       loggers.auth.error('Invalid Google ID token payload');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -136,7 +130,6 @@ export async function GET(req: Request) {
 
     if (!email) {
       loggers.auth.error('Missing required email from Google');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -229,7 +222,6 @@ export async function GET(req: Request) {
     const sessionClaims = await sessionService.validateSession(sessionToken);
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId: user.id });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -260,8 +252,7 @@ export async function GET(req: Request) {
           userId: user.id,
           email: user.email,
         });
-        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+          return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
       // Generate device token (now opaque ps_dev_* token)
@@ -397,7 +388,6 @@ export async function GET(req: Request) {
       }
     }
 
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     redirectUrl.searchParams.set('csrfToken', csrfToken);
@@ -412,7 +402,7 @@ export async function GET(req: Request) {
 
   } catch (error) {
     loggers.auth.error('Google OAuth callback error', error as Error);
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }
 }

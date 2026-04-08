@@ -228,7 +228,7 @@ describe('POST /api/auth/apple/callback', () => {
       await POST(request);
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Apple OAuth error',
+        'Apple OAuth callback without id_token',
         expect.objectContaining({ error: longError.slice(0, 100) })
       );
     });
@@ -247,14 +247,14 @@ describe('POST /api/auth/apple/callback', () => {
   });
 
   describe('missing id_token', () => {
-    it('redirects with invalid_request when id_token is missing', async () => {
+    it('redirects with oauth_error when id_token is missing', async () => {
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({ state });
       const response = await POST(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
   });
 
