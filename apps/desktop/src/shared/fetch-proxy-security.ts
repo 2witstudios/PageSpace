@@ -43,6 +43,46 @@ function isPrivateIPv4(hostname: string): boolean {
 }
 
 /**
+ * Explicit blocklist for dangerous IPv4 ranges — checked BEFORE the allowlist
+ * as defense-in-depth against future allowlist expansion.
+ */
+function isBlockedIPv4(hostname: string): boolean {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return false;
+
+  const octets = parts.map(Number);
+  if (octets.some((o) => isNaN(o) || o < 0 || o > 255)) return false;
+
+  const [first, second, third, fourth] = octets;
+
+  // 169.254.0.0/16 — link-local (AWS/GCP/DO/Oracle/OpenStack metadata at 169.254.169.254)
+  if (first === 169 && second === 254) return true;
+
+  // Alibaba Cloud metadata endpoint
+  if (first === 100 && second === 100 && third === 100 && fourth === 200) return true;
+
+  // Azure wireserver / IMDS
+  if (first === 168 && second === 63 && third === 129 && fourth === 16) return true;
+
+  return false;
+}
+
+/**
+ * Explicit blocklist for dangerous IPv6 ranges — checked BEFORE the allowlist.
+ */
+function isBlockedIPv6(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+
+  // fd00::/8 — ULA (covers AWS IMDSv2 IPv6 at fd00:ec2::254)
+  if (lower.startsWith('fd')) return true;
+
+  // fe80::/10 — link-local IPv6
+  if (lower.startsWith('fe80:') || lower.startsWith('fe80%')) return true;
+
+  return false;
+}
+
+/**
  * Extract the IPv4 address from an IPv6-mapped IPv4 hostname (::ffff:x.x.x.x or ::ffff:hex:hex).
  * Returns the dotted-quad IPv4 string, or null if not an IPv6-mapped address.
  */
@@ -71,11 +111,21 @@ function parseIPv6MappedIPv4(hostname: string): string | null {
 /**
  * Validates whether a URL is allowed for fetch proxy requests.
  *
+ * First blocks known-dangerous ranges (cloud metadata endpoints, link-local,
+ * ULA IPv6) as defense-in-depth, then allows only local/private addresses.
+ *
  * Allows:
  * - localhost, 127.0.0.1, ::1, 0.0.0.0 (any port)
  * - host.docker.internal (any port)
  * - Private IPv4 ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
  * - http: and https: protocols only
+ *
+ * Explicitly blocks (even if they overlap with allowed ranges):
+ * - 169.254.0.0/16 (link-local — cloud metadata)
+ * - 100.100.100.200 (Alibaba Cloud metadata)
+ * - 168.63.129.16 (Azure wireserver)
+ * - fd00::/8 (ULA IPv6 — AWS IMDSv2)
+ * - fe80::/10 (link-local IPv6)
  *
  * Blocks everything else — especially public internet URLs.
  */
@@ -94,6 +144,13 @@ export function isAllowedFetchProxyURL(url: string): boolean {
   // Strip brackets from IPv6 (URL parser wraps ::1 as [::1])
   const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
 
+  // Explicit blocklist — checked before the allowlist so dangerous ranges
+  // stay blocked even if the allowlist is later expanded.
+  if (isBlockedIPv4(hostname)) return false;
+  if (isBlockedIPv6(hostname)) return false;
+  const mappedForBlock = parseIPv6MappedIPv4(hostname);
+  if (mappedForBlock !== null && isBlockedIPv4(mappedForBlock)) return false;
+
   if (ALLOWED_HOSTNAMES.has(hostname)) {
     return true;
   }
@@ -103,7 +160,7 @@ export function isAllowedFetchProxyURL(url: string): boolean {
   }
 
   // Handle IPv6-mapped IPv4 addresses (e.g. ::ffff:192.168.1.1 or ::ffff:c0a8:101)
-  const mappedIPv4 = parseIPv6MappedIPv4(hostname);
+  const mappedIPv4 = mappedForBlock ?? parseIPv6MappedIPv4(hostname);
   if (mappedIPv4 !== null) {
     return ALLOWED_HOSTNAMES.has(mappedIPv4) || isPrivateIPv4(mappedIPv4);
   }
