@@ -35,26 +35,15 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
-  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
-  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
-  // Use actual implementation for isSafeReturnUrl so security tests are valid
-  isSafeReturnUrl: (url: string | undefined): boolean => {
-    if (!url) return true;
-    if (!url.startsWith('/')) return false;
-    if (url.startsWith('//') || url.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(url)) return false;
-    try {
-      const decoded = decodeURIComponent(url);
-      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-      if (/[a-z]+:/i.test(decoded)) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  },
-}));
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+  return {
+    getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+    isSafeReturnUrl: actual.isSafeReturnUrl,
+  };
+});
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
