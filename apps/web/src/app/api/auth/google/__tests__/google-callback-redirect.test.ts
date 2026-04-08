@@ -232,8 +232,8 @@ describe('GET /api/auth/google/callback', () => {
       expect(response.status).toBe(307);
 
       const location = response.headers.get('location')!;
-      expect(location).toContain('csrfToken=mock-csrf-token');
       expect(location).toContain('auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {

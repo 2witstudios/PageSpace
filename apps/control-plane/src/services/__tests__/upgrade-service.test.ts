@@ -243,6 +243,35 @@ describe('UpgradeService', () => {
     })
   })
 
+  describe('slug validation', () => {
+    test('given a tenant with shell metacharacters in slug, should record upgrade_failed', async () => {
+      const deps = makeDeps()
+      ;(deps.repo.listActiveTenants as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeTenant({ id: 't1', slug: 'acme; rm -rf /' }),
+      ])
+      const service = createUpgradeService(deps)
+
+      const result = await service.upgradeAll({ imageTag: 'v2.0.0' })
+
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0].error).toContain('Invalid slug')
+      expect(deps.executor.exec).not.toHaveBeenCalled()
+    })
+
+    test('given a tenant with valid slug from database, should proceed with upgrade', async () => {
+      const deps = makeDeps()
+      ;(deps.repo.listActiveTenants as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeTenant({ id: 't1', slug: 'valid-tenant' }),
+      ])
+      const service = createUpgradeService(deps)
+
+      const result = await service.upgradeAll({ imageTag: 'v2.0.0' })
+
+      expect(result.succeeded).toHaveLength(1)
+      expect(deps.executor.exec).toHaveBeenCalled()
+    })
+  })
+
   describe('dry run', () => {
     test('given dry-run, should return plan without calling any docker commands', async () => {
       const deps = makeDeps()

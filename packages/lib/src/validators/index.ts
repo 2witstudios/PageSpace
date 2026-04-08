@@ -9,3 +9,5 @@ export {
   type IdValidationErrorCode,
   type IdParseResult,
 } from './id-validators'
+
+export { isValidEmail } from './email'

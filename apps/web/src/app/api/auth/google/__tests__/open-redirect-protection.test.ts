@@ -306,10 +306,11 @@ describe('Open Redirect Protection', () => {
       expect(response.status).toBe(307);
       const location = response.headers.get('location')!;
       expect(location).not.toContain('evil.com');
-      expect(location).toContain('/dashboard?auth=success&csrfToken=mock-csrf-token');
+      expect(location).toContain('/dashboard?auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
-    it('given safe returnUrl in state, should redirect to that path with CSRF token', async () => {
+    it('given safe returnUrl in state, should redirect to that path without CSRF token in URL', async () => {
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard/my-drive',
@@ -324,7 +325,8 @@ describe('Open Redirect Protection', () => {
 
       expect(response.status).toBe(307);
       const location = response.headers.get('location')!;
-      expect(location).toContain('/dashboard/my-drive?auth=success&csrfToken=mock-csrf-token');
+      expect(location).toContain('/dashboard/my-drive?auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('given protocol-relative URL in legacy state, should redirect to /dashboard', async () => {
