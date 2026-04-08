@@ -18,7 +18,11 @@ describe('verifyOAuthState', () => {
   });
 
   afterEach(() => {
-    process.env.OAUTH_STATE_SECRET = originalEnv;
+    if (originalEnv === undefined) {
+      delete process.env.OAUTH_STATE_SECRET;
+    } else {
+      process.env.OAUTH_STATE_SECRET = originalEnv;
+    }
     vi.restoreAllMocks();
   });
 
