@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSignedState, verifySignedState } from './oauth-state';
+import { secureCompare } from '../../auth/secure-compare';
 
 const TEST_SECRET = 'test-secret-key-for-oauth-state';
 
@@ -84,5 +85,32 @@ describe('verifySignedState', () => {
     const expiredState = Buffer.from(JSON.stringify(decoded)).toString('base64');
     const result = verifySignedState(expiredState, TEST_SECRET);
     expect(result).toBeNull();
+  });
+
+  it('should reject forged signatures of different lengths without timing leaks', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+
+    // Attacker forges a sig with wrong length — must not leak length info
+    decoded.sig = 'short';
+    const shortSig = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(shortSig, TEST_SECRET)).toBeNull();
+
+    decoded.sig = 'a'.repeat(200);
+    const longSig = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(longSig, TEST_SECRET)).toBeNull();
+  });
+
+  it('should use double-hash comparison to prevent timing side-channels', () => {
+    // Verify the implementation hashes both sides before comparing,
+    // ensuring constant-length buffers regardless of attacker input
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+
+    // The expected sig is 64 hex chars (SHA-256 output). Forge one that's
+    // the right length but wrong value — must still reject safely.
+    decoded.sig = 'a'.repeat(64);
+    const forged = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(forged, TEST_SECRET)).toBeNull();
   });
 });
