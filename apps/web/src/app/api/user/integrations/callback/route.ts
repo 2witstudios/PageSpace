@@ -177,7 +177,7 @@ export async function GET(request: Request) {
       loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
     }
 
-    const redirectPath = isSafeReturnUrl(returnUrl) ? returnUrl : defaultReturn;
+    const redirectPath = returnUrl && isSafeReturnUrl(returnUrl) ? returnUrl : defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
 

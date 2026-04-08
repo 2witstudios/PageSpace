@@ -530,6 +530,18 @@ describe('GET /api/user/integrations/callback', () => {
       expect(url.pathname).toBe(DEFAULT_RETURN);
     });
 
+    it('falls back to default when returnUrl is undefined', async () => {
+      mockVerifySignedState.mockReturnValueOnce({
+        ...mockStateData,
+        returnUrl: undefined,
+      });
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      const response = await GET(request);
+
+      const url = getRedirectUrl(response);
+      expect(url.pathname).toBe(DEFAULT_RETURN);
+    });
+
     it('rejects returnUrl containing encoded protocol like javascript:', async () => {
       mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
