@@ -165,8 +165,9 @@ const createCallbackRequest = (params: Record<string, string>) => {
 };
 
 const createSignedState = (data: Record<string, unknown>) => {
+  const withTimestamp = { timestamp: Date.now(), ...data };
   const stateData = {
-    data,
+    data: withTimestamp,
     sig: 'valid-signature',
   };
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
