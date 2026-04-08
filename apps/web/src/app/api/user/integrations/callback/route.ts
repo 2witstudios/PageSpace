@@ -15,6 +15,7 @@ import {
 } from '@pagespace/lib/integrations';
 import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { isSafeReturnUrl } from '@/lib/auth';
 
 const integrationCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required'),
@@ -176,13 +177,7 @@ export async function GET(request: Request) {
       loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
     }
 
-    // Validate returnUrl is a safe relative path (no scheme, no host, starts with /)
-    const isSafeReturn = returnUrl
-      && returnUrl.startsWith('/')
-      && !returnUrl.startsWith('//')
-      && !returnUrl.includes('\\')
-      && !/[\r\n]/.test(returnUrl);
-    const redirectPath = isSafeReturn ? returnUrl : defaultReturn;
+    const redirectPath = returnUrl && isSafeReturnUrl(returnUrl) ? returnUrl : defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
 

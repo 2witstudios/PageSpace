@@ -29,7 +29,12 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');
     const state = searchParams.get('state');
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
+    const configuredUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL;
+    if (!configuredUrl && process.env.NODE_ENV === 'production') {
+      loggers.auth.error('NEXTAUTH_URL or WEB_APP_URL must be set in production');
+      return new Response('Server misconfiguration', { status: 500 });
+    }
+    const baseUrl = configuredUrl || new URL(req.url).origin;
 
     // Verify state HMAC upfront — this is the server-side security gate
     const stateResult = state ? verifyOAuthState(state) : null;
@@ -379,7 +384,7 @@ export async function GET(req: Request) {
 
   } catch (error) {
     loggers.auth.error('Google OAuth callback error', error as Error);
-    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
     return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }
 }
