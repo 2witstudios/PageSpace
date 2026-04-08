@@ -775,7 +775,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('web platform redirect', () => {
-    it('redirects to returnUrl with auth success and CSRF token', async () => {
+    it('redirects to returnUrl with auth success without CSRF token in URL', async () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
 

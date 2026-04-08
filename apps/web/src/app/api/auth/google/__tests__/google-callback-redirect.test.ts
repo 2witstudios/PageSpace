@@ -201,7 +201,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('session-based authentication', () => {
-    it('given successful OAuth, should create session and redirect with CSRF token', async () => {
+    it('given successful OAuth, should create session and redirect without CSRF token in URL', async () => {
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard',

@@ -930,7 +930,7 @@ describe('POST /api/auth/apple/callback', () => {
   });
 
   describe('web platform redirect', () => {
-    it('redirects to returnUrl with auth success and CSRF token', async () => {
+    it('redirects to returnUrl with auth success without CSRF token in URL', async () => {
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
         id_token: 'valid-token',
