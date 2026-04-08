@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 export interface OAuthStateData {
   returnUrl?: string;
-  platform?: 'web' | 'desktop';
+  platform?: 'web' | 'desktop' | 'ios';
   deviceId?: string;
   deviceName?: string;
 }
