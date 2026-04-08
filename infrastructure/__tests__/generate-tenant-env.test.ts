@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { resolve } from 'path';
 
 const SCRIPT = resolve(__dirname, '../scripts/generate-tenant-env.sh');
 
 function runScript(args: string): { code: number; stdout: string; stderr: string } {
   try {
-    const stdout = execSync(`bash ${SCRIPT} ${args}`, {
+    const stdout = execFileSync('bash', [SCRIPT, ...args.split(' ').filter(Boolean)], {
       encoding: 'utf-8',
       timeout: 10_000,
     });

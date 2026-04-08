@@ -213,3 +213,31 @@ The callback handler has layered security controls:
 
 - `apps/web/src/app/api/auth/google/callback/__tests__/route.test.ts` — comprehensive callback contract tests
 - `apps/web/src/app/api/auth/google/__tests__/open-redirect-protection.test.ts` — defense-in-depth returnUrl validation
+
+## Batch 8: Shell Command Injection in Infrastructure Tests (4 alerts fixed)
+
+**Branch**: `pu/sec-shell-inject`
+**Date**: 2026-04-08
+**Total Alerts**: 4 (all `js/shell-command-injection-from-environment` MEDIUM)
+**Disposition**: All 4 fixed — switched `execSync()` with string interpolation to `execFileSync()` with array args
+
+### Analysis
+
+CodeQL's `js/shell-command-injection-from-environment` rule flags shell commands built via string interpolation of paths resolved from `__dirname`. While these are test files with hardcoded arguments (no real exploitability), `execSync()` with template literals passes the command through a shell interpreter where metacharacters in paths could theoretically be exploited. Switching to `execFileSync()` with array arguments bypasses the shell entirely, eliminating the injection surface.
+
+**Rating: S2 (Should Fix)** — Not exploitable in practice (test files, hardcoded args, `__dirname`-derived paths), but `execFileSync` with array args is the correct API and the fix is trivial.
+
+### Alert Disposition
+
+| Alert | Rule | Severity | File | CWE | Fix Summary | Status |
+|-------|------|----------|------|-----|-------------|--------|
+| #120 | js/shell-command-injection-from-environment | medium | image-runtime.test.ts:25 | CWE-78 | Refactored `run()`/`composeCmd()` → `composeRun()`/`composeArgs()` using `execFileSync('docker', [...args])` | FIXED |
+| #121 | js/shell-command-injection-from-environment | medium | image-runtime.test.ts:57 | CWE-78 | `cleanup()` now uses `execFileSync('docker', composeArgs(...))` instead of `execSync(composeCmd(...))` | FIXED |
+| #122 | js/shell-command-injection-from-environment | medium | generate-tenant-env.test.ts:9 | CWE-78 | `execSync(\`bash ${SCRIPT} ${args}\`)` → `execFileSync('bash', [SCRIPT, ...args.split(' ').filter(Boolean)])` | FIXED |
+| #123 | js/shell-command-injection-from-environment | medium | tenant-stack.test.ts:10 | CWE-78 | `execSync(\`bash ${SCRIPT} ${args}\`)` → `execFileSync('bash', [SCRIPT, ...args.split(' ').filter(Boolean)])` | FIXED |
+
+### Files Modified (3 files)
+
+- `infrastructure/__tests__/tenant-stack.test.ts` — `execSync` → `execFileSync` with array args
+- `infrastructure/__tests__/generate-tenant-env.test.ts` — `execSync` → `execFileSync` with array args
+- `infrastructure/scripts/__tests__/image-runtime.test.ts` — Refactored `run()`/`composeCmd()` to `composeRun()`/`composeArgs()` using `execFileSync`
