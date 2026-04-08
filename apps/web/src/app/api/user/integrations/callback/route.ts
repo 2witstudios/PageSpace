@@ -158,7 +158,7 @@ export async function GET(request: Request) {
       // User-scoped connection
       const existing = await findUserConnection(db, userId, providerId);
       if (existing) {
-        await updateConnectionCredentials(db, existing.id, encrypted);
+        await updateConnectionCredentials(db, existing.id, encrypted, visibility);
         await updateConnectionStatus(db, existing.id, 'active');
       } else {
         await createConnection(db, {

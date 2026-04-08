@@ -131,7 +131,7 @@ describe('GET /api/user/integrations/callback', () => {
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     // Save original env
     for (const key of envKeys) {
@@ -144,9 +144,16 @@ describe('GET /api/user/integrations/callback', () => {
     process.env.INTEGRATION_GITHUB_CLIENT_ID = 'gh-client-id';
     process.env.INTEGRATION_GITHUB_CLIENT_SECRET = 'gh-client-secret';
 
-    // Default mock behaviors
+    // Default mock behaviors (must re-establish after resetAllMocks)
     mockGetProviderById.mockResolvedValue(mockProvider);
     mockVerifySignedState.mockReturnValue(mockStateData);
+    mockExchangeOAuthCode.mockResolvedValue({ accessToken: 'mock-access-token', refreshToken: 'mock-refresh-token', expiresIn: 3600 });
+    mockEncryptCredentials.mockResolvedValue('encrypted-credentials-blob');
+    mockCreateConnection.mockResolvedValue({ id: 'conn-1' });
+    mockFindUserConnection.mockResolvedValue(null);
+    mockFindDriveConnection.mockResolvedValue(null);
+    mockUpdateConnectionCredentials.mockResolvedValue(undefined);
+    mockUpdateConnectionStatus.mockResolvedValue(undefined);
     mockGetDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true });
   });
 
@@ -266,7 +273,7 @@ describe('GET /api/user/integrations/callback', () => {
 
   describe('Alert #101: State verification', () => {
     it('redirects with invalid_state when verifySignedState returns null', async () => {
-      mockVerifySignedState.mockReturnValue(null);
+      mockVerifySignedState.mockReturnValueOnce(null);
       const request = createCallbackRequest({ code: 'auth-code', state: 'invalid-state' });
       const response = await GET(request);
 
@@ -276,7 +283,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('logs warning when state verification fails', async () => {
-      mockVerifySignedState.mockReturnValue(null);
+      mockVerifySignedState.mockReturnValueOnce(null);
       const request = createCallbackRequest({ code: 'auth-code', state: 'invalid-state' });
       await GET(request);
 
@@ -318,7 +325,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('redirects with provider_not_found when provider does not exist', async () => {
-      mockGetProviderById.mockResolvedValue(null);
+      mockGetProviderById.mockResolvedValueOnce(null);
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);
 
@@ -328,7 +335,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('redirects with not_oauth when provider is not OAuth2', async () => {
-      mockGetProviderById.mockResolvedValue({
+      mockGetProviderById.mockResolvedValueOnce({
         ...mockProvider,
         config: { authMethod: { type: 'api_key' } },
       });
@@ -344,8 +351,8 @@ describe('GET /api/user/integrations/callback', () => {
   // ── Happy path: user-scoped connection ───────────────────────────
 
   describe('User-scoped connection', () => {
-    it('creates new connection when none exists', async () => {
-      mockFindUserConnection.mockResolvedValue(null);
+    it('creates new connection with default visibility when none exists', async () => {
+      mockFindUserConnection.mockResolvedValueOnce(null);
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
@@ -356,20 +363,56 @@ describe('GET /api/user/integrations/callback', () => {
           userId: 'user-123',
           name: 'My GitHub',
           status: 'active',
+          visibility: 'owned_drives',
         })
       );
     });
 
-    it('updates existing connection credentials', async () => {
+    it('creates connection with explicit visibility from state', async () => {
+      mockVerifySignedState.mockReturnValueOnce({
+        ...mockStateData,
+        visibility: 'private',
+      });
+      mockFindUserConnection.mockResolvedValueOnce(null);
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      expect(mockCreateConnection).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          visibility: 'private',
+        })
+      );
+    });
+
+    it('falls back to default visibility for invalid value', async () => {
+      mockVerifySignedState.mockReturnValueOnce({
+        ...mockStateData,
+        visibility: 'bogus_value',
+      });
+      mockFindUserConnection.mockResolvedValueOnce(null);
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      expect(mockCreateConnection).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          visibility: 'owned_drives',
+        })
+      );
+    });
+
+    it('updates existing connection credentials and visibility', async () => {
       const existing = { id: 'existing-conn-1' };
-      mockFindUserConnection.mockResolvedValue(existing);
+      mockFindUserConnection.mockResolvedValueOnce(existing);
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
       expect(mockUpdateConnectionCredentials).toHaveBeenCalledWith(
         expect.anything(),
         'existing-conn-1',
-        'encrypted-credentials-blob'
+        'encrypted-credentials-blob',
+        'owned_drives'
       );
       expect(mockUpdateConnectionStatus).toHaveBeenCalledWith(
         expect.anything(),
@@ -410,7 +453,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('rejects when user lacks admin access to drive', async () => {
-      mockGetDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false });
+      mockGetDriveAccess.mockResolvedValueOnce({ isOwner: false, isAdmin: false });
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);
 
@@ -420,7 +463,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('creates drive-scoped connection for admin users', async () => {
-      mockGetDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: true });
+      mockGetDriveAccess.mockResolvedValueOnce({ isOwner: false, isAdmin: true });
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
@@ -440,7 +483,7 @@ describe('GET /api/user/integrations/callback', () => {
 
   describe('Return URL validation', () => {
     it('uses safe relative returnUrl from state', async () => {
-      mockVerifySignedState.mockReturnValue({
+      mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
         returnUrl: '/settings/integrations/github',
       });
@@ -452,7 +495,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('falls back to default for unsafe returnUrl', async () => {
-      mockVerifySignedState.mockReturnValue({
+      mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
         returnUrl: 'https://evil.com/steal',
       });
@@ -464,7 +507,7 @@ describe('GET /api/user/integrations/callback', () => {
     });
 
     it('rejects protocol-relative returnUrl', async () => {
-      mockVerifySignedState.mockReturnValue({
+      mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
         returnUrl: '//evil.com/steal',
       });
@@ -480,7 +523,7 @@ describe('GET /api/user/integrations/callback', () => {
 
   describe('Token exchange errors', () => {
     it('redirects with missing_tokens when no access token returned', async () => {
-      mockExchangeOAuthCode.mockResolvedValue({ accessToken: null });
+      mockExchangeOAuthCode.mockResolvedValueOnce({ accessToken: null });
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);
 
@@ -494,7 +537,7 @@ describe('GET /api/user/integrations/callback', () => {
 
   describe('Unexpected errors', () => {
     it('redirects with unexpected error on thrown exception', async () => {
-      mockGetProviderById.mockRejectedValue(new Error('DB connection failed'));
+      mockGetProviderById.mockRejectedValueOnce(new Error('DB connection failed'));
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);
 
@@ -505,7 +548,7 @@ describe('GET /api/user/integrations/callback', () => {
 
     it('logs the error on unexpected exception', async () => {
       const dbError = new Error('DB connection failed');
-      mockGetProviderById.mockRejectedValue(dbError);
+      mockGetProviderById.mockRejectedValueOnce(dbError);
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 

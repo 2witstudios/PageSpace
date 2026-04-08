@@ -133,7 +133,7 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 
 ### Files Modified (26 files)
 
-**Processor App (6 files):**
+**Processor App (5 files):**
 - `apps/processor/src/cache/content-store.ts` — Path traversal prevention, prototype pollution guards, preset validation
 - `apps/processor/src/api/upload.ts` — Path containment checks for temp files
 - `apps/processor/src/api/avatar.ts` — Rate limiting middleware
@@ -156,12 +156,12 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 - `apps/web/src/stores/page-agents/usePageAgentDashboardStore.ts` — Agent ID validation
 - `apps/web/public/sw.js` — Message origin verification
 
-**Desktop App (2 files):**
+**Desktop App (3 files):**
 - `apps/desktop/src/offline.html` — URL redirect validation
 - `apps/desktop/src/main/auth-storage.ts` — Session data validation
 - `apps/desktop/src/main/ws-client.ts` — WebSocket URL validation
 
-**Shared Packages (3 files):**
+**Shared Packages (4 files):**
 - `packages/lib/src/services/drive-search-service.ts` — Regex injection prevention + type fix
 - `packages/lib/src/services/notification-email-service.ts` — Log injection prevention
 - `packages/lib/src/file-processing/file-processor.ts` — Hardcoded API URLs
