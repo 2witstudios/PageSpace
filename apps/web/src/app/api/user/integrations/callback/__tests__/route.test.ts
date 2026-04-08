@@ -517,6 +517,30 @@ describe('GET /api/user/integrations/callback', () => {
       const url = getRedirectUrl(response);
       expect(url.pathname).toBe(DEFAULT_RETURN);
     });
+
+    it('rejects URL-encoded protocol-relative returnUrl that decodes to //evil.com', async () => {
+      mockVerifySignedState.mockReturnValueOnce({
+        ...mockStateData,
+        returnUrl: '/%2fevil.com',
+      });
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      const response = await GET(request);
+
+      const url = getRedirectUrl(response);
+      expect(url.pathname).toBe(DEFAULT_RETURN);
+    });
+
+    it('rejects returnUrl containing encoded protocol like javascript:', async () => {
+      mockVerifySignedState.mockReturnValueOnce({
+        ...mockStateData,
+        returnUrl: '/redirect?to=javascript:alert(1)',
+      });
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      const response = await GET(request);
+
+      const url = getRedirectUrl(response);
+      expect(url.pathname).toBe(DEFAULT_RETURN);
+    });
   });
 
   // ── Token exchange errors ────────────────────────────────────────

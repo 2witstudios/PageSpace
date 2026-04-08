@@ -1119,5 +1119,55 @@ describe('GET /api/auth/google/callback', () => {
         new Error('Network failure')
       );
     });
+
+    it('error handler uses origin not full request URL as redirect base', async () => {
+      mockGetToken.mockRejectedValueOnce(new Error('fail'));
+
+      const request = createCallbackRequest({ code: 'valid-code' });
+      const response = await GET(request);
+
+      const location = response.headers.get('Location')!;
+      const locationUrl = new URL(location);
+      // Should redirect to origin + path, not include original query params from req.url
+      expect(locationUrl.origin).toBe('https://example.com');
+      expect(locationUrl.pathname).toBe('/auth/signin');
+      expect(locationUrl.searchParams.get('error')).toBe('oauth_error');
+      // Must NOT contain callback params from the original request
+      expect(locationUrl.searchParams.has('code')).toBe(false);
+    });
+
+    it('error handler fallback uses origin not raw req.url when env vars unset', async () => {
+      delete process.env.NEXTAUTH_URL;
+      delete process.env.WEB_APP_URL;
+      mockGetToken.mockRejectedValueOnce(new Error('fail'));
+
+      const request = createCallbackRequest({ code: 'valid-code' });
+      const response = await GET(request);
+
+      const location = response.headers.get('Location')!;
+      const locationUrl = new URL(location);
+      // Redirect should use origin only, not include query params from the original callback URL
+      expect(locationUrl.pathname).toBe('/auth/signin');
+      expect(locationUrl.searchParams.get('error')).toBe('oauth_error');
+      expect(locationUrl.searchParams.has('code')).toBe(false);
+      expect(locationUrl.searchParams.has('state')).toBe(false);
+    });
+  });
+
+  describe('production baseUrl safety', () => {
+    it('returns 500 when NEXTAUTH_URL and WEB_APP_URL are both unset in production', async () => {
+      delete process.env.NEXTAUTH_URL;
+      delete process.env.WEB_APP_URL;
+      process.env.NODE_ENV = 'production';
+
+      try {
+        const request = createCallbackRequest({ code: 'valid-code' });
+        const response = await GET(request);
+
+        expect(response.status).toBe(500);
+      } finally {
+        process.env.NODE_ENV = 'test';
+      }
+    });
   });
 });
