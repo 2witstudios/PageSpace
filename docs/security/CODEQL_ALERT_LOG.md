@@ -7,6 +7,7 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 **Branch**: `codeql-hardening`
 **Total Alerts**: 77
 **Resolved**: 76/77 (1 dismissed as S4 false positive)
+**Additional Dismissed**: 13 (7 Google OAuth S4 + 2 Round 4 false positives + 4 Round 5 S3)
 
 ---
 
@@ -135,6 +136,17 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 |-------|------|----------|------|-----|-----------------|--------|
 | 138 | js/http-to-file-access | medium | page-content-store.ts:161 | CWE-073 | Content-addressable storage: file path is SHA-256 hash validated by `/^[a-f0-9]{64}$/i` (path traversal impossible). All callers require authentication + `canUserEditPage()` authorization. Atomic `wx` flag write. CodeQL can't model hash derivation breaking taint chain | DISMISSED (false positive) |
 | 139 | js/request-forgery | critical | fetch-proxy-handler.ts:49 | CWE-918 | URL validated by `isAllowedFetchProxyURL()` before fetch — strict allowlist (localhost/private IPs, http/https only). Redirects blocked (lines 57-61). Not exposed to renderer; requires authenticated WebSocket. 102+ test cases cover validation. CodeQL can't model allowlist breaking taint chain | DISMISSED (false positive) |
+
+### Round 5: Incomplete Sanitization in Changelog Scripts (132-135)
+
+| Alert | Rule | Severity | File | CWE | Triage Rationale | Status |
+|-------|------|----------|------|-----|-----------------|--------|
+| 132 | js/incomplete-sanitization | high | detect-abandoned-approaches.ts:192 | CWE-116 | `.replace(/\|/g, "\\|")` escapes pipes but not backslashes. Output is markdown table in `docs/changelog/evidence/` — display only, no code execution path. Input is git commit subjects (semi-trusted). S3 per rubric: display/logging output | DISMISSED (S3) |
+| 133 | js/incomplete-sanitization | high | detect-abandoned-approaches.ts:193 | CWE-116 | Same pattern as #132 on adjacent line (`file.deleted.message`). Output is markdown documentation, not RegExp or shell exec | DISMISSED (S3) |
+| 134 | js/incomplete-sanitization | high | detect-multiple-attempts.ts:219 | CWE-116 | `.replace(/\|/g, "\\|")` for markdown table cell. Output goes to `docs/changelog/evidence/patterns/multiple-attempts.md`. Developer tooling, not production code | DISMISSED (S3) |
+| 135 | js/incomplete-sanitization | high | track-file-evolution.ts:174 | CWE-116 | `.replace(/\|/g, "\\|")` for markdown table cell. Output goes to `docs/changelog/evidence/files/`. No downstream parsing or execution of the output | DISMISSED (S3) |
+
+**Precedent**: Alert #28 (`prettier.ts:57`) was rated S2 and FIXED because its incompletely-sanitized string fed into `new RegExp()`. These 4 alerts output exclusively to static markdown documentation files — fundamentally different risk profile.
 
 ---
 
