@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { convertToModelMessages, generateText, stepCountIs } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -33,6 +34,10 @@ function formatToolExecutionResults(steps: unknown[]): string {
           // Type guard for toolCall structure
           if (typeof toolCall === 'object' && toolCall !== null) {
             const toolCallObj = toolCall as Record<string, unknown>;
+
+            // Skip internal control-flow tools
+            if (toolCallObj.toolName === FINISH_TOOL_NAME) return;
+
             const toolResults = Array.isArray(stepObj.toolResults) ? stepObj.toolResults : [];
             const toolResult = toolResults[callIndex];
 
@@ -309,12 +314,12 @@ export async function POST(request: Request) {
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
             }))),
-            tools: availableTools,
+            tools: { ...availableTools, ...finishTool },
             toolChoice: 'auto',
             temperature: 0.7,
             maxRetries: 3,
             experimental_context: executionContext,
-            stopWhen: stepCountIs(100), // Match AI SDK version
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
             onStepFinish: ({ toolCalls, toolResults, text }) => {
               loggers.api.debug('Agent tool execution step completed', {
                 agentId,
@@ -359,7 +364,9 @@ export async function POST(request: Request) {
       });
 
       // Extract response text with tool execution results
-      responseText = result.text;
+      // Collect text from all steps — result.text only returns the final step,
+      // which may be empty if the model's last action was calling the finish tool
+      responseText = result.steps?.map(s => s.text).filter(Boolean).join('') || '';
 
       // Enhanced: Include tool execution results for complete MCP responses
       if (result.steps && result.steps.length > 0) {

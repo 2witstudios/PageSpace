@@ -7,6 +7,7 @@ import { useMemo } from 'react';
 import type { UIMessage } from 'ai';
 import type { TextPart, FilePart, ToolPart, GroupedPart } from './message-types';
 import { isValidToolState } from './message-types';
+import { FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 
 /**
  * Groups message parts for rendering.
@@ -58,13 +59,19 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           filename: typeof filePart.filename === 'string' ? filePart.filename : undefined,
         });
       } else if (part.type.startsWith('tool-')) {
-        flushTextGroup();
-        flushFileGroup();
-
         // Type guard and safe property access for tool parts
         const toolPart = part as ToolPart & Record<string, unknown>;
         const toolCallId = typeof toolPart.toolCallId === 'string' ? toolPart.toolCallId : '';
         const toolName = typeof toolPart.toolName === 'string' ? toolPart.toolName : part.type.replace('tool-', '');
+
+        // Skip internal control-flow tools (finish tool is not visible to users)
+        if (toolName === FINISH_TOOL_NAME) {
+          return;
+        }
+
+        flushTextGroup();
+        flushFileGroup();
+
         const state = isValidToolState(toolPart.state) ? toolPart.state : 'input-available';
 
         // Add each tool individually (no grouping)
