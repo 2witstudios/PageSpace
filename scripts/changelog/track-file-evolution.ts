@@ -12,6 +12,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { execGit } from "./git-exec";
 
 interface FileCommit {
   commit: string;
@@ -40,11 +41,11 @@ function exec(cmd: string): string {
   }
 }
 
-function getFileHistory(filePath: string): FileHistory {
+export function getFileHistory(filePath: string): FileHistory {
   // Get all commits that touched this file
-  const log = exec(
-    `git log --follow --format="COMMIT:%H|%ad|%s" --date=short --numstat -- "${filePath}"`
-  );
+  const log = execGit([
+    "log", "--follow", "--format=COMMIT:%H|%ad|%s", "--date=short", "--numstat", "--", filePath
+  ]);
 
   const commits: FileCommit[] = [];
   let currentCommit: Partial<FileCommit> | null = null;
@@ -76,9 +77,9 @@ function getFileHistory(filePath: string): FileHistory {
   }
 
   // Detect created/deleted
-  const statusLog = exec(
-    `git log --follow --diff-filter=AD --format="COMMIT:%H|%ad|%s" --date=short --name-status -- "${filePath}"`
-  );
+  const statusLog = execGit([
+    "log", "--follow", "--diff-filter=AD", "--format=COMMIT:%H|%ad|%s", "--date=short", "--name-status", "--", filePath
+  ]);
 
   let created: { date: string; commit: string } | undefined;
   let deleted: { date: string; commit: string } | undefined;
@@ -269,6 +270,7 @@ async function main() {
 
   // Get most churned files (files with >5 commits)
   console.log("Finding files with significant history...");
+  // Safe: no variable interpolation; pipes require shell
   const churnOutput = exec(`git log --format= --name-only | sort | uniq -c | sort -rn`);
 
   const significantFiles: string[] = [];

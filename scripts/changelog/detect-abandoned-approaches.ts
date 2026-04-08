@@ -12,6 +12,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { execGit } from "./git-exec";
 
 interface AbandonedFile {
   path: string;
@@ -91,17 +92,17 @@ function getDeletedFiles(): Map<string, { commit: string; date: string; message:
   return deleted;
 }
 
-function getLinesAtCommit(commit: string, file: string): number {
+export function getLinesAtCommit(commit: string, file: string): number {
   try {
-    const content = exec(`git show ${commit}^:"${file}" 2>/dev/null`);
+    const content = execGit(["show", `${commit}^:${file}`]);
     return content.split("\n").length;
   } catch {
     return 0;
   }
 }
 
-function getCommitBody(commit: string): string {
-  return exec(`git log -1 --format="%b" ${commit}`).trim();
+export function getCommitBody(commit: string): string {
+  return execGit(["log", "-1", "--format=%b", commit]).trim();
 }
 
 function categorizeAbandonment(file: AbandonedFile): string {
