@@ -142,8 +142,6 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
 
     expect(consoleSpy).toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
-
-    consoleSpy.mockRestore();
   });
 
   it('given webhook POST failure, should not throw (fire-and-forget)', async () => {
@@ -194,7 +192,5 @@ describe('GET /api/cron/verify-audit-chain — webhook alerting', () => {
       '[Cron] Webhook alert delivery failed:',
       'Network timeout'
     );
-
-    warnSpy.mockRestore();
   });
 });
