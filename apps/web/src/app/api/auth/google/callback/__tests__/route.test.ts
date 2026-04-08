@@ -153,9 +153,10 @@ function createSignedState(
   data: Record<string, unknown>,
   secret: string = 'test-oauth-state-secret'
 ): string {
-  const payload = JSON.stringify(data);
+  const withTimestamp = { timestamp: Date.now(), ...data };
+  const payload = JSON.stringify(withTimestamp);
   const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  return Buffer.from(JSON.stringify({ data, sig })).toString('base64');
+  return Buffer.from(JSON.stringify({ data: withTimestamp, sig })).toString('base64');
 }
 
 const mockNewUser = {

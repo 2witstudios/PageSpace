@@ -206,7 +206,7 @@ The callback handler has layered security controls:
 3. **Server-side code exchange** — OAuth authorization code is validated by Google's token endpoint, not by local conditions.
 4. **PKCE** — code_challenge/code_verifier prevents authorization code interception.
 5. **`isSafeReturnUrl()` defense-in-depth** — blocks open redirect attacks for any returnUrl.
-6. **State expiration** — 10-minute TTL enforced when `timestamp` is present (injected by `createSignedState`). Legacy states without a timestamp are accepted for backward compatibility.
+6. **State expiration** — 10-minute TTL enforced via `Number.isFinite()` guard. States with missing, NaN, or non-finite timestamps are rejected as expired.
 7. **Rate limiting** — distributed rate limiting on callback IP.
 
 ### Alert Disposition

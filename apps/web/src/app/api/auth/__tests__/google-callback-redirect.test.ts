@@ -7,9 +7,10 @@ import crypto from 'crypto';
 import { GET } from '../google/callback/route';
 
 function createSignedState(data: Record<string, unknown>): string {
-  const payload = JSON.stringify(data);
+  const withTimestamp = { timestamp: Date.now(), ...data };
+  const payload = JSON.stringify(withTimestamp);
   const sig = crypto.createHmac('sha256', 'test-oauth-state-secret').update(payload).digest('hex');
-  return Buffer.from(JSON.stringify({ data, sig })).toString('base64');
+  return Buffer.from(JSON.stringify({ data: withTimestamp, sig })).toString('base64');
 }
 const defaultState = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
 
