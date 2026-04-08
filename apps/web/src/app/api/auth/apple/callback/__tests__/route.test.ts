@@ -228,8 +228,8 @@ describe('POST /api/auth/apple/callback', () => {
       await POST(request);
 
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Apple OAuth error',
-        expect.objectContaining({ error: longError.slice(0, 100) })
+        'Apple OAuth callback rejected',
+        expect.objectContaining({ errorHint: longError.slice(0, 100) })
       );
     });
 
@@ -247,14 +247,14 @@ describe('POST /api/auth/apple/callback', () => {
   });
 
   describe('missing id_token', () => {
-    it('redirects with invalid_request when id_token is missing', async () => {
+    it('rejects when id_token is missing', async () => {
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({ state });
       const response = await POST(request);
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
   });
 
@@ -288,10 +288,10 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/auth/signin?error=invalid_request');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('uses defaults when state has no signature', async () => {
+    it('rejects unsigned state', async () => {
       const unsignedState = Buffer.from(JSON.stringify({
         data: { returnUrl: '/evil', platform: 'desktop' },
       })).toString('base64');
@@ -303,17 +303,12 @@ describe('POST /api/auth/apple/callback', () => {
 
       const response = await POST(request);
 
-      // Should continue with safe defaults (/dashboard, web)
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/dashboard');
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Apple OAuth state missing signature - using safe defaults',
-        { hasData: true, hasSig: false }
-      );
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('uses defaults when state is malformed JSON', async () => {
+    it('rejects malformed state', async () => {
       const badState = Buffer.from('not-json').toString('base64');
 
       const request = createCallbackRequest({
@@ -324,13 +319,11 @@ describe('POST /api/auth/apple/callback', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(307);
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Apple OAuth state parse failed - using safe defaults',
-        { stateLength: 12 }
-      );
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
-    it('uses /dashboard when state is not provided', async () => {
+    it('rejects when state is not provided', async () => {
       const request = createCallbackRequest({
         id_token: 'valid-token',
       });
@@ -339,7 +332,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(response.status).toBe(307);
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/dashboard');
+      expect(location).toContain('/auth/signin?error=oauth_error');
     });
 
     it('extracts deviceId and deviceName from valid state', async () => {
@@ -395,10 +388,7 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard');
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Unsafe returnUrl in Apple OAuth callback - falling back to dashboard',
-        { returnUrl: 'https://evil.com', hasState: true }
-      );
+      expect(location).not.toContain('evil.com');
     });
   });
 

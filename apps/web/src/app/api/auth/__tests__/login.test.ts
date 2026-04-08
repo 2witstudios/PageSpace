@@ -130,7 +130,7 @@ vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
   getClientIP: vi.fn().mockReturnValue('unknown'),
   revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
-  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_device_token'),
+  createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_device_token'),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
@@ -150,7 +150,7 @@ import {
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { getClientIP, revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -302,11 +302,10 @@ describe('POST /api/auth/login', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockUser.id,
         'login',
-        {
-          email: mockUser.email,
+        expect.objectContaining({
           ip: '192.168.1.1',
           userAgent: null,
-        }
+        })
       );
     });
   });
@@ -996,7 +995,7 @@ describe('POST /api/auth/login', () => {
       expect(body.deviceToken).toBe('ps_dev_mock_device_token');
     });
 
-    it('calls createWebDeviceToken with correct params', async () => {
+    it('calls createDeviceToken with correct params', async () => {
       const request = createLoginRequest({
         ...validLoginPayload,
         deviceId: 'device-abc',
@@ -1005,7 +1004,7 @@ describe('POST /api/auth/login', () => {
       });
       await POST(request);
 
-      expect(createWebDeviceToken).toHaveBeenCalledWith(
+      expect(createDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: mockUser.id,
           deviceId: 'device-abc',
@@ -1021,11 +1020,11 @@ describe('POST /api/auth/login', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBeUndefined();
-      expect(createWebDeviceToken).not.toHaveBeenCalled();
+      expect(createDeviceToken).not.toHaveBeenCalled();
     });
 
     it('succeeds even when device token creation fails', async () => {
-      vi.mocked(createWebDeviceToken).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(createDeviceToken).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createLoginRequest({
         ...validLoginPayload,

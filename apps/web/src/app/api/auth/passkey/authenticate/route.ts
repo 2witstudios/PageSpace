@@ -13,14 +13,15 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP, createWebDeviceToken } from '@/lib/auth';
-import { authRepository } from '@/lib/repositories/auth-repository';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   csrfToken: z.string().min(1),
+  platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().max(128).optional(),
   deviceName: z.string().optional(),
 });
@@ -64,7 +65,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, csrfToken, deviceId, deviceName } = validation.data;
+    const { response, expectedChallenge, csrfToken, platform, deviceId, deviceName } = validation.data;
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
@@ -158,9 +159,10 @@ export async function POST(req: Request) {
       try {
         const user = await authRepository.findUserById(userId);
         if (user) {
-          deviceTokenValue = await createWebDeviceToken({
+          deviceTokenValue = await createDeviceToken({
             userId, deviceId, tokenVersion: user.tokenVersion,
-            deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+            platform: platform || 'web',
+            deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
             userAgent: req.headers.get('user-agent') || undefined,
             ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
           });
@@ -190,6 +192,8 @@ export async function POST(req: Request) {
         success: true,
         userId,
         redirectUrl: '/dashboard',
+        csrfToken: newCsrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }

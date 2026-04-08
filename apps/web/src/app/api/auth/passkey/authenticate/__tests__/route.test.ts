@@ -8,6 +8,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
+vi.mock('next/server', () => ({
+  NextResponse: {
+    json: (body: unknown, init?: ResponseInit) => new Response(JSON.stringify(body), {
+      status: init?.status ?? 200,
+      headers: init?.headers ?? new Headers({ 'Content-Type': 'application/json' }),
+    }),
+  },
+}));
+
 vi.mock('@pagespace/lib/auth', () => ({
   verifyAuthentication: vi.fn(),
   sessionService: {
@@ -54,20 +63,20 @@ vi.mock('@pagespace/lib/security', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
-  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+  createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+}));
+
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
     findUserById: vi.fn().mockResolvedValue({
       id: 'user-1',
-      tokenVersion: 0,
+      tokenVersion: 5,
     }),
   },
-}));
-
-vi.mock('@/lib/auth/cookie-config', () => ({
-  appendSessionCookie: vi.fn(),
 }));
 
 import { POST } from '../route';
@@ -79,7 +88,7 @@ import {
 import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const validPayload = {
@@ -362,7 +371,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
   describe('session creation errors', () => {
     it('returns 500 when session validation fails after creation', async () => {
-      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -385,6 +394,65 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Internal server error');
       expect(loggers.auth.error).toHaveBeenCalledWith('Passkey auth verification error', new Error('Unexpected'));
+    });
+  });
+
+  describe('desktop platform handling (unified path)', () => {
+    const desktopPayload = {
+      ...validPayload,
+      platform: 'desktop',
+      deviceId: 'device-123',
+      deviceName: 'My Mac',
+    };
+
+    const createDesktopRequest = (body: Record<string, unknown> = desktopPayload) =>
+      new Request('http://localhost/api/auth/passkey/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('returns sessionToken, csrfToken, deviceToken at top level for desktop', async () => {
+      const response = await POST(createDesktopRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
+      expect(body.csrfToken).toBe('mock-csrf-token');
+      expect(body.deviceToken).toBe('ps_dev_mock_token');
+      // Should NOT have nested desktopTokens
+      expect(body.desktopTokens).toBeUndefined();
+    });
+
+    it('uses revokeAllUserSessions (hardest reset) for passkey', async () => {
+      await POST(createDesktopRequest());
+
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
+    });
+
+    it('calls createDeviceToken with platform desktop', async () => {
+      await POST(createDesktopRequest());
+
+      expect(createDeviceToken).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        deviceId: 'device-123',
+        platform: 'desktop',
+        deviceName: 'My Mac',
+        tokenVersion: 5,
+      }));
+    });
+
+    it('sets session cookies even for desktop platform', async () => {
+      await POST(createDesktopRequest());
+
+      expect(appendSessionCookie).toHaveBeenCalled();
+    });
+
+    it('does not create device token without deviceId', async () => {
+      await POST(createRequest());
+
+      expect(createDeviceToken).not.toHaveBeenCalled();
     });
   });
 });

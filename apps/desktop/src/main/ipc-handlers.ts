@@ -1,5 +1,5 @@
 import * as os from 'node:os';
-import { app, ipcMain, session } from 'electron';
+import { app, ipcMain, session, shell } from 'electron';
 import { store } from './store';
 import { getAppUrl } from './app-url';
 import { mainWindow } from './state';
@@ -53,6 +53,25 @@ export function registerIPCHandlers(): void {
 
   ipcMain.handle('auth:store-session', async (_event, sessionData: StoredAuthSession) => {
     await saveAuthSession(sessionData);
+
+    // Also set the session cookie on the BrowserWindow's session
+    // so subsequent page loads/fetches include the cookie
+    const appUrl = new URL(getAppUrl());
+    try {
+      await session.defaultSession.cookies.set({
+        url: appUrl.origin,
+        name: 'session',
+        value: sessionData.sessionToken,
+        path: '/',
+        httpOnly: true,
+        secure: appUrl.protocol === 'https:',
+        sameSite: 'strict' as const,
+        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
+      });
+    } catch (cookieError) {
+      console.warn('[Auth IPC] Failed to set session cookie:', cookieError);
+    }
+
     return { success: true };
   });
 
@@ -81,6 +100,24 @@ export function registerIPCHandlers(): void {
       appVersion: app.getVersion(),
       userAgent: `${os.type()} ${os.release()} (${process.arch})`,
     };
+  });
+
+  // Open an OAuth URL in the system browser (allowlisted hostnames only)
+  const ALLOWED_AUTH_HOSTNAMES = ['accounts.google.com', 'appleid.apple.com'];
+
+  ipcMain.handle('auth:open-external', async (_event, url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || !ALLOWED_AUTH_HOSTNAMES.includes(parsed.hostname)) {
+        console.warn('[Auth IPC] Blocked open-external for URL not in allowlist:', parsed.hostname);
+        return { success: false, error: `URL hostname "${parsed.hostname}" is not allowed` };
+      }
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      console.error('[Auth IPC] Failed to open external URL:', error);
+      return { success: false, error: 'Invalid URL' };
+    }
   });
 
   ipcMain.handle('mcp:get-config', async () => {

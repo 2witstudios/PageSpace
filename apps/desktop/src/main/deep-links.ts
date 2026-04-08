@@ -141,11 +141,23 @@ async function handleAuthExchange(url: string): Promise<boolean> {
   }
 }
 
-export async function handleDeepLink(url: string): Promise<void> {
-  const handled = await handleAuthExchange(url);
-  if (handled) {
-    return;
+function handleAuthError(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.host !== 'auth-error') return false;
+
+    const error = urlObj.searchParams.get('error') || 'Authentication failed';
+    logger.warn('[Auth Error] OAuth error received via deep link', { error });
+    mainWindow?.webContents.send('auth-error', { error });
+    return true;
+  } catch {
+    return false;
   }
+}
+
+export async function handleDeepLink(url: string): Promise<void> {
+  if (await handleAuthExchange(url)) return;
+  if (handleAuthError(url)) return;
 
   if (mainWindow) {
     mainWindow.webContents.send('deep-link', url);

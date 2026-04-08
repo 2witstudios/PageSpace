@@ -19,7 +19,13 @@ export const MAGIC_LINK_EXPIRY_MINUTES = 5;
 // Input validation schemas
 const createMagicLinkSchema = z.object({
   email: z.string().email('Invalid email address'),
-});
+  platform: z.enum(['web', 'desktop']).optional(),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+}).refine(
+  (data) => data.platform !== 'desktop' || !!data.deviceId,
+  { message: 'deviceId is required for desktop platform' }
+);
 
 const verifyMagicLinkSchema = z.object({
   token: z.string().min(1).refine(
@@ -27,6 +33,13 @@ const verifyMagicLinkSchema = z.object({
     'Invalid magic link token format'
   ),
 });
+
+/** Metadata stored with desktop-initiated magic link tokens */
+export interface DesktopMagicLinkMetadata {
+  platform: 'desktop';
+  deviceId: string;
+  deviceName?: string;
+}
 
 // Result types following zero-trust pattern
 export type MagicLinkError =
@@ -41,7 +54,7 @@ export type CreateMagicLinkResult =
   | { ok: false; error: MagicLinkError };
 
 export type VerifyMagicLinkResult =
-  | { ok: true; data: { userId: string; isNewUser: boolean } }
+  | { ok: true; data: { userId: string; isNewUser: boolean; metadata?: string | null } }
   | { ok: false; error: MagicLinkError };
 
 /**
@@ -67,7 +80,7 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     };
   }
 
-  const { email } = parsed.data;
+  const { email, platform, deviceId, deviceName } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
 
   // Check if user exists
@@ -144,6 +157,11 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
   const { token, hash, tokenPrefix } = generateToken('ps_magic');
   const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000);
 
+  // Build metadata for desktop platform support
+  const metadata = platform === 'desktop' && deviceId
+    ? JSON.stringify({ platform, deviceId, deviceName })
+    : undefined;
+
   // Store token hash (never plaintext)
   await db.insert(verificationTokens).values({
     id: createId(),
@@ -152,6 +170,7 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     tokenPrefix,
     type: 'magic_link',
     expiresAt,
+    ...(metadata && { metadata }),
   });
 
   return {
@@ -259,6 +278,6 @@ export async function verifyMagicLinkToken(input: unknown): Promise<VerifyMagicL
 
   return {
     ok: true,
-    data: { userId: record.userId, isNewUser },
+    data: { userId: record.userId, isNewUser, metadata: record.metadata },
   };
 }
