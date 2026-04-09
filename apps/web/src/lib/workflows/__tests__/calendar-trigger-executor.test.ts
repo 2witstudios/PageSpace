@@ -164,14 +164,18 @@ describe('executeCalendarTrigger', () => {
     // Default: rate limit passes
     mockIncrementUsage.mockResolvedValue({ success: true });
 
-    // Default: no attendees
+    // Default select chain: agent page preflight → attendees → etc.
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({
       innerJoin: mockInnerJoin,
       where: mockSelectWhere,
     });
     mockInnerJoin.mockReturnValue({ where: mockSelectWhere });
-    mockSelectWhere.mockResolvedValue([]);
+    // First call: agent page preflight (exists, not trashed)
+    // Subsequent calls: empty (no attendees, etc.)
+    mockSelectWhere
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
+      .mockResolvedValue([]);
 
     // Default: update succeeds
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
@@ -225,11 +229,15 @@ describe('executeCalendarTrigger', () => {
   });
 
   it('includes attendees in the prompt when present', async () => {
-    // First select call = attendees query
-    mockSelectWhere.mockResolvedValueOnce([
-      { name: 'Alice', email: 'alice@test.com' },
-      { name: null, email: 'bob@test.com' },
-    ]);
+    // Reset beforeEach chain, set up: agent preflight → attendees
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
+      .mockResolvedValueOnce([
+        { name: 'Alice', email: 'alice@test.com' },
+        { name: null, email: 'bob@test.com' },
+      ])
+      .mockResolvedValue([]);
 
     await executeCalendarTrigger(createTrigger(), createEvent());
 
@@ -288,12 +296,13 @@ describe('executeCalendarTrigger', () => {
   it('re-checks instruction page access at execution time', async () => {
     const trigger = createTrigger({ instructionPageId: 'instr-page-1' });
 
-    // First query: attendees (empty)
-    // Second query: instruction page
+    // Call order: 1=agent preflight, 2=attendees, 3=instruction page
+    mockSelectWhere.mockReset();
     let callCount = 0;
     mockSelectWhere.mockImplementation(() => {
       callCount++;
-      if (callCount === 1) return Promise.resolve([]); // attendees
+      if (callCount === 1) return Promise.resolve([{ id: 'agent-1', isTrashed: false }]); // agent preflight
+      if (callCount === 2) return Promise.resolve([]); // attendees
       // instruction page — belongs to a different drive
       return Promise.resolve([{
         title: 'Instructions',
@@ -316,10 +325,12 @@ describe('executeCalendarTrigger', () => {
   it('includes instruction page content when access is valid', async () => {
     const trigger = createTrigger({ instructionPageId: 'instr-page-1' });
 
+    mockSelectWhere.mockReset();
     let callCount = 0;
     mockSelectWhere.mockImplementation(() => {
       callCount++;
-      if (callCount === 1) return Promise.resolve([]); // attendees
+      if (callCount === 1) return Promise.resolve([{ id: 'agent-1', isTrashed: false }]); // agent preflight
+      if (callCount === 2) return Promise.resolve([]); // attendees
       return Promise.resolve([{
         title: 'Instructions',
         content: 'Do X then Y',
@@ -359,6 +370,19 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('drive');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails without consuming usage when agent page is missing', async () => {
+    // Override default: agent page preflight returns empty (deleted since scheduling)
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockResolvedValue([]);
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('agent');
+    expect(mockIncrementUsage).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });

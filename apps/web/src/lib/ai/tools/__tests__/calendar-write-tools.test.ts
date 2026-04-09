@@ -136,7 +136,7 @@ vi.mock('chrono-node', () => ({
 }));
 
 import { calendarWriteTools } from '../calendar-write-tools';
-import { db } from '@pagespace/db';
+import { db, inArray } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -423,6 +423,41 @@ describe('calendar-write-tools', () => {
     });
 
     describe('agentTrigger', () => {
+      it('returns error when agentTrigger combined with recurrence', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        const input = {
+          title: 'Recurring Agent Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          recurrence: { frequency: 'WEEKLY' as const, interval: 1 },
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'agentTrigger with recurrence',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'agentTrigger with recurrence',
+          should: 'mention recurring in error',
+          actual: (result as { error?: string }).error?.toLowerCase().includes('recur'),
+          expected: true,
+        });
+      });
+
       it('returns error when agentTrigger used without driveId', async () => {
         const input = {
           title: 'Scheduled Task',
@@ -649,6 +684,59 @@ describe('calendar-write-tools', () => {
           given: 'personal agent page',
           should: 'mention drive-based agent',
           actual: (result as { error?: string }).error?.includes('drive-based'),
+          expected: true,
+        });
+      });
+
+      it('returns error when context page is from a different drive', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+
+        // First select: agent page validation (same drive — OK)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'agent-1', type: 'AI_CHAT', title: 'My Agent', isTrashed: false, driveId: 'drive-1',
+            }]),
+          }),
+        });
+
+        // Second select: context page validation (different drive)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{
+              id: 'ctx-page-1', driveId: 'drive-other', isTrashed: false,
+            }]),
+          }),
+        });
+
+        const input = {
+          title: 'Scheduled Task',
+          startAt: '2024-06-15T10:00:00Z',
+          endAt: '2024-06-15T10:30:00Z',
+          driveId: 'drive-1',
+          agentTrigger: {
+            agentPageId: 'agent-1',
+            prompt: 'Do something',
+            contextPageIds: ['ctx-page-1'],
+          },
+        };
+
+        const result = await calendarWriteTools.create_calendar_event.execute!(
+          input,
+          createAuthContext()
+        );
+
+        assert({
+          given: 'context page from a different drive',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        assert({
+          given: 'cross-drive context page',
+          should: 'mention same drive requirement',
+          actual: (result as { error?: string }).error?.toLowerCase().includes('same drive'),
           expected: true,
         });
       });
@@ -1148,7 +1236,7 @@ describe('calendar-write-tools', () => {
       });
     });
 
-    it('cancels pending triggers when deleting a trigger-linked event', async () => {
+    it('cancels pending, claimed, and running triggers when deleting a trigger-linked event', async () => {
       const triggerMeta = { isTrigger: true, triggerType: 'agent_execution', triggerId: 'trg-1' };
       const triggerEvent = createMockEvent({
         createdById: 'user-123',
@@ -1198,10 +1286,14 @@ describe('calendar-write-tools', () => {
         expected: true,
       });
 
-      // Verify trigger cancellation happened
+      // Verify trigger cancellation happened with multi-status match
       expect(cancelSetSpy).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'cancelled' })
       );
+
+      // Should use inArray for status (pending + claimed + running), not just eq(pending)
+      const mockInArray = vi.mocked(inArray);
+      expect(mockInArray).toHaveBeenCalled();
     });
   });
 

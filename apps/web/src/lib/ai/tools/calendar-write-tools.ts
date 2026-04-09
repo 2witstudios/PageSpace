@@ -171,6 +171,9 @@ export const calendarWriteTools = {
           if (!driveId) {
             return { success: false, error: 'Agent triggers require a drive event (driveId must be provided).' };
           }
+          if (recurrence) {
+            return { success: false, error: 'Agent triggers are not yet supported on recurring events. Create a one-time event instead.' };
+          }
           if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
             return { success: false, error: 'Agent trigger needs either a prompt or instructionPageId.' };
           }
@@ -220,8 +223,7 @@ export const calendarWriteTools = {
               if (cp.isTrashed) continue;
               if (!cp.driveId) return { success: false, error: `Context page ${cp.id} is a personal page and cannot be used.` };
               if (cp.driveId !== driveId) {
-                const canAccessCtxDrive = await isUserDriveMember(userId, cp.driveId);
-                if (!canAccessCtxDrive) return { success: false, error: `You do not have access to context page ${cp.id}'s drive.` };
+                return { success: false, error: `Context page ${cp.id} must be in the same drive as the event. Cross-drive context is not loaded at execution time.` };
               }
             }
           }
@@ -626,7 +628,7 @@ export const calendarWriteTools = {
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
-        // Cancel any pending triggers linked to this event
+        // Cancel any pending/claimed/running triggers linked to this event
         const eventMeta = event.metadata as CalendarTriggerMetadata | null;
         if (eventMeta?.isTrigger) {
           await db
@@ -634,7 +636,7 @@ export const calendarWriteTools = {
             .set({ status: 'cancelled', completedAt: new Date() })
             .where(and(
               eq(calendarTriggers.calendarEventId, eventId),
-              eq(calendarTriggers.status, 'pending')
+              inArray(calendarTriggers.status, ['pending', 'claimed', 'running'])
             ));
         }
 

@@ -28,7 +28,19 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 2. Rate-limit check: consume one standard AI call from the scheduler's budget
+    // 2. Cheap preflight: verify agent page still exists before consuming a usage credit
+    const [agentPage] = await db
+      .select({ id: pages.id, isTrashed: pages.isTrashed })
+      .from(pages)
+      .where(eq(pages.id, trigger.agentPageId));
+
+    if (!agentPage || agentPage.isTrashed) {
+      const error = `Trigger agent page ${trigger.agentPageId} not found or trashed`;
+      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 3. Rate-limit check: consume one standard AI call from the scheduler's budget
     const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
     if (!usageResult.success) {
       const error = 'Daily AI call limit reached for scheduling user';
@@ -36,10 +48,10 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Build prompt from trigger instructions + instruction page + event context
+    // 4. Build prompt from trigger instructions + instruction page + event context
     const prompt = await buildTriggerPrompt(trigger, event);
 
-    // 4. Construct synthetic WorkflowRow that executeWorkflow can consume.
+    // 5. Construct synthetic WorkflowRow that executeWorkflow can consume.
     //    We only populate the fields the executor actually reads.
     const syntheticWorkflow = {
       id: trigger.id,
@@ -65,10 +77,10 @@ export async function executeCalendarTrigger(
       updatedAt: trigger.updatedAt,
     };
 
-    // 5. Execute via the standard workflow executor
+    // 6. Execute via the standard workflow executor
     const result = await executeWorkflow(syntheticWorkflow);
 
-    // 6. Update trigger with execution results
+    // 7. Update trigger with execution results
     await db
       .update(calendarTriggers)
       .set({
