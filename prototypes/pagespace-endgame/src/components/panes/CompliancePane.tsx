@@ -161,19 +161,23 @@ export function CompliancePane() {
           </p>
         </Card>
         <Card accent="amber">
-          <h4>PII scrubber &amp; orphan cleanup</h4>
+          <h4>PII scrubber</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             PII scrubbing utility exists (email, phone, SSN, credit card with
             Luhn validation) but is{" "}
             <strong style={{ color: "var(--amber)" }}>
               not yet integrated into the AI logging pipeline
             </strong>
-            . File orphan detection endpoint built (finds zero-reference files,
-            deletes via processor service) but{" "}
-            <strong style={{ color: "var(--amber)" }}>
-              not yet on the cron schedule
-            </strong>
             .
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>Orphaned file cleanup</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Cron job detects orphaned files (zero references across filePages,
+            channelMessages, and pages), attempts physical deletion via the
+            processor service, then removes DB records only for files whose
+            physical deletion succeeded. Runs weekly on Sundays at 5am UTC.
           </p>
         </Card>
       </div>

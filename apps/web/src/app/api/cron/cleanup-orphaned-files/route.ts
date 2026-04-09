@@ -83,11 +83,19 @@ export async function GET(request: Request) {
       }
     }
 
-    // Delete DB records (even if physical delete failed - the file is orphaned regardless)
-    const dbDeleted = await deleteFileRecords(
-      db as Parameters<typeof deleteFileRecords>[0],
-      orphans.map(o => o.id),
-    );
+    // Only delete DB records for orphans whose physical files were successfully
+    // deleted (or had no storagePath). Failed physical deletes are skipped so
+    // they retry on the next scheduled run.
+    const safeToDelete = orphans
+      .filter(o => !failedPhysicalDeletes.includes(o.id))
+      .map(o => o.id);
+
+    const dbDeleted = safeToDelete.length > 0
+      ? await deleteFileRecords(
+          db as Parameters<typeof deleteFileRecords>[0],
+          safeToDelete,
+        )
+      : 0;
 
     console.log(
       `[Cron] Orphaned file cleanup: ${orphans.length} orphans found, ` +
