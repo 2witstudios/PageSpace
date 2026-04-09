@@ -93,6 +93,7 @@ export * from './monitoring/hash-chain-verifier';
 
 // Audit utilities (server-only)
 export * from './audit/security-audit-chain-verifier';
+export { verifyAndAlert } from './audit/security-audit-alerting';
 
 // Repository seams (server-only)
 export * from './repositories';

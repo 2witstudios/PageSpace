@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const { mockLoggers } = vi.hoisted(() => ({
+  mockLoggers: {
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  },
+}));
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: mockLoggers,
+}));
+
 vi.mock('../security-audit', () => ({
   securityAudit: {
     logEvent: vi.fn().mockResolvedValue(undefined),
@@ -155,6 +165,34 @@ describe('Security Audit Adapter', () => {
       expect(() => {
         auditSecurityEvent('unauthorized', { userId: 'user-1' });
       }).not.toThrow();
+    });
+  });
+
+  describe('failure logging', () => {
+    it('logs warning when auditAuthEvent write fails', async () => {
+      vi.mocked(securityAudit.logEvent).mockRejectedValueOnce(new Error('DB down'));
+
+      auditAuthEvent('login', 'user-1', 'test@example.com', '1.2.3.4');
+
+      await vi.waitFor(() => {
+        expect(mockLoggers.security.warn).toHaveBeenCalledWith(
+          expect.stringContaining('auditAuthEvent'),
+          expect.objectContaining({ error: expect.any(Error) })
+        );
+      });
+    });
+
+    it('logs warning when auditSecurityEvent write fails', async () => {
+      vi.mocked(securityAudit.logEvent).mockRejectedValueOnce(new Error('DB down'));
+
+      auditSecurityEvent('unauthorized', { userId: 'user-1' });
+
+      await vi.waitFor(() => {
+        expect(mockLoggers.security.warn).toHaveBeenCalledWith(
+          expect.stringContaining('auditSecurityEvent'),
+          expect.objectContaining({ error: expect.any(Error) })
+        );
+      });
     });
   });
 });
