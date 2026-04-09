@@ -10,17 +10,9 @@
  * - Convenience methods for common events
  * - Query interface for forensic analysis
  *
- * IMPORTANT: Multi-instance considerations
- * - This service maintains an in-memory lastHash for the hash chain
- * - In multi-instance deployments, use database-backed state instead:
- *   1. Use a Redis lock or database advisory lock before inserting
- *   2. Always read the latest hash from DB within the transaction
- *   3. Or use a dedicated single-instance audit writer service
- *
- * For production cloud deployments, consider:
- * - Running as a singleton service behind a queue
- * - Using database sequences for ordering
- * - Accepting eventual consistency with per-instance chains merged later
+ * Concurrency: logEvent() uses pg_advisory_xact_lock to serialize
+ * hash chain writes. The previous hash is always read from the database
+ * inside the advisory lock, so multi-instance deployments are safe.
  */
 
 import { createHash } from 'crypto';
@@ -202,7 +194,6 @@ export class SecurityAuditService {
         eventHash,
       });
 
-      this.lastHash = eventHash;
     });
   }
 
@@ -456,13 +447,6 @@ export class SecurityAuditService {
     }
 
     return baseQuery;
-  }
-
-  /**
-   * Get the current last hash (for debugging/verification).
-   */
-  getLastHash(): string {
-    return this.lastHash;
   }
 
   /**

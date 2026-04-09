@@ -9,6 +9,7 @@
  */
 
 import { securityAudit } from './security-audit';
+import { loggers } from '../logging/logger-config';
 import type { SecurityEventType } from '@pagespace/db';
 
 type AuthEventType = 'login' | 'logout' | 'signup' | 'refresh' | 'failed' | 'magic_link_login';
@@ -85,8 +86,8 @@ export function auditAuthEvent(
       source: 'auth_event_adapter',
     },
     riskScore: event === 'failed' ? 0.3 : undefined,
-  }).catch(() => {
-    // Fire-and-forget: never let audit failures break auth flows
+  }).catch((error) => {
+    loggers.security.warn('[SecurityAuditAdapter] auditAuthEvent write failed:', { error });
   });
 }
 
@@ -113,7 +114,7 @@ export function auditSecurityEvent(
       source: 'security_event_adapter',
     },
     riskScore: event === 'account_locked_login_attempt' ? 0.8 : 0.4,
-  }).catch(() => {
-    // Fire-and-forget: never let audit failures break security flows
+  }).catch((error) => {
+    loggers.security.warn('[SecurityAuditAdapter] auditSecurityEvent write failed:', { error });
   });
 }
