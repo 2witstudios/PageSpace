@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
+  securityAudit,
   checkDriveAccessForRoles,
   getRoleById,
   updateDriveRole,
@@ -128,6 +129,8 @@ export async function PATCH(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
+    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } }).catch(() => {});
+
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
     console.error('Error updating role:', error);
@@ -178,6 +181,8 @@ export async function DELETE(
       driveId,
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
+
+    securityAudit.logEvent({ eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } }).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

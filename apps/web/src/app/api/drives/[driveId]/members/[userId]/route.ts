@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   loggers,
+  securityAudit,
   checkDriveAccess,
   getDriveMemberDetails,
   getMemberPermissions,
@@ -162,6 +163,8 @@ export async function PATCH(
       permissions
     );
 
+    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, newRole: role } }).catch(() => {});
+
     // Invalidate permission caches so changes take effect immediately
     await Promise.all([
       invalidateUserPermissions(userId),
@@ -313,6 +316,8 @@ export async function DELETE(
       invitedAt: memberData.invitedAt,
       acceptedAt: memberData.acceptedAt,
     }, actorInfo);
+
+    securityAudit.logEvent({ eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } }).catch(() => {});
 
     // Broadcast member removal event
     await broadcastDriveMemberEvent(

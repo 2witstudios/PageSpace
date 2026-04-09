@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
@@ -65,6 +65,8 @@ export async function POST(
       previousValues: { isTrashed: true },
       newValues: { isTrashed: false },
     });
+
+    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'restore' }).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

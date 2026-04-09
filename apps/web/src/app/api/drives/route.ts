@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -99,6 +99,8 @@ export async function POST(request: Request) {
       id: newDrive.id,
       name: newDrive.name,
     }, actorInfo);
+
+    securityAudit.logDataAccess(userId, 'write', 'drive', newDrive.id, { name, operation: 'create' }).catch(() => {});
 
     return jsonResponse(newDrive, { status: 201 });
   } catch (error) {

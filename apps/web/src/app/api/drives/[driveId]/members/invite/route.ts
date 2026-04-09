@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
+import { loggers, securityAudit, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
@@ -172,6 +172,8 @@ export async function POST(
       targetUserEmail: invitedUserEmail,
       role,
     }, actorInfo);
+
+    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'invite' } }).catch(() => {});
 
     return NextResponse.json({
       memberId,

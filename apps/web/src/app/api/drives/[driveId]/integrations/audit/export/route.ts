@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, desc, integrationAuditLog } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { format } from 'date-fns';
 import { buildAuditLogWhereClause, parseAuditFilterParams } from '../audit-filters';
@@ -87,6 +87,8 @@ export async function GET(
     });
 
     const csv = `${CSV_HEADER}\n${csvRows.join('\n')}`;
+
+    securityAudit.logDataAccess(auth.userId, 'export', 'drive', driveId, { format: 'csv' }).catch(() => {});
 
     return new Response(csv, {
       headers: {
