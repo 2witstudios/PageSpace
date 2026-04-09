@@ -533,7 +533,7 @@ export async function verifyPassword(password: string, storedHash: string): Prom
     p: SCRYPT_PARAMS.p,
   }) as Buffer;
 
-  // Timing-safe comparison (scrypt output is fixed-length, so secureCompare works here too)
+  // Constant-time comparison (SHA-256 hashes both inputs before timingSafeEqual)
   return secureCompare(derivedKey.toString('hex'), storedKey.toString('hex'));
 }
 
@@ -865,18 +865,19 @@ export class EnforcedFileService {
 ### 5.1 Hash-Before-Compare Pattern
 
 ```typescript
-// packages/lib/src/auth/secure-compare.ts
 import { secureCompare } from '@pagespace/lib';
 
-// secureCompare SHA-256 hashes both inputs before crypto.timingSafeEqual,
-// guaranteeing constant-time comparison regardless of input length.
+// secureCompare(a: string, b: string): boolean
+//
+// SHA-256 hashes both inputs before crypto.timingSafeEqual, guaranteeing
+// constant-time comparison regardless of input length.
+//
 // This is the ONLY approved pattern for comparing secrets.
-//
-// Usage:
-//   secureCompare(providedToken, expectedToken)  // string comparison
-//
 // Never use raw timingSafeEqual, Buffer.from + length checks, or === for secrets.
-// Always import secureCompare from @pagespace/lib.
+
+if (secureCompare(providedApiKey, storedApiKey)) {
+  // API key is valid
+}
 ```
 
 ---
