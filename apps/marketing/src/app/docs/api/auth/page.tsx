@@ -3,43 +3,28 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Auth API",
-  description: "PageSpace authentication API routes: login, signup, OAuth, session management, CSRF, and MCP token management.",
+  description: "PageSpace authentication API routes: OAuth, passkeys, magic links, session management, CSRF, and MCP token management.",
   path: "/docs/api/auth",
-  keywords: ["API", "authentication", "login", "signup", "OAuth", "MCP tokens"],
+  keywords: ["API", "authentication", "OAuth", "passkeys", "magic links", "MCP tokens"],
 });
 
 const content = `
 # Auth API
 
-Authentication routes for login, signup, OAuth, session management, and MCP tokens.
+Authentication routes for passkeys, magic links, OAuth, session management, and MCP tokens.
 
 ## Core Authentication
 
-### POST /api/auth/signup
+### POST /api/auth/magic-link
 
-Register a new user with email and password.
-
-**Body:**
-\`\`\`json
-{ "name": "string", "email": "string", "password": "string" }
-\`\`\`
-
-**Response:** User info. Sets authentication cookies.
-
-**Side effects:** Creates personal drive, default AI settings, logs event.
-
----
-
-### POST /api/auth/login
-
-Authenticate with email and password.
+Send a magic link to an email address for passwordless sign-in.
 
 **Body:**
 \`\`\`json
-{ "email": "string", "password": "string" }
+{ "email": "string" }
 \`\`\`
 
-**Response:** User info. Sets authentication cookies.
+**Response:** Success message. Sends email with one-time sign-in link.
 
 **Security:** Rate limited by IP and email.
 

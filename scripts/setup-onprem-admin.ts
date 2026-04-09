@@ -9,14 +9,24 @@
  * 1. Creates a user with admin role and business-tier subscription
  * 2. Sets emailVerified (pre-verified for on-prem)
  * 3. Creates default Ollama AI settings
- *
- * The admin signs in via magic link on first login. Ensure SMTP is configured.
+ * 4. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
 import { db, users, userAiSettings, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
+import { createVerificationToken } from '@pagespace/lib/auth';
 import { parseArgs } from 'node:util';
+
+async function generateSetupLink(userId: string): Promise<string> {
+  const token = await createVerificationToken({
+    userId,
+    type: 'magic_link',
+    expiresInMinutes: 60,
+  });
+  const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || 'http://localhost:3000';
+  return `${baseUrl}/api/auth/magic-link/verify?token=${token}`;
+}
 
 async function main() {
   const { values } = parseArgs({
@@ -59,7 +69,11 @@ async function main() {
 
   if (existing) {
     if (existing.role === 'admin') {
+      const link = await generateSetupLink(existing.id);
       console.log(`Admin user ${email} already exists.`);
+      console.log('');
+      console.log('One-time sign-in link (expires in 60 minutes):');
+      console.log(`  ${link}`);
     } else {
       // Promote to admin
       await db.update(users)
@@ -78,7 +92,11 @@ async function main() {
         });
       }
 
+      const link = await generateSetupLink(existing.id);
       console.log(`Existing user ${email} promoted to admin with business tier.`);
+      console.log('');
+      console.log('One-time sign-in link (expires in 60 minutes):');
+      console.log(`  ${link}`);
     }
     process.exit(0);
   }
@@ -101,6 +119,8 @@ async function main() {
     ...getOnPremOllamaSettings(),
   });
 
+  const link = await generateSetupLink(userId);
+
   console.log('');
   console.log('Admin user created successfully!');
   console.log(`  Name:  ${name}`);
@@ -108,8 +128,11 @@ async function main() {
   console.log(`  Role:  admin`);
   console.log(`  Tier:  business`);
   console.log('');
-  console.log('Sign in via magic link at your PageSpace URL.');
-  console.log('Ensure SMTP is configured for email delivery.');
+  console.log('One-time sign-in link (expires in 60 minutes):');
+  console.log(`  ${link}`);
+  console.log('');
+  console.log('After initial sign-in, register a passkey for future logins.');
+  console.log('For email-based magic links, configure SMTP in your environment.');
 
   process.exit(0);
 }

@@ -133,7 +133,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
               <li><strong>Authentication Security:</strong> Passwordless authentication eliminates credential-based attack vectors</li>
-              <li><strong>Session Management:</strong> JWT tokens with proper expiration and validation</li>
+              <li><strong>Session Management:</strong> Opaque session tokens with proper expiration and validation</li>
               <li><strong>API Key Protection:</strong> AES-256-GCM encryption for user-provided AI service keys</li>
               <li><strong>Database Access:</strong> Restricted access controls with comprehensive logging of operations, errors, and security events</li>
               <li><strong>Input Validation:</strong> Comprehensive sanitization and validation of user inputs</li>
