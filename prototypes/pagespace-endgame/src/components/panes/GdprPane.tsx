@@ -157,13 +157,14 @@ export function GdprPane() {
           </p>
         </Card>
         <Card accent="amber">
-          <h4>Hash chain broken by anonymization (#541)</h4>
+          <h4>Activity log hash chain broken by anonymization</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Account deletion anonymizes activity log entries, but this
             changes the data that was hashed &mdash; invalidating the
             hash chain. The tamper-evident property is compromised for
-            entries involving deleted users. Security audit chain uses
-            separate hash and is not affected.
+            entries involving deleted users. Security audit chain is{" "}
+            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
+            {" "}&mdash; PII fields excluded from hash computation.
           </p>
         </Card>
       </div>

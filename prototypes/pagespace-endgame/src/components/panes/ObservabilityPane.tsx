@@ -70,10 +70,11 @@ export function ObservabilityPane() {
           <h4>Security audit log</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             SHA-256 hash chain with fork prevention (
-            <code>FOR UPDATE</code> DB lock). 70+ event types across auth,
-            authorization, data access, admin, and security categories.
-            Risk scoring + anomaly flags per entry. 8 indexes for forensic
-            queries. 365-day retention.
+            <code>pg_advisory_xact_lock</code> serialization). 70+ event
+            types across auth, authorization, data access, admin, and
+            security categories. PII excluded from hash for GDPR-safe
+            anonymization. Risk scoring + anomaly flags per entry.
+            8 indexes for forensic queries. 365-day retention.
           </p>
         </Card>
         <Card accent="green">
@@ -95,9 +96,10 @@ export function ObservabilityPane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Cron job recomputes hashes and verifies chain links. Modes: full
             (complete re-verify), quick (structural check), stats, single-entry.
-            On chain break: <code>AUDIT_ALERT_WEBHOOK_URL</code> fires
-            with break position, reason, and timing. Admin API at{" "}
-            <code>/api/admin/audit-logs/integrity</code>.
+            On chain break: pluggable <code>ChainAlertHandler</code> fires
+            via <code>verifyAndAlert()</code> with structured logging.
+            Periodic verification scheduler with overlap guard. Admin API
+            at <code>/api/admin/audit-logs/integrity</code>.
           </p>
         </Card>
         <Card accent="green">

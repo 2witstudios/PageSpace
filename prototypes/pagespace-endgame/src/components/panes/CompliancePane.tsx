@@ -38,8 +38,9 @@ export function CompliancePane() {
             recomputes every entry&apos;s hash and verifies chain links.
             Detects break points with position, stored vs computed hash.
             HMAC-signed cron request prevents unauthorized triggering.
-            On failure: webhook alert to <code>AUDIT_ALERT_WEBHOOK_URL</code>
-            {" "}(HTTPS-only, fire-and-forget via <code>after()</code>).
+            On failure: pluggable <code>ChainAlertHandler</code> callback
+            via <code>verifyAndAlert()</code> — wire to Slack, email,
+            PagerDuty at startup. Structured logging via <code>loggers.security</code>.
           </p>
         </Card>
       </div>
@@ -328,13 +329,15 @@ export function CompliancePane() {
       </div>
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="amber">
-          <h4>Hash chain broken by anonymization (#541)</h4>
+          <h4>Activity log hash chain broken by anonymization</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Account deletion anonymizes <code>actorEmail</code> in activity
             logs, but this field is included in{" "}
             <code>serializeLogDataForHash()</code> &mdash; invalidating the
-            stored <code>logHash</code>. Security audit chain uses a separate
-            table and hash function, and is not affected.
+            stored <code>logHash</code>. Security audit chain is{" "}
+            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
+            {" "}&mdash; PII fields excluded from hash computation so the
+            chain remains valid after GDPR anonymization.
           </p>
         </Card>
       </div>
