@@ -160,8 +160,10 @@ describe('calendar-trigger-tools', () => {
         }),
       });
 
-      const result = await calendarTriggerTools.schedule_agent_work.execute!(
-        input as unknown as Parameters<typeof calendarTriggerTools.schedule_agent_work.execute>[0],
+      const executeFn = calendarTriggerTools.schedule_agent_work.execute!;
+      const result = await executeFn(
+        // @ts-expect-error -- test input shape is intentionally incomplete
+        input,
         createAuthContext()
       );
 
@@ -426,10 +428,15 @@ describe('calendar-trigger-tools', () => {
         new Error('insert or update on table "calendar_triggers" violates foreign key constraint "calendar_triggers_driveId_drives_id_fk"')
       );
 
-      const error = await calendarTriggerTools.schedule_agent_work.execute!(
-        VALID_SCHEDULE_INPUT,
-        createAuthContext()
-      ).catch((e: Error) => e);
+      let error: Error | undefined;
+      try {
+        await calendarTriggerTools.schedule_agent_work.execute!(
+          VALID_SCHEDULE_INPUT,
+          createAuthContext()
+        );
+      } catch (e) {
+        error = e as Error;
+      }
 
       assert({
         given: 'a database error with internal table/constraint names',
@@ -679,10 +686,15 @@ describe('calendar-trigger-tools', () => {
         new Error('deadlock detected on table "calendar_triggers"')
       );
 
-      const error = await calendarTriggerTools.cancel_scheduled_work.execute!(
-        { triggerId: 'trg-1' },
-        createAuthContext()
-      ).catch((e: Error) => e);
+      let error: Error | undefined;
+      try {
+        await calendarTriggerTools.cancel_scheduled_work.execute!(
+          { triggerId: 'trg-1' },
+          createAuthContext()
+        );
+      } catch (e) {
+        error = e as Error;
+      }
 
       assert({
         given: 'a database error with internal details',

@@ -114,15 +114,22 @@ export const calendarTriggerTools = {
           }
         }
 
-        // Validate context pages — must all be in accessible drives
+        // Validate context pages — must all exist and be in accessible drives
         if (contextPageIds && contextPageIds.length > 0) {
           const ctxPages = await db
             .select({ id: pages.id, driveId: pages.driveId, isTrashed: pages.isTrashed })
             .from(pages)
             .where(inArray(pages.id, contextPageIds));
 
+          // Reject unknown page IDs
+          const foundIds = new Set(ctxPages.map(p => p.id));
+          const missingIds = contextPageIds.filter(id => !foundIds.has(id));
+          if (missingIds.length > 0) {
+            return { success: false, error: `Context page(s) not found: ${missingIds.join(', ')}` };
+          }
+
           for (const cp of ctxPages) {
-            if (cp.isTrashed) continue; // trashed pages silently excluded at execution time
+            if (cp.isTrashed) continue;
             if (!cp.driveId) {
               return { success: false, error: `Context page ${cp.id} is a personal page and cannot be used.` };
             }
@@ -204,14 +211,20 @@ export const calendarTriggerTools = {
           return { event: evt, trigger: trg };
         });
 
-        // Broadcast calendar event creation
-        await broadcastCalendarEvent({
-          eventId: event.id,
-          driveId,
-          operation: 'created',
-          userId,
-          attendeeIds: [userId],
-        });
+        // Broadcast calendar event creation (best-effort — don't fail the tool if broadcast fails)
+        try {
+          await broadcastCalendarEvent({
+            eventId: event.id,
+            driveId,
+            operation: 'created',
+            userId,
+            attendeeIds: [userId],
+          });
+        } catch (broadcastErr) {
+          triggerLogger.error('Failed to broadcast calendar event creation', broadcastErr instanceof Error ? broadcastErr : undefined, {
+            eventId: maskIdentifier(event.id),
+          });
+        }
 
         triggerLogger.info('Scheduled agent work created', {
           triggerId: maskIdentifier(trigger.id),
@@ -308,14 +321,20 @@ export const calendarTriggerTools = {
           };
         }
 
-        // Broadcast deletion
-        await broadcastCalendarEvent({
-          eventId: cancelled.calendarEventId,
-          driveId: cancelled.driveId,
-          operation: 'deleted',
-          userId,
-          attendeeIds: [userId],
-        });
+        // Broadcast deletion (best-effort — cancellation already committed)
+        try {
+          await broadcastCalendarEvent({
+            eventId: cancelled.calendarEventId,
+            driveId: cancelled.driveId,
+            operation: 'deleted',
+            userId,
+            attendeeIds: [userId],
+          });
+        } catch (broadcastErr) {
+          triggerLogger.error('Failed to broadcast cancellation', broadcastErr instanceof Error ? broadcastErr : undefined, {
+            triggerId: maskIdentifier(triggerId),
+          });
+        }
 
         triggerLogger.info('Scheduled agent work cancelled', {
           triggerId: maskIdentifier(triggerId),
