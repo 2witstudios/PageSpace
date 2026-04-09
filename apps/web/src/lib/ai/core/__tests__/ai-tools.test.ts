@@ -92,13 +92,6 @@ vi.mock('../../tools/calendar-write-tools', () => ({
   },
 }));
 
-vi.mock('../../tools/calendar-trigger-tools', () => ({
-  calendarTriggerTools: {
-    schedule_agent_work: { name: 'schedule_agent_work', description: 'Schedule agent work' },
-    cancel_scheduled_work: { name: 'cancel_scheduled_work', description: 'Cancel scheduled work' },
-  },
-}));
-
 vi.mock('../../tools/channel-tools', () => ({
   channelTools: {
     send_channel_message: { name: 'send_channel_message', description: 'Send channel message' },
@@ -123,7 +116,6 @@ import { webSearchTools } from '../../tools/web-search-tools';
 import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
-import { calendarTriggerTools } from '../../tools/calendar-trigger-tools';
 import { channelTools } from '../../tools/channel-tools';
 import { githubImportTools } from '../../tools/github-import-tools';
 
@@ -142,7 +134,6 @@ describe('ai-tools', () => {
         ...activityTools,
         ...calendarReadTools,
         ...calendarWriteTools,
-        ...calendarTriggerTools,
         ...channelTools,
         ...githubImportTools,
       });
@@ -161,7 +152,6 @@ describe('ai-tools', () => {
         Object.keys(activityTools),
         Object.keys(calendarReadTools),
         Object.keys(calendarWriteTools),
-        Object.keys(calendarTriggerTools),
         Object.keys(channelTools),
         Object.keys(githubImportTools),
       ];
