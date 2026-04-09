@@ -175,8 +175,9 @@ export function CompliancePane() {
           <h4>Orphaned file cleanup</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Cron job detects orphaned files (zero references across filePages,
-            channelMessages, and pages), deletes physical files via processor
-            service, then removes DB records. Runs weekly on Sundays at 5am UTC.
+            channelMessages, and pages), attempts physical deletion via the
+            processor service, then removes DB records only for files whose
+            physical deletion succeeded. Runs weekly on Sundays at 5am UTC.
           </p>
         </Card>
       </div>
