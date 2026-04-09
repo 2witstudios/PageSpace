@@ -7,7 +7,7 @@ import { calendarEvents } from './calendar';
 
 export const calendarTriggerStatus = pgEnum('CalendarTriggerStatus', [
   'pending',
-  'claimed',
+  'claimed',   // Reserved for future two-phase claim in recurring trigger support
   'running',
   'completed',
   'failed',

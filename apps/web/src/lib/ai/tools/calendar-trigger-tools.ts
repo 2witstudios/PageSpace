@@ -240,9 +240,7 @@ export const calendarTriggerTools = {
           userId: maskIdentifier(userId),
           title,
         });
-        throw new Error(
-          `Failed to schedule agent work: ${error instanceof Error ? error.message : String(error)}`
-        );
+        throw new Error('Failed to schedule agent work. Please try again.');
       }
     },
   }),
@@ -334,9 +332,7 @@ export const calendarTriggerTools = {
           userId: maskIdentifier(userId),
           triggerId: maskIdentifier(triggerId),
         });
-        throw new Error(
-          `Failed to cancel scheduled work: ${error instanceof Error ? error.message : String(error)}`
-        );
+        throw new Error('Failed to cancel scheduled work. Please try again.');
       }
     },
   }),
