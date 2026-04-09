@@ -158,18 +158,17 @@ function createValidHashChain(count: number): typeof mockLogEntries {
     const timestamp = new Date(Date.now() + i * 1000);
     const id = `log-${i + 1}`;
 
-    const entryData = {
+    const hashData = {
       id,
       timestamp,
-      userId: 'user-123',
-      actorEmail: 'test@example.com',
       operation: 'create',
       resourceType: 'page',
       resourceId: `page-${i + 1}`,
       driveId: 'drive-1',
     };
 
-    const logHash = computeLogHash(entryData, previousHash);
+    const logHash = computeLogHash(hashData, previousHash);
+    const entryData = { ...hashData, userId: 'user-123', actorEmail: 'test@example.com' };
 
     entries.push({
       ...entryData,

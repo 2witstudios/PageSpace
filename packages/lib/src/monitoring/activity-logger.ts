@@ -67,17 +67,13 @@ export interface HashChainData {
 }
 
 /**
- * Data used to compute the hash of a log entry.
- * Includes immutable fields that define the entry's content.
- *
- * PII fields (userId, actorEmail) are accepted but excluded from hash
- * computation for GDPR compliance — see serializeLogDataForHash().
+ * Fields included in the tamper-evident hash chain.
+ * PII (userId, actorEmail) is deliberately excluded so the chain
+ * stays verifiable after GDPR right-to-erasure anonymization (#541).
  */
 interface HashableLogData {
   id: string;
   timestamp: Date;
-  userId?: string;
-  actorEmail?: string;
   operation: string;
   resourceType: string;
   resourceId: string;
@@ -114,23 +110,9 @@ export function computeHash(data: string, previousHash: string): string {
 
 /**
  * Serialize log entry data for hashing.
- * Creates a deterministic JSON string from the hashable fields.
- * Uses sorted keys to ensure consistent hash computation.
- *
- * PII fields excluded from hash computation for GDPR compliance (#541).
- * These fields may be anonymized/deleted under right-to-erasure requests,
- * so they must not be part of the hash chain to keep it verifiable.
- *
- * Excluded: userId, actorEmail
- * Included: id, timestamp, operation, resourceType, resourceId, driveId,
- *           pageId, contentSnapshot, previousValues, newValues, metadata
- *
- * @param data - Log entry data to serialize
- * @returns Deterministic JSON string
+ * Creates a deterministic JSON string with sorted keys.
  */
 export function serializeLogDataForHash(data: HashableLogData): string {
-  // Create object with sorted keys for deterministic serialization
-  // Note: userId and actorEmail are intentionally excluded (PII — GDPR right-to-erasure)
   const hashableObject = {
     id: data.id,
     timestamp: data.timestamp.toISOString(),
@@ -527,8 +509,6 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       {
         id: values.id,
         timestamp: values.timestamp,
-        userId: values.userId,
-        actorEmail: values.actorEmail,
         operation: values.operation,
         resourceType: values.resourceType,
         resourceId: values.resourceId,
@@ -621,8 +601,6 @@ export async function logActivityWithTx(
     {
       id: values.id,
       timestamp: values.timestamp,
-      userId: values.userId,
-      actorEmail: values.actorEmail,
       operation: values.operation,
       resourceType: values.resourceType,
       resourceId: values.resourceId,

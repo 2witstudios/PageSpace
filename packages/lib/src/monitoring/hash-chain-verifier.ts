@@ -256,13 +256,11 @@ export async function verifyHashChain(
         // Determine what previous hash to use
         const hashInput = previousHash ?? '';
 
-        // Compute expected hash
+        // Compute expected hash (PII fields excluded per GDPR #541)
         const computedHash = computeLogHash(
           {
             id: storedEntry.id,
             timestamp: storedEntry.timestamp,
-            userId: storedEntry.userId,
-            actorEmail: storedEntry.actorEmail,
             operation: storedEntry.operation,
             resourceType: storedEntry.resourceType,
             resourceId: storedEntry.resourceId,
@@ -544,13 +542,11 @@ export async function verifyEntry(
       previousHashUsed = storedEntry.previousLogHash;
     }
 
-    // Compute expected hash
+    // Compute expected hash (PII fields excluded per GDPR #541)
     const computedHash = computeLogHash(
       {
         id: storedEntry.id,
         timestamp: storedEntry.timestamp,
-        userId: storedEntry.userId,
-        actorEmail: storedEntry.actorEmail,
         operation: storedEntry.operation,
         resourceType: storedEntry.resourceType,
         resourceId: storedEntry.resourceId,
