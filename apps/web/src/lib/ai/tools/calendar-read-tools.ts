@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   db,
   calendarEvents,
+  calendarTriggers,
   eventAttendees,
   eq,
   and,
@@ -13,6 +14,7 @@ import {
   isNull,
   desc,
 } from '@pagespace/db';
+import type { CalendarTriggerMetadata } from '@pagespace/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { type ToolExecutionContext } from '../core';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
@@ -63,6 +65,7 @@ function formatEventForResponse(event: {
   visibility: string;
   color: string | null;
   recurrenceRule: unknown;
+  metadata?: unknown;
   driveId: string | null;
   createdById: string;
   createdBy?: { id: string; name: string | null; image: string | null } | null;
@@ -75,7 +78,7 @@ function formatEventForResponse(event: {
   }>;
   page?: { id: string; title: string; type: string } | null;
   drive?: { id: string; name: string; slug: string } | null;
-}, timezone?: string) {
+}, timezone?: string, triggerInfo?: { status: string; agentPageId: string; triggerId: string } | null) {
   const displayTz = timezone ?? event.timezone;
   return {
     id: event.id,
@@ -122,7 +125,47 @@ function formatEventForResponse(event: {
         slug: event.drive.slug,
       },
     }),
+    ...(triggerInfo && {
+      scheduledWork: {
+        triggerId: triggerInfo.triggerId,
+        status: triggerInfo.status,
+        agentPageId: triggerInfo.agentPageId,
+      },
+    }),
   };
+}
+
+/**
+ * Batch-fetch trigger info for events that have isTrigger metadata.
+ * Returns a map from eventId -> trigger info.
+ */
+async function fetchTriggerInfoForEvents(
+  events: Array<{ id: string; metadata?: unknown }>
+): Promise<Map<string, { status: string; agentPageId: string; triggerId: string }>> {
+  const triggerEventIds = events
+    .filter(e => {
+      const meta = e.metadata as CalendarTriggerMetadata | null;
+      return meta?.isTrigger === true;
+    })
+    .map(e => e.id);
+
+  if (triggerEventIds.length === 0) return new Map();
+
+  const triggers = await db
+    .select({
+      id: calendarTriggers.id,
+      calendarEventId: calendarTriggers.calendarEventId,
+      status: calendarTriggers.status,
+      agentPageId: calendarTriggers.agentPageId,
+    })
+    .from(calendarTriggers)
+    .where(inArray(calendarTriggers.calendarEventId, triggerEventIds));
+
+  const map = new Map<string, { status: string; agentPageId: string; triggerId: string }>();
+  for (const t of triggers) {
+    map.set(t.calendarEventId, { status: t.status, agentPageId: t.agentPageId, triggerId: t.id });
+  }
+  return map;
 }
 
 export const calendarReadTools = {
@@ -259,7 +302,8 @@ export const calendarReadTools = {
           });
 
           const userTz = (ctx as ToolExecutionContext)?.timezone;
-          const formattedEvents = events.map((e) => formatEventForResponse(e, userTz));
+          const triggerMap = await fetchTriggerInfoForEvents(events);
+          const formattedEvents = events.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id)));
 
           return {
             success: true,
@@ -356,7 +400,8 @@ export const calendarReadTools = {
         });
 
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
-        const formattedEvents = events.map((e) => formatEventForResponse(e, userTzForList));
+        const triggerMapAll = await fetchTriggerInfoForEvents(events);
+        const formattedEvents = events.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
 
         return {
           success: true,
@@ -452,7 +497,8 @@ export const calendarReadTools = {
           };
         }
 
-        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone);
+        const triggerMapSingle = await fetchTriggerInfoForEvents([event]);
+        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone, triggerMapSingle.get(event.id));
 
         // Calculate RSVP summary if attendees included
         let rsvpSummary: Record<string, number> | undefined;

@@ -34,3 +34,7 @@
 # Workflow execution - Every 5 minutes
 # Checks for due scheduled workflows and executes them
 */5 * * * * cron-curl POST http://web:3000/api/cron/workflows >> /var/log/cron/workflows.log 2>&1
+
+# Calendar trigger execution - Every 2 minutes
+# Fires scheduled agent work tied to calendar events
+*/2 * * * * cron-curl POST http://web:3000/api/cron/calendar-triggers >> /var/log/cron/calendar-triggers.log 2>&1

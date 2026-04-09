@@ -27,6 +27,9 @@ const WRITE_TOOLS = new Set([
   'send_channel_message',
   // GitHub import (creates pages)
   'import_from_github',
+  // Calendar trigger operations
+  'schedule_agent_work',
+  'cancel_scheduled_work',
 ]);
 
 // Web search tools (excluded when web search is disabled)
