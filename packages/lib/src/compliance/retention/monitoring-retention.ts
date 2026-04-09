@@ -1,15 +1,13 @@
 import { lt } from 'drizzle-orm';
-import { db, apiMetrics, systemLogs, securityAuditLog } from '@pagespace/db';
+import { db, apiMetrics, systemLogs } from '@pagespace/db';
 import type { CleanupResult } from './retention-engine';
 
 const DEFAULT_API_METRICS_DAYS = 90;
 const DEFAULT_SYSTEM_LOGS_DAYS = 30;
-const DEFAULT_SECURITY_AUDIT_DAYS = 365;
 
 export interface RetentionConfig {
   apiMetricsDays: number;
   systemLogsDays: number;
-  securityAuditDays: number;
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -23,7 +21,6 @@ export function getRetentionConfig(): RetentionConfig {
   return {
     apiMetricsDays: parsePositiveInt(process.env.RETENTION_API_METRICS_DAYS, DEFAULT_API_METRICS_DAYS),
     systemLogsDays: parsePositiveInt(process.env.RETENTION_SYSTEM_LOGS_DAYS, DEFAULT_SYSTEM_LOGS_DAYS),
-    securityAuditDays: parsePositiveInt(process.env.RETENTION_SECURITY_AUDIT_DAYS, DEFAULT_SECURITY_AUDIT_DAYS),
   };
 }
 
@@ -49,21 +46,14 @@ export async function cleanupSystemLogs(opts: { retentionDays: number }): Promis
   return { table: 'system_logs', deleted: result.length };
 }
 
-export async function cleanupSecurityAuditLog(opts: { retentionDays: number }): Promise<CleanupResult> {
-  const cutoff = getRetentionCutoff(opts.retentionDays);
-  const result = await db
-    .delete(securityAuditLog)
-    .where(lt(securityAuditLog.timestamp, cutoff))
-    .returning({ id: securityAuditLog.id });
-  return { table: 'security_audit_log', deleted: result.length };
-}
+// security_audit_log is intentionally excluded — tamper-evident hash chain
+// requires infinite retention to preserve chain integrity for verification.
 
 export async function runMonitoringRetentionCleanup(): Promise<CleanupResult[]> {
   const config = getRetentionConfig();
   const results = await Promise.all([
     cleanupApiMetrics({ retentionDays: config.apiMetricsDays }),
     cleanupSystemLogs({ retentionDays: config.systemLogsDays }),
-    cleanupSecurityAuditLog({ retentionDays: config.securityAuditDays }),
   ]);
   return results;
 }

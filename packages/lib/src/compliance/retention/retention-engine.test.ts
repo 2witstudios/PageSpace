@@ -31,7 +31,6 @@ vi.mock('./monitoring-retention', () => ({
   runMonitoringRetentionCleanup: vi.fn().mockResolvedValue([
     { table: 'api_metrics', deleted: 0 },
     { table: 'system_logs', deleted: 0 },
-    { table: 'security_audit_log', deleted: 0 },
   ]),
 }));
 
@@ -227,12 +226,12 @@ describe('cleanupExpiredAiUsageLogs', () => {
 });
 
 describe('runRetentionCleanup', () => {
-  it('given_allCleanupsSucceed_returnsResultsForAll12Tables', async () => {
+  it('given_allCleanupsSucceed_returnsResultsForAll11Tables', async () => {
     const { db } = createMockDb([]);
 
     const results = await runRetentionCleanup(db);
 
-    expect(results).toHaveLength(12);
+    expect(results).toHaveLength(11);
   });
 
   it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
@@ -249,7 +248,6 @@ describe('runRetentionCleanup', () => {
       'page_permissions',
       'page_versions',
       'pulse_summaries',
-      'security_audit_log',
       'sessions',
       'socket_tokens',
       'system_logs',
