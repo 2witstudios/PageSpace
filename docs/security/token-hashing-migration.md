@@ -320,16 +320,14 @@ We store first 12 characters for:
 
 ### Timing Attacks
 
-Token hash comparison uses constant-time comparison:
+Token hash comparison uses the centralized `secureCompare` utility:
 
 ```typescript
-import { timingSafeEqual } from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 
-function compareHashes(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'hex');
-  const bufB = Buffer.from(b, 'hex');
-  return timingSafeEqual(bufA, bufB);
-}
+// secureCompare SHA-256 hashes both inputs before timingSafeEqual,
+// guaranteeing constant-time comparison regardless of input length.
+const isValid = secureCompare(providedHash, storedHash);
 ```
 
 ## Timeline

@@ -60,10 +60,7 @@ vi.mock('@pagespace/lib/broadcast-auth', async () => {
 
       const payload = `${timestamp}.${body}`;
       const expected = crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
-      const expectedBuffer = Buffer.from(expected, 'hex');
-      const providedBuffer = Buffer.from(providedSig, 'hex');
-      if (expectedBuffer.length !== providedBuffer.length) return false;
-      return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
+      return expected === providedSig;
     } catch {
       return false;
     }

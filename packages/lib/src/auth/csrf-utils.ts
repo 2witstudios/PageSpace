@@ -1,4 +1,5 @@
-import { randomBytes, createHmac, createHash, timingSafeEqual } from 'crypto';
+import { randomBytes, createHmac } from 'crypto';
+import { secureCompare } from './secure-compare';
 
 function getCSRFSecret(): string {
   const CSRF_SECRET = process.env.CSRF_SECRET;
@@ -68,13 +69,7 @@ export function validateCSRFToken(token: string, sessionId: string, maxAge: numb
       .update(payload)
       .digest('hex');
     
-    // Double-hash both sides before comparing to guarantee equal-length buffers
-    // regardless of attacker-controlled signature length — eliminates
-    // length-based timing side-channels.
-    const actualHash = createHash('sha256').update(String(signature)).digest();
-    const expectedHash = createHash('sha256').update(expectedSignature).digest();
-
-    return timingSafeEqual(actualHash, expectedHash);
+    return secureCompare(String(signature), expectedSignature);
   } catch (error) {
     console.error('CSRF token validation error:', error);
     return false;

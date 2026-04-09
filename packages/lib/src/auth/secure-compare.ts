@@ -1,11 +1,11 @@
-import { timingSafeEqual } from 'crypto';
+import crypto from 'crypto';
 
 /**
  * Timing-safe comparison of secret values to prevent timing attacks.
  *
- * Uses crypto.timingSafeEqual under the hood. When lengths differ,
- * performs a constant-time comparison against self to avoid leaking
- * length information through timing.
+ * Hashes both inputs with SHA-256 before comparing with timingSafeEqual.
+ * This destroys prefix structure and guarantees equal-length (32-byte)
+ * buffers, eliminating timing leaks from length or content differences.
  *
  * @param a - First string to compare
  * @param b - Second string to compare
@@ -23,20 +23,12 @@ import { timingSafeEqual } from 'crypto';
  * ```
  */
 export function secureCompare(a: string, b: string): boolean {
-  // Handle non-string inputs safely
   if (typeof a !== 'string' || typeof b !== 'string') {
     return false;
   }
 
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
+  const hashA = crypto.createHash('sha256').update(a, 'utf8').digest();
+  const hashB = crypto.createHash('sha256').update(b, 'utf8').digest();
 
-  // Length check must happen, but we still do the comparison to maintain constant time
-  if (bufA.length !== bufB.length) {
-    // Compare with self to maintain constant timing
-    timingSafeEqual(bufA, bufA);
-    return false;
-  }
-
-  return timingSafeEqual(bufA, bufB);
+  return crypto.timingSafeEqual(hashA, hashB);
 }

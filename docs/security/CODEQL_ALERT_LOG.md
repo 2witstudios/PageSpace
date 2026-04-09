@@ -128,7 +128,7 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | 98 | js/user-controlled-bypass | high | integrations/callback/route.ts:37 | CWE-807 | `String(error).slice(0, 100)` for log sanitization | Never log user input without sanitization | FIXED |
 | 99 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `code` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
 | 100 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `state` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
-| 101 | js/user-controlled-bypass | high | integrations/callback/route.ts:57 | CWE-807 | Dismissed — `verifySignedState()` uses HMAC-SHA256 + timingSafeEqual | Cryptographic verification IS the security check | DISMISSED (S4) |
+| 101 | js/user-controlled-bypass | high | integrations/callback/route.ts:57 | CWE-807 | Dismissed — `verifySignedState()` uses HMAC-SHA256 + `secureCompare` | Cryptographic verification IS the security check | DISMISSED (S4) |
 
 ### Round 4: Batch 5 triage — SSRF + HTTP-to-File (138-139)
 
@@ -201,7 +201,7 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 CodeQL's `js/user-controlled-bypass` rule flags conditions where user-provided values control branches guarding sensitive actions. In an OAuth callback handler, this is structurally inevitable — the protocol operates on user-delivered query parameters (`code`, `state`, `error`) that the server must validate and act on.
 
 The callback handler has layered security controls:
-1. **HMAC-SHA256 state signing** — state parameter is signed server-side at `/signin`, verified at `/callback` via `verifyOAuthState` with `crypto.timingSafeEqual`.
+1. **HMAC-SHA256 state signing** — state parameter is signed server-side at `/signin`, verified at `/callback` via `verifyOAuthState` with `secureCompare`.
 2. **Single rejection guard** — `if (!code || !verifiedState)` rejects requests without both a valid code and HMAC-verified state.
 3. **Server-side code exchange** — OAuth authorization code is validated by Google's token endpoint, not by local conditions.
 4. **PKCE** — code_challenge/code_verifier prevents authorization code interception.
@@ -216,7 +216,7 @@ The callback handler has layered security controls:
 | #145 | 35 | CWE-807 | `searchParams.get('code')` → `client.getToken()` | S4 | Standard OAuth code exchange; Google validates the code server-side |
 | #146 | 40 | CWE-807 | `searchParams.get('error')` → hardcoded redirect | S4 | Error redirect uses hardcoded params (`oauth_error`/`access_denied`), not user values |
 | #147 | 40 | CWE-807 | Same as #146 | S4 | Duplicate alert on same line |
-| #148 | 76 | CWE-807 | `state` → HMAC `sig` vs `expectedSignature` | S4 | HMAC verification IS the security control; uses `crypto.timingSafeEqual` |
+| #148 | 76 | CWE-807 | `state` → HMAC `sig` vs `expectedSignature` | S4 | HMAC verification IS the security control; uses `secureCompare` |
 | #151 | 226 | CWE-807 | `sessionService.validateSession(sessionToken)` | S4 | `sessionToken` is server-generated, not user-controlled |
 | #152 | 227 | CWE-807 | Same flow as #151 | S4 | Same flow; CodeQL traces through code exchange but misses trust boundary |
 | #153 | 293 | CWE-807 | `platform === 'desktop'` → `createExchangeCode()` | S4 | `platform` only extracted from HMAC-signed state |
