@@ -212,17 +212,18 @@ CURRENT TIMESTAMP CONTEXT:
  * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
  */
 export function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
-  // Try ISO 8601 first
+  // Handle naive ISO datetimes first (no Z or offset) — interpret in the given timezone
+  if (timezone && isNaiveISODatetime(input)) {
+    return parseNaiveDatetimeInTimezone(input, timezone);
+  }
+
+  // Try strict ISO 8601 (with Z or offset, or date-only)
   const isoDate = new Date(input);
   if (!isNaN(isoDate.getTime())) {
-    if (timezone && isNaiveISODatetime(input)) {
-      return parseNaiveDatetimeInTimezone(input, timezone);
-    }
     return isoDate;
   }
 
-  // Build timezone-aware reference for chrono-node so that
-  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
+  // Natural language parsing via chrono-node with timezone-aware reference
   const ref: { instant: Date; timezone?: number } = {
     instant: referenceDate ?? new Date(),
   };
@@ -233,6 +234,17 @@ export function parseDateTime(input: string, referenceDate?: Date, timezone?: st
   const parsed = chrono.parseDate(input, ref, { forwardDate: true });
   if (!parsed) {
     throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
+  }
+
+  // Two-pass DST resolution: if the parsed date is in a different DST period
+  // than the reference, the offset may be wrong. Recompute and re-parse.
+  if (timezone) {
+    const newOffset = getTimezoneOffsetMinutes(timezone, parsed);
+    if (ref.timezone !== undefined && newOffset !== ref.timezone) {
+      ref.timezone = newOffset;
+      const corrected = chrono.parseDate(input, ref, { forwardDate: true });
+      if (corrected) return corrected;
+    }
   }
 
   return parsed;

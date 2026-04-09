@@ -55,8 +55,10 @@ export const calendarTriggers = pgTable('calendar_triggers', {
   // Links to saved chat messages for inspection
   conversationId: text('conversationId'),
 
-  // For recurring events: one trigger row per occurrence (null for one-shot)
-  occurrenceDate: timestamp('occurrenceDate', { mode: 'date', withTimezone: true }),
+  // For recurring events: one trigger row per occurrence.
+  // One-shot events use the epoch sentinel (1970-01-01) so the unique constraint works
+  // (PostgreSQL treats NULL != NULL, so a nullable column breaks dedup).
+  occurrenceDate: timestamp('occurrenceDate', { mode: 'date', withTimezone: true }).notNull().default(new Date(0)),
 
   // Audit timestamps
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

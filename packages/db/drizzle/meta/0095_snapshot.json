@@ -1,6 +1,6 @@
 {
-  "id": "94a4aa00-654d-4d77-abe9-4ae6979161aa",
-  "prevId": "6d5bc46d-0a29-4a1f-8b19-e3da870cd405",
+  "id": "8a0ac6bd-5321-4878-9d0b-088fcfd01e48",
+  "prevId": "94a4aa00-654d-4d77-abe9-4ae6979161aa",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -881,12 +881,6 @@
         },
         "image": {
           "name": "image",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "password": {
-          "name": "password",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -11909,7 +11903,8 @@
           "name": "occurrenceDate",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'1970-01-01T00:00:00.000Z'"
         },
         "createdAt": {
           "name": "createdAt",
@@ -12353,8 +12348,7 @@
       "values": [
         "email",
         "google",
-        "apple",
-        "both"
+        "apple"
       ]
     },
     "public.PlatformType": {
