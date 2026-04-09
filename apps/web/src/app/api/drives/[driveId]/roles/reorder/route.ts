@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
+  securityAudit,
   checkDriveAccessForRoles,
   reorderDriveRoles,
 } from '@pagespace/lib/server';
@@ -57,6 +58,8 @@ export async function PATCH(
       previousOrder,
       newOrder: roleIds,
     }, actorInfo);
+
+    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'reorder', previousOrder, newOrder: roleIds } }).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -173,7 +173,7 @@ export async function POST(
       role,
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'invite' } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role, operation: 'invite' } }).catch(() => {});
 
     return NextResponse.json({
       memberId,
