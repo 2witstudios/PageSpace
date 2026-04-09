@@ -1,4 +1,5 @@
-import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
+import { randomBytes, createHmac } from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 
 // Constants
 export const LOGIN_CSRF_COOKIE_NAME = 'login_csrf';
@@ -59,15 +60,5 @@ export function validateLoginCSRFToken(token: string, maxAge: number = LOGIN_CSR
     .update(payload)
     .digest('hex');
 
-  // Timing-safe comparison
-  try {
-    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-    const actualBuffer = Buffer.from(signature, 'hex');
-
-    if (expectedBuffer.length !== actualBuffer.length) return false;
-
-    return timingSafeEqual(expectedBuffer, actualBuffer);
-  } catch {
-    return false;
-  }
+  return secureCompare(signature, expectedSignature);
 }

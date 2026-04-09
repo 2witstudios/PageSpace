@@ -152,7 +152,7 @@ describe('verifySignedState', () => {
     expect(verifySignedState(longSig, TEST_SECRET)).toBeNull();
   });
 
-  it('should use double-hash comparison to prevent timing side-channels', () => {
+  it('should use secureCompare to prevent timing side-channels', () => {
     // Verify the implementation hashes both sides before comparing,
     // ensuring constant-length buffers regardless of attacker input
     const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);

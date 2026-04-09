@@ -991,8 +991,9 @@ describe('Secret Management', () => {
    * 2. System noise (GC, I/O, scheduling) can mask timing leaks
    * 3. Statistically significant results require thousands of samples
    *
-   * Instead, we use static code analysis to verify timingSafeEqual is used
-   * for all secret comparisons.
+   * Instead, we use static code analysis to verify secureCompare is used
+   * for all secret comparisons. Never use raw timingSafeEqual or Buffer-based
+   * comparisons — always use secureCompare from @pagespace/lib.
    */
   describe('Timing-Safe Operations', () => {
     it('password comparison uses bcrypt (inherently timing-safe)', async () => {
@@ -1007,33 +1008,33 @@ describe('Secret Management', () => {
       expect(authCode).not.toMatch(/password\s*===\s*|password\s*!==\s*/);
     });
 
-    it('CSRF token comparison uses timingSafeEqual', async () => {
+    it('CSRF token comparison uses secureCompare', async () => {
       const csrfUtilsCode = await fs.readFile(
         'apps/web/src/lib/auth/csrf-utils.ts',
         'utf-8'
       );
 
-      expect(csrfUtilsCode).toContain('timingSafeEqual');
+      expect(csrfUtilsCode).toContain('secureCompare');
       // Verify no plain equality for token comparison
       expect(csrfUtilsCode).not.toMatch(/token\s*===\s*|token\s*!==\s*/);
     });
 
-    it('cron secret comparison uses timingSafeEqual', async () => {
+    it('cron secret comparison uses secureCompare', async () => {
       const cronCode = await fs.readFile(
-        'apps/web/src/app/api/cron/cleanup-tokens/route.ts',
+        'apps/web/src/lib/auth/cron-auth.ts',
         'utf-8'
       );
 
-      expect(cronCode).toContain('timingSafeEqual');
+      expect(cronCode).toContain('secureCompare');
     });
 
-    it('monitoring ingest key comparison uses timingSafeEqual', async () => {
+    it('monitoring ingest key comparison uses secureCompare', async () => {
       const ingestCode = await fs.readFile(
         'apps/web/src/app/api/internal/monitoring/ingest/route.ts',
         'utf-8'
       );
 
-      expect(ingestCode).toContain('timingSafeEqual');
+      expect(ingestCode).toContain('secureCompare');
     });
   });
 

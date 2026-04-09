@@ -920,87 +920,17 @@ describe('Distributed Rate Limiting', () => {
 
 **Vulnerability:** #10 - CRON_SECRET and MONITORING_INGEST_KEY use plain string comparison
 
-**Description:** Update all secret comparisons to use crypto.timingSafeEqual.
+**Description:** Consolidate all secret comparisons to use `secureCompare` from `@pagespace/lib`.
 
-**Files to Modify:**
-- `packages/lib/src/auth/secure-compare.ts` (new)
-- `apps/web/src/app/api/cron/cleanup-tokens/route.ts`
-- `apps/web/src/app/api/internal/monitoring/ingest/route.ts`
-- `apps/web/src/lib/auth/csrf-utils.ts`
+**Status:** ✅ COMPLETED (2026-01-08, hardened 2026-04-08)
 
 **Implementation:**
-```typescript
-// packages/lib/src/auth/secure-compare.ts
-import { timingSafeEqual, createHash } from 'crypto';
-
-/**
- * Timing-safe comparison for secrets
- * Hashes both inputs to ensure constant-time comparison
- */
-export function secureCompare(provided: string, expected: string): boolean {
-  if (typeof provided !== 'string' || typeof expected !== 'string') {
-    return false;
-  }
-
-  // Hash both to ensure same length and prevent timing leaks
-  const providedHash = createHash('sha256').update(provided).digest();
-  const expectedHash = createHash('sha256').update(expected).digest();
-
-  return timingSafeEqual(providedHash, expectedHash);
-}
-```
-
-**Update cron route:**
-```typescript
-// apps/web/src/app/api/cron/cleanup-tokens/route.ts
-import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-
-export async function POST(request: Request) {
-  const authHeader = request.headers.get('authorization');
-  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
-
-  if (!authHeader || !secureCompare(authHeader, expectedAuth)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  // ... rest of handler
-}
-```
-
-**Tests Required:**
-```typescript
-// packages/lib/src/__tests__/secure-compare.test.ts
-describe('Timing-Safe Comparisons', () => {
-  it('returns true for matching strings');
-  it('returns false for non-matching strings');
-  it('returns false for non-string inputs');
-  it('comparison time is constant regardless of match position');
-});
-
-// Static analysis tests
-describe('Codebase Secret Comparison Audit', () => {
-  it('CSRF token comparison uses secureCompare');
-  it('cron secret comparison uses secureCompare');
-  it('monitoring ingest key uses secureCompare');
-  it('no direct === comparison for secrets in auth paths');
-});
-```
-
-**Acceptance Criteria:**
-- [x] All secret comparisons use secureCompare
-- [x] Static analysis verifies no plain === for secrets
-- [x] Timing attack vector eliminated
-
-**Dependencies:** None
-
-**Status:** ✅ COMPLETED (2026-01-08)
-
-**Implementation Notes:**
-- Implemented in `packages/lib/src/auth/secure-compare.ts` (43 lines)
-- Uses `crypto.timingSafeEqual()` for constant-time comparison
-- Handles mismatched lengths with constant-time self-comparison
-- Exported from `@pagespace/lib/auth`
-- Used in: cron cleanup-tokens route, monitoring ingest route, CSRF validation
-- 28 secure-compare tests passing
+- Canonical implementation: `packages/lib/src/auth/secure-compare.ts`
+- SHA-256 hashes both inputs before `crypto.timingSafeEqual`, guaranteeing constant-time comparison regardless of input length
+- Exported from `@pagespace/lib` as `secureCompare`
+- All callers consolidated: cron-auth, csrf-utils, login-csrf-utils, oauth-state, broadcast-auth, api-key-auth, webhook-token, google-calendar callback
+- 29 tests passing
+- **Never use raw `timingSafeEqual`, `Buffer.from` + length checks, or `===` for secrets — always use `secureCompare`**
 
 ---
 
@@ -1980,7 +1910,7 @@ if (age > SIGNATURE_MAX_AGE_MS) {  // 5 minutes
 - [x] All broadcasts include timestamp
 - [x] Old messages rejected (>5 min)
 - [x] Replay attacks prevented (signature binds timestamp to body)
-- [x] Timing-safe verification (timingSafeEqual)
+- [x] Timing-safe verification (`secureCompare`)
 
 **Dependencies:** None
 

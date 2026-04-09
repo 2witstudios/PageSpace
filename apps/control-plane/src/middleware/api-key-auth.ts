@@ -1,13 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
-import { timingSafeEqual } from 'node:crypto'
-
-function safeCompare(a: string, b: string): boolean {
-  const aBuffer = Buffer.from(a)
-  const bBuffer = Buffer.from(b)
-  if (aBuffer.length !== bBuffer.length) return false
-  return timingSafeEqual(aBuffer, bBuffer)
-}
+import { secureCompare } from '@pagespace/lib'
 
 async function apiKeyAuthPlugin(app: FastifyInstance) {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -21,7 +14,7 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     }
 
     const provided = request.headers['x-api-key'] as string | undefined
-    if (!provided || !safeCompare(provided, apiKey)) {
+    if (!provided || !secureCompare(provided, apiKey)) {
       request.log.warn({ ip: request.ip }, 'auth failure: invalid API key')
       return reply.status(401).send({ error: 'Unauthorized' })
     }

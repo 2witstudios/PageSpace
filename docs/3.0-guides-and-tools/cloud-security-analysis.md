@@ -341,12 +341,10 @@ if (authHeader !== `Bearer ${expectedAuth}`) {
 
 **Recommended Hardening:**
 ```typescript
-import { timingSafeEqual } from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 
-function secureCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+if (!authHeader || !secureCompare(authHeader, expectedAuth)) {
+  return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 }
 ```
 
@@ -507,8 +505,8 @@ Before implementing security hardening, ensure infrastructure is prepared:
    - ~~Make PROCESSOR_AUTH_REQUIRED=false fail in production~~
    - ~~Add startup validation~~
 
-8. **Implement Timing-Safe Comparisons**
-   - Update all secret comparisons to use crypto.timingSafeEqual
+8. ~~**Implement Timing-Safe Comparisons**~~ COMPLETED
+   - ~~Update all secret comparisons to use `secureCompare()` from `@pagespace/lib`~~
    - Add rate limiting to cron/internal endpoints
 
 ### Phase 3: Defense in Depth (Weeks 3-4)

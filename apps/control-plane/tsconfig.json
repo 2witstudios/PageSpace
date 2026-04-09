@@ -3,8 +3,15 @@
   "compilerOptions": {
     "outDir": "dist",
     "module": "commonjs",
-    "noEmit": false
+    "noEmit": false,
+    "jsx": "react-jsx",
+    "baseUrl": "../..",
+    "paths": {
+      "@pagespace/db": ["packages/db/src/index"],
+      "@pagespace/db/*": ["packages/db/src/*"],
+      "@pagespace/*": ["packages/*/src"]
+    }
   },
-  "include": ["src"],
+  "include": ["src", "../../types"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 
 // State expires after 10 minutes — prevents replay attacks
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -49,13 +50,7 @@ export function verifyOAuthState(stateBase64: string): VerifyOAuthStateResult {
       .update(JSON.stringify(data))
       .digest('hex');
 
-    // Double-hash timing-safe comparison: hash both sides to guarantee
-    // equal-length buffers regardless of attacker-controlled sig length
-    const actualHash = crypto.createHash('sha256').update(String(sig)).digest();
-    const expectedHash = crypto.createHash('sha256').update(expected).digest();
-    const isValid = crypto.timingSafeEqual(actualHash, expectedHash);
-
-    if (!isValid) {
+    if (!secureCompare(String(sig), expected)) {
       return { status: 'invalid_signature' };
     }
 

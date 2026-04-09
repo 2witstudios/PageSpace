@@ -304,7 +304,7 @@ const advancedPayloads = [
 
 **Required Audit:**
 ```typescript
-// All secret comparisons should use timingSafeEqual
+// All secret comparisons should use secureCompare from @pagespace/lib
 grep -r "=== .*Secret\|=== .*Token\|=== .*Key" packages/
 ```
 
@@ -376,7 +376,7 @@ function verifyBroadcastSignature(signature: string, body: string): boolean {
     .update(`${timestamp}:${body}`)
     .digest('hex');
 
-  return timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  return secureCompare(sig, expected);
 }
 ```
 

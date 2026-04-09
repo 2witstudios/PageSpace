@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 import {
   GOOGLE_CALENDAR_DEFAULT_RETURN_PATH,
   normalizeGoogleCalendarReturnPath,
@@ -67,9 +68,7 @@ export async function GET(req: Request) {
         .update(JSON.stringify(stateWithSignature.data))
         .digest('hex');
 
-      const sigBuffer = Buffer.from(stateWithSignature.sig, 'utf-8');
-      const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
-      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      if (!secureCompare(String(stateWithSignature.sig), expectedSignature)) {
         loggers.auth.warn('Google Calendar OAuth state signature mismatch');
         return NextResponse.redirect(
           new URL('/settings/integrations/google-calendar?error=invalid_state', baseUrl)
