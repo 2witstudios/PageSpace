@@ -89,7 +89,7 @@ export function GdprPane() {
         <Feature
           nameColor="var(--green)"
           name="File orphan cleanup"
-          description="Cron job detects orphaned files (zero references), deletes physical files via processor service, then removes DB records. Content-addressed store cleanup."
+          description="Cron job detects orphaned files (zero references), attempts physical deletion via processor service, then removes DB records only for successfully deleted files. Content-addressed store cleanup."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
