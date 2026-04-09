@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc } from '@pagespace/db';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, securityAudit } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -438,6 +438,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       taskListPageId: pageId,
     },
   });
+
+  securityAudit.logDataAccess(userId, 'write', 'task', result.task.id, { pageId }).catch(() => {});
 
   return NextResponse.json({
     ...taskWithRelations,

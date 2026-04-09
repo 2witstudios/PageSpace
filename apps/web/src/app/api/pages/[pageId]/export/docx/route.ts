@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { marked } from 'marked';
@@ -70,6 +70,8 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       exportFormat: 'docx',
       pageTitle: page.title,
     });
+
+    securityAudit.logDataAccess(userId, 'export', 'page', pageId, { format: 'docx' }).catch(() => {});
 
     // Return the DOCX as a downloadable file
     // Convert Buffer to Uint8Array for Next.js 15 compatibility
