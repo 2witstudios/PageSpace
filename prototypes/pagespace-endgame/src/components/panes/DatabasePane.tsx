@@ -172,17 +172,19 @@ export function DatabasePane() {
         {/* RIGHT SIDEBAR: current details */}
         <div>
           <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: "var(--amber)", textTransform: "uppercase" as CSSProperties["textTransform"], marginBottom: 10 }}>
-            8 Cron Jobs
+            10 Cron Jobs
           </div>
           <div style={{ background: "var(--s1)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
             <CronJob schedule="*/5 min" name="Calendar sync" endpoint="/api/cron/calendar-sync" />
             <CronJob schedule="*/5 min" name="Workflows" endpoint="/api/cron/workflows" />
             <CronJob schedule="hourly" name="Token cleanup" endpoint="/api/cron/cleanup-tokens" />
             <CronJob schedule="*/6h" name="Pulse" endpoint="/api/pulse/cron" />
+            <CronJob schedule="1am" name="Retention cleanup" endpoint="/api/cron/retention-cleanup" />
             <CronJob schedule="2am" name="Audit verify" endpoint="/api/cron/verify-audit-chain" />
             <CronJob schedule="3am" name="AI log purge" endpoint="/api/cron/purge-ai-usage-logs" />
             <CronJob schedule="4am" name="Msg purge" endpoint="/api/cron/purge-deleted-messages" />
             <CronJob schedule="6am" name="Memory" endpoint="/api/memory/cron" />
+            <CronJob schedule="Sun 5am" name="Orphan cleanup" endpoint="/api/cron/cleanup-orphaned-files" />
           </div>
 
           <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: 1.5, color: "var(--cyan)", textTransform: "uppercase" as CSSProperties["textTransform"], marginBottom: 10 }}>
