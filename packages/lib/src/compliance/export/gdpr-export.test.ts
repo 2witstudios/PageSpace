@@ -1,10 +1,81 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, users } from '@pagespace/db';
-import { drives, pages, chatMessages } from '@pagespace/db';
-import { taskLists, taskItems } from '@pagespace/db';
-import { aiUsageLogs } from '@pagespace/db';
-import { eq } from 'drizzle-orm';
-import { createId } from '@paralleldrive/cuid2';
+/**
+ * @scaffold — GDPR Export Tests
+ *
+ * These functions use module-level ORM queries with no injected seam.
+ * Chain mocks and order-dependent mock ladders (createChainDb callIndex)
+ * are structural necessities — assertions focus on the observable data
+ * contracts (return types, aggregation logic, deduplication).
+ *
+ * REVIEW: introduce a GdprExportRepository seam so these functions can
+ * be tested without reproducing the ORM chain shape. Once that seam
+ * exists, remove the chain mocks and promote these to contract tests.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@pagespace/db', () => {
+  const mockTable = (name: string) => ({
+    id: `${name}.id`,
+    name: `${name}.name`,
+    email: `${name}.email`,
+    image: `${name}.image`,
+    timezone: `${name}.timezone`,
+    createdAt: `${name}.createdAt`,
+    updatedAt: `${name}.updatedAt`,
+    slug: `${name}.slug`,
+    ownerId: `${name}.ownerId`,
+    role: `${name}.role`,
+    driveId: `${name}.driveId`,
+    userId: `${name}.userId`,
+    title: `${name}.title`,
+    type: `${name}.type`,
+    content: `${name}.content`,
+    pageId: `${name}.pageId`,
+    conversationId: `${name}.conversationId`,
+    sizeBytes: `${name}.sizeBytes`,
+    mimeType: `${name}.mimeType`,
+    storagePath: `${name}.storagePath`,
+    createdBy: `${name}.createdBy`,
+    operation: `${name}.operation`,
+    resourceType: `${name}.resourceType`,
+    resourceId: `${name}.resourceId`,
+    timestamp: `${name}.timestamp`,
+    metadata: `${name}.metadata`,
+    provider: `${name}.provider`,
+    model: `${name}.model`,
+    inputTokens: `${name}.inputTokens`,
+    outputTokens: `${name}.outputTokens`,
+    cost: `${name}.cost`,
+    status: `${name}.status`,
+    priority: `${name}.priority`,
+    taskListId: `${name}.taskListId`,
+    senderId: `${name}.senderId`,
+  });
+
+  return {
+    users: mockTable('users'),
+    drives: mockTable('drives'),
+    driveMembers: mockTable('driveMembers'),
+    pages: mockTable('pages'),
+    chatMessages: mockTable('chatMessages'),
+    channelMessages: mockTable('channelMessages'),
+    conversations: mockTable('conversations'),
+    messages: mockTable('messages'),
+    directMessages: mockTable('directMessages'),
+    dmConversations: mockTable('dmConversations'),
+    files: mockTable('files'),
+    filePages: mockTable('filePages'),
+    activityLogs: mockTable('activityLogs'),
+    aiUsageLogs: mockTable('aiUsageLogs'),
+    taskLists: mockTable('taskLists'),
+    taskItems: mockTable('taskItems'),
+  };
+});
+
+vi.mock('drizzle-orm', () => ({
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
+}));
+
 import {
   collectUserProfile,
   collectUserDrives,
@@ -17,214 +88,261 @@ import {
   collectAllUserData,
 } from './gdpr-export';
 
-type DBParam = Parameters<typeof collectUserProfile>[0];
+/** Creates a chain-mock db that resolves .where() calls with queued results */
+function createChainDb(whereResults: unknown[][]) {
+  let callIndex = 0;
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => {
+      const result = whereResults[callIndex] ?? [];
+      callIndex++;
+      return result;
+    }),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
 
-let testUserId: string;
-let testDriveId: string;
-
-beforeEach(async () => {
-  const [user] = await db.insert(users).values({
-    id: createId(),
-    name: 'GDPR Export Test User',
-    email: `gdpr-test-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
-    password: 'hashed_password',
-    provider: 'email',
-    role: 'user',
-    tokenVersion: 1,
-    timezone: 'America/New_York',
-  }).returning();
-  testUserId = user.id;
-
-  const [drive] = await db.insert(drives).values({
-    id: createId(),
-    name: 'GDPR Test Drive',
-    slug: `gdpr-test-${Date.now()}`,
-    ownerId: testUserId,
-    updatedAt: new Date(),
-  }).returning();
-  testDriveId = drive.id;
-});
-
-afterEach(async () => {
-  await db.delete(drives).where(eq(drives.id, testDriveId));
-  await db.delete(users).where(eq(users.id, testUserId));
-});
+/** Creates a chain-mock db where the first where() returns a .limit() chain */
+function createLimitDb(limitResult: unknown[]) {
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => ({ limit: vi.fn().mockReturnValue(limitResult) })),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
 
 describe('collectUserProfile', () => {
-  it('returns profile with expected fields', async () => {
-    const profile = await collectUserProfile(db as DBParam, testUserId);
+  it('given_userExists_returnsProfile', async () => {
+    const profile = {
+      id: 'user-1',
+      name: 'Test User',
+      email: 'test@example.com',
+      image: null,
+      timezone: 'UTC',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const db = createLimitDb([profile]);
 
-    expect(profile).toBeTruthy();
-    expect(profile!.id).toBe(testUserId);
-    expect(Object.keys(profile!).sort()).toEqual([
-      'createdAt', 'email', 'id', 'image', 'name', 'timezone', 'updatedAt',
-    ]);
+    const result = await collectUserProfile(db as never, 'user-1');
+
+    expect(result).toEqual(profile);
   });
 
-  it('returns null for nonexistent user', async () => {
-    const profile = await collectUserProfile(db as DBParam, 'nonexistent-id');
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
-    expect(profile).toBeNull();
+    const result = await collectUserProfile(db as never, 'nonexistent');
+
+    expect(result).toBeNull();
   });
 });
 
 describe('collectUserDrives', () => {
-  it('returns owned drives', async () => {
-    const userDrives = await collectUserDrives(db as DBParam, testUserId);
+  it('given_ownedAndMemberDrives_returnsBothWithCorrectRoles', async () => {
+    const ownedDrive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', createdAt: new Date() };
+    const memberDrive = { id: 'drive-2', name: 'Shared Drive', slug: 'shared', role: 'MEMBER', createdAt: new Date() };
+    const db = createChainDb([[ownedDrive], [memberDrive]]);
 
-    expect(userDrives.length).toBeGreaterThanOrEqual(1);
-    const ownedDrive = userDrives.find(d => d.id === testDriveId);
-    expect(ownedDrive).toBeTruthy();
-    expect(ownedDrive!.role).toBe('OWNER');
+    const result = await collectUserDrives(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result[0].role).toBe('OWNER');
+    expect(result[1].role).toBe('MEMBER');
+  });
+
+  it('given_userIsBothOwnerAndMember_deduplicatesKeepingOwnerRole', async () => {
+    const drive = { id: 'drive-1', name: 'Drive', slug: 'drive', createdAt: new Date() };
+    const db = createChainDb([[drive], [{ ...drive, role: 'ADMIN' }]]);
+
+    const result = await collectUserDrives(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('OWNER');
   });
 });
 
 describe('collectUserPages', () => {
-  let testPageId: string;
-
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'GDPR Test Page',
+  it('given_driveIds_returnsPagesFromThoseDrives', async () => {
+    const page = {
+      id: 'page-1',
+      title: 'Test Page',
       type: 'DOCUMENT',
-      driveId: testDriveId,
-      position: 0,
+      content: 'Hello',
+      driveId: 'drive-1',
+      createdAt: new Date(),
       updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
+    };
+    const db = createChainDb([[page]]);
+
+    const result = await collectUserPages(db as never, 'user-1', ['drive-1']);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe('Test Page');
   });
 
-  afterEach(async () => {
-    await db.delete(pages).where(eq(pages.id, testPageId));
+  it('given_emptyDriveIds_returnsEmptyArrayWithoutQuery', async () => {
+    const db = createChainDb([]);
+
+    const result = await collectUserPages(db as never, 'user-1', []);
+
+    expect(result).toEqual([]);
   });
 
-  it('returns pages from user drives', async () => {
-    const userPages = await collectUserPages(db as DBParam, testUserId);
+  it('given_noPreloadedDriveIds_fetchesDrivesFirst', async () => {
+    // owned drives → empty, member drives → empty → no pages
+    const db = createChainDb([[], []]);
 
-    expect(userPages.length).toBeGreaterThanOrEqual(1);
-    const found = userPages.find(p => p.id === testPageId);
-    expect(found).toBeTruthy();
-    expect(found!.title).toBe('GDPR Test Page');
+    const result = await collectUserPages(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
 });
 
 describe('collectUserMessages', () => {
-  let testPageId: string;
+  it('given_messagesInAllSources_aggregatesWithCorrectSourceLabels', async () => {
+    const aiMsg = { id: 'm1', content: 'AI msg', role: 'user', pageId: 'p1', conversationId: 'c1', createdAt: new Date() };
+    const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
+    const convMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date() };
+    const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
+    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg]]);
 
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'Chat Test Page',
-      type: 'AI_CHAT',
-      driveId: testDriveId,
-      position: 0,
-      updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(4);
+    expect(result.map(r => r.source)).toEqual([
+      'ai_chat', 'channel', 'conversation', 'direct_message',
+    ]);
   });
 
-  afterEach(async () => {
-    await db.delete(chatMessages).where(eq(chatMessages.pageId, testPageId));
-    await db.delete(pages).where(eq(pages.id, testPageId));
+  it('given_noMessages_returnsEmptyArray', async () => {
+    const db = createChainDb([[], [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
+});
 
-  it('returns AI chat messages for the user', async () => {
-    await db.insert(chatMessages).values({
-      id: createId(),
-      pageId: testPageId,
-      role: 'user',
-      content: 'Hello AI',
-      userId: testUserId,
-    });
+describe('collectUserFiles', () => {
+  it('given_filesExist_returnsFileMetadata', async () => {
+    const file = {
+      id: 'f1', driveId: 'd1', sizeBytes: 1024,
+      mimeType: 'text/plain', storagePath: '/path', createdAt: new Date(),
+    };
+    const db = createChainDb([[file]]);
 
-    const userMessages = await collectUserMessages(db as DBParam, testUserId);
+    const result = await collectUserFiles(db as never, 'user-1');
 
-    const found = userMessages.find(m => m.content === 'Hello AI');
-    expect(found).toBeTruthy();
-    expect(found!.source).toBe('ai_chat');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ id: 'f1', sizeBytes: 1024 }));
+  });
+});
+
+describe('collectUserActivity', () => {
+  it('given_activityExists_returnsLogs', async () => {
+    const activity = {
+      id: 'a1', operation: 'create', resourceType: 'page',
+      resourceId: 'p1', timestamp: new Date(), metadata: null,
+    };
+    const db = createChainDb([[activity]]);
+
+    const result = await collectUserActivity(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].operation).toBe('create');
   });
 });
 
 describe('collectUserAiUsage', () => {
-  it('returns AI usage logs for the user', async () => {
-    const logId = createId();
-    await db.insert(aiUsageLogs).values({
-      id: logId,
-      userId: testUserId,
-      provider: 'openrouter',
-      model: 'gpt-4o',
-      inputTokens: 100,
-      outputTokens: 50,
-      cost: 0.01,
-    });
+  it('given_usageExists_returnsLogs', async () => {
+    const usage = {
+      id: 'u1', provider: 'openai', model: 'gpt-4',
+      inputTokens: 100, outputTokens: 50, cost: 0.01, timestamp: new Date(),
+    };
+    const db = createChainDb([[usage]]);
 
-    const usage = await collectUserAiUsage(db as DBParam, testUserId);
+    const result = await collectUserAiUsage(db as never, 'user-1');
 
-    const found = usage.find(u => u.id === logId);
-    expect(found).toBeTruthy();
-    expect(found!.provider).toBe('openrouter');
-    expect(found!.model).toBe('gpt-4o');
-
-    // cleanup
-    await db.delete(aiUsageLogs).where(eq(aiUsageLogs.id, logId));
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ provider: 'openai', model: 'gpt-4' }));
   });
 });
 
 describe('collectUserTasks', () => {
-  let testListId: string;
+  it('given_tasksExist_returnsListsWithItems', async () => {
+    const list = { id: 'tl1', title: 'My Tasks' };
+    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListId: 'tl1', createdAt: new Date() };
+    const db = createChainDb([[list], [item]]);
 
-  beforeEach(async () => {
-    const [list] = await db.insert(taskLists).values({
-      id: createId(),
-      userId: testUserId,
-      title: 'GDPR Test Tasks',
-    }).returning();
-    testListId = list.id;
+    const result = await collectUserTasks(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].listTitle).toBe('My Tasks');
+    expect(result[0].items).toHaveLength(1);
+    expect(result[0].items[0].title).toBe('Task 1');
   });
 
-  afterEach(async () => {
-    await db.delete(taskItems).where(eq(taskItems.taskListId, testListId));
-    await db.delete(taskLists).where(eq(taskLists.id, testListId));
+  it('given_noTaskLists_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserTasks(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
 
-  it('returns task lists with items', async () => {
-    await db.insert(taskItems).values({
-      id: createId(),
-      taskListId: testListId,
-      userId: testUserId,
-      title: 'Test Task Item',
-      status: 'pending',
-      priority: 'medium',
-    });
+  it('given_listsWithNoItems_returnsListsWithEmptyItemsArray', async () => {
+    const db = createChainDb([[{ id: 'tl1', title: 'Empty List' }], []]);
 
-    const tasks = await collectUserTasks(db as DBParam, testUserId);
+    const result = await collectUserTasks(db as never, 'user-1');
 
-    const found = tasks.find(t => t.listId === testListId);
-    expect(found).toBeTruthy();
-    expect(found!.listTitle).toBe('GDPR Test Tasks');
-    expect(found!.items.length).toBe(1);
-    expect(found!.items[0].title).toBe('Test Task Item');
+    expect(result).toHaveLength(1);
+    expect(result[0].items).toEqual([]);
   });
 });
 
 describe('collectAllUserData', () => {
-  it('returns all data categories', async () => {
-    const data = await collectAllUserData(db as DBParam, testUserId);
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
-    expect(data).toBeTruthy();
-    expect(data!.profile.id).toBe(testUserId);
-    expect(Array.isArray(data!.drives)).toBe(true);
-    expect(Array.isArray(data!.pages)).toBe(true);
-    expect(Array.isArray(data!.messages)).toBe(true);
-    expect(Array.isArray(data!.files)).toBe(true);
-    expect(Array.isArray(data!.activity)).toBe(true);
-    expect(Array.isArray(data!.aiUsage)).toBe(true);
-    expect(Array.isArray(data!.tasks)).toBe(true);
+    const result = await collectAllUserData(db as never, 'nonexistent');
+
+    expect(result).toBeNull();
   });
 
-  it('returns null for nonexistent user', async () => {
-    const data = await collectAllUserData(db as DBParam, 'nonexistent-id');
+  it('given_userExists_aggregatesAllDataCategories', async () => {
+    const profile = {
+      id: 'user-1', name: 'Test', email: 'test@test.com',
+      image: null, timezone: 'UTC', createdAt: new Date(), updatedAt: new Date(),
+    };
 
-    expect(data).toBeNull();
+    let callCount = 0;
+    const db = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return { limit: vi.fn().mockReturnValue([profile]) };
+        }
+        return [];
+      }),
+      innerJoin: vi.fn().mockReturnThis(),
+    };
+
+    const result = await collectAllUserData(db as never, 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.profile.id).toBe('user-1');
+    expect(result!.profile.email).toBe('test@test.com');
+    expect(Array.isArray(result!.drives)).toBe(true);
+    expect(Array.isArray(result!.pages)).toBe(true);
+    expect(Array.isArray(result!.messages)).toBe(true);
+    expect(Array.isArray(result!.files)).toBe(true);
+    expect(Array.isArray(result!.activity)).toBe(true);
+    expect(Array.isArray(result!.aiUsage)).toBe(true);
+    expect(Array.isArray(result!.tasks)).toBe(true);
   });
 });

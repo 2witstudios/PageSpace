@@ -20,7 +20,8 @@
       }
     ],
     "paths": {
-      "@/*": ["apps/marketing/src/*"]
+      "@/*": ["apps/marketing/src/*"],
+      "@pagespace/*": ["packages/*/src"]
     }
   },
   "include": ["next-env.d.ts", "src/**/*.ts", "src/**/*.tsx", ".next/types/**/*.ts"],

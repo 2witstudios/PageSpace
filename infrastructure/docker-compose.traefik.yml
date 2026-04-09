@@ -1,0 +1,48 @@
+# Traefik reverse proxy for PageSpace tenant routing
+# Provides wildcard subdomain routing with auto-TLS for tenant stacks.
+#
+# Prerequisites:
+#   docker network create traefik
+#
+# Usage:
+#   docker compose -f infrastructure/docker-compose.traefik.yml up -d
+
+services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      # Dashboard behind basic auth on traefik.pagespace.ai
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.pagespace.ai`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=le"
+      - "traefik.http.routers.dashboard.tls.domains[0].main=pagespace.ai"
+      - "traefik.http.routers.dashboard.tls.domains[0].sans=*.pagespace.ai"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+
+networks:
+  traefik:
+    external: true
+
+volumes:
+  letsencrypt:

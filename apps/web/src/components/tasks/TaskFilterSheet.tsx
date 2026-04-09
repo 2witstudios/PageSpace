@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { User, Users, Filter } from 'lucide-react';
+import { Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -10,23 +10,20 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { cn } from '@/lib/utils';
-import {
-  type TaskStatus,
-  type TaskPriority,
-} from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Drive, StatusConfigsByTaskList } from './types';
 import { aggregateStatuses } from './task-helpers';
+import {
+  type DueDateFilter,
+  type AssigneeFilter,
+  type FilterValues,
+  DriveSelect,
+  StatusSelect,
+  PrioritySelect,
+  DueDateSelect,
+  AssigneeToggle,
+} from './FilterComponents';
 
-type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
-type AssigneeFilter = 'mine' | 'all';
+export type { DueDateFilter, AssigneeFilter, FilterValues };
 
 export interface TaskFilterSheetProps {
   open: boolean;
@@ -34,22 +31,11 @@ export interface TaskFilterSheetProps {
   context: 'user' | 'drive';
   drives: Drive[];
   selectedDriveId: string | undefined;
-  filters: {
-    status?: TaskStatus;
-    priority?: TaskPriority;
-    driveId?: string;
-    dueDateFilter?: DueDateFilter;
-    assigneeFilter?: AssigneeFilter;
-  };
+  filters: FilterValues;
   activeFilterCount: number;
   statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
-  onFiltersChange: (filters: Partial<{
-    status?: TaskStatus;
-    priority?: TaskPriority;
-    dueDateFilter?: DueDateFilter;
-    assigneeFilter?: AssigneeFilter;
-  }>) => void;
+  onFiltersChange: (filters: Partial<FilterValues>) => void;
   onClearFilters: () => void;
 }
 
@@ -78,7 +64,6 @@ export function TaskFilterSheet({
         className="rounded-t-2xl max-h-[80vh] pb-[calc(1rem+env(safe-area-inset-bottom))]"
       >
         <SheetHeader className="px-5 pt-3 pb-0">
-          {/* Drag handle */}
           <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" />
           <div className="flex items-center justify-between">
             <SheetTitle className="text-base">Filters</SheetTitle>
@@ -96,129 +81,60 @@ export function TaskFilterSheet({
               </Button>
             )}
           </div>
-          <SheetDescription className="sr-only">
-            Filter your task list
-          </SheetDescription>
+          <SheetDescription className="sr-only">Filter your task list</SheetDescription>
         </SheetHeader>
 
         <div className="overflow-y-auto px-5 pb-4 space-y-5 mt-2">
-          {/* Assignee toggle */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Show tasks</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => onFiltersChange({ assigneeFilter: 'mine' })}
-                className={cn(
-                  'flex h-11 items-center justify-center gap-2 rounded-lg border text-sm font-medium transition-colors',
-                  filters.assigneeFilter !== 'all'
-                    ? 'border-primary bg-primary/5 text-primary'
-                    : 'border-border bg-background text-muted-foreground'
-                )}
-              >
-                <User className="h-4 w-4" />
-                My tasks
-              </button>
-              <button
-                onClick={() => onFiltersChange({ assigneeFilter: 'all' })}
-                className={cn(
-                  'flex h-11 items-center justify-center gap-2 rounded-lg border text-sm font-medium transition-colors',
-                  filters.assigneeFilter === 'all'
-                    ? 'border-primary bg-primary/5 text-primary'
-                    : 'border-border bg-background text-muted-foreground'
-                )}
-              >
-                <Users className="h-4 w-4" />
-                All tasks
-              </button>
-            </div>
+            <AssigneeToggle
+              value={filters.assigneeFilter || 'mine'}
+              onChange={(v) => onFiltersChange({ assigneeFilter: v })}
+              variant="full"
+            />
           </div>
 
-          {/* Drive selector */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Drive</label>
-            <Select
-              value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-              onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
-            >
-              <SelectTrigger className="h-11 w-full">
-                <SelectValue placeholder="All drives" />
-              </SelectTrigger>
-              <SelectContent>
-                {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-                {drives.map((drive) => (
-                  <SelectItem key={drive.id} value={drive.id}>
-                    {drive.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <DriveSelect
+              context={context}
+              drives={drives}
+              selectedDriveId={selectedDriveId}
+              driveFilterId={filters.driveId}
+              onDriveChange={onDriveChange}
+              triggerClassName="h-11 w-full"
+            />
           </div>
 
-          {/* Status */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Status</label>
-            <Select
-              value={filters.status || 'all'}
-              onValueChange={(value) => onFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-            >
-              <SelectTrigger className="h-11 w-full">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                {aggregatedStatuses.map((s) => (
-                  <SelectItem key={s.slug} value={s.slug}>
-                    {s.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <StatusSelect
+              value={filters.status}
+              statuses={aggregatedStatuses}
+              onChange={(s) => onFiltersChange({ status: s })}
+              triggerClassName="h-11 w-full"
+            />
           </div>
 
-          {/* Priority */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Priority</label>
-            <Select
-              value={filters.priority || 'all'}
-              onValueChange={(value) => onFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-            >
-              <SelectTrigger className="h-11 w-full">
-                <SelectValue placeholder="All priorities" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All priorities</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="low">Low</SelectItem>
-              </SelectContent>
-            </Select>
+            <PrioritySelect
+              value={filters.priority}
+              onChange={(p) => onFiltersChange({ priority: p })}
+              triggerClassName="h-11 w-full"
+            />
           </div>
 
-          {/* Due date */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Due date</label>
-            <Select
-              value={filters.dueDateFilter || 'all'}
-              onValueChange={(value) => onFiltersChange({ dueDateFilter: value as DueDateFilter })}
-            >
-              <SelectTrigger className="h-11 w-full">
-                <SelectValue placeholder="Any date" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Any date</SelectItem>
-                <SelectItem value="overdue">Overdue</SelectItem>
-                <SelectItem value="today">Due today</SelectItem>
-                <SelectItem value="this_week">This week</SelectItem>
-                <SelectItem value="upcoming">Upcoming</SelectItem>
-              </SelectContent>
-            </Select>
+            <DueDateSelect
+              value={filters.dueDateFilter}
+              onChange={(d) => onFiltersChange({ dueDateFilter: d })}
+              triggerClassName="h-11 w-full"
+            />
           </div>
 
-          {/* Apply button */}
-          <Button
-            className="w-full h-11"
-            onClick={() => onOpenChange(false)}
-          >
+          <Button className="w-full h-11" onClick={() => onOpenChange(false)}>
             Done
           </Button>
         </div>
@@ -227,7 +143,6 @@ export function TaskFilterSheet({
   );
 }
 
-/** Trigger button for the filter sheet, with active filter count badge */
 export function TaskFilterButton({
   activeFilterCount,
   onClick,

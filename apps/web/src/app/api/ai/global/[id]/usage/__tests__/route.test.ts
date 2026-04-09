@@ -223,9 +223,14 @@ describe('GET /api/ai/global/[id]/usage', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.logs).toBeDefined();
-      expect(body.summary).toBeDefined();
-      expect(body.summary.billing).toBeDefined();
+      expect(Array.isArray(body.logs)).toBe(true);
+      expect(body.summary).toEqual(mockUsageSummary());
+      expect(body.summary.billing).toEqual({
+        totalInputTokens: 3000,
+        totalOutputTokens: 1300,
+        totalTokens: 4300,
+        totalCost: 0.03,
+      });
     });
 
     it('should call repository methods with correct arguments', async () => {
@@ -268,7 +273,7 @@ describe('GET /api/ai/global/[id]/usage', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch AI usage');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error fetching AI usage:', expect.objectContaining({ message: 'Database error' }));
     });
   });
 });

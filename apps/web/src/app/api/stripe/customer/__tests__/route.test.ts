@@ -187,21 +187,29 @@ describe('Customer API', () => {
     });
 
     it('should clear DB reference and return null when customer deleted in Stripe', async () => {
-      mockStripeCustomersRetrieve.mockResolvedValue({ id: 'cus_123', deleted: true });
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const request = new Request('https://example.com/api/stripe/customer', {
-        method: 'GET',
-      }) as unknown as import('next/server').NextRequest;
+      try {
+        mockStripeCustomersRetrieve.mockResolvedValue({ id: 'cus_123', deleted: true });
 
-      const response = await GET(request);
-      const body = await response.json();
+        const request = new Request('https://example.com/api/stripe/customer', {
+          method: 'GET',
+        }) as unknown as import('next/server').NextRequest;
 
-      expect(response.status).toBe(200);
-      expect(body.customer).toBeNull();
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        stripeCustomerId: null,
-        updatedAt: expect.any(Date),
-      });
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.customer).toBeNull();
+        expect(mockUpdateSet).toHaveBeenCalledWith({
+          stripeCustomerId: null,
+          updatedAt: frozenDate,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should return 500 on errors', async () => {
@@ -293,22 +301,34 @@ describe('Customer API', () => {
 
       expect(response.status).toBe(200);
       expect(body.created).toBe(true);
-      expect(mockStripeCustomersCreate).toHaveBeenCalled();
+      expect(mockStripeCustomersCreate).toHaveBeenCalledWith({
+        email: 'test@example.com',
+        name: 'Test User',
+        metadata: { userId: 'user_123' },
+      });
     });
 
     it('should save new customer ID to database', async () => {
-      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+      const frozenDate = new Date('2025-01-15T12:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(frozenDate);
 
-      const request = new Request('https://example.com/api/stripe/customer', {
-        method: 'POST',
-      }) as unknown as import('next/server').NextRequest;
+      try {
+        mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
 
-      await POST(request);
+        const request = new Request('https://example.com/api/stripe/customer', {
+          method: 'POST',
+        }) as unknown as import('next/server').NextRequest;
 
-      expect(mockUpdateSet).toHaveBeenCalledWith({
-        stripeCustomerId: 'cus_new',
-        updatedAt: expect.any(Date),
-      });
+        await POST(request);
+
+        expect(mockUpdateSet).toHaveBeenCalledWith({
+          stripeCustomerId: 'cus_new',
+          updatedAt: frozenDate,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('should handle null user name when creating customer', async () => {

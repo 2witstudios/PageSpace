@@ -249,7 +249,7 @@ describe('POST /api/stripe/update-subscription', () => {
       expect(body.status).toBe('scheduled');
       expect(body.scheduleId).toBe('sch_123');
       expect(body.message).toBe('Plan change scheduled for next billing period');
-      expect(body.effectiveDate).toBeDefined();
+      expect(typeof body.effectiveDate).toBe('string');
     });
 
     it('should create subscription schedule for downgrade', async () => {
@@ -405,7 +405,13 @@ describe('POST /api/stripe/update-subscription', () => {
       await POST(request);
 
       // Should use update (upgrade path), not schedules
-      expect(mockStripeSubscriptionsUpdate).toHaveBeenCalled();
+      expect(mockStripeSubscriptionsUpdate).toHaveBeenCalledWith(
+        'sub_123',
+        expect.objectContaining({
+          items: [{ id: 'si_123', price: mockPriceId }],
+          proration_behavior: 'always_invoice',
+        })
+      );
       expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
     });
 

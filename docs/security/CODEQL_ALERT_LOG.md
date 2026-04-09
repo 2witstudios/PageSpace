@@ -5,8 +5,9 @@
 Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume breach. Fortify every boundary.**
 
 **Branch**: `codeql-hardening`
-**Total Alerts**: 73
-**Resolved**: 73/73
+**Total Alerts**: 77
+**Resolved**: 76/77 (1 dismissed as S4 false positive)
+**Additional Dismissed**: 13 (7 Google OAuth S4 + 2 Round 4 false positives + 4 Round 5 S3)
 
 ---
 
@@ -120,18 +121,45 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | 80 | js/user-controlled-bypass | high | verify-email/route.ts:16 | CWE-807 | Unnecessary format check created new alert (false positive fix) | Reverted — `verifyToken()` already validates cryptographically | REVERTED |
 | 81 | js/log-injection | medium | mcp-tool-converter.ts:247 | CWE-117 | `mcpTools.length` tainted as user-controlled array property | Coerce through `Number()` to break taint chain | FIXED |
 
+### Round 3: Integration OAuth callback (98-101)
+
+| Alert | Rule | Severity | File | CWE | Fix Summary | Zero-Trust Principle | Status |
+|-------|------|----------|------|-----|-------------|---------------------|--------|
+| 98 | js/user-controlled-bypass | high | integrations/callback/route.ts:37 | CWE-807 | `String(error).slice(0, 100)` for log sanitization | Never log user input without sanitization | FIXED |
+| 99 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `code` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
+| 100 | js/user-controlled-bypass | high | integrations/callback/route.ts:43 | CWE-807 | Zod schema validation for `state` via `integrationCallbackSchema` | Defense in depth - validate input format, not just presence | FIXED |
+| 101 | js/user-controlled-bypass | high | integrations/callback/route.ts:57 | CWE-807 | Dismissed — `verifySignedState()` uses HMAC-SHA256 + `secureCompare` | Cryptographic verification IS the security check | DISMISSED (S4) |
+
+### Round 4: Batch 5 triage — SSRF + HTTP-to-File (138-139)
+
+| Alert | Rule | Severity | File | CWE | Triage Rationale | Status |
+|-------|------|----------|------|-----|-----------------|--------|
+| 138 | js/http-to-file-access | medium | page-content-store.ts:161 | CWE-073 | Content-addressable storage: file path is SHA-256 hash validated by `/^[a-f0-9]{64}$/i` (path traversal impossible). All callers require authentication + `canUserEditPage()` authorization. Atomic `wx` flag write. CodeQL can't model hash derivation breaking taint chain | DISMISSED (false positive) |
+| 139 | js/request-forgery | critical | fetch-proxy-handler.ts:49 | CWE-918 | URL validated by `isAllowedFetchProxyURL()` before fetch — strict allowlist (localhost/private IPs, http/https only). Redirects blocked (lines 57-61). Not exposed to renderer; requires authenticated WebSocket. 102+ test cases cover validation. CodeQL can't model allowlist breaking taint chain | DISMISSED (false positive) |
+
+### Round 5: Incomplete Sanitization in Changelog Scripts (132-135)
+
+| Alert | Rule | Severity | File | CWE | Triage Rationale | Status |
+|-------|------|----------|------|-----|-----------------|--------|
+| 132 | js/incomplete-sanitization | high | detect-abandoned-approaches.ts:192 | CWE-116 | `.replace(/\|/g, "\\|")` escapes pipes but not backslashes. Output is markdown table in `docs/changelog/evidence/` — display only, no code execution path. Input is git commit subjects (semi-trusted). S3 per rubric: display/logging output | DISMISSED (S3) |
+| 133 | js/incomplete-sanitization | high | detect-abandoned-approaches.ts:193 | CWE-116 | Same pattern as #132 on adjacent line (`file.deleted.message`). Output is markdown documentation, not RegExp or shell exec | DISMISSED (S3) |
+| 134 | js/incomplete-sanitization | high | detect-multiple-attempts.ts:219 | CWE-116 | `.replace(/\|/g, "\\|")` for markdown table cell. Output goes to `docs/changelog/evidence/patterns/multiple-attempts.md`. Developer tooling, not production code | DISMISSED (S3) |
+| 135 | js/incomplete-sanitization | high | track-file-evolution.ts:174 | CWE-116 | `.replace(/\|/g, "\\|")` for markdown table cell. Output goes to `docs/changelog/evidence/files/`. No downstream parsing or execution of the output | DISMISSED (S3) |
+
+**Precedent**: Alert #28 (`prettier.ts:57`) was rated S2 and FIXED because its incompletely-sanitized string fed into `new RegExp()`. These 4 alerts output exclusively to static markdown documentation files — fundamentally different risk profile.
+
 ---
 
-### Files Modified (25 files)
+### Files Modified (26 files)
 
-**Processor App (6 files):**
+**Processor App (5 files):**
 - `apps/processor/src/cache/content-store.ts` — Path traversal prevention, prototype pollution guards, preset validation
 - `apps/processor/src/api/upload.ts` — Path containment checks for temp files
 - `apps/processor/src/api/avatar.ts` — Rate limiting middleware
 - `apps/processor/src/api/optimize.ts` — Prototype pollution prevention for dynamic presets
 - `apps/processor/src/workers/image-processor.ts` — Log injection prevention with sanitized format strings
 
-**Web App (13 files):**
+**Web App (14 files):**
 - `apps/web/src/lib/canvas/css-sanitizer.ts` — URL scheme blocklist expansion
 - `apps/web/src/lib/ai/core/mention-processor.ts` — Bounded regex quantifiers
 - `apps/web/src/lib/ai/core/mcp-tool-converter.ts` — Prototype pollution + log injection prevention
@@ -141,18 +169,87 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 - `apps/web/src/app/api/account/route.ts` — Safe email regex
 - `apps/web/src/app/api/admin/audit-logs/integrity/route.ts` — Input format validation
 - `apps/web/src/app/api/auth/google/callback/route.ts` — Safe URL construction
+- `apps/web/src/app/api/user/integrations/callback/route.ts` — Zod input validation + log sanitization
 - `apps/web/src/app/api/auth/verify-email/route.ts` — Token format validation
 - `apps/web/src/app/api/avatar/[userId]/[filename]/route.ts` — TOCTOU elimination
 - `apps/web/src/stores/page-agents/usePageAgentDashboardStore.ts` — Agent ID validation
 - `apps/web/public/sw.js` — Message origin verification
 
-**Desktop App (2 files):**
+**Desktop App (3 files):**
 - `apps/desktop/src/offline.html` — URL redirect validation
 - `apps/desktop/src/main/auth-storage.ts` — Session data validation
 - `apps/desktop/src/main/ws-client.ts` — WebSocket URL validation
 
-**Shared Packages (3 files):**
+**Shared Packages (4 files):**
 - `packages/lib/src/services/drive-search-service.ts` — Regex injection prevention + type fix
 - `packages/lib/src/services/notification-email-service.ts` — Log injection prevention
 - `packages/lib/src/file-processing/file-processor.ts` — Hardcoded API URLs
 - `packages/lib/src/security/__tests__/path-validator.test.ts` — Secure temp file creation
+
+---
+
+## Batch 2: Google OAuth User-Controlled Bypass (7 alerts dismissed)
+
+**Branch**: `pu/sec-google-oauth`
+**Date**: 2026-04-08
+**Total Alerts**: 7 (all `js/user-controlled-bypass` HIGH)
+**File**: `apps/web/src/app/api/auth/google/callback/route.ts`
+**Disposition**: All 7 dismissed as **false positives** — standard OAuth protocol patterns
+
+### Analysis
+
+CodeQL's `js/user-controlled-bypass` rule flags conditions where user-provided values control branches guarding sensitive actions. In an OAuth callback handler, this is structurally inevitable — the protocol operates on user-delivered query parameters (`code`, `state`, `error`) that the server must validate and act on.
+
+The callback handler has layered security controls:
+1. **HMAC-SHA256 state signing** — state parameter is signed server-side at `/signin`, verified at `/callback` via `verifyOAuthState` with `secureCompare`.
+2. **Single rejection guard** — `if (!code || !verifiedState)` rejects requests without both a valid code and HMAC-verified state.
+3. **Server-side code exchange** — OAuth authorization code is validated by Google's token endpoint, not by local conditions.
+4. **PKCE** — code_challenge/code_verifier prevents authorization code interception.
+5. **`isSafeReturnUrl()` defense-in-depth** — blocks open redirect attacks for any returnUrl.
+6. **State expiration** — 10-minute TTL enforced via `Number.isFinite()` guard. States with missing, NaN, or non-finite timestamps are rejected as expired.
+7. **Rate limiting** — distributed rate limiting on callback IP.
+
+### Alert Disposition
+
+| Alert | Line | CWE | Data Flow | Rating | Reason |
+|-------|------|-----|-----------|--------|--------|
+| #145 | 35 | CWE-807 | `searchParams.get('code')` → `client.getToken()` | S4 | Standard OAuth code exchange; Google validates the code server-side |
+| #146 | 40 | CWE-807 | `searchParams.get('error')` → hardcoded redirect | S4 | Error redirect uses hardcoded params (`oauth_error`/`access_denied`), not user values |
+| #147 | 40 | CWE-807 | Same as #146 | S4 | Duplicate alert on same line |
+| #148 | 76 | CWE-807 | `state` → HMAC `sig` vs `expectedSignature` | S4 | HMAC verification IS the security control; uses `secureCompare` |
+| #151 | 226 | CWE-807 | `sessionService.validateSession(sessionToken)` | S4 | `sessionToken` is server-generated, not user-controlled |
+| #152 | 227 | CWE-807 | Same flow as #151 | S4 | Same flow; CodeQL traces through code exchange but misses trust boundary |
+| #153 | 293 | CWE-807 | `platform === 'desktop'` → `createExchangeCode()` | S4 | `platform` only extracted from HMAC-signed state |
+
+### Existing Test Coverage
+
+- `apps/web/src/app/api/auth/google/callback/__tests__/route.test.ts` — comprehensive callback contract tests
+- `apps/web/src/app/api/auth/google/__tests__/open-redirect-protection.test.ts` — defense-in-depth returnUrl validation
+
+## Batch 8: Shell Command Injection in Infrastructure Tests (4 alerts fixed)
+
+**Branch**: `pu/sec-shell-inject`
+**Date**: 2026-04-08
+**Total Alerts**: 4 (all `js/shell-command-injection-from-environment` MEDIUM)
+**Disposition**: All 4 fixed — switched `execSync()` with string interpolation to `execFileSync()` with array args
+
+### Analysis
+
+CodeQL's `js/shell-command-injection-from-environment` rule flags shell commands built via string interpolation of paths resolved from `__dirname`. While these are test files with hardcoded arguments (no real exploitability), `execSync()` with template literals passes the command through a shell interpreter where metacharacters in paths could theoretically be exploited. Switching to `execFileSync()` with array arguments bypasses the shell entirely, eliminating the injection surface.
+
+**Rating: S2 (Should Fix)** — Not exploitable in practice (test files, hardcoded args, `__dirname`-derived paths), but `execFileSync` with array args is the correct API and the fix is trivial.
+
+### Alert Disposition
+
+| Alert | Rule | Severity | File | CWE | Fix Summary | Status |
+|-------|------|----------|------|-----|-------------|--------|
+| #120 | js/shell-command-injection-from-environment | medium | image-runtime.test.ts:25 | CWE-78 | Refactored `run()`/`composeCmd()` → `composeRun()`/`composeArgs()` using `execFileSync('docker', [...args])` | FIXED |
+| #121 | js/shell-command-injection-from-environment | medium | image-runtime.test.ts:57 | CWE-78 | `cleanup()` now uses `execFileSync('docker', composeArgs(...))` instead of `execSync(composeCmd(...))` | FIXED |
+| #122 | js/shell-command-injection-from-environment | medium | generate-tenant-env.test.ts:9 | CWE-78 | `execSync(\`bash ${SCRIPT} ${args}\`)` → `execFileSync('bash', [SCRIPT, ...args.split(' ').filter(Boolean)])` | FIXED |
+| #123 | js/shell-command-injection-from-environment | medium | tenant-stack.test.ts:10 | CWE-78 | `execSync(\`bash ${SCRIPT} ${args}\`)` → `execFileSync('bash', [SCRIPT, ...args.split(' ').filter(Boolean)])` | FIXED |
+
+### Files Modified (3 files)
+
+- `infrastructure/__tests__/tenant-stack.test.ts` — `execSync` → `execFileSync` with array args
+- `infrastructure/__tests__/generate-tenant-env.test.ts` — `execSync` → `execFileSync` with array args
+- `infrastructure/scripts/__tests__/image-runtime.test.ts` — Refactored `run()`/`composeCmd()` to `composeRun()`/`composeArgs()` using `execFileSync`

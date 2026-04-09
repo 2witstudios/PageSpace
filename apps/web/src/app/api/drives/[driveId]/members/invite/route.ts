@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { driveMembers, drives, pagePermissions, pages, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -49,29 +48,18 @@ export async function POST(
     };
 
     // Check if user is drive owner or admin
-    const drive = await db.select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .limit(1);
+    const drive = await driveInviteRepository.findDriveById(driveId);
 
-    if (drive.length === 0) {
+    if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive[0].ownerId === userId;
+    const isOwner = drive.ownerId === userId;
     let isAdmin = false;
 
     if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
+      const adminMembership = await driveInviteRepository.findAdminMembership(driveId, userId);
+      isAdmin = adminMembership !== null;
     }
 
     if (!isOwner && !isAdmin) {
@@ -79,44 +67,38 @@ export async function POST(
     }
 
     // Check if member already exists
-    const existingMember = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, driveId),
-        eq(driveMembers.userId, invitedUserId)
-      ))
-      .limit(1);
+    const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
 
     let memberId: string;
-    
-    if (existingMember.length === 0) {
-      // Add as drive member with specified role
-      const newMember = await db.insert(driveMembers)
-        .values({
-          driveId,
-          userId: invitedUserId,
-          role,
-          customRoleId: customRoleId || null,
-          invitedBy: userId,
-          acceptedAt: new Date(), // Auto-accept for now
-        })
-        .returning();
 
-      memberId = newMember[0].id;
+    if (!existingMember) {
+      // Add as drive member with specified role
+      const newMember = await driveInviteRepository.createDriveMember({
+        driveId,
+        userId: invitedUserId,
+        role,
+        customRoleId: customRoleId || null,
+        invitedBy: userId,
+        acceptedAt: new Date(),
+      });
+
+      memberId = newMember.id;
     } else {
       // Update role if member exists
-      await db.update(driveMembers)
-        .set({ role, customRoleId: customRoleId || null })
-        .where(eq(driveMembers.id, existingMember[0].id));
+      await driveInviteRepository.updateDriveMemberRole(
+        existingMember.id,
+        role,
+        customRoleId || null
+      );
 
-      memberId = existingMember[0].id;
+      memberId = existingMember.id;
     }
 
     // Broadcast member added/updated event to the affected user
     await broadcastDriveMemberEvent(
       createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
         role,
-        driveName: drive[0].name
+        driveName: drive.name
       })
     );
 
@@ -127,11 +109,7 @@ export async function POST(
     ]);
 
     // Validate that all pageIds belong to this drive
-    const validPages = await db.select({ id: pages.id })
-      .from(pages)
-      .where(eq(pages.driveId, driveId));
-
-    const validPageIds = new Set(validPages.map(p => p.id));
+    const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
 
     // Add permissions for each page
     const permissionPromises = permissions.map(async (perm) => {
@@ -141,39 +119,28 @@ export async function POST(
       }
 
       // Check if permission already exists
-      const existing = await db.select()
-        .from(pagePermissions)
-        .where(and(
-          eq(pagePermissions.pageId, perm.pageId),
-          eq(pagePermissions.userId, invitedUserId)
-        ))
-        .limit(1);
+      const existing = await driveInviteRepository.findPagePermission(perm.pageId, invitedUserId);
 
-      if (existing.length > 0) {
+      if (existing) {
         // Update existing permission
-        return db.update(pagePermissions)
-          .set({
-            canView: perm.canView,
-            canEdit: perm.canEdit,
-            canShare: perm.canShare,
-            grantedBy: userId,
-            grantedAt: new Date(),
-          })
-          .where(eq(pagePermissions.id, existing[0].id))
-          .returning();
+        return driveInviteRepository.updatePagePermission(existing.id, {
+          canView: perm.canView,
+          canEdit: perm.canEdit,
+          canShare: perm.canShare,
+          grantedBy: userId,
+          grantedAt: new Date(),
+        });
       } else {
         // Create new permission
-        return db.insert(pagePermissions)
-          .values({
-            pageId: perm.pageId,
-            userId: invitedUserId,
-            canView: perm.canView,
-            canEdit: perm.canEdit,
-            canShare: perm.canShare,
-            canDelete: false, // Never grant delete via invite
-            grantedBy: userId,
-          })
-          .returning();
+        return driveInviteRepository.createPagePermission({
+          pageId: perm.pageId,
+          userId: invitedUserId,
+          canView: perm.canView,
+          canEdit: perm.canEdit,
+          canShare: perm.canShare,
+          canDelete: false, // Never grant delete via invite
+          grantedBy: userId,
+        });
       }
     });
 
@@ -197,15 +164,12 @@ export async function POST(
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
-    const invitedUser = await db.query.users.findFirst({
-      where: eq(users.id, invitedUserId),
-      columns: { email: true },
-    });
+    const invitedUserEmail = await driveInviteRepository.findUserEmail(invitedUserId);
     logMemberActivity(userId, 'member_add', {
       driveId,
-      driveName: drive[0].name,
+      driveName: drive.name,
       targetUserId: invitedUserId,
-      targetUserEmail: invitedUser?.email,
+      targetUserEmail: invitedUserEmail,
       role,
     }, actorInfo);
 

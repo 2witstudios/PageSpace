@@ -58,6 +58,14 @@ export async function getLinksForFile(fileId: string): Promise<FileLink[]> {
   return results;
 }
 
+export async function getFileDriveId(fileId: string): Promise<string | undefined> {
+  const result = await db.query.files.findFirst({
+    where: eq(files.id, fileId),
+    columns: { driveId: true },
+  });
+  return result?.driveId ?? undefined;
+}
+
 export async function getLinkForPage(pageId: string): Promise<FileLink | null> {
   const [row] = await db
     .select({

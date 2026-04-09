@@ -10,6 +10,7 @@ import {
   Table,
   CheckSquare,
   Code,
+  Terminal,
 } from 'lucide-react';
 import { PageType, getPageTypeIconName } from '@pagespace/lib/client-safe';
 
@@ -31,6 +32,7 @@ const iconMap = {
   Table,
   CheckSquare,
   Code,
+  Terminal,
 } as const;
 
 export function PageTypeIcon({ type, className, isTaskLinked }: PageTypeIconProps) {

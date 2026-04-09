@@ -84,12 +84,12 @@ export function GoogleOneTap({
           }
 
           // Handle platform-specific token storage
-          if (isDesktop && window.electron && data.tokens) {
+          if (isDesktop && window.electron && data.sessionToken && data.csrfToken && data.deviceToken) {
             // Desktop: Store in Electron secure storage
             await window.electron.auth.storeSession({
-              sessionToken: data.tokens.sessionToken,
-              csrfToken: data.tokens.csrfToken,
-              deviceToken: data.tokens.deviceToken,
+              sessionToken: data.sessionToken,
+              csrfToken: data.csrfToken,
+              deviceToken: data.deviceToken,
             });
           } else if (data.deviceToken) {
             // Web: Store device token in localStorage for 90-day persistence

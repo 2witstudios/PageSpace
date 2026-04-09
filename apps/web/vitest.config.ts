@@ -16,14 +16,24 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
       exclude: [
         '**/*.d.ts',
         '**/*.config.*',
         '**/.next/**',
         '**/dist/**',
         '**/test/**',
+        '**/drizzle/**',
+        '**/node_modules/**',
       ],
+      thresholds: {
+        lines: 44,
+        branches: 85,
+        functions: 56,
+        statements: 44,
+      },
     },
   },
   resolve: {

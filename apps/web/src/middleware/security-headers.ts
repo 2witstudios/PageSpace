@@ -42,7 +42,7 @@ const buildCSPString = (directives: CSPDirectives): string =>
     .map(([key, values]) => `${key} ${values.join(' ')}`)
     .join('; ');
 
-const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
+const IS_CLOUD = process.env.DEPLOYMENT_MODE !== 'onprem' && process.env.DEPLOYMENT_MODE !== 'tenant';
 
 export const buildCSPPolicy = (nonce: string): string => {
   const scriptSrc = [
@@ -54,8 +54,8 @@ export const buildCSPPolicy = (nonce: string): string => {
   const styleSrc = ["'self'", "'unsafe-inline'"];
   const frameSrc: string[] = [];
 
-  // On-prem: no Google or Stripe external origins needed
-  if (!IS_ONPREM) {
+  // Cloud-only: Google and Stripe external origins
+  if (IS_CLOUD) {
     scriptSrc.push('https://accounts.google.com');
     styleSrc.push('https://accounts.google.com');
     frameSrc.push('https://accounts.google.com', 'https://js.stripe.com');
@@ -64,7 +64,7 @@ export const buildCSPPolicy = (nonce: string): string => {
   const connectSrc = ["'self'", 'ws:', 'wss:'];
 
   // Cloud mode: allow Stripe client SDK and Google One Tap connections
-  if (!IS_ONPREM) {
+  if (IS_CLOUD) {
     connectSrc.push('https://accounts.google.com', 'https://*.stripe.com');
   }
 

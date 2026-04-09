@@ -28,20 +28,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
-  and: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -60,6 +53,8 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -68,6 +63,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -80,6 +76,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'mock-device-token',
+    deviceTokenRecordId: 'device-record-id',
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -107,24 +107,19 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn(() => '127.0.0.1'),
-  // Use actual implementation for isSafeReturnUrl so redirect tests are valid
-  isSafeReturnUrl: (url: string | undefined): boolean => {
-    if (!url) return true;
-    if (!url.startsWith('/')) return false;
-    if (url.startsWith('//') || url.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(url)) return false;
-    try {
-      const decoded = decodeURIComponent(url);
-      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-      if (/[a-z]+:/i.test(decoded)) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  },
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
+
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+  return {
+    getClientIP: vi.fn(() => '127.0.0.1'),
+    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+    isSafeReturnUrl: actual.isSafeReturnUrl,
+  };
+});
 
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
@@ -141,7 +136,7 @@ vi.mock('crypto', async () => {
   };
 });
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -170,8 +165,9 @@ const createCallbackRequest = (params: Record<string, string>) => {
 };
 
 const createSignedState = (data: Record<string, unknown>) => {
+  const withTimestamp = { timestamp: Date.now(), ...data };
   const stateData = {
-    data,
+    data: withTimestamp,
     sig: 'valid-signature',
   };
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
@@ -195,19 +191,10 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
-
-    vi.mocked(db.insert).mockImplementation(() => ({
-      values: vi.fn(() => ({
-        returning: vi.fn(() => Promise.resolve([mockExistingUser])),
-      })),
-    } as never));
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -215,7 +202,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('session-based authentication', () => {
-    it('given successful OAuth, should create session and redirect with CSRF token', async () => {
+    it('given successful OAuth, should create session and redirect without CSRF token in URL', async () => {
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard',
@@ -229,27 +216,30 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockExistingUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockExistingUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '127.0.0.1',
+      });
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][0]).toBeInstanceOf(Headers);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
 
       // Response should be a redirect
       expect(response.status).toBe(307);
 
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      expect(location).toContain('csrfToken=mock-csrf-token');
+      const location = response.headers.get('location')!;
       expect(location).toContain('auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {
+      const { revokeSessionsForLogin } = await import('@/lib/auth');
+
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard',
@@ -262,9 +252,11 @@ describe('GET /api/auth/google/callback', () => {
 
       await GET(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockExistingUser.id,
-        'new_login'
+        undefined,
+        'new_login',
+        'Google OAuth'
       );
     });
 
@@ -305,8 +297,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
+      const location = response.headers.get('location')!;
       expect(location).toContain('/dashboard/my-drive');
     });
   });

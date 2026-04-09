@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'mock-device-token',
+    deviceTokenRecordId: 'device-record-id',
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -31,24 +35,15 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
-  // Use actual implementation for isSafeReturnUrl so security tests are valid
-  isSafeReturnUrl: (url: string | undefined): boolean => {
-    if (!url) return true;
-    if (!url.startsWith('/')) return false;
-    if (url.startsWith('//') || url.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(url)) return false;
-    try {
-      const decoded = decodeURIComponent(url);
-      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-      if (/[a-z]+:/i.test(decoded)) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  },
-}));
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+  return {
+    getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+    isSafeReturnUrl: actual.isSafeReturnUrl,
+  };
+});
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
@@ -67,35 +62,31 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'user-123',
-          name: 'Test User',
-          email: 'test@example.com',
-          googleId: 'google-id-123',
-          tokenVersion: 1,
-          role: 'user',
-          provider: 'google',
-          password: null,
-        }),
-      },
-    },
-    insert: vi.fn().mockImplementation(() => ({
-      values: vi.fn().mockResolvedValue(undefined),
-    })),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn().mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'google',
+      password: null,
     }),
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'google',
+      password: null,
+    }),
+    createUser: vi.fn(),
+    updateUser: vi.fn().mockResolvedValue(undefined),
   },
-  eq: vi.fn(),
-  or: vi.fn(),
-  and: vi.fn(),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -114,6 +105,8 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  generatePKCE: vi.fn().mockResolvedValue(null),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -122,6 +115,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -134,6 +128,10 @@ vi.mock('@paralleldrive/cuid2', () => ({
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'existing-drive', created: false }),
+}));
+
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('crypto', async () => {
@@ -168,7 +166,8 @@ const createCallbackRequest = (params: Record<string, string>) => {
 };
 
 const createSignedState = (data: Record<string, unknown>) => {
-  const stateData = { data, sig: 'valid-signature' };
+  const withTimestamp = { timestamp: Date.now(), ...data };
+  const stateData = { data: withTimestamp, sig: 'valid-signature' };
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
@@ -204,7 +203,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toBeTruthy();
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com\//);
     });
 
     it('given absolute external URL, should reject with 400', async () => {
@@ -218,7 +217,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given protocol-relative URL (//evil.com), should reject with 400', async () => {
@@ -232,7 +231,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given backslash URL (/\\evil.com), should reject with 400', async () => {
@@ -246,7 +245,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given javascript: URL, should reject with 400', async () => {
@@ -259,7 +258,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given URL-encoded malicious URL, should reject with 400', async () => {
@@ -273,7 +272,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given no returnUrl, should accept (defaults to /dashboard)', async () => {
@@ -285,7 +284,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toBeTruthy();
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com\//);
     });
   });
 
@@ -306,15 +305,13 @@ describe('Open Redirect Protection', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      // Should NOT redirect to evil.com
+      const location = response.headers.get('location')!;
       expect(location).not.toContain('evil.com');
-      // Should redirect to dashboard
-      expect(location).toContain('/dashboard');
+      expect(location).toContain('/dashboard?auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
-    it('given safe returnUrl in state, should redirect to that path with CSRF token', async () => {
+    it('given safe returnUrl in state, should redirect to that path without CSRF token in URL', async () => {
       const state = createSignedState({
         platform: 'web',
         returnUrl: '/dashboard/my-drive',
@@ -328,10 +325,9 @@ describe('Open Redirect Protection', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      expect(location).toContain('/dashboard/my-drive');
-      expect(location).toContain('csrfToken=');
+      const location = response.headers.get('location')!;
+      expect(location).toContain('/dashboard/my-drive?auth=success');
+      expect(location).not.toContain('csrfToken');
     });
 
     it('given protocol-relative URL in legacy state, should redirect to /dashboard', async () => {

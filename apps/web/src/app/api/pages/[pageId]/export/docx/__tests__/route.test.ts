@@ -43,6 +43,12 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('marked', () => ({
+  marked: {
+    parse: vi.fn(() => Promise.resolve('<h1>Hello World</h1>')),
+  },
+}));
+
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
@@ -190,12 +196,28 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
       expect(response.headers.get('Content-Disposition')).toContain('.docx');
     });
 
+    it('converts markdown content to HTML before generating DOCX', async () => {
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+        ...mockPage(),
+        contentMode: 'markdown',
+        content: '# Hello World',
+      } as never);
+
+      await GET(createRequest(), { params: mockParams });
+
+      // generateDOCX should receive HTML converted from markdown, not the raw markdown
+      expect(generateDOCX).toHaveBeenCalledWith(
+        '<h1>Hello World</h1>',
+        'Test Document'
+      );
+    });
+
     it('uses default content when page has no content', async () => {
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ content: '' }) as never);
 
       await GET(createRequest(), { params: mockParams });
 
-      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', expect.any(String));
+      expect(generateDOCX).toHaveBeenCalledWith('<p>No content</p>', 'Test Document');
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {
@@ -215,17 +237,17 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'docx',
           pageTitle: 'Test Document',
-        })
+        }
       );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when DOCX generation fails', async () => {
-      vi.mocked(generateDOCX).mockRejectedValue(new Error('Generation failed'));
+      vi.mocked(generateDOCX).mockRejectedValueOnce(new Error('Generation failed'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -235,7 +257,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

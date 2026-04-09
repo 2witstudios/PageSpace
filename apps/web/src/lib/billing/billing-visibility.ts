@@ -1,5 +1,5 @@
 import { isIOS } from '@/lib/capacitor-bridge';
-import { isOnPrem } from '@/lib/deployment-mode';
+import { isBillingEnabled } from '@/lib/deployment-mode';
 
 /**
  * Paths that contain billing/subscription functionality.
@@ -9,12 +9,12 @@ export const BILLING_PATHS = ['/settings/billing', '/settings/plan'] as const;
 
 /**
  * Determines whether billing UI should be shown.
- * Returns false for iOS Capacitor apps and on-prem deployments.
+ * Returns false for iOS Capacitor apps, on-prem, and tenant deployments.
  *
  * Use this for non-React contexts. For React components, use `useBillingVisibility` hook.
  */
 export function shouldShowBilling(): boolean {
-  if (isOnPrem()) return false;
+  if (!isBillingEnabled()) return false;
   return !isIOS();
 }
 

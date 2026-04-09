@@ -161,6 +161,38 @@ describe('useSocketStore', () => {
     });
   });
 
+  describe('socket URL resolution', () => {
+    it('given NEXT_PUBLIC_REALTIME_URL is undefined, should pass undefined as first arg to io()', async () => {
+      delete process.env.NEXT_PUBLIC_REALTIME_URL;
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is set, should pass that URL as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = 'https://rt.example.com';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBe('https://rt.example.com');
+    });
+
+    it('given NEXT_PUBLIC_REALTIME_URL is empty string, should pass undefined as first arg to io()', async () => {
+      process.env.NEXT_PUBLIC_REALTIME_URL = '';
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      const callArgs = vi.mocked(io).mock.calls[0];
+      expect(callArgs[0]).toBeUndefined();
+    });
+  });
+
   describe('connection creation', () => {
     it('given valid token available, should create Socket.IO client with auth.token', async () => {
       const mockToken = 'ps_sock_test-token';
@@ -233,18 +265,42 @@ describe('useSocketStore', () => {
       expect(mockSocket.io.opts.reconnection).toBe(false);
     });
 
-    it('given Authentication error, should attempt token refresh via unified auth-fetch after delay', async () => {
+    it('given Authentication error on web, should first try fetching a fresh socket token', async () => {
       vi.useFakeTimers();
 
       const { connect } = useSocketStore.getState();
       await connect();
+
+      // Clear initial fetch mock calls from connect()
+      vi.mocked(global.fetch).mockClear();
 
       mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
 
       // Fast-forward past the 2 second delay
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Should use the unified refreshAuthSession instead of direct fetch
+      // Web path should try getSocketToken() first (session cookie may still be valid)
+      expect(global.fetch).toHaveBeenCalledWith('/api/auth/socket-token', { credentials: 'include' });
+      // Since fetch returns a valid token, refreshAuthSession should NOT be called
+      expect(mockRefreshAuthSession).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    it('given socket token fetch fails after auth error, should fall back to refreshAuthSession', async () => {
+      vi.useFakeTimers();
+
+      const { connect } = useSocketStore.getState();
+      await connect();
+
+      // Make socket-token fetch fail after auth error so it falls through
+      global.fetch = mockSocketTokenFetch(null);
+
+      mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
+
+      await vi.advanceTimersByTimeAsync(2100);
+
+      // Should fall back to unified refreshAuthSession
       expect(mockRefreshAuthSession).toHaveBeenCalled();
 
       vi.useRealTimers();
@@ -259,16 +315,27 @@ describe('useSocketStore', () => {
       // Mock refreshAuthSession to return success
       mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
 
-      // Mock fetch to return different tokens for different calls to socket-token endpoint
+      // Mock fetch: first call succeeds (initial connect), second fails (trigger fallback to refresh),
+      // third succeeds (post-refresh token fetch)
       let callCount = 0;
       global.fetch = vi.fn().mockImplementation((url: string) => {
         if (url === '/api/auth/socket-token') {
           callCount++;
-          // First call returns initial token, subsequent calls return new token
-          const token = callCount === 1 ? 'ps_sock_initial-token' : newToken;
+          if (callCount === 1) {
+            // Initial connect succeeds
+            return Promise.resolve({
+              ok: true,
+              json: () => Promise.resolve({ token: 'ps_sock_initial-token', expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            });
+          }
+          if (callCount === 2) {
+            // First retry after auth error fails — triggers fallback to refreshAuthSession
+            return Promise.resolve({ ok: false, status: 401 });
+          }
+          // After refresh, return new token
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
+            json: () => Promise.resolve({ token: newToken, expiresAt: new Date(Date.now() + 300000).toISOString() }),
           });
         }
         return Promise.resolve({ ok: true });
@@ -281,7 +348,7 @@ describe('useSocketStore', () => {
 
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Verify unified refresh was called
+      // Verify unified refresh was called (because socket-token fetch failed)
       expect(mockRefreshAuthSession).toHaveBeenCalled();
       // Verify session cache was cleared
       expect(mockClearSessionCache).toHaveBeenCalled();
@@ -303,11 +370,14 @@ describe('useSocketStore', () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
+      // Make socket-token fetch fail so it falls through to refreshAuthSession
+      global.fetch = mockSocketTokenFetch(null);
+
       mockSocket._trigger('connect_error', new Error('Authentication error: Invalid token'));
 
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Verify unified refresh was attempted
+      // Verify unified refresh was attempted (after socket-token fetch failed)
       expect(mockRefreshAuthSession).toHaveBeenCalled();
       // Verify connection status is set to error
       const { connectionStatus } = useSocketStore.getState();
@@ -361,9 +431,11 @@ describe('useSocketStore', () => {
 
       disconnect();
 
+      // Called twice: once during connect() (dedupe cleanup) and once during disconnect()
+      expect(windowEventMock.removeEventListener).toHaveBeenCalledTimes(2);
       expect(windowEventMock.removeEventListener).toHaveBeenCalledWith(
         'auth:refreshed',
-        expect.any(Function)
+        expect.any(Function),
       );
     });
 

@@ -1,47 +1,32 @@
 'use client';
 
 import { useMemo } from 'react';
-import { User, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { cn } from '@/lib/utils';
-import {
-  type TaskStatus,
-  type TaskPriority,
-} from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Drive, StatusConfigsByTaskList } from './types';
 import { aggregateStatuses } from './task-helpers';
+import {
+  type DueDateFilter,
+  type AssigneeFilter,
+  type FilterValues,
+  DriveSelect,
+  StatusSelect,
+  PrioritySelect,
+  DueDateSelect,
+  AssigneeToggle,
+} from './FilterComponents';
 
-type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
-type AssigneeFilter = 'mine' | 'all';
+export type { DueDateFilter, AssigneeFilter, FilterValues };
 
 export interface FilterControlsProps {
   layout: 'mobile' | 'desktop';
   context: 'user' | 'drive';
   drives: Drive[];
   selectedDriveId: string | undefined;
-  filters: {
-    status?: TaskStatus;
-    priority?: TaskPriority;
-    driveId?: string;
-    dueDateFilter?: DueDateFilter;
-    assigneeFilter?: AssigneeFilter;
-  };
+  filters: FilterValues;
   hasActiveFilters: boolean;
   statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
-  onFiltersChange: (filters: Partial<{
-    status?: TaskStatus;
-    priority?: TaskPriority;
-    dueDateFilter?: DueDateFilter;
-    assigneeFilter?: AssigneeFilter;
-  }>) => void;
+  onFiltersChange: (filters: Partial<FilterValues>) => void;
   onClearFilters: () => void;
 }
 
@@ -58,87 +43,9 @@ export function FilterControls({
   onClearFilters,
 }: FilterControlsProps) {
   const isMobile = layout === 'mobile';
-
   const aggregatedStatuses = useMemo(
     () => aggregateStatuses(statusConfigsByTaskList),
     [statusConfigsByTaskList],
-  );
-
-  // Drive selector
-  const DriveSelector = (
-    <Select
-      value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-      onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
-    >
-      <SelectTrigger className={cn(isMobile ? 'h-10 min-w-[170px]' : 'w-[180px]')}>
-        <SelectValue placeholder="All drives" />
-      </SelectTrigger>
-      <SelectContent>
-        {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-        {drives.map((drive) => (
-          <SelectItem key={drive.id} value={drive.id}>
-            {drive.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-
-  // Status filter
-  const StatusFilter = (
-    <Select
-      value={filters.status || 'all'}
-      onValueChange={(value) => onFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-    >
-      <SelectTrigger className={cn(isMobile ? 'h-10 min-w-[145px]' : 'w-[140px]')}>
-        <SelectValue placeholder="All statuses" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">All statuses</SelectItem>
-        {aggregatedStatuses.map((s) => (
-          <SelectItem key={s.slug} value={s.slug}>
-            {s.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-
-  // Priority filter
-  const PriorityFilter = (
-    <Select
-      value={filters.priority || 'all'}
-      onValueChange={(value) => onFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-    >
-      <SelectTrigger className={cn(isMobile ? 'h-10 min-w-[140px]' : 'w-[130px]')}>
-        <SelectValue placeholder="All priorities" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">All priorities</SelectItem>
-        <SelectItem value="high">High</SelectItem>
-        <SelectItem value="medium">Medium</SelectItem>
-        <SelectItem value="low">Low</SelectItem>
-      </SelectContent>
-    </Select>
-  );
-
-  // Due date filter
-  const DueDateFilter = (
-    <Select
-      value={filters.dueDateFilter || 'all'}
-      onValueChange={(value) => onFiltersChange({ dueDateFilter: value as DueDateFilter })}
-    >
-      <SelectTrigger className={cn(isMobile ? 'h-10 min-w-[140px]' : 'w-[140px]')}>
-        <SelectValue placeholder="Any date" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">Any date</SelectItem>
-        <SelectItem value="overdue">Overdue</SelectItem>
-        <SelectItem value="today">Due today</SelectItem>
-        <SelectItem value="this_week">This week</SelectItem>
-        <SelectItem value="upcoming">Upcoming</SelectItem>
-      </SelectContent>
-    </Select>
   );
 
   if (isMobile) {
@@ -150,42 +57,39 @@ export function FilterControls({
           aria-label="Filter options"
         >
           <div className="flex w-max min-w-full gap-2">
-            {DriveSelector}
-            {StatusFilter}
-            {PriorityFilter}
-            {DueDateFilter}
+            <DriveSelect
+              context={context}
+              drives={drives}
+              selectedDriveId={selectedDriveId}
+              driveFilterId={filters.driveId}
+              onDriveChange={onDriveChange}
+              triggerClassName="h-10 min-w-[170px]"
+            />
+            <StatusSelect
+              value={filters.status}
+              statuses={aggregatedStatuses}
+              onChange={(s) => onFiltersChange({ status: s })}
+              triggerClassName="h-10 min-w-[145px]"
+            />
+            <PrioritySelect
+              value={filters.priority}
+              onChange={(p) => onFiltersChange({ priority: p })}
+              triggerClassName="h-10 min-w-[140px]"
+            />
+            <DueDateSelect
+              value={filters.dueDateFilter}
+              onChange={(d) => onFiltersChange({ dueDateFilter: d })}
+              triggerClassName="h-10 min-w-[140px]"
+            />
           </div>
         </div>
 
-        {/* Assignee Filter - Mobile */}
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => onFiltersChange({ assigneeFilter: 'mine' })}
-            className={cn(
-              'flex h-10 items-center justify-center gap-1.5 rounded-md border text-sm transition-colors',
-              filters.assigneeFilter !== 'all'
-                ? 'border-border bg-background text-foreground shadow-sm'
-                : 'border-transparent bg-muted text-muted-foreground'
-            )}
-            title="My tasks"
-          >
-            <User className="h-4 w-4" />
-            <span>My tasks</span>
-          </button>
-          <button
-            onClick={() => onFiltersChange({ assigneeFilter: 'all' })}
-            className={cn(
-              'flex h-10 items-center justify-center gap-1.5 rounded-md border text-sm transition-colors',
-              filters.assigneeFilter === 'all'
-                ? 'border-border bg-background text-foreground shadow-sm'
-                : 'border-transparent bg-muted text-muted-foreground'
-            )}
-            title="All tasks"
-          >
-            <Users className="h-4 w-4" />
-            <span>All tasks</span>
-          </button>
-        </div>
+        <AssigneeToggle
+          variant="full"
+          value={filters.assigneeFilter || 'mine'}
+          onChange={(f) => onFiltersChange({ assigneeFilter: f })}
+          className="grid grid-cols-2"
+        />
 
         {hasActiveFilters && (
           <Button
@@ -201,43 +105,36 @@ export function FilterControls({
     );
   }
 
-  // Desktop layout
   return (
     <>
-      {DriveSelector}
-      {StatusFilter}
-      {PriorityFilter}
-      {DueDateFilter}
-
-      {/* Assignee Filter - Desktop */}
-      <div className="flex items-center bg-muted rounded-md p-0.5">
-        <button
-          onClick={() => onFiltersChange({ assigneeFilter: 'mine' })}
-          className={cn(
-            'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-            filters.assigneeFilter !== 'all'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-          title="My tasks"
-        >
-          <User className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">My tasks</span>
-        </button>
-        <button
-          onClick={() => onFiltersChange({ assigneeFilter: 'all' })}
-          className={cn(
-            'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-            filters.assigneeFilter === 'all'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          )}
-          title="All tasks"
-        >
-          <Users className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">All tasks</span>
-        </button>
-      </div>
+      <DriveSelect
+        context={context}
+        drives={drives}
+        selectedDriveId={selectedDriveId}
+        driveFilterId={filters.driveId}
+        onDriveChange={onDriveChange}
+        triggerClassName="w-[180px]"
+      />
+      <StatusSelect
+        value={filters.status}
+        statuses={aggregatedStatuses}
+        onChange={(s) => onFiltersChange({ status: s })}
+        triggerClassName="w-[140px]"
+      />
+      <PrioritySelect
+        value={filters.priority}
+        onChange={(p) => onFiltersChange({ priority: p })}
+        triggerClassName="w-[130px]"
+      />
+      <DueDateSelect
+        value={filters.dueDateFilter}
+        onChange={(d) => onFiltersChange({ dueDateFilter: d })}
+        triggerClassName="w-[140px]"
+      />
+      <AssigneeToggle
+        value={filters.assigneeFilter || 'mine'}
+        onChange={(f) => onFiltersChange({ assigneeFilter: f })}
+      />
     </>
   );
 }

@@ -187,6 +187,13 @@ describe('page-content-store', () => {
       await expect(readPageContent('invalid-ref')).rejects.toThrow('Invalid content reference');
     });
 
+    it('rejects path traversal attempts via content reference', async () => {
+      await expect(readPageContent('../../../etc/passwd')).rejects.toThrow('Invalid content reference');
+      // URL-encoded traversal also rejected: `%` is not in [a-f0-9], so the
+      // encoded string fails CONTENT_REF_REGEX before any path resolution.
+      await expect(readPageContent('..%2F..%2F..%2Fetc%2Fpasswd')).rejects.toThrow('Invalid content reference');
+    });
+
     it('throws for non-existent content', async () => {
       const fakeRef = 'a'.repeat(64);
       await expect(readPageContent(fakeRef)).rejects.toThrow();

@@ -55,46 +55,10 @@ const LANGUAGES = [
   { value: 'scss', label: 'SCSS' },
 ] as const;
 
-const EXTENSION_MAP: Record<string, string> = {
-  'js': 'javascript',
-  'jsx': 'javascript',
-  'ts': 'typescript',
-  'tsx': 'typescript',
-  'py': 'python',
-  'java': 'java',
-  'c': 'c',
-  'cpp': 'cpp',
-  'cs': 'csharp',
-  'rb': 'ruby',
-  'go': 'go',
-  'rs': 'rust',
-  'php': 'php',
-  'swift': 'swift',
-  'kt': 'kotlin',
-  'html': 'html',
-  'css': 'css',
-  'scss': 'scss',
-  'json': 'json',
-  'xml': 'xml',
-  'yaml': 'yaml',
-  'yml': 'yaml',
-  'md': 'markdown',
-  'sh': 'shell',
-  'bash': 'shell',
-  'zsh': 'shell',
-  'sql': 'sql',
-  'graphql': 'graphql',
-  'gql': 'graphql',
-  'sudo': 'sudolang',
-  'sudolang': 'sudolang',
-};
+import { detectLanguageFromFilename } from '@pagespace/lib/utils/language-detection';
 
 function detectLanguageFromTitle(title: string): string {
-  const ext = title.toLowerCase().split('.').pop();
-  if (ext && ext in EXTENSION_MAP) {
-    return EXTENSION_MAP[ext];
-  }
-  return 'plaintext';
+  return detectLanguageFromFilename(title);
 }
 
 const CodePageView = ({ pageId }: CodePageViewProps) => {

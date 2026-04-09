@@ -58,6 +58,8 @@ services:
         - NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=${NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB}
         - NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID}
         - NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"
     depends_on:

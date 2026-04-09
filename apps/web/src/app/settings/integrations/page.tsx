@@ -12,12 +12,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package } from 'lucide-react';
+import { ArrowLeft, Cable, Calendar, Plug2, Loader2, AlertCircle, Package, Clock, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useProviders, useUserConnections, useAvailableBuiltins } from '@/hooks/useIntegrations';
+import { useProviders, useUserConnections, useAvailableBuiltins, useGoogleCalendarStatus } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
-import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
+import { DisconnectWithAgentCount } from '@/components/integrations/DisconnectConfirmDialog';
 import { del, patch, post } from '@/lib/auth/auth-fetch';
 import type { SafeProvider, SafeConnection } from '@/components/integrations/types';
 
@@ -34,6 +34,7 @@ export default function IntegrationsSettingsPage() {
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
   const { builtins, isLoading: loadingBuiltins, error: builtinsError, mutate: mutateBuiltins } = useAvailableBuiltins();
+  const { connected: gcalConnected, connection: gcalConnection, error: gcalError, isLoading: gcalLoading } = useGoogleCalendarStatus();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -103,13 +104,6 @@ export default function IntegrationsSettingsPage() {
 
   const isLoading = loadingProviders || loadingConnections;
 
-  const getProviderDetailHref = (connection: SafeConnection) => {
-    if (connection.provider?.slug === 'google-calendar') {
-      return '/settings/integrations/google-calendar';
-    }
-    return null;
-  };
-
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
       <div className="mb-8">
@@ -129,6 +123,66 @@ export default function IntegrationsSettingsPage() {
       </div>
 
       <div className="space-y-6">
+        {/* Google Calendar */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" />
+              Google Calendar
+            </CardTitle>
+            <CardDescription>
+              Sync events with Google Calendar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {gcalLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : gcalError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load Google Calendar status</span>
+              </div>
+            ) : gcalConnected && gcalConnection ? (
+              <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+                <div className="flex items-center gap-3 min-w-0">
+                  <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <span className="font-medium">Connected</span>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {gcalConnection.googleEmail}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => router.push('/settings/integrations/google-calendar')}
+                >
+                  Manage
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                  <div className="min-w-0">
+                    <span className="font-medium">Not connected</span>
+                    <p className="text-xs text-muted-foreground">
+                      Connect your Google Calendar to sync events.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => router.push('/settings/integrations/google-calendar')}
+                >
+                  Set up
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Connected Integrations */}
         <Card>
           <CardHeader>
@@ -157,72 +211,15 @@ export default function IntegrationsSettingsPage() {
               </p>
             ) : (
               <div className="space-y-3">
-                {connections.map((connection) => {
-                  const detailHref = getProviderDetailHref(connection);
-                  return (
-                    <div
-                      key={connection.id}
-                      className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                          <Plug2 className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium truncate">{connection.name}</span>
-                            <IntegrationStatusBadge status={connection.status} />
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {connection.provider?.name}
-                            {connection.visibility && (
-                              <> &middot; {visibilityLabels[connection.visibility] ?? connection.visibility}</>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {connection.visibility && (
-                          <Select
-                            value={connection.visibility}
-                            onValueChange={(v) => handleVisibilityChange(connection.id, v)}
-                            disabled={updatingVisibility === connection.id}
-                          >
-                            <SelectTrigger className="w-[130px] h-8 text-xs">
-                              {updatingVisibility === connection.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <SelectValue />
-                              )}
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="private">Private</SelectItem>
-                              <SelectItem value="owned_drives">Your drives</SelectItem>
-                              <SelectItem value="all_drives">All drives</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                        {detailHref && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => router.push(detailHref)}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDisconnectConnection(connection)}
-                        >
-                          Disconnect
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {connections.map((connection) => (
+                  <ConnectionRow
+                    key={connection.id}
+                    connection={connection}
+                    updatingVisibility={updatingVisibility === connection.id}
+                    onVisibilityChange={(v) => handleVisibilityChange(connection.id, v)}
+                    onDisconnect={() => setDisconnectConnection(connection)}
+                  />
+                ))}
               </div>
             )}
           </CardContent>
@@ -362,13 +359,105 @@ export default function IntegrationsSettingsPage() {
         onConnected={() => mutateConnections()}
       />
 
-      {/* Disconnect Dialog */}
-      <DisconnectConfirmDialog
-        open={!!disconnectConnection}
+      {/* Disconnect Dialog with agent count */}
+      <DisconnectWithAgentCount
+        connection={disconnectConnection}
         onOpenChange={(open) => { if (!open) setDisconnectConnection(null); }}
-        connectionName={disconnectConnection?.name ?? ''}
         onConfirm={handleDisconnect}
       />
     </div>
   );
 }
+
+function formatRelativeTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60_000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 30) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+function ConnectionRow({
+  connection,
+  updatingVisibility,
+  onVisibilityChange,
+  onDisconnect,
+}: {
+  connection: SafeConnection;
+  updatingVisibility: boolean;
+  onVisibilityChange: (visibility: string) => void;
+  onDisconnect: () => void;
+}) {
+  const accountInfo = connection.accountMetadata;
+  const accountLabel = accountInfo?.email || accountInfo?.accountName || accountInfo?.workspaceName;
+
+  return (
+    <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="p-2 rounded-full bg-muted flex-shrink-0">
+          <Plug2 className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium truncate">{connection.name}</span>
+            <IntegrationStatusBadge status={connection.status} />
+          </div>
+          <div className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
+            <span>{connection.provider?.name}</span>
+            {accountLabel && (
+              <> &middot; <span className="truncate max-w-[180px]">{accountLabel}</span></>
+            )}
+            {connection.visibility && (
+              <> &middot; {visibilityLabels[connection.visibility] ?? connection.visibility}</>
+            )}
+            {connection.lastUsedAt && (
+              <>
+                {' '}&middot;{' '}
+                <Clock className="h-3 w-3 inline" />
+                <span>{formatRelativeTime(connection.lastUsedAt)}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {connection.visibility && (
+          <Select
+            value={connection.visibility}
+            onValueChange={onVisibilityChange}
+            disabled={updatingVisibility}
+          >
+            <SelectTrigger className="w-[130px] h-8 text-xs">
+              {updatingVisibility ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <SelectValue />
+              )}
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="private">Private</SelectItem>
+              <SelectItem value="owned_drives">Your drives</SelectItem>
+              <SelectItem value="all_drives">All drives</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={onDisconnect}
+        >
+          Disconnect
+        </Button>
+      </div>
+    </div>
+  );
+}
+

@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/server', () => ({
 vi.mock('ai', () => ({
   tool: vi.fn((config) => config),
   stepCountIs: vi.fn(() => () => false),
+  hasToolCall: vi.fn(() => () => false),
   generateText: vi.fn(),
   convertToModelMessages: vi.fn(),
   UIMessage: {},

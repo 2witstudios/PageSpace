@@ -12,6 +12,8 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
+import { execGit } from "./git-exec";
 
 interface AbandonedFile {
   path: string;
@@ -91,17 +93,13 @@ function getDeletedFiles(): Map<string, { commit: string; date: string; message:
   return deleted;
 }
 
-function getLinesAtCommit(commit: string, file: string): number {
-  try {
-    const content = exec(`git show ${commit}^:"${file}" 2>/dev/null`);
-    return content.split("\n").length;
-  } catch {
-    return 0;
-  }
+export function getLinesAtCommit(commit: string, file: string): number {
+  const content = execGit(["show", `${commit}^:${file}`]);
+  return content.split("\n").length;
 }
 
-function getCommitBody(commit: string): string {
-  return exec(`git log -1 --format="%b" ${commit}`).trim();
+export function getCommitBody(commit: string): string {
+  return execGit(["log", "-1", "--format=%b", commit]).trim();
 }
 
 function categorizeAbandonment(file: AbandonedFile): string {
@@ -316,4 +314,6 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(console.error);
+}

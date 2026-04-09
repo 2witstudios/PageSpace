@@ -1,7 +1,40 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, users, sessions, socketTokens, verificationTokens, emailUnsubscribeTokens, pageVersions, driveBackups, aiUsageLogs, pagePermissions, pulseSummaries, drives, pages } from '@pagespace/db';
-import { eq, and, lt } from 'drizzle-orm';
-import { createId } from '@paralleldrive/cuid2';
+/**
+ * @scaffold — retention-engine cleanup functions accept `db` as a parameter,
+ * but the mock still reproduces the ORM delete().where().returning() chain
+ * shape. Assertions verify the observable CleanupResult contract and the
+ * correct table reference, not internal chaining.
+ *
+ * REVIEW: once a RetentionRepository seam wraps these queries, replace
+ * chain mocks with repository-level mocks and promote to contract tests.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('drizzle-orm', () => ({
+  and: (...args: unknown[]) => ({ _op: 'and', conditions: args }),
+  lt: (col: unknown, val: unknown) => ({ _op: 'lt', col, val }),
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  isNotNull: (col: unknown) => ({ _op: 'isNotNull', col }),
+}));
+
+vi.mock('@pagespace/db', () => ({
+  sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
+  verificationTokens: { id: 'vt.id', expiresAt: 'vt.expiresAt' },
+  socketTokens: { id: 'st.id', expiresAt: 'st.expiresAt' },
+  emailUnsubscribeTokens: { id: 'eut.id', expiresAt: 'eut.expiresAt' },
+  pulseSummaries: { id: 'ps.id', expiresAt: 'ps.expiresAt' },
+  pageVersions: { id: 'pv.id', expiresAt: 'pv.expiresAt', isPinned: 'pv.isPinned' },
+  driveBackups: { id: 'db.id', expiresAt: 'db.expiresAt', isPinned: 'db.isPinned' },
+  pagePermissions: { id: 'pp.id', expiresAt: 'pp.expiresAt' },
+  aiUsageLogs: { id: 'aul.id', expiresAt: 'aul.expiresAt' },
+}));
+
+vi.mock('./monitoring-retention', () => ({
+  runMonitoringRetentionCleanup: vi.fn().mockResolvedValue([
+    { table: 'api_metrics', deleted: 0 },
+    { table: 'system_logs', deleted: 0 },
+    { table: 'security_audit_log', deleted: 0 },
+  ]),
+}));
+
 import {
   cleanupExpiredSessions,
   cleanupExpiredVerificationTokens,
@@ -14,362 +47,231 @@ import {
   cleanupExpiredAiUsageLogs,
   runRetentionCleanup,
 } from './retention-engine';
-import { createHash } from 'crypto';
 
-const pastDate = new Date(Date.now() - 86400000); // 1 day ago
-const futureDate = new Date(Date.now() + 86400000); // 1 day from now
+import {
+  sessions,
+  verificationTokens,
+  socketTokens,
+  emailUnsubscribeTokens,
+  pulseSummaries,
+  pageVersions,
+  driveBackups,
+  pagePermissions,
+  aiUsageLogs,
+} from '@pagespace/db';
 
-let testUserId: string;
-let testDriveId: string;
+/**
+ * Creates a mock DB that captures which table and condition were passed,
+ * allowing assertions on the contract boundary rather than internal chaining.
+ */
+function createMockDb(rows: { id: string }[] = []) {
+  const captured = { table: null as unknown, condition: null as unknown };
+  const returning = vi.fn().mockResolvedValue(rows);
+  const where = vi.fn((cond: unknown) => {
+    captured.condition = cond;
+    return { returning };
+  });
+  const deleteFn = vi.fn((tbl: unknown) => {
+    captured.table = tbl;
+    return { where };
+  });
+  return { db: { delete: deleteFn } as never, captured, deleteFn, returning };
+}
 
-beforeEach(async () => {
-  const [user] = await db.insert(users).values({
-    id: createId(),
-    name: 'Retention Test User',
-    email: `retention-test-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
-    password: 'hashed_password',
-    provider: 'email',
-    role: 'user',
-    tokenVersion: 1,
-  }).returning();
-  testUserId = user.id;
+function createFailingDb(error: Error) {
+  const returning = vi.fn().mockRejectedValue(error);
+  const where = vi.fn().mockReturnValue({ returning });
+  return { delete: vi.fn().mockReturnValue({ where }) } as never;
+}
 
-  const [drive] = await db.insert(drives).values({
-    id: createId(),
-    name: 'Retention Test Drive',
-    slug: `retention-test-${Date.now()}`,
-    ownerId: testUserId,
-    updatedAt: new Date(),
-  }).returning();
-  testDriveId = drive.id;
-});
-
-afterEach(async () => {
-  // Cleanup in reverse dependency order
-  await db.delete(drives).where(eq(drives.id, testDriveId));
-  await db.delete(users).where(eq(users.id, testUserId));
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe('cleanupExpiredSessions', () => {
-  it('deletes sessions past expiresAt', async () => {
-    const tokenHash = createHash('sha256').update(`sess-expired-${Date.now()}`).digest('hex');
-    await db.insert(sessions).values({
-      id: createId(),
-      tokenHash,
-      tokenPrefix: 'ps_sess_',
-      userId: testUserId,
-      type: 'user',
-      scopes: ['*'],
-      tokenVersion: 1,
-      expiresAt: pastDate,
-    });
+  it('given_expiredRowsExist_returnsTableNameAndDeletedCount', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }, { id: '2' }]);
 
     const result = await cleanupExpiredSessions(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'sessions', deleted: 2 });
+    expect(deleteFn).toHaveBeenCalledWith(sessions);
   });
 
-  it('does not delete sessions with future expiresAt', async () => {
-    const tokenHash = createHash('sha256').update(`sess-future-${Date.now()}`).digest('hex');
-    const [created] = await db.insert(sessions).values({
-      id: createId(),
-      tokenHash,
-      tokenPrefix: 'ps_sess_',
-      userId: testUserId,
-      type: 'user',
-      scopes: ['*'],
-      tokenVersion: 1,
-      expiresAt: futureDate,
-    }).returning();
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const { db } = createMockDb([]);
 
-    await cleanupExpiredSessions(db);
+    const result = await cleanupExpiredSessions(db);
 
-    const remaining = await db.query.sessions.findFirst({
-      where: eq(sessions.id, created.id),
-    });
-    expect(remaining).toBeTruthy();
+    expect(result).toEqual({ table: 'sessions', deleted: 0 });
+  });
 
-    // cleanup
-    await db.delete(sessions).where(eq(sessions.id, created.id));
+  it('given_databaseError_propagatesWithoutCatching', async () => {
+    const db = createFailingDb(new Error('connection lost'));
+
+    await expect(cleanupExpiredSessions(db)).rejects.toThrow('connection lost');
   });
 });
 
 describe('cleanupExpiredVerificationTokens', () => {
-  it('deletes verification tokens past expiresAt', async () => {
-    const tokenHash = createHash('sha256').update(`vt-expired-${Date.now()}`).digest('hex');
-    await db.insert(verificationTokens).values({
-      id: createId(),
-      userId: testUserId,
-      tokenHash,
-      tokenPrefix: 'ps_vt_',
-      type: 'email_verification',
-      expiresAt: pastDate,
-    });
+  it('given_expiredTokens_deletesFromCorrectTable', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }]);
 
     const result = await cleanupExpiredVerificationTokens(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'verification_tokens', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(verificationTokens);
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = createFailingDb(new Error('timeout'));
+    await expect(cleanupExpiredVerificationTokens(db)).rejects.toThrow('timeout');
   });
 });
 
 describe('cleanupExpiredSocketTokens', () => {
-  it('deletes socket tokens past expiresAt', async () => {
-    const tokenHash = createHash('sha256').update(`st-expired-${Date.now()}`).digest('hex');
-    await db.insert(socketTokens).values({
-      id: createId(),
-      userId: testUserId,
-      tokenHash,
-      expiresAt: pastDate,
-    });
+  it('given_expiredTokens_deletesFromCorrectTable', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }]);
 
     const result = await cleanupExpiredSocketTokens(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'socket_tokens', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(socketTokens);
   });
 });
 
 describe('cleanupExpiredEmailUnsubscribeTokens', () => {
-  it('deletes email unsubscribe tokens past expiresAt', async () => {
-    const tokenHash = createHash('sha256').update(`eut-expired-${Date.now()}`).digest('hex');
-    await db.insert(emailUnsubscribeTokens).values({
-      id: createId(),
-      tokenHash,
-      tokenPrefix: 'ps_eut_',
-      userId: testUserId,
-      notificationType: 'test',
-      expiresAt: pastDate,
-    });
+  it('given_noExpiredTokens_returnsZero', async () => {
+    const { db, deleteFn } = createMockDb([]);
 
     const result = await cleanupExpiredEmailUnsubscribeTokens(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'email_unsubscribe_tokens', deleted: 0 });
+    expect(deleteFn).toHaveBeenCalledWith(emailUnsubscribeTokens);
   });
 });
 
 describe('cleanupExpiredPulseSummaries', () => {
-  it('deletes pulse summaries past expiresAt', async () => {
-    await db.insert(pulseSummaries).values({
-      id: createId(),
-      userId: testUserId,
-      summary: 'Test expired summary',
-      periodStart: pastDate,
-      periodEnd: pastDate,
-      expiresAt: pastDate,
-    });
+  it('given_multipleExpired_returnsCorrectCount', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }, { id: '2' }, { id: '3' }]);
 
     const result = await cleanupExpiredPulseSummaries(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'pulse_summaries', deleted: 3 });
+    expect(deleteFn).toHaveBeenCalledWith(pulseSummaries);
   });
 });
 
 describe('cleanupExpiredPageVersions', () => {
-  let testPageId: string;
-
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'Retention Test Page',
-      type: 'DOCUMENT',
-      driveId: testDriveId,
-      position: 0,
-      updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
-  });
-
-  afterEach(async () => {
-    await db.delete(pages).where(eq(pages.id, testPageId));
-  });
-
-  it('deletes unpinned page versions past expiresAt', async () => {
-    await db.insert(pageVersions).values({
-      id: createId(),
-      pageId: testPageId,
-      driveId: testDriveId,
-      isPinned: false,
-      expiresAt: pastDate,
-    });
+  it('given_expiredUnpinnedVersions_deletesAndReturnsCount', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
 
     const result = await cleanupExpiredPageVersions(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(result).toEqual({ table: 'page_versions', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(pageVersions);
+    // The condition must include an AND (expiry + isPinned=false) to protect pinned versions
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 
-  it('does not delete pinned page versions past expiresAt', async () => {
-    const [pinned] = await db.insert(pageVersions).values({
-      id: createId(),
-      pageId: testPageId,
-      driveId: testDriveId,
-      isPinned: true,
-      expiresAt: pastDate,
-    }).returning();
-
-    await cleanupExpiredPageVersions(db);
-
-    const remaining = await db.query.pageVersions.findFirst({
-      where: eq(pageVersions.id, pinned.id),
-    });
-    expect(remaining).toBeTruthy();
-
-    // cleanup
-    await db.delete(pageVersions).where(eq(pageVersions.id, pinned.id));
+  it('given_databaseError_propagates', async () => {
+    const db = createFailingDb(new Error('deadlock'));
+    await expect(cleanupExpiredPageVersions(db)).rejects.toThrow('deadlock');
   });
 });
 
 describe('cleanupExpiredDriveBackups', () => {
-  it('deletes unpinned drive backups past expiresAt', async () => {
-    await db.insert(driveBackups).values({
-      id: createId(),
-      driveId: testDriveId,
-      isPinned: false,
-      expiresAt: pastDate,
-    });
+  it('given_expiredUnpinnedBackups_deletesAndReturnsCount', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
 
     const result = await cleanupExpiredDriveBackups(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
-  });
-
-  it('does not delete pinned drive backups past expiresAt', async () => {
-    const [pinned] = await db.insert(driveBackups).values({
-      id: createId(),
-      driveId: testDriveId,
-      isPinned: true,
-      expiresAt: pastDate,
-    }).returning();
-
-    await cleanupExpiredDriveBackups(db);
-
-    const remaining = await db.query.driveBackups.findFirst({
-      where: eq(driveBackups.id, pinned.id),
-    });
-    expect(remaining).toBeTruthy();
-
-    // cleanup
-    await db.delete(driveBackups).where(eq(driveBackups.id, pinned.id));
+    expect(result).toEqual({ table: 'drive_backups', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(driveBackups);
+    // Must use AND condition to protect pinned backups
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('cleanupExpiredPagePermissions', () => {
-  let testPageId: string;
-
-  beforeEach(async () => {
-    const [page] = await db.insert(pages).values({
-      id: createId(),
-      title: 'Permission Test Page',
-      type: 'DOCUMENT',
-      driveId: testDriveId,
-      position: 0,
-      updatedAt: new Date(),
-    }).returning();
-    testPageId = page.id;
-  });
-
-  afterEach(async () => {
-    await db.delete(pages).where(eq(pages.id, testPageId));
-  });
-
-  it('deletes page permissions past expiresAt', async () => {
-    await db.insert(pagePermissions).values({
-      id: createId(),
-      pageId: testPageId,
-      userId: testUserId,
-      canView: true,
-      expiresAt: pastDate,
-    });
+  it('given_expiredPermissions_deletesWithNotNullGuard', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
 
     const result = await cleanupExpiredPagePermissions(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
-  });
-
-  it('does not delete page permissions without expiresAt', async () => {
-    const [perm] = await db.insert(pagePermissions).values({
-      id: createId(),
-      pageId: testPageId,
-      userId: testUserId,
-      canView: true,
-      expiresAt: null,
-    }).returning();
-
-    await cleanupExpiredPagePermissions(db);
-
-    const remaining = await db.query.pagePermissions.findFirst({
-      where: eq(pagePermissions.id, perm.id),
-    });
-    expect(remaining).toBeTruthy();
-
-    // cleanup
-    await db.delete(pagePermissions).where(eq(pagePermissions.id, perm.id));
+    expect(result).toEqual({ table: 'page_permissions', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(pagePermissions);
+    // Must guard with isNotNull(expiresAt) to avoid deleting permanent permissions
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('cleanupExpiredAiUsageLogs', () => {
-  it('deletes AI usage logs past expiresAt', async () => {
-    await db.insert(aiUsageLogs).values({
-      id: createId(),
-      userId: testUserId,
-      provider: 'test',
-      model: 'test-model',
-      expiresAt: pastDate,
-    });
+  it('given_expiredLogs_deletesWithNotNullGuard', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }, { id: '2' }]);
 
     const result = await cleanupExpiredAiUsageLogs(db);
 
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
-  });
-
-  it('does not delete AI usage logs without expiresAt', async () => {
-    const [log] = await db.insert(aiUsageLogs).values({
-      id: createId(),
-      userId: testUserId,
-      provider: 'test',
-      model: 'test-model',
-      expiresAt: null,
-    }).returning();
-
-    await cleanupExpiredAiUsageLogs(db);
-
-    const remaining = await db.query.aiUsageLogs.findFirst({
-      where: eq(aiUsageLogs.id, log.id),
-    });
-    expect(remaining).toBeTruthy();
-
-    // cleanup
-    await db.delete(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+    expect(result).toEqual({ table: 'ai_usage_logs', deleted: 2 });
+    expect(deleteFn).toHaveBeenCalledWith(aiUsageLogs);
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('runRetentionCleanup', () => {
-  it('returns results for all tables', async () => {
+  it('given_allCleanupsSucceed_returnsResultsForAll12Tables', async () => {
+    const { db } = createMockDb([]);
+
     const results = await runRetentionCleanup(db);
 
-    expect(Array.isArray(results)).toBe(true);
-    expect(results.length).toBe(9);
-
-    for (const result of results) {
-      expect(result).toHaveProperty('table');
-      expect(result).toHaveProperty('deleted');
-      expect(typeof result.table).toBe('string');
-      expect(typeof result.deleted).toBe('number');
-    }
+    expect(results).toHaveLength(12);
   });
 
-  it('includes all expected table names', async () => {
+  it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
+    const { db } = createMockDb([]);
+
     const results = await runRetentionCleanup(db);
     const tableNames = results.map(r => r.table).sort();
 
     expect(tableNames).toEqual([
       'ai_usage_logs',
+      'api_metrics',
       'drive_backups',
       'email_unsubscribe_tokens',
       'page_permissions',
       'page_versions',
       'pulse_summaries',
+      'security_audit_log',
       'sessions',
       'socket_tokens',
+      'system_logs',
       'verification_tokens',
     ]);
+  });
+
+  it('given_allCleanupsSucceed_everyResultHasValidStructure', async () => {
+    const { db } = createMockDb([]);
+
+    const results = await runRetentionCleanup(db);
+
+    for (const result of results) {
+      expect(typeof result.table).toBe('string');
+      expect(typeof result.deleted).toBe('number');
+      expect(result.deleted).toBe(0);
+    }
+  });
+
+  it('given_databaseError_rejectsWithOriginalError', async () => {
+    const db = createFailingDb(new Error('connection refused'));
+
+    await expect(runRetentionCleanup(db)).rejects.toThrow('connection refused');
   });
 });

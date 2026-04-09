@@ -7,3 +7,4 @@ export { PasswordLoginForm } from './PasswordLoginForm';
 export { PasskeySignupButton } from './PasskeySignupButton';
 export { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 export { PasskeyLoginButton, useConditionalPasskeyUI } from './PasskeyLoginButton';
+export { ExternalAuthWaiting } from './ExternalAuthWaiting';

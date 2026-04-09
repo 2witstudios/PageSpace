@@ -2,21 +2,14 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
-import { formatDistanceToNow, format, isPast, isToday } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import {
   ArrowLeft,
   RefreshCw,
   AlertTriangle,
-  CheckSquare,
-  ExternalLink,
   Search,
   LayoutList,
   Kanban,
-  MoreHorizontal,
-  Pencil,
-  Trash2,
-  FileText,
 } from 'lucide-react';
 import {
   DndContext,
@@ -27,43 +20,17 @@ import {
   useSensor,
   useSensors,
   closestCorners,
-  useDroppable,
 } from '@dnd-kit/core';
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Card, CardContent } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -73,29 +40,22 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
 import { useCapacitor } from '@/hooks/useCapacitor';
-import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
-import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  PRIORITY_CONFIG,
   buildStatusConfig,
-  getStatusOrder,
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
-import { getStatusDisplay, getAssigneeText } from './task-helpers';
+import { getStatusDisplay } from './task-helpers';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
 import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
+import { TaskTableRow } from './TaskTableRow';
+import { TaskLoadingSkeleton, TaskEmptyState } from './TaskStates';
+import { KanbanColumn, KanbanCard } from './TaskKanbanComponents';
 
-// Status group labels and colors for kanban columns
-const STATUS_GROUP_CONFIG: Record<TaskStatusGroup, { label: string; color: string }> = {
-  todo: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
-  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
-  done: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
-};
 const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
 
 interface TasksDashboardProps {
@@ -574,19 +534,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
             ? 'px-4 pt-4'
             : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
         )}>
-          <div className={cn('space-y-4', isMobileTaskLayout && 'space-y-3')}>
-            <Skeleton className={cn('w-48', isMobileTaskLayout ? 'h-6' : 'h-8')} />
-            <Skeleton className={cn('w-full', isMobileTaskLayout ? 'h-9' : 'h-10')} />
-            {isMobileTaskLayout ? (
-              <>
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <Skeleton key={i} className="h-14 w-full" />
-                ))}
-              </>
-            ) : (
-              <Skeleton className="h-96" />
-            )}
-          </div>
+          <TaskLoadingSkeleton isMobile={isMobileTaskLayout} />
         </div>
       </div>
     );
@@ -716,31 +664,13 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
                 {/* Mobile Compact Task List */}
                 {tasks.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
-                    <CheckSquare className="h-10 w-10 text-muted-foreground/40 mb-3" />
-                    <h3 className="text-base font-medium mb-1">
-                      {context === 'drive' && !selectedDriveId
-                        ? 'Select a drive'
-                        : 'No tasks'}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {context === 'drive' && !selectedDriveId
-                        ? 'Open filters to choose a drive'
-                        : hasActiveFilters
-                          ? 'Try adjusting your filters'
-                          : 'Tasks assigned to you will appear here'}
-                    </p>
-                    {hasActiveFilters && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={clearFilters}
-                        className="mt-3"
-                      >
-                        Clear filters
-                      </Button>
-                    )}
-                  </div>
+                  <TaskEmptyState
+                    context={context}
+                    hasDriveSelected={!!selectedDriveId}
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={clearFilters}
+                    isMobile
+                  />
                 ) : (
                   <div className="divide-y divide-border/50">
                     {tasks.map((task) => (
@@ -900,31 +830,12 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
                 {/* Desktop Tasks View */}
                 {tasks.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <CheckSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                    <h3 className="text-lg font-medium mb-1">
-                      {context === 'drive' && !selectedDriveId
-                        ? 'Select a drive to view tasks'
-                        : 'No tasks found'}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {context === 'drive' && !selectedDriveId
-                        ? 'Choose a drive from the dropdown above'
-                        : hasActiveFilters
-                          ? 'Try adjusting your filters'
-                          : 'Tasks assigned to you will appear here'}
-                    </p>
-                    {hasActiveFilters && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={clearFilters}
-                        className="mt-4"
-                      >
-                        Clear filters
-                      </Button>
-                    )}
-                  </div>
+                  <TaskEmptyState
+                    context={context}
+                    hasDriveSelected={!!selectedDriveId}
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={clearFilters}
+                  />
                 ) : viewMode === 'kanban' ? (
                   /* Kanban View */
                   <DndContext
@@ -1039,509 +950,5 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         </div>
       )}
     </div>
-  );
-}
-
-// Table Row Component
-interface TaskTableRowProps {
-  task: Task;
-  statusConfigs: TaskStatusConfig[];
-  onStatusChange: (task: Task, status: string) => void;
-  onPriorityChange: (task: Task, priority: string) => void;
-  onToggleComplete: (task: Task) => void;
-  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
-  onDueDateChange: (task: Task, date: Date | null) => void;
-  onStartEdit: (task: Task) => void;
-  onSaveTitle: (task: Task, title: string) => void;
-  onDelete: (task: Task) => void;
-  onNavigate: (task: Task) => void;
-  isEditing: boolean;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onCancelEdit: () => void;
-}
-
-function TaskTableRow({
-  task,
-  statusConfigs,
-  onStatusChange,
-  onPriorityChange,
-  onToggleComplete,
-  onMultiAssigneeChange,
-  onDueDateChange,
-  onStartEdit,
-  onSaveTitle,
-  onDelete,
-  onNavigate,
-  isEditing,
-  editingTitle,
-  onEditingTitleChange,
-  onCancelEdit,
-}: TaskTableRowProps) {
-  const statusDisplay = getStatusDisplay(task);
-  const isCompleted = statusDisplay.group === 'done';
-  const cancelTriggeredRef = useRef(false);
-  const statusConfigMap = buildStatusConfig(statusConfigs);
-  const taskStatusOrder = getStatusOrder(statusConfigs);
-
-  return (
-    <TableRow className={cn('group', isCompleted && 'opacity-60')}>
-      {/* Checkbox */}
-      <TableCell>
-        <Checkbox
-          checked={isCompleted}
-          onCheckedChange={() => onToggleComplete(task)}
-        />
-      </TableCell>
-
-      {/* Title */}
-      <TableCell>
-        {isEditing ? (
-          <Input
-            value={editingTitle}
-            onChange={(e) => onEditingTitleChange(e.target.value)}
-            onBlur={() => {
-              if (cancelTriggeredRef.current) {
-                cancelTriggeredRef.current = false;
-                return;
-              }
-              if (editingTitle.trim()) {
-                onSaveTitle(task, editingTitle.trim());
-              }
-              onCancelEdit();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.currentTarget.blur();
-              }
-              if (e.key === 'Escape') {
-                cancelTriggeredRef.current = true;
-                onCancelEdit();
-              }
-            }}
-            autoFocus
-            className="h-8"
-          />
-        ) : (
-          <button
-            type="button"
-            className={cn(
-              'font-medium bg-transparent border-0 p-0 text-left',
-              task.pageId && task.driveId
-                ? 'cursor-pointer hover:text-primary hover:underline'
-                : 'cursor-default',
-              isCompleted && 'line-through text-muted-foreground'
-            )}
-            onClick={task.pageId && task.driveId ? () => onNavigate(task) : undefined}
-            disabled={!task.pageId || !task.driveId}
-            title={!task.pageId || !task.driveId ? 'No linked page' : undefined}
-          >
-            {task.title}
-          </button>
-        )}
-      </TableCell>
-
-      {/* Status */}
-      <TableCell>
-        <Select
-          value={task.status}
-          onValueChange={(value) => onStatusChange(task, value)}
-        >
-          <SelectTrigger className="h-8 w-28">
-            <SelectValue>
-              <Badge className={cn('text-xs', statusDisplay.color)}>
-                {statusDisplay.label}
-              </Badge>
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {taskStatusOrder.map((slug) => {
-              const config = statusConfigMap[slug];
-              return (
-                <SelectItem key={slug} value={slug}>
-                  <Badge className={cn('text-xs', config?.color || '')}>
-                    {config?.label || slug}
-                  </Badge>
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-      </TableCell>
-
-      {/* Priority */}
-      <TableCell>
-        <Select
-          value={task.priority}
-          onValueChange={(value) => onPriorityChange(task, value)}
-        >
-          <SelectTrigger className="h-8 w-24">
-            <SelectValue>
-              <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                {PRIORITY_CONFIG[task.priority].label}
-              </Badge>
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {(['high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
-              <SelectItem key={priority} value={priority}>
-                <Badge className={cn('text-xs', PRIORITY_CONFIG[priority].color)}>
-                  {PRIORITY_CONFIG[priority].label}
-                </Badge>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </TableCell>
-
-      {/* Assignees */}
-      <TableCell>
-        {task.driveId && (
-          <MultiAssigneeSelect
-            driveId={task.driveId}
-            assignees={task.assignees || []}
-            onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
-          />
-        )}
-      </TableCell>
-
-      {/* Due Date */}
-      <TableCell>
-        <DueDatePicker
-          currentDate={task.dueDate}
-          onSelect={(date) => onDueDateChange(task, date)}
-        />
-      </TableCell>
-
-      {/* Source Task List */}
-      <TableCell>
-        {task.taskListPageTitle && task.driveId && task.taskListPageId && (
-          <Link
-            href={`/dashboard/${task.driveId}/${task.taskListPageId}`}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors max-w-[150px]"
-          >
-            <span className="truncate">{task.taskListPageTitle}</span>
-            <ExternalLink className="h-3 w-3 flex-shrink-0" />
-          </Link>
-        )}
-      </TableCell>
-
-      {/* Actions */}
-      <TableCell>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {task.pageId && (
-                <DropdownMenuItem onClick={() => onNavigate(task)}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Open
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onStartEdit(task)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDelete(task)}
-                className="text-destructive"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-// Kanban Column Component
-interface KanbanColumnProps {
-  statusGroup: TaskStatusGroup;
-  tasks: Task[];
-  onToggleComplete: (task: Task) => void;
-  onNavigate: (task: Task) => void;
-  onStartEdit: (task: Task) => void;
-  onDelete: (task: Task) => void;
-  editingTaskId: string | null;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onSaveTitle: (task: Task, title: string) => void;
-  onCancelEdit: () => void;
-}
-
-function KanbanColumn({
-  statusGroup,
-  tasks,
-  onToggleComplete,
-  onNavigate,
-  onStartEdit,
-  onDelete,
-  editingTaskId,
-  editingTitle,
-  onEditingTitleChange,
-  onSaveTitle,
-  onCancelEdit,
-}: KanbanColumnProps) {
-  const { setNodeRef } = useDroppable({ id: statusGroup });
-  const config = STATUS_GROUP_CONFIG[statusGroup];
-
-  return (
-    <div className="flex-shrink-0 w-72 flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3 px-1">
-        <div className="flex items-center gap-2">
-          <Badge className={cn('text-xs', config.color)}>{config.label}</Badge>
-          <span className="text-sm text-muted-foreground">{tasks.length}</span>
-        </div>
-      </div>
-
-      {/* Cards */}
-      <ScrollArea className="flex-1">
-        <SortableContext
-          id={statusGroup}
-          items={tasks.map(t => t.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          <div
-            ref={setNodeRef}
-            className="space-y-2 min-h-[100px] p-1 rounded-lg bg-muted/30"
-          >
-            {tasks.map((task) => (
-              <SortableKanbanCard
-                key={task.id}
-                task={task}
-                onToggleComplete={onToggleComplete}
-                onNavigate={onNavigate}
-                onStartEdit={onStartEdit}
-                onDelete={onDelete}
-                isEditing={editingTaskId === task.id}
-                editingTitle={editingTitle}
-                onEditingTitleChange={onEditingTitleChange}
-                onSaveTitle={onSaveTitle}
-                onCancelEdit={onCancelEdit}
-              />
-            ))}
-            {tasks.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground text-sm">
-                No tasks
-              </div>
-            )}
-          </div>
-        </SortableContext>
-      </ScrollArea>
-    </div>
-  );
-}
-
-// Sortable Kanban Card
-interface SortableKanbanCardProps {
-  task: Task;
-  onToggleComplete: (task: Task) => void;
-  onNavigate: (task: Task) => void;
-  onStartEdit: (task: Task) => void;
-  onDelete: (task: Task) => void;
-  isEditing: boolean;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onSaveTitle: (task: Task, title: string) => void;
-  onCancelEdit: () => void;
-}
-
-function SortableKanbanCard(props: SortableKanbanCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: props.task.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <KanbanCard {...props} isDragging={isDragging} />
-    </div>
-  );
-}
-
-// Kanban Card Component
-interface KanbanCardProps {
-  task: Task;
-  isDragging?: boolean;
-  onToggleComplete: (task: Task) => void;
-  onNavigate: (task: Task) => void;
-  onStartEdit: (task: Task) => void;
-  onDelete: (task: Task) => void;
-  isEditing: boolean;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onSaveTitle: (task: Task, title: string) => void;
-  onCancelEdit: () => void;
-}
-
-function KanbanCard({
-  task,
-  isDragging,
-  onToggleComplete,
-  onNavigate,
-  onStartEdit,
-  onDelete,
-  isEditing,
-  editingTitle,
-  onEditingTitleChange,
-  onSaveTitle,
-  onCancelEdit,
-}: KanbanCardProps) {
-  const statusDisplay = getStatusDisplay(task);
-  const isCompleted = statusDisplay.group === 'done';
-  const cancelTriggeredRef = useRef(false);
-
-  return (
-    <Card
-      className={cn(
-        'group transition-all cursor-grab active:cursor-grabbing',
-        isCompleted && 'opacity-60',
-        isDragging && 'opacity-50 ring-2 ring-primary'
-      )}
-    >
-      <CardContent className="p-3">
-        {/* Header */}
-        <div className="flex items-start gap-2">
-          <Checkbox
-            checked={isCompleted}
-            onCheckedChange={() => onToggleComplete(task)}
-            className="mt-0.5"
-          />
-          <div className="flex-1 min-w-0">
-            {isEditing ? (
-              <Input
-                value={editingTitle}
-                onChange={(e) => onEditingTitleChange(e.target.value)}
-                onBlur={() => {
-                  if (cancelTriggeredRef.current) {
-                    cancelTriggeredRef.current = false;
-                    return;
-                  }
-                  if (editingTitle.trim()) {
-                    onSaveTitle(task, editingTitle.trim());
-                  }
-                  onCancelEdit();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur();
-                  }
-                  if (e.key === 'Escape') {
-                    cancelTriggeredRef.current = true;
-                    onCancelEdit();
-                  }
-                }}
-                autoFocus
-                className="h-7 text-sm"
-              />
-            ) : (
-              <button
-                type="button"
-                className={cn(
-                  'text-sm font-medium bg-transparent border-0 p-0 text-left w-full truncate',
-                  task.pageId && task.driveId
-                    ? 'cursor-pointer hover:text-primary'
-                    : 'cursor-default',
-                  isCompleted && 'line-through text-muted-foreground'
-                )}
-                onClick={task.pageId && task.driveId ? () => onNavigate(task) : undefined}
-                disabled={!task.pageId || !task.driveId}
-                title={!task.pageId || !task.driveId ? 'No linked page' : undefined}
-              >
-                {task.title}
-              </button>
-            )}
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <MoreHorizontal className="h-3 w-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {task.pageId && (
-                <DropdownMenuItem onClick={() => onNavigate(task)}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Open
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onStartEdit(task)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDelete(task)}
-                className="text-destructive"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {/* Metadata */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2 ml-6">
-          <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
-            {PRIORITY_CONFIG[task.priority].label}
-          </Badge>
-
-          {/* Assignees */}
-          {(() => {
-            const text = getAssigneeText(task);
-            return text ? <span className="text-xs text-muted-foreground">{text}</span> : null;
-          })()}
-
-          {/* Due date */}
-          {task.dueDate && (
-            <span className={cn(
-              'text-xs',
-              isPast(new Date(task.dueDate)) && !isCompleted
-                ? 'text-red-500 font-medium'
-                : isToday(new Date(task.dueDate))
-                  ? 'text-amber-500'
-                  : 'text-muted-foreground'
-            )}>
-              {format(new Date(task.dueDate), 'MMM d')}
-            </span>
-          )}
-        </div>
-
-        {/* Source task list */}
-        {task.taskListPageTitle && task.driveId && task.taskListPageId && (
-          <div className="mt-2 ml-6">
-            <Link
-              href={`/dashboard/${task.driveId}/${task.taskListPageId}`}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span className="truncate max-w-[150px]">{task.taskListPageTitle}</span>
-              <ExternalLink className="h-3 w-3" />
-            </Link>
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }

@@ -273,7 +273,7 @@ WARN [realtime] WebSocket connection from unexpected origin {
 ### 3.1 Strong CSRF Implementation
 
 - HMAC-SHA256 tokens tied to session
-- Timing-safe comparison (`timingSafeEqual`)
+- Timing-safe comparison (`secureCompare` from `@pagespace/lib`)
 - Token expiration with timestamps
 - Automatic CSRF refresh in client (`auth-fetch.ts`)
 

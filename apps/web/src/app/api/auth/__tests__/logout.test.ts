@@ -131,7 +131,8 @@ describe('/api/auth/logout', () => {
 
       await POST(request);
 
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendClearCookies).mock.calls[0][0]).toBeInstanceOf(Headers);
     });
 
     it('logs logout event', async () => {
@@ -157,9 +158,10 @@ describe('/api/auth/logout', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'test-user-id',
         'logout',
-        expect.objectContaining({
+        {
           ip: '192.168.1.1',
-        })
+          userAgent: null,
+        }
       );
     });
   });
@@ -184,11 +186,13 @@ describe('/api/auth/logout', () => {
       // Session revoke should not be called since there's no session
       expect(sessionService.revokeSession).not.toHaveBeenCalled();
       // But cookies should still be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendClearCookies).mock.calls[0][0]).toBeInstanceOf(Headers);
     });
 
     it('handles invalid session gracefully', async () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+      vi.mocked(getSessionFromCookies).mockReturnValue('invalid_session_token');
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -204,14 +208,15 @@ describe('/api/auth/logout', () => {
       // Logout should still succeed
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
-      // Session revoke should still be attempted
-      expect(sessionService.revokeSession).toHaveBeenCalled();
+      // Session revoke should still be attempted with the actual token
+      expect(sessionService.revokeSession).toHaveBeenCalledWith('invalid_session_token', 'logout');
       // Cookies should be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendClearCookies).mock.calls[0][0]).toBeInstanceOf(Headers);
     });
 
     it('handles session revocation failure gracefully', async () => {
-      vi.mocked(sessionService.revokeSession).mockRejectedValue(
+      vi.mocked(sessionService.revokeSession).mockRejectedValueOnce(
         new Error('Database error')
       );
 
@@ -230,7 +235,8 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
       // Cookies should still be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendClearCookies).mock.calls[0][0]).toBeInstanceOf(Headers);
     });
 
     it('does not log logout event when no user ID', async () => {

@@ -1,5 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { db, socketTokens } from '@pagespace/db';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { randomBytes, createHash } from 'crypto';
 
 /**
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
   // Store hash in database (never store plaintext)
-  await db.insert(socketTokens).values({
+  await sessionRepository.createSocketToken({
     tokenHash,
     userId: auth.userId,
     expiresAt,

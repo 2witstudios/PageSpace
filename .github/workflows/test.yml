@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -70,7 +70,7 @@ jobs:
           JWT_AUDIENCE: pagespace-test-users
         run: pnpm --filter @pagespace/db db:migrate
 
-      - name: Run tests
+      - name: Run tests with coverage
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           REDIS_URL: redis://localhost:6379
@@ -79,7 +79,21 @@ jobs:
           JWT_SECRET: test-secret-key-minimum-32-characters-long-for-ci
           JWT_ISSUER: pagespace-test
           JWT_AUDIENCE: pagespace-test-users
-        run: pnpm test:turbo
+        run: pnpm test:coverage
+
+      - name: Coverage report
+        if: always()
+        run: node scripts/coverage-report.mjs
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            apps/*/coverage/coverage-summary.json
+            packages/*/coverage/coverage-summary.json
+          retention-days: 30
 
   lint:
     name: Lint & TypeScript Check
@@ -89,7 +103,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

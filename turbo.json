@@ -39,6 +39,11 @@
       "inputs": ["$TURBO_DEFAULT$", "vitest.config.*", "src/**/*.test.{ts,tsx}"],
       "cache": false
     },
+    "test:coverage": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "outputs": ["coverage/**"]
+    },
     "package": {
       "cache": false,
       "dependsOn": ["build"],

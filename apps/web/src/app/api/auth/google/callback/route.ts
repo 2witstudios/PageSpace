@@ -1,5 +1,3 @@
-import { users, db, eq, or } from '@pagespace/db';
-import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
@@ -8,19 +6,17 @@ import {
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { verifyOAuthState } from '@/lib/auth/oauth-state';
+import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-
-const googleCallbackSchema = z.object({
-  code: z.string().min(1, 'Authorization code is required'),
-  state: z.string().nullish().optional(),
-});
+import { consumePKCEVerifier } from '@pagespace/lib/auth';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -33,70 +29,43 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');
     const state = searchParams.get('state');
-    const error = searchParams.get('error');
-
-    if (error) {
-      loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
-      let errorParam = 'oauth_error';
-      if (error === 'access_denied') {
-        errorParam = 'access_denied';
-      }
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
+    const configuredUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL;
+    if (!configuredUrl && process.env.NODE_ENV === 'production') {
+      loggers.auth.error('NEXTAUTH_URL or WEB_APP_URL must be set in production');
+      return new Response('Server misconfiguration', { status: 500 });
     }
+    const baseUrl = configuredUrl || new URL(req.url).origin;
 
-    const validation = googleCallbackSchema.safeParse({ code, state });
-    if (!validation.success) {
-      loggers.auth.warn('Invalid OAuth callback parameters', { errors: validation.error.flatten().fieldErrors });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
-      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-    }
+    // Verify state HMAC upfront — this is the server-side security gate
+    const stateResult = state ? verifyOAuthState(state) : null;
+    const verifiedState = stateResult?.status === 'valid' ? stateResult.data : null;
 
-    const { code: authCode, state: stateParam } = validation.data;
-
-    let returnUrl = '/dashboard';
-    let platform = 'web';
-    let deviceId: string | undefined;
-    let deviceName: string | undefined;
-
-    if (stateParam) {
-      try {
-        const stateWithSignature = JSON.parse(
-          Buffer.from(stateParam, 'base64').toString('utf-8')
-        );
-
-        if (stateWithSignature.data && stateWithSignature.sig) {
-          const { data, sig } = stateWithSignature;
-          const expectedSignature = crypto
-            .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-            .update(JSON.stringify(data))
-            .digest('hex');
-
-          if (sig !== expectedSignature) {
-            loggers.auth.warn('OAuth state signature mismatch', { stateParam });
-            const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-            return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
-          }
-
-          returnUrl = data.returnUrl || '/dashboard';
-          platform = data.platform || 'web';
-          deviceId = data.deviceId;
-          deviceName = data.deviceName;
-        } else {
-          returnUrl = stateWithSignature.returnUrl || '/dashboard';
-        }
-      } catch {
-        returnUrl = stateParam;
-      }
-    }
-
-    if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
-        returnUrl,
-        hasState: !!stateParam,
+    // Single rejection guard: code + HMAC-verified state required
+    // `error` is never a branch condition — only read as a UX hint inside
+    if (!code || !verifiedState) {
+      const errorHint = searchParams.get('error');
+      loggers.auth.warn('OAuth callback rejected', {
+        hasCode: !!code,
+        hasState: !!state,
+        stateStatus: stateResult?.status ?? 'missing',
+        errorHint: errorHint ? String(errorHint).slice(0, 100) : 'none',
       });
-      returnUrl = '/dashboard';
+      const errorType = errorHint === 'access_denied' ? 'access_denied' : 'oauth_error';
+
+      if (verifiedState?.platform === 'desktop') {
+        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+      }
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
+
+    // Past this point: code present + HMAC-verified state
+    const authCode = code;
+    let returnUrl = isSafeReturnUrl(verifiedState.returnUrl)
+      ? (verifiedState.returnUrl || '/dashboard')
+      : '/dashboard';
+    const platform = verifiedState.platform || 'web';
+    const deviceId = verifiedState.deviceId;
+    const deviceName = verifiedState.deviceName;
 
     const clientIP = getClientIP(req);
 
@@ -105,15 +74,26 @@ export async function GET(req: Request) {
       DISTRIBUTED_RATE_LIMITS.LOGIN
     );
     if (!ipRateLimit.allowed) {
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
-    const { tokens } = await client.getToken(authCode);
+    // Input validation: bound length and reject unexpected characters
+    if (authCode.length > 512 || !/^[a-zA-Z0-9/_\-\.]+$/.test(authCode)) {
+      loggers.auth.warn('Invalid authorization code format', { codeLength: authCode.length });
+      return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
+    }
+
+    // Retrieve PKCE code_verifier (stored during signin, keyed by state)
+    // state is guaranteed non-null past the rejection guard
+    const codeVerifier = await consumePKCEVerifier(state!);
+
+    const { tokens } = await client.getToken({
+      code: authCode,
+      ...(codeVerifier && { codeVerifier }),
+    });
 
     if (!tokens.id_token) {
       loggers.auth.error('No ID token received from Google');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -125,7 +105,6 @@ export async function GET(req: Request) {
     const payload = ticket.getPayload();
     if (!payload) {
       loggers.auth.error('Invalid Google ID token payload');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -133,18 +112,12 @@ export async function GET(req: Request) {
 
     if (!email) {
       loggers.auth.error('Missing required email from Google');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
     const userName = name || email.split('@')[0] || 'User';
 
-    let user = await db.query.users.findFirst({
-      where: or(
-        eq(users.googleId, googleId),
-        eq(users.email, email)
-      ),
-    });
+    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
 
     if (user) {
       const resolvedImage = await resolveGoogleAvatarImage({
@@ -160,24 +133,20 @@ export async function GET(req: Request) {
         (email_verified && !user.emailVerified)
       ) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
-        await db.update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || userName,
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.password ? 'both' : 'google',
+          name: user.name || userName,
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
       }
     } else {
       loggers.auth.info('Creating new user via Google OAuth', { email });
-      const [newUser] = await db.insert(users).values({
+      user = await authRepository.createUser({
         id: createId(),
         name: userName,
         email,
@@ -189,9 +158,7 @@ export async function GET(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-
-      user = newUser;
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -200,9 +167,7 @@ export async function GET(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db.update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 
@@ -223,11 +188,7 @@ export async function GET(req: Request) {
       });
     }
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Google OAuth login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google OAuth');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
@@ -235,6 +196,7 @@ export async function GET(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -242,7 +204,6 @@ export async function GET(req: Request) {
     const sessionClaims = await sessionService.validateSession(sessionToken);
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId: user.id });
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
@@ -273,8 +234,7 @@ export async function GET(req: Request) {
           userId: user.id,
           email: user.email,
         });
-        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+          return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
       // Generate device token (now opaque ps_dev_* token)
@@ -394,20 +354,36 @@ export async function GET(req: Request) {
       return NextResponse.redirect(deepLinkUrl.toString());
     }
 
-    // WEB PLATFORM: Original redirect flow (UNCHANGED)
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+    let webDeviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        webDeviceTokenValue = await createWebDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
-    redirectUrl.searchParams.set('csrfToken', csrfToken);
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
+    if (webDeviceTokenValue) {
+      headers.append('Set-Cookie', createDeviceTokenHandoffCookie(webDeviceTokenValue));
+    }
 
     return NextResponse.redirect(redirectUrl, { headers });
 
   } catch (error) {
     loggers.auth.error('Google OAuth callback error', error as Error);
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
+    return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }
 }

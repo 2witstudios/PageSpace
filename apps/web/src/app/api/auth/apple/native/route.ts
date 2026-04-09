@@ -1,4 +1,3 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
@@ -12,6 +11,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -91,9 +91,7 @@ export async function POST(req: Request) {
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
 
     // Find or create user
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.appleId, appleId), eq(users.email, email)),
-    });
+    let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
 
     let isNewUser = false;
     if (user) {
@@ -101,23 +99,19 @@ export async function POST(req: Request) {
       const needsUpdate = !user.appleId || (!user.name && name);
       if (needsUpdate) {
         loggers.auth.info('Updating existing user via native Apple OAuth', { email, platform });
-        await db.update(users)
-          .set({
-            appleId: user.appleId || appleId,
-            provider: user.password ? 'both' : 'apple',
-            name: user.name || name || email.split('@')[0],
-            emailVerified: emailVerified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          appleId: user.appleId || appleId,
+          provider: user.password ? 'both' : 'apple',
+          name: user.name || name || email.split('@')[0],
+          emailVerified: emailVerified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
       }
     } else {
       isNewUser = true;
       loggers.auth.info('Creating new user via native Apple OAuth', { email, platform });
-      const [newUser] = await db.insert(users).values({
+      user = await authRepository.createUser({
         id: createId(),
         name: name || email.split('@')[0],
         email,
@@ -129,8 +123,7 @@ export async function POST(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-      user = newUser;
+      });
       loggers.auth.info('New user created via native Apple OAuth', { userId: user.id, platform });
     }
 

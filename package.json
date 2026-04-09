@@ -3,10 +3,12 @@
   "private": true,
   "license": "AGPL-3.0",
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --filter=!control-plane",
+    "dev:atlas": "pnpm --filter atlas dev",
     "dev:db": "docker compose up postgres migrate seed -d",
     "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis processor realtime -d",
     "build": "turbo build",
+    "build:atlas": "pnpm --filter atlas build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "db:generate": "drizzle-kit generate",
@@ -16,7 +18,9 @@
     "test:unit": "pnpm --filter @pagespace/lib test && cd apps/web && npx vitest run",
     "test:watch": "pnpm --filter @pagespace/lib test -- --watch",
     "test:ui": "pnpm --filter @pagespace/lib test -- --ui",
-    "test:coverage": "pnpm --filter @pagespace/lib test -- --coverage",
+    "test:coverage": "turbo run test:coverage",
+    "coverage:report": "node scripts/coverage-report.mjs",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
     "test:scripts": "echo 'Script tests require isolated vitest context. Run: pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts' && exit 1",
     "verify:migrations": "pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts",
     "dev:desktop": "pnpm --filter desktop dev",
@@ -26,6 +30,8 @@
     "knip": "knip",
     "knip:fix": "knip --fix",
     "changelog:generate": "npx tsx scripts/changelog/index.ts",
+    "test:infra": "cd infrastructure && npx vitest run",
+    "test:infra:runtime": "cd infrastructure && npx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
     "test:security": "./scripts/test-security.sh",
     "setup:admin": "tsx scripts/setup-onprem-admin.ts"
   },
@@ -48,7 +54,8 @@
     "tsx": "^4.21.0",
     "turbo": "^2.5.5",
     "typescript": "^5.8.3",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "yaml": "^2.8.2"
   },
   "packageManager": "pnpm@10.13.1",
   "pnpm": {

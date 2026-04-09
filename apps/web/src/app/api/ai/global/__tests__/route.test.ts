@@ -163,7 +163,10 @@ describe('GET /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to fetch conversations');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const fetchErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(fetchErrorArgs[0]).toBe('Error fetching conversations:');
+      expect(fetchErrorArgs[1]).toBeInstanceOf(Error);
+      expect((fetchErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });
@@ -255,9 +258,11 @@ describe('POST /api/ai/global', () => {
 
       expect(globalConversationRepository.createConversation).toHaveBeenCalledWith(
         mockUserId,
-        expect.objectContaining({
+        {
+          title: undefined,
           type: 'global',
-        })
+          contextId: undefined,
+        }
       );
     });
   });
@@ -275,7 +280,10 @@ describe('POST /api/ai/global', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create conversation');
-      expect(loggers.api.error).toHaveBeenCalled();
+      const createErrorArgs = vi.mocked(loggers.api.error).mock.calls[0];
+      expect(createErrorArgs[0]).toBe('Error creating conversation:');
+      expect(createErrorArgs[1]).toBeInstanceOf(Error);
+      expect((createErrorArgs[1] as Error).message).toBe('Database error');
     });
   });
 });

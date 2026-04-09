@@ -119,6 +119,7 @@ type PageLookupResult = {
   trashedAt: Date | null;
   originalParentId: string | null;
   contentMode: 'html' | 'markdown';
+  excludeFromSearch: boolean;
 };
 
 const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
@@ -158,6 +159,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   trashedAt: null,
   originalParentId: null,
   contentMode: 'html',
+  excludeFromSearch: false,
   ...overrides,
 });
 
@@ -337,7 +339,10 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Edit message permission denied',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -388,7 +393,10 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Message edited successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -494,7 +502,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to edit message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error editing message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
@@ -584,8 +592,13 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
         expect.objectContaining({
           driveId: null,
         }),
-        expect.any(Object),
-        expect.any(Object)
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Hello, AI!',
+          newContent: 'Updated',
+        })
       );
     });
   });
@@ -679,7 +692,10 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Delete message permission denied',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -714,7 +730,10 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(loggers.api.info).toHaveBeenCalledWith(
         'Message deleted successfully',
-        expect.any(Object)
+        expect.objectContaining({
+          messageId: '***_123',
+          userId: '***_123',
+        })
       );
     });
   });
@@ -819,7 +838,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete message');
-      expect(loggers.api.error).toHaveBeenCalled();
+      expect(loggers.api.error).toHaveBeenCalledWith('Error deleting message', expect.objectContaining({ message: 'Database error' }));
     });
   });
 
@@ -908,8 +927,12 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
         expect.objectContaining({
           driveId: null,
         }),
-        expect.any(Object),
-        expect.any(Object)
+        expect.objectContaining({
+          actorEmail: 'test@example.com',
+        }),
+        expect.objectContaining({
+          previousContent: 'Hello, AI!',
+        })
       );
     });
   });

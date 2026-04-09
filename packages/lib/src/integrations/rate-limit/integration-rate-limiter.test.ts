@@ -2,52 +2,29 @@
  * Integration Rate Limiter Tests
  *
  * Tests for rate limiting tool execution.
- * Uses mocked distributed rate limiter for unit testing.
+ * Imports from the actual source and mocks the distributed rate limiter.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock types for rate limiter
-interface RateLimitResult {
-  allowed: boolean;
-  retryAfter?: number;
-  attemptsRemaining?: number;
-}
+// Mock the distributed rate limiter
+const mockCheckDistributedRateLimit = vi.fn();
+const mockResetDistributedRateLimit = vi.fn();
 
-interface IntegrationRateLimitConfig {
-  connectionId: string;
-  agentId: string;
-  toolName: string;
-  requestsPerMinute: number;
-}
+vi.mock('../../security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => mockCheckDistributedRateLimit(...args),
+  resetDistributedRateLimit: (...args: unknown[]) => mockResetDistributedRateLimit(...args),
+}));
 
-// Mock rate limiter
-const mockCheckRateLimit = vi.fn<
-  (key: string, config: { maxAttempts: number; windowMs: number }) => Promise<RateLimitResult>
->();
-const mockResetRateLimit = vi.fn<(key: string) => Promise<void>>();
-
-// Inline implementation for testing
-const buildRateLimitKey = (config: IntegrationRateLimitConfig): string => {
-  return `integration:${config.connectionId}:${config.agentId}:${config.toolName}`;
-};
-
-const checkIntegrationRateLimit = async (
-  config: IntegrationRateLimitConfig
-): Promise<RateLimitResult> => {
-  const key = buildRateLimitKey(config);
-  return mockCheckRateLimit(key, {
-    maxAttempts: config.requestsPerMinute,
-    windowMs: 60 * 1000,
-  });
-};
-
-const resetIntegrationRateLimit = async (
-  config: Pick<IntegrationRateLimitConfig, 'connectionId' | 'agentId' | 'toolName'>
-): Promise<void> => {
-  const key = buildRateLimitKey({ ...config, requestsPerMinute: 0 });
-  await mockResetRateLimit(key);
-};
+import {
+  buildRateLimitKey,
+  checkIntegrationRateLimit,
+  resetIntegrationRateLimit,
+  checkConnectionRateLimit,
+  checkDriveRateLimit,
+  INTEGRATION_RATE_LIMITS,
+  type IntegrationRateLimitConfig,
+} from './integration-rate-limiter';
 
 describe('buildRateLimitKey', () => {
   it('given connection, agent, and tool, should create unique key', () => {
@@ -61,6 +38,19 @@ describe('buildRateLimitKey', () => {
     const key = buildRateLimitKey(config);
 
     expect(key).toBe('integration:conn-123:agent-456:list_repos');
+  });
+
+  it('given null agentId, should use global in key', () => {
+    const config: IntegrationRateLimitConfig = {
+      connectionId: 'conn-123',
+      agentId: null,
+      toolName: 'list_repos',
+      requestsPerMinute: 30,
+    };
+
+    const key = buildRateLimitKey(config);
+
+    expect(key).toBe('integration:conn-123:global:list_repos');
   });
 
   it('given different tools, should create different keys', () => {
@@ -88,7 +78,7 @@ describe('checkIntegrationRateLimit', () => {
   });
 
   it('given count under limit, should allow request', async () => {
-    mockCheckRateLimit.mockResolvedValue({
+    mockCheckDistributedRateLimit.mockResolvedValue({
       allowed: true,
       attemptsRemaining: 29,
     });
@@ -105,7 +95,7 @@ describe('checkIntegrationRateLimit', () => {
   });
 
   it('given count at limit, should deny request', async () => {
-    mockCheckRateLimit.mockResolvedValue({
+    mockCheckDistributedRateLimit.mockResolvedValue({
       allowed: false,
       retryAfter: 45,
     });
@@ -121,8 +111,8 @@ describe('checkIntegrationRateLimit', () => {
     expect(result.retryAfter).toBe(45);
   });
 
-  it('given rate limit config, should track per minute window', async () => {
-    mockCheckRateLimit.mockResolvedValue({ allowed: true });
+  it('given rate limit config, should call distributed rate limiter with correct params', async () => {
+    mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
 
     await checkIntegrationRateLimit({
       connectionId: 'conn-123',
@@ -131,14 +121,19 @@ describe('checkIntegrationRateLimit', () => {
       requestsPerMinute: 60,
     });
 
-    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-123:agent-456:list_repos',
-      { maxAttempts: 60, windowMs: 60000 }
+      {
+        maxAttempts: 60,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
   });
 
   it('given different keys, should track independently', async () => {
-    mockCheckRateLimit.mockResolvedValue({ allowed: true });
+    mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
 
     await checkIntegrationRateLimit({
       connectionId: 'conn-1',
@@ -154,14 +149,24 @@ describe('checkIntegrationRateLimit', () => {
       requestsPerMinute: 30,
     });
 
-    expect(mockCheckRateLimit).toHaveBeenCalledTimes(2);
-    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledTimes(2);
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-1:agent-1:tool-a',
-      expect.any(Object)
+      {
+        maxAttempts: 30,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
-    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-2:agent-2:tool-b',
-      expect.any(Object)
+      {
+        maxAttempts: 30,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
   });
 });
@@ -171,8 +176,8 @@ describe('resetIntegrationRateLimit', () => {
     vi.clearAllMocks();
   });
 
-  it('given window expiration, should reset count', async () => {
-    mockResetRateLimit.mockResolvedValue(undefined);
+  it('given reset request, should call resetDistributedRateLimit with correct key', async () => {
+    mockResetDistributedRateLimit.mockResolvedValue(undefined);
 
     await resetIntegrationRateLimit({
       connectionId: 'conn-123',
@@ -180,52 +185,102 @@ describe('resetIntegrationRateLimit', () => {
       toolName: 'list_repos',
     });
 
-    expect(mockResetRateLimit).toHaveBeenCalledWith(
+    expect(mockResetDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-123:agent-456:list_repos'
+    );
+  });
+
+  it('given null agentId, should use global in key', async () => {
+    mockResetDistributedRateLimit.mockResolvedValue(undefined);
+
+    await resetIntegrationRateLimit({
+      connectionId: 'conn-123',
+      agentId: null,
+      toolName: 'list_repos',
+    });
+
+    expect(mockResetDistributedRateLimit).toHaveBeenCalledWith(
+      'integration:conn-123:global:list_repos'
     );
   });
 });
 
-describe('rate limit integration scenarios', () => {
+describe('checkConnectionRateLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('given provider rate limit, should apply to all tools', async () => {
-    // Simulate provider-level rate limit
-    mockCheckRateLimit.mockResolvedValue({ allowed: true });
+  it('given connection rate limit check, should use provider-level key', async () => {
+    mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
 
-    const providerLimit = 100; // requests per minute for entire provider
+    await checkConnectionRateLimit('conn-github', 'agent-1', 100);
 
-    await checkIntegrationRateLimit({
-      connectionId: 'conn-github',
-      agentId: 'agent-1',
-      toolName: 'provider:github', // Provider-level key
-      requestsPerMinute: providerLimit,
-    });
-
-    expect(mockCheckRateLimit).toHaveBeenCalledWith(
-      'integration:conn-github:agent-1:provider:github',
-      { maxAttempts: 100, windowMs: 60000 }
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
+      'integration:conn-github:agent-1:provider',
+      {
+        maxAttempts: 100,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
   });
 
-  it('given grant-level override, should use most restrictive limit', async () => {
-    // When grant specifies a lower limit than provider
-    mockCheckRateLimit.mockResolvedValue({
+  it('given null agentId, should use global in key', async () => {
+    mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
+
+    await checkConnectionRateLimit('conn-github', null, 100);
+
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
+      'integration:conn-github:global:provider',
+      {
+        maxAttempts: 100,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
+    );
+  });
+});
+
+describe('checkDriveRateLimit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given drive rate limit check, should use drive-level key', async () => {
+    mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
+
+    await checkDriveRateLimit('drive-123', 200);
+
+    expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
+      'integration:drive:drive-123',
+      {
+        maxAttempts: 200,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
+    );
+  });
+
+  it('given rate limit exceeded, should return denied result', async () => {
+    mockCheckDistributedRateLimit.mockResolvedValue({
       allowed: false,
       retryAfter: 30,
     });
 
-    const grantOverrideLimit = 10; // Grant allows only 10/min (more restrictive than provider's 100)
-
-    const result = await checkIntegrationRateLimit({
-      connectionId: 'conn-github',
-      agentId: 'agent-1',
-      toolName: 'create_issue',
-      requestsPerMinute: grantOverrideLimit,
-    });
+    const result = await checkDriveRateLimit('drive-123', 200);
 
     expect(result.allowed).toBe(false);
+    expect(result.retryAfter).toBe(30);
+  });
+});
+
+describe('INTEGRATION_RATE_LIMITS', () => {
+  it('should export default rate limits', () => {
+    expect(INTEGRATION_RATE_LIMITS.DEFAULT).toBe(30);
+    expect(INTEGRATION_RATE_LIMITS.MIN).toBe(1);
+    expect(INTEGRATION_RATE_LIMITS.MAX).toBe(1000);
   });
 });

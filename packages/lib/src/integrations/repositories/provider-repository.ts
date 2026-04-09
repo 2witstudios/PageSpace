@@ -14,6 +14,7 @@ import {
   type IntegrationProvider,
   type NewIntegrationProvider,
 } from '@pagespace/db';
+import type { IntegrationProviderConfig } from '../types';
 
 /**
  * Get a provider by ID.
@@ -133,6 +134,92 @@ export const deleteProvider = async (
     .returning();
 
   return deleted ?? null;
+};
+
+/**
+ * Seed builtin providers that are not yet installed.
+ * Idempotent — skips providers whose slug already exists in the database.
+ */
+export const seedBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<IntegrationProvider[]> => {
+  const existing = await database.query.integrationProviders.findMany({
+    columns: { slug: true },
+  });
+
+  const installedSlugs = new Set(existing.map((p) => p.slug));
+  const toSeed = builtins.filter((b) => !installedSlugs.has(b.id));
+
+  if (toSeed.length === 0) return [];
+
+  const seeded: IntegrationProvider[] = [];
+  for (const builtin of toSeed) {
+    const [provider] = await database
+      .insert(integrationProviders)
+      .values({
+        slug: builtin.id,
+        name: builtin.name,
+        description: builtin.description ?? null,
+        iconUrl: builtin.iconUrl ?? null,
+        documentationUrl: builtin.documentationUrl ?? null,
+        providerType: 'builtin',
+        config: builtin as unknown as Record<string, unknown>,
+        isSystem: true,
+        enabled: true,
+      })
+      .returning();
+    seeded.push(provider);
+  }
+
+  return seeded;
+};
+
+/**
+ * Deterministic JSON serialization with sorted keys at all levels.
+ * Needed because PostgreSQL JSONB does not preserve key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+    return `{${sorted.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Refresh builtin provider configs from the in-memory definitions.
+ * Compares the full config (tools, schemas, rate limits, etc.) via stable
+ * JSON serialization. Only touches providers with providerType 'builtin'.
+ */
+export const refreshBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<number> => {
+  let updated = 0;
+
+  for (const builtin of builtins) {
+    const existing = await database.query.integrationProviders.findFirst({
+      where: and(
+        eq(integrationProviders.slug, builtin.id),
+        eq(integrationProviders.providerType, 'builtin')
+      ),
+    });
+    if (!existing) continue;
+
+    if (stableStringify(existing.config) === stableStringify(builtin)) continue;
+
+    await database
+      .update(integrationProviders)
+      .set({ config: builtin as unknown as Record<string, unknown> })
+      .where(eq(integrationProviders.id, existing.id));
+    updated++;
+  }
+
+  return updated;
 };
 
 /**

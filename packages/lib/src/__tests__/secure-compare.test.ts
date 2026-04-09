@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import crypto from 'crypto';
 import { secureCompare } from '../auth/secure-compare';
 
 /**
@@ -149,17 +150,28 @@ describe('secureCompare', () => {
     /**
      * NOTE: Actual timing-safe verification requires statistical timing analysis
      * which is out of scope for unit tests. This documents expected behavior
-     * and verifies the function uses crypto.timingSafeEqual internally.
+     * and verifies the function uses SHA-256 hashing + crypto.timingSafeEqual.
      *
      * The implementation must:
-     * 1. Always perform comparison even when lengths differ
-     * 2. Use crypto.timingSafeEqual for actual byte comparison
-     * 3. Encode both strings to same buffer type before comparison
+     * 1. SHA-256 hash both inputs to produce fixed 32-byte digests
+     * 2. Use crypto.timingSafeEqual on the equal-length hashes
+     * 3. Never branch on input length or content before comparison
      */
-    it('performs length-constant comparison even when lengths differ', () => {
-      // Verify both return false without throwing
+    it('performs length-constant comparison even when lengths differ (both hash to 32 bytes)', () => {
+      // Both inputs are SHA-256 hashed to 32-byte digests before comparison
       expect(secureCompare('short', 'much-longer-string')).toBe(false);
       expect(secureCompare('much-longer-string', 'short')).toBe(false);
+    });
+
+    it('hashes both inputs with SHA-256 before comparing', () => {
+      const createHashSpy = vi.spyOn(crypto, 'createHash');
+      try {
+        secureCompare('input-a', 'input-b');
+        const sha256Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha256');
+        expect(sha256Calls).toHaveLength(2);
+      } finally {
+        createHashSpy.mockRestore();
+      }
     });
 
     it('returns consistent results regardless of input order', () => {

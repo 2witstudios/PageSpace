@@ -3,7 +3,16 @@
  */
 
 import { describe, expect, test, beforeEach, vi } from 'vitest';
+import crypto from 'crypto';
 import { GET } from '../google/callback/route';
+
+function createSignedState(data: Record<string, unknown>): string {
+  const withTimestamp = { timestamp: Date.now(), ...data };
+  const payload = JSON.stringify(withTimestamp);
+  const sig = crypto.createHmac('sha256', 'test-oauth-state-secret').update(payload).digest('hex');
+  return Buffer.from(JSON.stringify({ data: withTimestamp, sig })).toString('base64');
+}
+const defaultState = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
@@ -24,19 +33,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -55,6 +58,8 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -63,6 +68,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -75,6 +81,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+    deviceToken: 'mock-device-token',
+    deviceTokenRecordId: 'device-record-id',
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -102,32 +112,28 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn(() => '127.0.0.1'),
-  // Use actual implementation for isSafeReturnUrl so redirect tests are valid
-  isSafeReturnUrl: (url: string | undefined): boolean => {
-    if (!url) return true;
-    if (!url.startsWith('/')) return false;
-    if (url.startsWith('//') || url.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(url)) return false;
-    try {
-      const decoded = decodeURIComponent(url);
-      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-      if (/[a-z]+:/i.test(decoded)) return false;
-    } catch {
-      return false;
-    }
-    return true;
-  },
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
-import { db, users } from '@pagespace/db';
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+  return {
+    getClientIP: vi.fn(() => '127.0.0.1'),
+    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+    isSafeReturnUrl: actual.isSafeReturnUrl,
+  };
+});
+
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.OAUTH_STATE_SECRET = 'test-oauth-state-secret';
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
@@ -135,43 +141,22 @@ describe('/api/auth/google/callback redirect', () => {
       created: true,
     });
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() =>
-              Promise.resolve([
-                {
-                  id: 'user-123',
-                  name: 'Test User',
-                  email: 'test@example.com',
-                  googleId: 'google-id',
-                  tokenVersion: 0,
-                  role: 'user',
-                },
-              ])
-            ),
-          })),
-        } as never;
-      }
-
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id',
+      tokenVersion: 0,
+      role: 'user',
     } as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 
@@ -189,7 +174,7 @@ describe('/api/auth/google/callback redirect', () => {
       driveId: 'existing-drive',
       created: false,
     });
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',
       email: 'test@example.com',
@@ -199,7 +184,7 @@ describe('/api/auth/google/callback redirect', () => {
     } as never);
 
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 
@@ -210,10 +195,10 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request(
-      'http://localhost/api/auth/google/callback?code=valid-code',
+      `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,
       { method: 'GET' }
     );
 

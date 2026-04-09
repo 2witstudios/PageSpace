@@ -3,7 +3,7 @@
  * This replaces the complex sync logic with simple computed values
  */
 
-import { isOnPrem } from '../deployment-mode';
+import { isOnPrem, isTenantMode } from '../deployment-mode';
 
 export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
 export type StorageTier = 'free' | 'pro' | 'founder' | 'business';
@@ -42,7 +42,7 @@ export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTi
  * On-prem: always returns business-tier limits regardless of stored tier.
  */
 export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier): StorageConfig {
-  if (isOnPrem()) {
+  if (isOnPrem() || isTenantMode()) {
     return {
       tier: 'business',
       quotaBytes: 50 * 1024 * 1024 * 1024,    // 50GB

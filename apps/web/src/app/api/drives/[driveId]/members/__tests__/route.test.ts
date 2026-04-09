@@ -327,7 +327,7 @@ describe('GET /api/drives/[driveId]/members', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccess).mockRejectedValue(new Error('Database connection lost'));
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
       const response = await GET(request, createContext(mockDriveId));
@@ -339,7 +339,7 @@ describe('GET /api/drives/[driveId]/members', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(checkDriveAccess).mockRejectedValue(error);
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
       await GET(request, createContext(mockDriveId));
@@ -654,7 +654,7 @@ describe('POST /api/drives/[driveId]/members', () => {
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
       vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockRejectedValue(new Error('Insert failed'));
+      vi.mocked(addDriveMember).mockRejectedValueOnce(new Error('Insert failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
         method: 'POST',
@@ -674,7 +674,7 @@ describe('POST /api/drives/[driveId]/members', () => {
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
       vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockRejectedValue(error);
+      vi.mocked(addDriveMember).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
         method: 'POST',

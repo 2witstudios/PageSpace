@@ -40,17 +40,6 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 
-/**
- * @scaffold - happy path coverage deferred
- *
- * These tests cover authentication and validation error paths.
- * Happy path tests (list_drives returning data, create_drive success, etc.)
- * are deferred because they require either:
- * - A repository seam to avoid query-builder chain mocking, OR
- * - Integration tests against a real database
- *
- * TODO: Add DriveRepository seam and test happy paths against it.
- */
 describe('drive-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,8 +47,8 @@ describe('drive-tools', () => {
 
   describe('list_drives', () => {
     it('has correct tool definition', () => {
-      expect(driveTools.list_drives).toBeDefined();
-      expect(driveTools.list_drives.description).toBeDefined();
+      expect(typeof driveTools.list_drives).toBe('object');
+      expect(typeof driveTools.list_drives.description).toBe('string');
       expect(driveTools.list_drives.description).toContain('drive');
     });
 
@@ -74,8 +63,8 @@ describe('drive-tools', () => {
 
   describe('create_drive', () => {
     it('has correct tool definition', () => {
-      expect(driveTools.create_drive).toBeDefined();
-      expect(driveTools.create_drive.description).toBeDefined();
+      expect(typeof driveTools.create_drive).toBe('object');
+      expect(typeof driveTools.create_drive.description).toBe('string');
       expect(driveTools.create_drive.description).toContain('Create');
     });
 
@@ -115,8 +104,8 @@ describe('drive-tools', () => {
 
   describe('rename_drive', () => {
     it('has correct tool definition', () => {
-      expect(driveTools.rename_drive).toBeDefined();
-      expect(driveTools.rename_drive.description).toBeDefined();
+      expect(typeof driveTools.rename_drive).toBe('object');
+      expect(typeof driveTools.rename_drive.description).toBe('string');
     });
 
     it('requires user authentication', async () => {

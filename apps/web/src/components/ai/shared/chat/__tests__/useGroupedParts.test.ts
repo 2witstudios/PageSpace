@@ -154,6 +154,46 @@ describe('useGroupedParts', () => {
     }
   });
 
+  it('given a finish tool part, should skip it entirely', () => {
+    const parts = asMessageParts([
+      { type: 'text', text: 'Done' },
+      {
+        type: 'tool-invocation',
+        toolCallId: 'tc-finish',
+        toolName: 'finish',
+        state: 'output-available',
+        input: { reason: 'Task completed' },
+        output: { done: true },
+      },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    expect(isTextGroupPart(result.current[0])).toBe(true);
+  });
+
+  it('given a finish tool part between text parts, should not create a group for it', () => {
+    const parts = asMessageParts([
+      { type: 'text', text: 'Before' },
+      {
+        type: 'tool-invocation',
+        toolCallId: 'tc-finish',
+        toolName: 'finish',
+        state: 'output-available',
+        input: {},
+      },
+      { type: 'text', text: 'After' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // finish is skipped, so both text parts merge into one group
+    expect(result.current).toHaveLength(1);
+    expect(isTextGroupPart(result.current[0])).toBe(true);
+    if (isTextGroupPart(result.current[0])) {
+      expect(result.current[0].parts).toHaveLength(2);
+    }
+  });
+
   it('given trailing file parts at end, should flush them', () => {
     const parts = asMessageParts([
       { type: 'text', text: 'Images:' },

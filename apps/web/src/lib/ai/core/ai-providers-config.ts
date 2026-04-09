@@ -60,6 +60,7 @@ export const AI_PROVIDERS = {
     models: {
       // Anthropic Models (2026)
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+      'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
 
       // Anthropic Models (2025)
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
@@ -67,6 +68,12 @@ export const AI_PROVIDERS = {
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
+
+      // OpenAI Models (2026)
+      'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
+      'openai/gpt-5.4': 'GPT-5.4',
+      'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
+      'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
@@ -103,6 +110,13 @@ export const AI_PROVIDERS = {
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
       'z-ai/glm-4-32b': 'GLM 4 32B',
+      'qwen/qwen3.5-397b-a17b': 'Qwen3.5 397B-A17B',
+      'qwen/qwen3.5-plus-2026-02-15': 'Qwen3.5 Plus',
+      'qwen/qwen3.5-flash': 'Qwen3.5 Flash',
+      'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
+      'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
+      'qwen/qwen3.5-27b': 'Qwen3.5 27B',
+      'qwen/qwen3-max-thinking': 'Qwen3 Max Thinking',
       'qwen/qwen3-max': 'Qwen3 Max',
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
@@ -116,6 +130,9 @@ export const AI_PROVIDERS = {
 
       // Google Models (via OpenRouter)
       'google/gemini-3-pro-preview': 'Gemini 3 Pro',
+      'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
+      'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
       'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
       'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -132,6 +149,7 @@ export const AI_PROVIDERS = {
       'x-ai/grok-4': 'Grok 4',
 
       // Other Models
+      'inception/mercury-2': 'Mercury 2',
       'inception/mercury': 'Mercury',
       'writer/palmyra-x5': 'Palmyra X5',
     },
@@ -195,6 +213,9 @@ export const AI_PROVIDERS = {
     models: {
       // Gemini 3 Series (2025)
       'gemini-3-pro': 'Gemini 3 Pro',
+      'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+      'gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
+      'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
       'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       // Gemini 2.5 Series (2025)
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -214,7 +235,12 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      // GPT-5.4 Models (2026)
+      'gpt-5.4-pro': 'GPT-5.4 Pro',
+      'gpt-5.4': 'GPT-5.4',
+
       // GPT-5.3 Models (2026)
+      'gpt-5.3-chat-latest': 'GPT-5.3 Chat',
       'gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // GPT-5.2 Models (2025)
@@ -263,6 +289,7 @@ export const AI_PROVIDERS = {
     models: {
       // Claude 4.6 Models (2026)
       'claude-opus-4-6-20260204': 'Claude Opus 4.6',
+      'claude-sonnet-4-6-20260217': 'Claude Sonnet 4.6',
 
       // Claude 4.5 Models (2025)
       'claude-opus-4-5-20251124': 'Claude Opus 4.5',

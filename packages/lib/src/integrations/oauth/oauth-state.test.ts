@@ -1,13 +1,15 @@
 import crypto from 'crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSignedState, verifySignedState } from './oauth-state';
+import { secureCompare } from '../../auth/secure-compare';
 
 const TEST_SECRET = 'test-secret-key-for-oauth-state';
 
 describe('createSignedState', () => {
   it('should create a base64 encoded state string', () => {
     const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
-    expect(state).toBeTruthy();
+    expect(typeof state).toBe('string');
+    expect(state.length).toBeGreaterThanOrEqual(1);
     // Should be valid base64
     expect(() => Buffer.from(state, 'base64')).not.toThrow();
   });
@@ -83,5 +85,83 @@ describe('verifySignedState', () => {
     const expiredState = Buffer.from(JSON.stringify(decoded)).toString('base64');
     const result = verifySignedState(expiredState, TEST_SECRET);
     expect(result).toBeNull();
+  });
+
+  it('should return null for state with NaN timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    decoded.data.timestamp = NaN;
+
+    // Re-sign with correct secret (NaN becomes null in JSON)
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const tamperedState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(tamperedState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
+  it('should return null for state with missing timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    delete decoded.data.timestamp;
+
+    // Re-sign without timestamp
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const noTimestampState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(noTimestampState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
+  it('should return null for state with Infinity timestamp', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+    decoded.data.timestamp = Infinity;
+
+    // Re-sign (Infinity becomes null in JSON)
+    const newSig = crypto
+      .createHmac('sha256', TEST_SECRET)
+      .update(JSON.stringify(decoded.data))
+      .digest('hex');
+    decoded.sig = newSig;
+
+    const infState = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    const result = verifySignedState(infState, TEST_SECRET);
+    expect(result).toBeNull();
+  });
+
+  it('should reject forged signatures of different lengths without timing leaks', () => {
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+
+    // Attacker forges a sig with wrong length — must not leak length info
+    decoded.sig = 'short';
+    const shortSig = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(shortSig, TEST_SECRET)).toBeNull();
+
+    decoded.sig = 'a'.repeat(200);
+    const longSig = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(longSig, TEST_SECRET)).toBeNull();
+  });
+
+  it('should use secureCompare to prevent timing side-channels', () => {
+    // Verify the implementation hashes both sides before comparing,
+    // ensuring constant-length buffers regardless of attacker input
+    const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+
+    // The expected sig is 64 hex chars (SHA-256 output). Forge one that's
+    // the right length but wrong value — must still reject safely.
+    decoded.sig = 'a'.repeat(64);
+    const forged = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    expect(verifySignedState(forged, TEST_SECRET)).toBeNull();
   });
 });

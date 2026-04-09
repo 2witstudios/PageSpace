@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.4",
@@ -25,6 +26,8 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@gridland/utils": "^0.2.53",
+    "@gridland/web": "^0.2.53",
     "@monaco-editor/react": "^4.7.0",
     "@openrouter/ai-sdk-provider": "^1.1.2",
     "@pagespace/db": "workspace:*",
@@ -90,7 +93,6 @@
     "marked": "^17.0.1",
     "monaco-editor": "^0.52.2",
     "motion": "^12.23.22",
-    "nanoid": "^5.1.6",
     "next": "15.3.9",
     "next-themes": "^0.4.6",
     "next-ws": "^2.1.5",

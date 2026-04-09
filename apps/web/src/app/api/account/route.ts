@@ -1,8 +1,8 @@
 import { users, db, eq } from '@pagespace/db';
-import { createHash } from 'crypto';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
+import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -57,9 +57,7 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Name and email are required' }, { status: 400 });
     }
 
-    // Email validation - use a linear-time regex that prevents ReDoS
-    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    if (!emailRegex.test(email)) {
+    if (!isValidEmail(email)) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
@@ -118,15 +116,6 @@ export async function PATCH(req: Request) {
 
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-/**
- * Create an anonymized identifier for GDPR-compliant audit trail preservation.
- * Uses a deterministic hash so the same user ID always produces the same anonymized ID.
- */
-function createAnonymizedActorEmail(userId: string): string {
-  const hash = createHash('sha256').update(userId).digest('hex').slice(0, 12);
-  return `deleted_user_${hash}`;
-}
 
 const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
@@ -258,6 +247,15 @@ export async function DELETE(req: Request) {
       await deleteAiUsageLogsForUser(userId);
     } catch (error) {
       loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
+    }
+
+    // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
+    // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
+    // (tamper-evident hash chain must remain intact for compliance)
+    try {
+      await deleteMonitoringDataForUser(userId);
+    } catch (error) {
+      loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
     }
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)

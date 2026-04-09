@@ -4,8 +4,9 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import crypto from 'crypto';
+import { createSignedState } from '@pagespace/lib/integrations';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { generatePKCE } from '@pagespace/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
@@ -75,29 +76,21 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create state object to preserve platform and deviceId through OAuth redirect
-    const stateData = {
-      returnUrl: returnUrl || '/dashboard',
-      platform: platform || 'web',
-      ...(deviceId && { deviceId }),
-      ...(deviceName && { deviceName }),
-    };
+    // Create signed state with HMAC-SHA256 + timestamp for tamper protection and expiration.
+    const stateParam = createSignedState(
+      {
+        returnUrl: returnUrl || '/dashboard',
+        platform: platform || 'web',
+        ...(deviceId && { deviceId }),
+        ...(deviceName && { deviceName }),
+      },
+      process.env.OAUTH_STATE_SECRET!
+    );
 
-    // Sign state parameter with HMAC-SHA256 to prevent tampering
-    const statePayload = JSON.stringify(stateData);
-    const signature = crypto
-      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
-      .update(statePayload)
-      .digest('hex');
+    // Generate PKCE challenge (code_verifier stored server-side in Redis)
+    const pkce = await generatePKCE(stateParam);
 
-    const stateWithSignature = JSON.stringify({
-      data: stateData,
-      sig: signature,
-    });
-
-    const stateParam = Buffer.from(stateWithSignature).toString('base64');
-
-    // Generate OAuth URL
+    // Generate OAuth URL (with PKCE when Redis is available)
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,
@@ -106,6 +99,10 @@ export async function POST(req: Request) {
       access_type: 'offline',
       prompt: 'consent',
       state: stateParam,
+      ...(pkce && {
+        code_challenge: pkce.codeChallenge,
+        code_challenge_method: pkce.codeChallengeMethod,
+      }),
     });
 
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;

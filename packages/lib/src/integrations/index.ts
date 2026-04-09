@@ -120,6 +120,8 @@ export {
   updateProvider,
   deleteProvider,
   countProviderConnections,
+  seedBuiltinProviders,
+  refreshBuiltinProviders,
 } from './repositories/provider-repository';
 
 // Config Repository
@@ -176,4 +178,6 @@ export {
   isBuiltinProvider,
   genericWebhookProvider,
   githubProvider,
+  notionProvider,
+  slackProvider,
 } from './providers';

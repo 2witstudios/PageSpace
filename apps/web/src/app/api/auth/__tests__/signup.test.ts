@@ -15,31 +15,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../signup/route';
 
 // Mock all external dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email', id: 'id' },
-  drives: {},
-  userAiSettings: {},
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([
-          {
-            id: 'new-user-id',
-            name: 'New User',
-            email: 'new@example.com',
-            tokenVersion: 0,
-            role: 'user',
-          },
-        ]),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
+    createUser: vi.fn(),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -94,6 +80,7 @@ vi.mock('@pagespace/lib/server', () => ({
 vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
+
 
 // Mock distributed rate limiting (P1-T5)
 vi.mock('@pagespace/lib/security', () => ({
@@ -152,9 +139,9 @@ vi.mock('react', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
 import {
@@ -202,7 +189,15 @@ describe('/api/auth/signup', () => {
     vi.clearAllMocks();
 
     // Default: no existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+    // Default: user creation returns a user object
+    vi.mocked(authRepository.createUser).mockResolvedValue({
+      id: 'new-user-id',
+      name: 'New User',
+      email: 'new@example.com',
+      tokenVersion: 0,
+      role: 'user',
+    } as never);
     // Reset client IP mock
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
@@ -221,16 +216,19 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: SESSION_DURATION_MS,
+        createdByIp: undefined,
+      });
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [signupHeaders, signupToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(signupHeaders).toBeInstanceOf(Headers);
+      expect(signupToken).toBe('ps_sess_mock_session_token');
     });
 
     it('hashes password with bcrypt cost factor 12', async () => {
@@ -241,39 +239,17 @@ describe('/api/auth/signup', () => {
     });
 
     it('creates user with correct data', async () => {
-      interface CapturedUserData {
-        email?: string;
-        name?: string;
-        password?: string;
-      }
-      let capturedUserData: CapturedUserData | undefined;
-      const mockValues = vi.fn().mockImplementation((data: CapturedUserData) => {
-        if (!capturedUserData && data.email) {
-          capturedUserData = data;
-        }
-        return {
-          returning: vi.fn().mockResolvedValue([
-            {
-              id: 'new-user-id',
-              name: data.name || 'New User',
-              email: data.email || 'new@example.com',
-              tokenVersion: 0,
-              role: 'user',
-            },
-          ]),
-        };
-      });
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(capturedUserData).toBeDefined();
-      expect(capturedUserData!.email).toBe('new@example.com');
-      expect(capturedUserData!.name).toBe('New User');
-      expect(typeof capturedUserData!.password).toBe('string');
-      expect(capturedUserData!.password).not.toBe('ValidPass123!');
-      expect(capturedUserData!.password).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/);
+      const createUserArg = vi.mocked(authRepository.createUser).mock.calls[0][0] as Record<string, unknown>;
+      expect(createUserArg.email).toBe('new@example.com');
+      expect(createUserArg.name).toBe('New User');
+      expect(createUserArg.id).toBe('mock-cuid');
+      expect(createUserArg.storageUsedBytes).toBe(0);
+      expect(createUserArg.subscriptionTier).toBe('free');
+      expect(createUserArg.password).toMatch(/^\$2[aby]?\$\d{1,2}\$/);
+      expect(createUserArg.tosAcceptedAt).toBeInstanceOf(Date);
     });
 
     it('creates a personal drive for new user', async () => {
@@ -287,25 +263,26 @@ describe('/api/auth/signup', () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalled();
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'new@example.com',
-          subject: 'Verify your PageSpace email',
-        })
-      );
+      expect(createVerificationToken).toHaveBeenCalledWith({ userId: 'new-user-id', type: 'email_verification' });
+      const emailArg = vi.mocked(sendEmail).mock.calls[0][0] as unknown as Record<string, unknown>;
+      expect(emailArg.to).toBe('new@example.com');
+      expect(emailArg.subject).toBe('Verify your PageSpace email');
     });
 
     it('creates notification for email verification', async () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(createNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'EMAIL_VERIFICATION_REQUIRED',
-          title: 'Please verify your email',
-        })
-      );
+      expect(createNotification).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'EMAIL_VERIFICATION_REQUIRED',
+        title: 'Please verify your email',
+        message: 'Check your inbox for a verification link. You can resend it from your account settings.',
+        metadata: {
+          email: 'new@example.com',
+          settingsUrl: '/settings/account',
+        },
+      });
     });
 
     it('logs successful signup event', async () => {
@@ -326,10 +303,12 @@ describe('/api/auth/signup', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
         'signup',
-        expect.objectContaining({
+        {
           email: 'new@example.com',
           name: 'New User',
-        })
+          ip: '192.168.1.1',
+          userAgent: null,
+        }
       );
     });
 
@@ -347,7 +326,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if verification email fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP error'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -357,7 +336,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
         new Error('Database error')
       );
 
@@ -369,15 +348,15 @@ describe('/api/auth/signup', () => {
       expect(response.headers.get('Location')).not.toContain('/dashboard/new-drive-id');
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Failed to provision Getting Started drive',
-        expect.any(Error),
-        expect.objectContaining({ userId: 'new-user-id' })
+        new Error('Database error'),
+        { userId: 'new-user-id' }
       );
     });
   });
 
   describe('with duplicate email', () => {
     it('returns 409 when email already exists', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
       } as never);
@@ -392,7 +371,7 @@ describe('/api/auth/signup', () => {
 
     it('logs failed signup for duplicate email', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
       } as never);
@@ -424,7 +403,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.name).toBeDefined();
+      expect(body.errors.name).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid email format', async () => {
@@ -437,7 +416,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid email address']);
     });
 
     it('returns 400 for password shorter than 12 characters', async () => {
@@ -451,7 +430,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must be at least 12 characters long']);
     });
 
     it('returns 400 for password without uppercase', async () => {
@@ -465,7 +444,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one uppercase letter']);
     });
 
     it('returns 400 for password without lowercase', async () => {
@@ -479,7 +458,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one lowercase letter']);
     });
 
     it('returns 400 for password without number', async () => {
@@ -493,7 +472,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.password).toBeDefined();
+      expect(body.errors.password).toEqual(['Password must contain at least one number']);
     });
 
     it('returns 400 when passwords do not match', async () => {
@@ -506,7 +485,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.confirmPassword).toBeDefined();
+      expect(body.errors.confirmPassword).toEqual(['Passwords do not match']);
     });
 
     it('returns 400 when ToS not accepted', async () => {
@@ -519,7 +498,7 @@ describe('/api/auth/signup', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.errors.acceptedTos).toBeDefined();
+      expect(body.errors.acceptedTos).toEqual(['You must accept the Terms of Service and Privacy Policy']);
     });
   });
 
@@ -649,21 +628,19 @@ describe('/api/auth/signup', () => {
       await POST(request);
 
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^signup:ip:/),
-        expect.any(Object)
+        'signup:ip:10.0.0.1',
+        DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^signup:email:/),
-        expect.any(Object)
+        'signup:email:new@example.com',
+        DISTRIBUTED_RATE_LIMITS.SIGNUP
       );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(db.insert).mockImplementation(() => {
-        throw new Error('Database connection failed');
-      });
+      vi.mocked(authRepository.createUser).mockRejectedValueOnce(new Error('Database connection failed'));
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -671,6 +648,137 @@ describe('/api/auth/signup', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('An unexpected error occurred.');
+    });
+  });
+
+  describe('on-prem mode', () => {
+    it('returns 403 when on-prem mode is enabled', async () => {
+      const lib = await import('@pagespace/lib');
+      vi.spyOn(lib, 'isOnPrem').mockReturnValueOnce(true);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Self-registration is disabled');
+    });
+  });
+
+  describe('CSRF validation', () => {
+    it('returns 403 when CSRF header is missing', async () => {
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': 'login_csrf=valid-csrf-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF cookie is missing', async () => {
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({});
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISSING');
+    });
+
+    it('returns 403 when CSRF header does not match cookie', async () => {
+      const { parse } = await import('cookie');
+      vi.mocked(parse).mockReturnValueOnce({ login_csrf: 'different-token' });
+
+      const request = new Request('http://localhost/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+          'Cookie': 'login_csrf=different-token',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
+    });
+
+    it('returns 403 when CSRF token validation fails', async () => {
+      const { validateLoginCSRFToken } = await import('@/lib/auth');
+      vi.mocked(validateLoginCSRFToken).mockReturnValueOnce(false);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('LOGIN_CSRF_INVALID');
+    });
+  });
+
+  describe('session creation edge cases', () => {
+    beforeEach(() => {
+      // authRepository.createUser default mock is set in outer beforeEach
+    });
+
+    it('returns 500 when session validation fails after creation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to create session.');
+    });
+
+    it('logs warning when rate limit reset fails', async () => {
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
+
+      const request = createSignupRequest(validSignupPayload);
+      await POST(request);
+
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful signup',
+        { failureCount: 1, reasons: ['Redis down'] }
+      );
+    });
+
+    it('redirects to /dashboard/driveId even when drive already existed', async () => {
+      // provisionGettingStartedDriveIfNeeded always returns a drive object
+      // The route uses the driveId for redirect regardless of created flag
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce({
+        driveId: 'existing-drive',
+        created: false,
+      } as never);
+
+      const request = createSignupRequest(validSignupPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(303);
+      const location = response.headers.get('Location');
+      expect(location).toContain('/dashboard/existing-drive');
     });
   });
 });

@@ -15,8 +15,9 @@
  *   - Logs a warning on first request
  */
 
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac } from 'crypto';
 import { NextResponse } from 'next/server';
+import { secureCompare } from '@pagespace/lib';
 
 let cronSecretWarningLogged = false;
 
@@ -208,10 +209,7 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
 
   const expectedSignature = computeCronSignature(cronSecret, timestamp, nonce, method, path);
 
-  const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
-  const providedBuffer = Buffer.from(signature, 'utf-8');
-
-  if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+  if (!secureCompare(signature, expectedSignature)) {
     return NextResponse.json(
       { error: 'Forbidden - invalid cron signature' },
       { status: 403 }

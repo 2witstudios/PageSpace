@@ -1,11 +1,6 @@
 /**
- * @scaffold - aggregation tripwire
- *
- * This test validates that pageSpaceTools correctly aggregates all tool modules.
- * It's a scaffold test because:
- * - The unit is pure wiring/aggregation with no business logic
- * - Changes here indicate tools were added/removed/renamed
- * - Failures should prompt review of whether the change was intentional
+ * Validates that pageSpaceTools correctly aggregates all tool modules.
+ * Changes here indicate tools were added/removed/renamed.
  */
 import { describe, it, expect, vi } from 'vitest';
 
@@ -103,6 +98,12 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/github-import-tools', () => ({
+  githubImportTools: {
+    import_from_github: { name: 'import_from_github', description: 'Import from GitHub' },
+  },
+}));
+
 import { pageSpaceTools } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
@@ -116,6 +117,7 @@ import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
+import { githubImportTools } from '../../tools/github-import-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -133,6 +135,7 @@ describe('ai-tools', () => {
         ...calendarReadTools,
         ...calendarWriteTools,
         ...channelTools,
+        ...githubImportTools,
       });
     });
 
@@ -150,6 +153,7 @@ describe('ai-tools', () => {
         Object.keys(calendarReadTools),
         Object.keys(calendarWriteTools),
         Object.keys(channelTools),
+        Object.keys(githubImportTools),
       ];
 
       const allKeys = moduleKeysets.flat();

@@ -238,7 +238,7 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
     });
 
     it('should reject when roleIds contains invalid IDs', async () => {
-      vi.mocked(reorderDriveRoles).mockRejectedValue(new Error('Invalid role IDs'));
+      vi.mocked(reorderDriveRoles).mockRejectedValueOnce(new Error('Invalid role IDs'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -315,7 +315,7 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
-      vi.mocked(reorderDriveRoles).mockRejectedValue(new Error('Transaction failed'));
+      vi.mocked(reorderDriveRoles).mockRejectedValueOnce(new Error('Transaction failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/reorder`, {
         method: 'PATCH',
@@ -347,15 +347,16 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
       expect(logRoleActivity).toHaveBeenCalledWith(
         mockUserId,
         'role_reorder',
-        expect.objectContaining({
+        {
           driveId: mockDriveId,
           driveName: 'Test Drive',
           previousOrder: ['role_1', 'role_2', 'role_3'],
           newOrder: newOrder,
-        }),
-        expect.objectContaining({
+        },
+        {
           actorEmail: 'test@example.com',
-        })
+          actorDisplayName: 'Test User',
+        }
       );
     });
 

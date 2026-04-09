@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, userAiSettings } from '@pagespace/db';
+import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import {
   verifySignupRegistration,
   sessionService,
@@ -14,7 +14,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 
@@ -28,6 +28,9 @@ const verifySchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service',
   }),
+  platform: z.enum(['web', 'desktop']).optional().default('web'),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
 });
 
 /**
@@ -153,12 +156,7 @@ export async function POST(req: Request) {
 
     // Add default 'ollama' provider for the new user
     try {
-      await db.insert(userAiSettings).values({
-        userId,
-        provider: 'ollama',
-        baseUrl: 'http://host.docker.internal:11434',
-        updatedAt: new Date(),
-      });
+      await oauthRepository.createDefaultAiSettings(userId);
     } catch (error) {
       loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }
@@ -189,12 +187,15 @@ export async function POST(req: Request) {
       ip: clientIP,
     });
 
+    const { platform, deviceId, deviceName: deviceNameField } = validation.data;
+
     // Create session
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -210,6 +211,24 @@ export async function POST(req: Request) {
 
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createDeviceToken({
+          userId, deviceId,
+          tokenVersion: 1, // verifySignupRegistration creates users with tokenVersion: 1
+          platform: platform || 'web',
+          deviceName: deviceNameField || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     loggers.auth.info('Passkey signup session created', {
       userId,
@@ -239,6 +258,9 @@ export async function POST(req: Request) {
         success: true,
         userId,
         redirectUrl: `${dashboardPath}?welcome=true`,
+        csrfToken: newCsrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
     );

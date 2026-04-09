@@ -122,14 +122,12 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('allows JWT and MCP auth', async () => {
-      await GET(createRequest(), { params: mockParams });
+      const request = createRequest();
+      await GET(request, { params: mockParams });
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          allow: ['session', 'mcp'],
-          requireCSRF: false,
-        })
+        request,
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -211,12 +209,17 @@ describe('GET /api/pages/[pageId]/history', () => {
         { params: mockParams }
       );
 
+      // startDate '2024-01-01' is before the 30-day retention cutoff,
+      // so the route clamps it to the retention boundary (2024-06-15 minus 30 days)
+      const retentionCutoff = new Date('2024-06-15T12:00:00Z');
+      retentionCutoff.setDate(retentionCutoff.getDate() - 30);
+
       expect(getPageVersionHistory).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
         expect.objectContaining({
-          startDate: expect.any(Date),
-          endDate: expect.any(Date),
+          startDate: retentionCutoff,
+          endDate: new Date('2024-12-31'),
         })
       );
     });
@@ -262,11 +265,11 @@ describe('GET /api/pages/[pageId]/history', () => {
 
       await GET(createRequest(), { params: mockParams });
 
-      // Should have called with a startDate approximately 7 days ago
+      // Should have called with a startDate exactly 7 days ago
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2]!;
 
-      expect(options.startDate).toBeDefined();
+      expect(options.startDate).toBeInstanceOf(Date);
       const daysDiff = Math.floor(
         (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
@@ -281,7 +284,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2]!;
 
-      expect(options.startDate).toBeDefined();
+      expect(options.startDate).toBeInstanceOf(Date);
       const daysDiff = Math.floor(
         (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );

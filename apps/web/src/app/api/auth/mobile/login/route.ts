@@ -1,5 +1,4 @@
-import { users } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
@@ -95,9 +94,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
+    const user = await authRepository.findUserByEmail(email);
 
     // Always perform bcrypt comparison to prevent timing attacks
     // Use a fake hash for non-existent users to maintain consistent timing

@@ -2,12 +2,20 @@ import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-c
 import { STATUS_ORDER } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task, StatusConfigsByTaskList } from './types';
 
+export type { StatusConfigsByTaskList };
+
+export interface StatusDisplay {
+  label: string;
+  color: string;
+  group: TaskStatusGroup;
+}
+
 /**
  * Resolve status display for a task. Prefers server-enriched metadata
  * (statusLabel/statusColor/statusGroup) when all three are present,
  * then falls back to DEFAULT_STATUS_CONFIG, then to a safe default.
  */
-export function getStatusDisplay(task: Task): { label: string; color: string; group: TaskStatusGroup } {
+export function getStatusDisplay(task: Task): StatusDisplay {
   if (task.statusLabel && task.statusColor && task.statusGroup) {
     return { label: task.statusLabel, color: task.statusColor, group: task.statusGroup };
   }
@@ -16,10 +24,6 @@ export function getStatusDisplay(task: Task): { label: string; color: string; gr
   return { label: task.status, color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400', group: 'todo' };
 }
 
-/**
- * Get comma-separated display text for task assignees.
- * Prefers the multi-assignee array, falls back to legacy single assignee fields.
- */
 /**
  * Aggregate statuses across task lists, deduped by slug. Falls back to
  * default statuses when no configs are present.

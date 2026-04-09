@@ -261,11 +261,11 @@ describe('csrf-utils', () => {
      * REVIEW: Timing-safe comparison is a security implementation detail.
      * This test verifies normal operation; actual timing safety requires
      * statistical timing analysis which is out of scope for unit tests.
-     * The implementation uses crypto.timingSafeEqual which is trusted.
+     * The implementation uses secureCompare (SHA-256 + timingSafeEqual) which is trusted.
      */
     it('validateCSRFToken_withValidToken_operatesCorrectly', () => {
       // This test verifies the signature comparison path works correctly
-      // The timing-safe property is provided by Node's crypto.timingSafeEqual
+      // The timing-safe property is provided by secureCompare from @pagespace/lib
       const token = generateCSRFToken(testSessionId)
       const isValid = validateCSRFToken(token, testSessionId)
       expect(isValid).toBe(true)

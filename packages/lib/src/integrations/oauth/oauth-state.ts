@@ -7,6 +7,7 @@
  */
 
 import crypto from 'crypto';
+import { secureCompare } from '../../auth/secure-compare';
 
 // State expiration: 10 minutes
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -59,23 +60,24 @@ export function verifySignedState<T extends Record<string, unknown> = Record<str
       return null;
     }
 
-    // Verify HMAC signature using timing-safe comparison
     const expectedSignature = crypto
       .createHmac('sha256', signingKey)
       .update(JSON.stringify(stateWithSignature.data))
       .digest('hex');
 
-    const sigBuffer = Buffer.from(stateWithSignature.sig, 'utf-8');
-    const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
-
-    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+    if (!secureCompare(String(stateWithSignature.sig), expectedSignature)) {
       return null;
     }
 
     const data = stateWithSignature.data;
 
+    // Reject state with missing or invalid timestamp
+    if (typeof data.timestamp !== 'number' || !Number.isFinite(data.timestamp)) {
+      return null;
+    }
+
     // Check state expiration
-    if (typeof data.timestamp === 'number' && Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
+    if (Date.now() - data.timestamp > STATE_MAX_AGE_MS) {
       return null;
     }
 

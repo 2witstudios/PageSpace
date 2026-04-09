@@ -198,13 +198,13 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(parseSheetContent).toHaveBeenCalled();
+      expect(parseSheetContent).toHaveBeenCalledWith(mockPage().content);
       expect(evaluateSheet).toHaveBeenCalledWith(
         mockSheetData,
-        expect.objectContaining({
+        {
           pageId: mockPageId,
           pageTitle: 'Test Sheet',
-        })
+        }
       );
       expect(generateCSV).toHaveBeenCalledWith(mockEvaluation.display);
     });
@@ -241,7 +241,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      expect(response.headers.get('Content-Length')).toBeDefined();
+      expect(response.headers.get('Content-Length')).toBe('16');
     });
   });
 
@@ -253,10 +253,10 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'csv',
           pageTitle: 'Test Sheet',
-        })
+        }
       );
     });
   });
@@ -287,7 +287,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

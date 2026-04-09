@@ -284,9 +284,9 @@ describe('Upcoming Invoice API', () => {
         subtotal: 1500,
         total: 1500,
         currency: 'usd',
-        periodStart: expect.any(String),
-        periodEnd: expect.any(String),
-        nextPaymentAttempt: expect.any(String),
+        periodStart: new Date(1700000000 * 1000).toISOString(),
+        periodEnd: new Date(1702592000 * 1000).toISOString(),
+        nextPaymentAttempt: new Date(1702592000 * 1000).toISOString(),
       });
       expect(body.invoice.lines).toHaveLength(1);
       expect(body.proration).toBeNull();

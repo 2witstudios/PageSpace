@@ -7,6 +7,9 @@ import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 
+// Module-level flag to prevent concurrent lazy device registration attempts
+let deviceRegistrationInFlight = false;
+
 interface User {
   id: string;
   name: string | null;
@@ -309,22 +312,54 @@ export function useAuth(): {
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
 
-  // Capture device token from URL (signup redirect) and store in localStorage
+  // Capture device token from cookie (set by OAuth/signup redirect) and persist to localStorage
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-    const params = new URLSearchParams(window.location.search);
-    const deviceTokenParam = params.get('deviceToken');
-
-    if (deviceTokenParam) {
-      localStorage.setItem('deviceToken', deviceTokenParam);
-      // Clean up URL
-      params.delete('deviceToken');
-      const newUrl = new URL(window.location.href);
-      newUrl.search = params.toString();
-      window.history.replaceState({}, '', newUrl.toString());
+    const match = document.cookie.match(/(?:^|;\s*)ps_device_token=([^;]+)/);
+    if (match?.[1]) {
+      localStorage.setItem('deviceToken', match[1]);
+      // Clear the short-lived cookie
+      document.cookie = 'ps_device_token=; Path=/; Max-Age=0';
     }
   }, []);
+
+  // Lazy device registration: if authenticated but no device token (e.g., magic link login),
+  // register the device to enable session recovery when the cookie expires.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+    if (!isAuthenticated || !hasHydrated) return;
+    if (window.electron?.isDesktop) return;
+    if (deviceRegistrationInFlight) return;
+
+    const existingToken = localStorage.getItem('deviceToken');
+    if (existingToken) return;
+
+    deviceRegistrationInFlight = true;
+
+    const registerDevice = async () => {
+      try {
+        // Skip for Capacitor apps — they handle device tokens via platform-specific mechanisms
+        const { isCapacitorApp } = await import('@/lib/capacitor-bridge');
+        if (isCapacitorApp()) return;
+
+        const deviceId = getOrCreateDeviceId();
+        const deviceName = getDeviceName();
+
+        const data = await post<{ deviceToken?: string }>('/api/auth/device/register', { deviceId, deviceName });
+        if (data?.deviceToken) {
+          localStorage.setItem('deviceToken', data.deviceToken);
+          console.log('[AUTH_HOOK] Device registered via lazy registration');
+        }
+      } catch (error) {
+        console.warn('[AUTH_HOOK] Lazy device registration failed:', error);
+      } finally {
+        deviceRegistrationInFlight = false;
+      }
+    };
+
+    void registerDevice();
+  }, [isAuthenticated, hasHydrated]);
 
   // Initial auth check - simplified with store-level deduplication
   // Desktop OAuth now uses secure exchange codes handled in Electron main process

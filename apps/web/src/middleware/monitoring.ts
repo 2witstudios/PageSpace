@@ -10,6 +10,7 @@ import {
   REQUEST_ID_HEADER,
 } from '@/lib/request-id/request-id';
 import { db, apiMetrics } from '@pagespace/db';
+import { sanitizeEndpoint } from '@/lib/monitoring/ingest-sanitizer';
 
 // In-memory buffer for metrics (flushed to database every 30s or when buffer is full)
 interface RequestMetrics {
@@ -180,7 +181,6 @@ interface MonitoringIngestPayload {
   driveId?: string;
   pageId?: string;
   metadata?: Record<string, unknown>;
-  query?: Record<string, unknown>;
 }
 
 const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
@@ -345,9 +345,11 @@ export async function monitoringMiddleware(
   // Extract context
   const context = extractRequestContext(request);
   const userId = await extractUserId(request);
-  
+  const cleanEndpoint = sanitizeEndpoint(pathname);
+  const requestSize = getRequestSize(request);
+
   // Create request-scoped logger
-  const requestLogger = logger.child({ 
+  const requestLogger = logger.child({
     requestId,
     userId,
     ...context
@@ -359,16 +361,15 @@ export async function monitoringMiddleware(
   try {
     // Execute the request
     const response = await next();
-    
+
     // Calculate metrics
     const duration = Date.now() - startTime;
-    const requestSize = getRequestSize(request);
     const responseSize = getResponseSize(response);
     const statusCode = response.status;
 
     // Track metrics
     await metricsCollector.track({
-      endpoint: pathname,
+      endpoint: cleanEndpoint,
       method: request.method,
       statusCode,
       duration,
@@ -389,7 +390,7 @@ export async function monitoringMiddleware(
         requestId,
         timestamp: startedAt.toISOString(),
         method: request.method.toUpperCase(),
-        endpoint: pathname,
+        endpoint: cleanEndpoint,
         statusCode,
         duration,
         requestSize,
@@ -398,7 +399,6 @@ export async function monitoringMiddleware(
         sessionId: context.sessionId,
         ip: context.ip,
         userAgent: context.userAgent,
-        query: context.query as Record<string, unknown> | undefined,
         error: isServerError ? `HTTP ${statusCode}` : undefined,
         errorName: isServerError ? 'HttpError' : undefined,
       });
@@ -433,7 +433,7 @@ export async function monitoringMiddleware(
 
     // Track error metrics
     await metricsCollector.track({
-      endpoint: pathname,
+      endpoint: cleanEndpoint,
       method: request.method,
       statusCode: 500,
       duration,
@@ -452,10 +452,10 @@ export async function monitoringMiddleware(
         requestId,
         timestamp: startedAt.toISOString(),
         method: request.method.toUpperCase(),
-        endpoint: pathname,
+        endpoint: cleanEndpoint,
         statusCode: 500,
         duration,
-        requestSize: getRequestSize(request),
+        requestSize,
         responseSize: 0,
         userId,
         sessionId: context.sessionId,
@@ -464,7 +464,6 @@ export async function monitoringMiddleware(
         error: errorMessage,
         errorName,
         errorStack,
-        query: context.query as Record<string, unknown> | undefined,
       });
     }
 

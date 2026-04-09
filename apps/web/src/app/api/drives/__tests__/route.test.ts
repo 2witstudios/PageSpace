@@ -51,7 +51,7 @@ vi.mock('@/lib/auth', () => ({
 import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Helpers
@@ -217,7 +217,7 @@ describe('GET /api/drives', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(listAccessibleDrives).mockRejectedValue(new Error('Database connection lost'));
+      vi.mocked(listAccessibleDrives).mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request('https://example.com/api/drives');
       const response = await GET(request);
@@ -229,7 +229,7 @@ describe('GET /api/drives', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(listAccessibleDrives).mockRejectedValue(error);
+      vi.mocked(listAccessibleDrives).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives');
       await GET(request);
@@ -425,7 +425,10 @@ describe('POST /api/drives', () => {
         'created',
         { name: 'Broadcast Drive', slug: 'broadcast-drive' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: 'drive_broadcast', event: 'created' }),
+        ['user_123']
+      );
     });
 
     it('should track drive creation for analytics', async () => {
@@ -454,7 +457,7 @@ describe('POST /api/drives', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(createDrive).mockRejectedValue(new Error('Insert failed'));
+      vi.mocked(createDrive).mockRejectedValueOnce(new Error('Insert failed'));
 
       const request = new Request('https://example.com/api/drives', {
         method: 'POST',
@@ -470,7 +473,7 @@ describe('POST /api/drives', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Creation failed');
-      vi.mocked(createDrive).mockRejectedValue(error);
+      vi.mocked(createDrive).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives', {
         method: 'POST',
@@ -480,6 +483,26 @@ describe('POST /api/drives', () => {
       await POST(request);
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error creating drive:', error);
+    });
+  });
+
+  describe('MCP scope check', () => {
+    it('should return scope error when scoped MCP token tries to create', async () => {
+      const scopeErrorResponse = NextResponse.json(
+        { error: 'Scoped tokens cannot create drives' },
+        { status: 403 }
+      );
+      vi.mocked(checkMCPCreateScope).mockReturnValue(scopeErrorResponse);
+
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'MCP Drive' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(403);
+      expect(createDrive).not.toHaveBeenCalled();
     });
   });
 });

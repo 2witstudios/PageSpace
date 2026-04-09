@@ -13,7 +13,13 @@ import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
-});
+  platform: z.enum(['web', 'desktop']).optional(),
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
+}).refine(
+  (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
+  { message: 'deviceId and deviceName are required for desktop platform' }
+);
 
 /** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
 function maskEmail(email: string): string {
@@ -92,7 +98,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email } = validation.data;
+    const { email, platform, deviceId, deviceName } = validation.data;
     const normalizedEmail = email.toLowerCase().trim();
 
     // Rate limit by IP and email
@@ -138,7 +144,13 @@ export async function POST(req: Request) {
     }
 
     // Create magic link token (handles both existing and new users)
-    const result = await createMagicLinkToken({ email: normalizedEmail });
+    // Pass platform/deviceId so the verify route can redirect desktop apps via deep link
+    const result = await createMagicLinkToken({
+      email: normalizedEmail,
+      ...(platform && { platform }),
+      ...(deviceId && { deviceId }),
+      ...(deviceName && { deviceName }),
+    });
 
     // SECURITY: Always return same response to prevent email enumeration
     // Even if user is suspended, we return success but don't send email

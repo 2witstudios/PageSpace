@@ -51,7 +51,7 @@ import {
   generateCSRFToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
-import { db, users, eq } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -229,9 +229,7 @@ export async function POST(req: Request) {
     });
 
     if (resolvedImage !== (user.image ?? null)) {
-      await db.update(users)
-        .set({ image: resolvedImage })
-        .where(eq(users.id, user.id));
+      await authRepository.updateUser(user.id, { image: resolvedImage });
       user = { ...user, image: resolvedImage };
     }
 

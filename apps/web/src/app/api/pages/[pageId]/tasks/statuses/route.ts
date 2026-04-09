@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { db, taskLists, taskStatusConfigs, taskItems, eq, and, asc, desc, inArray } from '@pagespace/db';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 function slugify(name: string): string {
   return name
@@ -29,6 +29,10 @@ export async function GET(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   const canView = await canUserViewPage(userId, pageId);
   if (!canView) {
@@ -74,6 +78,10 @@ export async function POST(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const postScopeError = await checkMCPPageScope(auth, pageId);
+  if (postScopeError) return postScopeError;
 
   const canEdit = await canUserEditPage(userId, pageId);
   if (!canEdit) {
@@ -184,6 +192,10 @@ export async function PUT(
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
+  // Check MCP page scope
+  const putScopeError = await checkMCPPageScope(auth, pageId);
+  if (putScopeError) return putScopeError;
+
   const canEdit = await canUserEditPage(userId, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
@@ -266,6 +278,10 @@ export async function DELETE(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const deleteScopeError = await checkMCPPageScope(auth, pageId);
+  if (deleteScopeError) return deleteScopeError;
 
   const canEdit = await canUserEditPage(userId, pageId);
   if (!canEdit) {

@@ -394,6 +394,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
+  MARKETING_CONTACT_FORM: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000, // 1 hour
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
   TRACKING: {
     maxAttempts: 100,
     windowMs: 60 * 1000, // 1 minute

@@ -217,10 +217,10 @@ describe('GET /api/pages/[pageId]/export/markdown', () => {
         mockUserId,
         'read',
         mockPageId,
-        expect.objectContaining({
+        {
           exportFormat: 'markdown',
           pageTitle: 'Test Document',
-        })
+        }
       );
     });
   });
@@ -239,7 +239,7 @@ describe('GET /api/pages/[pageId]/export/markdown', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

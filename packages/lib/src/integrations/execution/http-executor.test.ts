@@ -206,4 +206,80 @@ describe('executeHttpRequest', () => {
     expect(result.success).toBe(true);
     expect(result.retries).toBe(1);
   });
+
+  it('given timeout (AbortError), should return timeout error without retrying', async () => {
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    mockFetch.mockRejectedValue(abortError);
+
+    const request: HttpRequest = {
+      url: 'https://api.example.com/data',
+      method: 'GET',
+    };
+
+    const resultPromise = executeHttpRequest(request, {
+      maxRetries: 3,
+      timeoutMs: 100,
+    }, mockFetch as unknown as typeof fetch);
+
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Request timeout');
+    expect(result.errorType).toBe('timeout');
+    expect(result.retries).toBe(0);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('given network errors exhausting all retries, should return final network error', async () => {
+    mockFetch.mockRejectedValue(new Error('Connection refused'));
+
+    const request: HttpRequest = {
+      url: 'https://api.example.com/data',
+      method: 'GET',
+    };
+
+    const resultPromise = executeHttpRequest(request, {
+      maxRetries: 2,
+      retryDelayMs: 50,
+    }, mockFetch as unknown as typeof fetch);
+
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.runAllTimersAsync();
+
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Connection refused');
+    expect(result.errorType).toBe('network');
+    expect(result.retries).toBe(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('given 429 response exhausting retries, should return rate limit error', async () => {
+    const mock429 = createMockResponse(429, { error: 'Too many requests' });
+    mockFetch.mockResolvedValue(mock429);
+
+    const request: HttpRequest = {
+      url: 'https://api.example.com/data',
+      method: 'GET',
+    };
+
+    const resultPromise = executeHttpRequest(request, {
+      maxRetries: 1,
+      retryDelayMs: 50,
+    }, mockFetch as unknown as typeof fetch);
+
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.runAllTimersAsync();
+
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Rate limit exceeded');
+    expect(result.errorType).toBe('rate_limit');
+    expect(result.retries).toBe(1);
+  });
 });

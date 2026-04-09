@@ -101,7 +101,7 @@ describe('createValidatedServiceToken', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Service token denied: no access to resource',
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', resourceType: 'page', resourceId: 'page-1' })
       );
     });
 
@@ -126,7 +126,7 @@ describe('createValidatedServiceToken', () => {
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Service token denied: no authorized scopes',
-        expect.any(Object)
+        expect.objectContaining({ userId: 'user-1', resourceType: 'page', resourceId: 'page-1', requestedScopes: ['files:write'] })
       );
     });
 
@@ -529,7 +529,7 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Invalid duration value (must be positive), using default',
-        expect.any(Object)
+        expect.objectContaining({ duration: '0m', value: 0, default: 300000 })
       );
     });
 
@@ -550,7 +550,7 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Invalid duration format, using default',
-        expect.any(Object)
+        expect.objectContaining({ duration: 'invalid', default: 300000 })
       );
     });
 
@@ -571,7 +571,7 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Duration exceeds maximum, capping',
-        expect.any(Object)
+        expect.objectContaining({ duration: '365d', max: 2592000000 })
       );
     });
 
@@ -592,7 +592,7 @@ describe('createValidatedServiceToken', () => {
       );
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Duration below minimum, using minimum',
-        expect.any(Object)
+        expect.objectContaining({ duration: '1s', ms: 1000, min: 10000 })
       );
     });
 
@@ -644,7 +644,9 @@ describe('createValidatedServiceToken', () => {
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
       expect(result.token).toBe('ps_svc_mock-session-token');
-      expect(mockFindFirst).toHaveBeenCalled();
+      expect(mockFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+        columns: { driveId: true },
+      }));
       expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
       expect(getUserDrivePermissions).not.toHaveBeenCalled();
       expect(mockCreateSession).toHaveBeenCalledWith(

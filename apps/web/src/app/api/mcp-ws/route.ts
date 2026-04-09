@@ -1,7 +1,9 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
 import { getMCPBridge } from '@/lib/mcp';
+import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
 import {
+  getConnection,
   registerConnection,
   unregisterConnection,
   updateLastPing,
@@ -18,6 +20,10 @@ import {
   isPingMessage,
   isToolExecuteMessage,
   isToolResultMessage,
+  isFetchResponseStartMessage,
+  isFetchResponseChunkMessage,
+  isFetchResponseEndMessage,
+  isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
 
@@ -281,6 +287,38 @@ export async function UPGRADE(
         return;
       }
 
+      // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
+      if (isFetchBridgeInitialized()) {
+        if (isFetchResponseStartMessage(message)) {
+          logSecurityEvent('ws_fetch_response_start', {
+            userId,
+            requestId: message.id,
+            status: message.status,
+            severity: 'info',
+          });
+          getFetchBridge().handleResponseStart(message);
+          return;
+        }
+        if (isFetchResponseChunkMessage(message)) {
+          getFetchBridge().handleResponseChunk(message);
+          return;
+        }
+        if (isFetchResponseEndMessage(message)) {
+          getFetchBridge().handleResponseEnd(message);
+          return;
+        }
+        if (isFetchResponseErrorMessage(message)) {
+          logSecurityEvent('ws_fetch_response_error', {
+            userId,
+            requestId: message.id,
+            error: message.error,
+            severity: 'warn',
+          });
+          getFetchBridge().handleResponseError(message);
+          return;
+        }
+      }
+
       // Note: Unknown message types are now caught by Zod validation above
     } catch (error) {
       logSecurityEvent('ws_message_parse_error', {
@@ -299,6 +337,9 @@ export async function UPGRADE(
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
+    // Check before unregister — if another socket replaced this one, don't cancel its fetches
+    const isActiveConnection = getConnection(userId) === client;
+
     logSecurityEvent('ws_connection_closed', {
       userId,
       code,
@@ -306,8 +347,16 @@ export async function UPGRADE(
       severity: 'info',
     });
 
-    // Clean up resources
+    // Clean up resources — only cancel fetch-bridge requests if this socket
+    // is still the active connection (prevents stale socket from canceling
+    // in-flight requests after a reconnect)
+    if (isFetchBridgeInitialized() && getConnection(userId) === client) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
     unregisterConnection(userId, client);
+    if (isActiveConnection) {
+      getFetchBridge().cancelUserRequests(userId);
+    }
   });
 
   // Handle errors

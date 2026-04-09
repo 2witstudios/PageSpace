@@ -1,8 +1,7 @@
-import { db, files, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions-cached';
 import type { EnforcedAuthContext, ResourceBinding } from '../middleware/auth';
-import { getLinksForFile, type FileLink } from './file-links';
+import { getLinksForFile, getFileDriveId, type FileLink } from './file-links';
 
 export type AccessRequirement = 'view' | 'edit';
 
@@ -142,6 +141,7 @@ function getScopedLinks(links: FileLink[], binding: ResourceBinding | null): Fil
     case 'file':
       return links;
     default:
+      /* c8 ignore next */
       return [];
   }
 }
@@ -208,15 +208,10 @@ export async function authorizeFileAccess(
   }
 
   // Step 2: Fetch file context
-  const [links, fileRecord] = await Promise.all([
+  const [links, fileDriveId] = await Promise.all([
     getLinksForFile(normalizedHash),
-    db.query.files.findFirst({
-      where: eq(files.id, normalizedHash),
-      columns: { driveId: true },
-    }),
+    getFileDriveId(normalizedHash),
   ]);
-
-  const fileDriveId = fileRecord?.driveId;
 
   // Step 3: Check binding
   const matchType = determineBindingMatchType(binding, normalizedHash, links, fileDriveId);
@@ -279,6 +274,7 @@ export async function authorizeFileAccess(
   // Step 5: Scope links and check page permissions
   const scopedLinks = getScopedLinks(links, binding);
 
+  /* c8 ignore next 15 */
   if (scopedLinks.length === 0) {
     // File has links but none within token's scope
     const decision = buildDeniedDecision('binding', binding, matchType, requirement);

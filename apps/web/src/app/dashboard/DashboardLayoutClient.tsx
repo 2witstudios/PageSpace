@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import Layout from "@/components/layout/Layout";
 import { PushNotificationManager } from "@/components/PushNotificationManager";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
+import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
@@ -20,8 +21,8 @@ const FULL_PAGE_ROUTES = [
 export default function DashboardLayoutClient({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // Load user hotkey preferences and sync to store
   useHotkeyPreferences();
+  useDesktopExchangeHandler();
 
   // Check if current route should render its children directly
   // Also match /dashboard/[driveId]/activity pattern

@@ -221,8 +221,8 @@ export function convertMCPToolSchemaToZod(
  */
 export function convertMCPToolsToAISDKSchemas(
   mcpTools: MCPTool[]
-): Record<string, { description: string; parameters: z.ZodObject<Record<string, z.ZodTypeAny>> }> {
-  const toolSchemas: Record<string, { description: string; parameters: z.ZodObject<Record<string, z.ZodTypeAny>> }> = {};
+): Record<string, { description: string; inputSchema: z.ZodObject<Record<string, z.ZodTypeAny>> }> {
+  const toolSchemas: Record<string, { description: string; inputSchema: z.ZodObject<Record<string, z.ZodTypeAny>> }> = {};
 
   for (const mcpTool of mcpTools) {
     try {
@@ -231,7 +231,7 @@ export function convertMCPToolsToAISDKSchemas(
 
       toolSchemas[toolName] = {
         description: mcpTool.description || `Tool from MCP server: ${mcpTool.serverName}`,
-        parameters: convertMCPToolSchemaToZod(mcpTool.inputSchema),
+        inputSchema: convertMCPToolSchemaToZod(mcpTool.inputSchema),
       };
 
       console.log('Converted MCP tool: %s', sanitizeLogValue(toolName));

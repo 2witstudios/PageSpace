@@ -19,7 +19,7 @@
  */
 
 // Deployment mode
-export { isOnPrem, isCloud } from './deployment-mode';
+export { isOnPrem, isCloud, isTenantMode, isBillingEnabled } from './deployment-mode';
 export { getOnPremUserDefaults, getOnPremOllamaSettings } from './onprem-defaults';
 
 // Content processing
@@ -83,6 +83,7 @@ export * from './logging/logger';
 export * from './logging/logger-config';
 export * from './logging/logger-database';
 export * from './logging/ai-usage-purge';
+export * from './logging/monitoring-purge';
 
 // Monitoring and tracking utilities (server-only)
 export * from './monitoring/ai-monitoring';

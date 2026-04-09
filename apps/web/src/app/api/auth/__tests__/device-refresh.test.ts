@@ -1,28 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../device/refresh/route';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id' },
-  deviceTokens: { id: 'id', deviceId: 'deviceId' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    }),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'device-token-id', deviceId: 'device-123' }]),
-        }),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    updateDeviceTokenDeviceId: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
@@ -80,7 +68,8 @@ vi.mock('@/lib/auth', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
@@ -123,7 +112,8 @@ describe('/api/auth/device/refresh', () => {
 
     // Default: valid device token flow
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser as never);
+    vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
     // Default: no rotation (token not near expiration)
     vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({ success: false });
   });
@@ -169,7 +159,10 @@ describe('/api/auth/device/refresh', () => {
       expect(body.token).toBeUndefined(); // No JWT for web - uses session cookie
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('valid-device-token');
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
+      expect(webHeaders).toBeInstanceOf(Headers);
+      expect(webToken).toBe('ps_sess_mock-session-token');
     });
 
     it('creates new session for mobile/desktop', async () => {
@@ -184,13 +177,10 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert - creates session token (no refresh token - devices use device tokens)
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      const sessionArg = vi.mocked(sessionService.createSession).mock.calls[0][0];
+      expect(sessionArg.userId).toBe(mockUser.id);
+      expect(sessionArg.type).toBe('user');
+      expect(sessionArg.scopes).toEqual(['*']);
     });
 
     it('updates device token activity', async () => {
@@ -236,14 +226,12 @@ describe('/api/auth/device/refresh', () => {
         '192.168.1.1',
         'Device token refresh'
       );
-      expect(trackAuthEvent).toHaveBeenCalledWith(
-        mockUser.id,
-        'refresh',
-        expect.objectContaining({
-          platform: 'desktop',
-          appVersion: '1.0.0',
-        })
-      );
+      const trackArgs = vi.mocked(trackAuthEvent).mock.calls[0];
+      expect(trackArgs[0]).toBe(mockUser.id);
+      expect(trackArgs[1]).toBe('refresh');
+      const trackData = trackArgs[2] as Record<string, unknown>;
+      expect(trackData.platform).toBe('desktop');
+      expect(trackData.appVersion).toBe('1.0.0');
     });
   });
 
@@ -272,7 +260,18 @@ describe('/api/auth/device/refresh', () => {
       const body = await response.json();
 
       // Assert
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
+      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        'valid-device-token',
+        {
+          userAgent: 'TestApp/1.0',
+          ipAddress: '192.168.1.1',
+        },
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken,
+      );
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
     });
 
@@ -359,7 +358,12 @@ describe('/api/auth/device/refresh', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Correcting device token deviceId from OAuth migration',
-        expect.any(Object)
+        {
+          deviceTokenId: 'device-token-record-id',
+          oldDeviceId: 'unknown',
+          newDeviceId: 'new-device-id',
+          userId: 'test-user-id',
+        }
       );
     });
 
@@ -378,13 +382,11 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert
-      expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Device token mismatch detected - possible stolen token',
-        expect.objectContaining({
-          tokenDeviceId: 'device-123',
-          providedDeviceId: 'stolen-device-999',
-        })
-      );
+      const warnArgs = vi.mocked(loggers.auth.warn).mock.calls[0];
+      expect(warnArgs[0]).toBe('Device token mismatch detected - possible stolen token');
+      const warnData = warnArgs[1] as Record<string, unknown>;
+      expect(warnData.tokenDeviceId).toBe('device-123');
+      expect(warnData.providedDeviceId).toBe('stolen-device-999');
     });
   });
 
@@ -403,7 +405,7 @@ describe('/api/auth/device/refresh', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.deviceToken).toBeDefined();
+      expect(body.errors.deviceToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -420,14 +422,14 @@ describe('/api/auth/device/refresh', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
   });
 
   describe('user not found', () => {
     it('returns 404 when user is deleted but device token exists', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
@@ -448,7 +450,7 @@ describe('/api/auth/device/refresh', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('Database error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',

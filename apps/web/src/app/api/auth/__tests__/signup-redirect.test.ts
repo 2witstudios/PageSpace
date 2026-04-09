@@ -5,18 +5,17 @@
 import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { POST } from '../signup/route';
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', email: 'email', tokenVersion: 'tokenVersion', role: 'role' },
-  userAiSettings: { userId: 'userId' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
+    createUser: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string | number) => ({ field, value })),
+}));
+
+vi.mock('@/lib/repositories/oauth-repository', () => ({
+  oauthRepository: {
+    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -125,7 +124,7 @@ vi.mock('react', () => ({
   },
 }));
 
-import { db, users, userAiSettings } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
 import { createNotification } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -147,38 +146,14 @@ describe('/api/auth/signup redirect', () => {
       created: true,
     });
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    // Match table by identity to return appropriate mock responses
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() =>
-              Promise.resolve([
-                {
-                  id: 'user-123',
-                  name: 'Test User',
-                  email: 'test@example.com',
-                  tokenVersion: 0,
-                  role: 'user',
-                },
-              ])
-            ),
-          })),
-        } as never;
-      }
-
-      if (table === userAiSettings) {
-        return {
-          values: vi.fn(() => Promise.resolve(undefined)),
-        } as never;
-      }
-
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      tokenVersion: 0,
+      role: 'user',
+    } as never);
   });
 
   test('given successful signup, should redirect to Getting Started drive', async () => {
@@ -236,7 +211,7 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given signup when provisioning throws, should still redirect to dashboard', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
       new Error('Provisioning failed')
     );
 

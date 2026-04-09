@@ -1,0 +1,95 @@
+---
+description: Epic plan compliance audit for PRs. Compares the task/epic plan against the actual diff to find missed requirements, ungated code paths, and deferred work that should have been completed.
+alwaysApply: false
+---
+# Pre-Merge Audit
+
+Compare the epic/task plan (source of truth) against the PR diff to verify every requirement was implemented. This catches gaps that code-only reviews miss — files that SHOULD have changed but didn't.
+
+## Audit Process
+
+### Step 1: Extract Requirements from Plan
+
+Read the epic plan file from `tasks/` that corresponds to this PR. Extract every requirement line:
+- Lines with "Given X, should Y" patterns
+- Lines starting with "Add", "Update", "Block", "Override", "Return"
+- Lines describing behavior changes
+
+Number each requirement for tracking.
+
+### Step 2: Map Requirements to Diff
+
+For each requirement, search the PR diff for evidence it was implemented:
+- PASS: Requirement is clearly addressed in the diff
+- FAIL: Requirement is in the plan but not in the diff
+- PARTIAL: Some aspect addressed, but incomplete
+
+### Step 3: Pattern Propagation Audit
+
+This is the critical step that catches what happened with `isOnPrem()` → `isBillingEnabled()`:
+
+1. Identify the core pattern change in the PR (e.g., replacing `isOnPrem()` with `!isBillingEnabled()`)
+2. Search the ENTIRE codebase for all instances of the old pattern
+3. Flag any instance that was NOT updated but should have been
+
+```bash
+# Example: if PR changes isOnPrem() to !isBillingEnabled() in one file
+grep -rn "isOnPrem()" --include="*.ts" --include="*.tsx" apps/ packages/ | grep -v __tests__ | grep -v node_modules
+```
+
+For each flagged instance, determine:
+- NEEDS UPDATE: Same context as the files that were changed (subscription, billing, rate limiting)
+- OK TO SKIP: Different context where onprem-only behavior is correct (e.g., session timing, logging config)
+
+### Step 4: Error Message & UX Audit
+
+If the PR disables features in a deployment mode:
+- Search for error messages referencing disabled features (e.g., "Upgrade to Pro" when billing is hidden)
+- Search for URLs pointing to disabled pages (e.g., `/settings/billing` when billing is off)
+- Verify no user-facing text assumes the old behavior
+
+### Step 5: Test Coverage Audit
+
+For each requirement in the plan:
+- Verify at least one test assertion covers it
+- Flag requirements with no test coverage
+- "Manual test needed" is NOT acceptable as the only coverage — unit tests must validate the logic
+
+### Step 6: Deferred Work Check
+
+Search the PR and commit messages for deferral language:
+- "TODO", "FIXME", "Phase 2", "future work", "manual test needed", "deferred", "later", "out of scope"
+
+For each deferred item:
+- If it's in the epic plan → REJECT: must be implemented or provide a technical blocker
+- If it's genuinely blocked by a later epic → verify the blocking epic's plan accounts for it
+- If not accounted for → flag as gap requiring a task entry in `/tasks`
+
+## Output Format
+
+```
+# Pre-Merge Audit: PR #NNN — [Title]
+
+## Requirements Checklist
+1. [PASS] Requirement description — implemented in file:line
+2. [FAIL] Requirement description — NOT FOUND in diff
+3. [PARTIAL] Requirement description — partially addressed, missing X
+
+## Pattern Propagation
+- Pattern: isOnPrem() → !isBillingEnabled()
+- Total instances: N
+- Updated: N
+- Flagged: file:line — [NEEDS UPDATE | OK TO SKIP] reason
+
+## Error Message Audit
+- [PASS | FAIL] description
+
+## Test Coverage
+- Requirement 1: [COVERED | MISSING] test file:line
+- Requirement 2: [COVERED | MISSING]
+
+## Deferred Items
+- [REJECT | ACCEPT] item — reason
+
+## Verdict: [PASS | FAIL — N issues found]
+```

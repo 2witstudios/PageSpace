@@ -102,6 +102,7 @@ const createPageFixture = (overrides: Partial<{
   id: string;
   driveId: string;
   title: string;
+  excludeFromSearch: boolean;
 }> = {}) => ({
   id: overrides.id ?? 'page_1',
   driveId: overrides.driveId ?? 'drive_1',
@@ -139,6 +140,7 @@ const createPageFixture = (overrides: Partial<{
   stateHash: null,
   parentId: null,
   originalParentId: null,
+  excludeFromSearch: overrides.excludeFromSearch ?? false,
 });
 
 const createTaskListFixture = (overrides: Partial<{
@@ -356,7 +358,7 @@ describe('GET /api/tasks', () => {
         taskListPageTitle: 'My Task List',
         statusGroup: 'todo',
         statusLabel: 'To Do',
-        statusColor: expect.any(String),
+        statusColor: 'bg-slate-100 text-slate-700',
       });
     });
   });
@@ -424,21 +426,21 @@ describe('GET /api/tasks', () => {
       await GET(request);
 
       // Verify the query was called (exact filter verification would require deeper mocking)
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
 
     it('should filter by priority', async () => {
       const request = new Request('https://example.com/api/tasks?context=user&priority=high');
       await GET(request);
 
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
 
     it('should combine multiple filters', async () => {
       const request = new Request('https://example.com/api/tasks?context=user&status=pending&priority=high');
       await GET(request);
 
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -462,7 +464,7 @@ describe('GET /api/tasks', () => {
       await GET(request);
 
       // The query should be called with trashed page exclusion filter
-      expect(db.query.taskItems.findMany).toHaveBeenCalled();
+      expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -5,6 +5,23 @@ import {
 } from './index';
 
 /**
+ * Linear-time check for protocol-like patterns (e.g. "http:", "javascript:").
+ * Returns true if the string contains an ASCII letter immediately followed by ':'.
+ * Equivalent to /[a-z]+:/i but avoids O(N^2) polynomial backtracking.
+ */
+function containsProtocol(s: string): boolean {
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] === ':') {
+      const c = s.charCodeAt(i - 1);
+      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Validates that a return URL is a safe same-origin path.
  * Prevents open redirect attacks by ensuring the URL:
  * - Is a relative path starting with /
@@ -16,11 +33,11 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
   if (!url) return true; // undefined/empty falls back to /dashboard
   if (!url.startsWith('/')) return false;
   if (url.startsWith('//') || url.startsWith('/\\')) return false;
-  if (/[a-z]+:/i.test(url)) return false;
+  if (containsProtocol(url)) return false;
   try {
     const decoded = decodeURIComponent(url);
     if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(decoded)) return false;
+    if (containsProtocol(decoded)) return false;
   } catch {
     return false;
   }

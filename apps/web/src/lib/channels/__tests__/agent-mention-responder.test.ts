@@ -135,7 +135,7 @@ describe('agent-mention-responder', () => {
     mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
   });
 
-  it('does nothing when no structured mentions are present', async () => {
+  it('given message with no mentions, should not query agents or post responses', async () => {
     await triggerMentionedAgentResponses({
       ...baseParams,
       content: 'No mentions here',
@@ -146,7 +146,7 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });
 
-  it('consults and posts response for mentioned AI agent', async () => {
+  it('given message mentioning an AI agent, should consult agent and post response to channel', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
     ]);
@@ -168,42 +168,32 @@ describe('agent-mention-responder', () => {
     });
 
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    expect(mockAskAgentExecute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        conversationId: 'channel:channel-1:agent:agent-1',
-      }),
-      expect.objectContaining({
-        experimental_context: expect.objectContaining({
-          userId: 'user-1',
-          locationContext: expect.objectContaining({
-            currentPage: expect.objectContaining({
-              id: 'channel-1',
-            }),
-          }),
-        }),
-      })
-    );
+    const askArgs = mockAskAgentExecute.mock.calls[0];
+    expect(askArgs[0].agentId).toBe('agent-1');
+    expect(askArgs[0].conversationId).toBe('channel:channel-1:agent:agent-1');
+    expect(askArgs[0].agentPath).toBe('/Budget Agent');
+    const askContext = askArgs[1].experimental_context;
+    expect(askContext.userId).toBe('user-1');
+    expect(askContext.conversationId).toBe('channel:channel-1:agent:agent-1');
+    expect(askContext.locationContext.currentPage.id).toBe('channel-1');
+    expect(askContext.requestOrigin).toBe('user');
 
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
-    expect(mockSendChannelExecute).toHaveBeenCalledWith(
-      {
-        channelId: 'channel-1',
-        content: 'I think this conversation is on track.',
-      },
-      expect.objectContaining({
-        experimental_context: expect.objectContaining({
-          chatSource: {
-            type: 'page',
-            agentPageId: 'agent-1',
-            agentTitle: 'Budget Agent',
-          },
-        }),
-      })
-    );
+    const sendArgs = mockSendChannelExecute.mock.calls[0];
+    expect(sendArgs[0]).toEqual({
+      channelId: 'channel-1',
+      content: 'I think this conversation is on track.',
+    });
+    const sendContext = sendArgs[1].experimental_context;
+    expect(sendContext.chatSource).toEqual({
+      type: 'page',
+      agentPageId: 'agent-1',
+      agentTitle: 'Budget Agent',
+    });
+    expect(sendContext.requestOrigin).toBe('agent');
   });
 
-  it('skips when structured mention does not resolve to an active AI agent', async () => {
+  it('given mention of non-existent agent, should skip without consulting or posting', async () => {
     mockPagesFindMany.mockResolvedValue([]);
 
     await triggerMentionedAgentResponses({
@@ -216,7 +206,24 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
   });
 
-  it('deduplicates repeated mentions and skips agents without view access', async () => {
+  it('given repeated mentions of same agent, should deduplicate and consult only once', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content:
+        'Ping @[Budget Agent](agent-1:page) and @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockCanUserViewPage).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given mention of agent user cannot view, should skip that agent', async () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
       { id: 'agent-2', title: 'Ops Agent', enabledTools: ['send_channel_message'] },
@@ -226,15 +233,12 @@ describe('agent-mention-responder', () => {
     await triggerMentionedAgentResponses({
       ...baseParams,
       content:
-        'Ping @[Budget Agent](agent-1:page) and @[Budget Agent](agent-1:page) and @[Ops Agent](agent-2:page)',
+        '@[Budget Agent](agent-1:page) and @[Ops Agent](agent-2:page)',
     });
 
     expect(mockCanUserViewPage).toHaveBeenCalledTimes(2);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
-    expect(mockAskAgentExecute).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: 'agent-1' }),
-      expect.any(Object)
-    );
+    expect(mockAskAgentExecute.mock.calls[0][0].agentId).toBe('agent-1');
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 

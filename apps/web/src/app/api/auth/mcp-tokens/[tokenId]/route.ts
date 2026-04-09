@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -19,25 +19,14 @@ export async function DELETE(
 
   try {
     // Get the token first to capture its name for the audit log
-    const existingToken = await db.query.mcpTokens.findFirst({
-      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
-      columns: { id: true, name: true },
-    });
+    const existingToken = await sessionRepository.findMcpTokenByIdAndUser(tokenId, userId);
 
     if (!existingToken) {
       return new NextResponse('Token not found', { status: 404 });
     }
 
     // Verify the token belongs to the user and revoke it
-    await db
-      .update(mcpTokens)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(
-          eq(mcpTokens.id, tokenId),
-          eq(mcpTokens.userId, userId)
-        )
-      );
+    await sessionRepository.revokeMcpToken(tokenId, userId);
 
     // Log activity for audit trail (token revocation is a security event)
     const actorInfo = await getActorInfo(userId);

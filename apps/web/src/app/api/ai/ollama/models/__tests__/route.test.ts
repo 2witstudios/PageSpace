@@ -311,7 +311,7 @@ describe('GET /api/ai/ollama/models', () => {
       expect(body.success).toBe(false);
       expect(body.error).toBe('Failed to discover Ollama models');
       expect(body.models).toEqual({});
-      expect(loggers.ai.error).toHaveBeenCalled();
+      expect(loggers.ai.error).toHaveBeenCalledWith('Ollama models discovery error', expect.objectContaining({ message: 'Database error' }));
     });
   });
 

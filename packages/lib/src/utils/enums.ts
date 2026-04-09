@@ -8,6 +8,7 @@ export enum PageType {
   SHEET = 'SHEET',
   TASK_LIST = 'TASK_LIST',
   CODE = 'CODE',
+  TERMINAL = 'TERMINAL',
 }
 
 export enum PermissionAction {

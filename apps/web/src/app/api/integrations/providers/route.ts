@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { listEnabledProviders, createProvider } from '@pagespace/lib/integrations';
+import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -28,7 +28,37 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const providers = await listEnabledProviders(db);
+    // Auto-seed builtin providers if none are installed yet (lazy init)
+    let providers = await listEnabledProviders(db);
+    if (providers.length === 0 && builtinProviderList.length > 0) {
+      try {
+        const seeded = await seedBuiltinProviders(db, builtinProviderList);
+        if (seeded.length > 0) {
+          loggers.api.info('Auto-seeded builtin integration providers', {
+            count: seeded.length,
+            slugs: seeded.map((p) => p.slug),
+          });
+          providers = await listEnabledProviders(db);
+        }
+      } catch (seedError) {
+        loggers.api.warn('Failed to auto-seed builtin providers (non-fatal)', {
+          error: seedError instanceof Error ? seedError.message : String(seedError),
+        });
+      }
+    }
+
+    // Refresh builtin providers with latest tool definitions (e.g. after deploy)
+    try {
+      const refreshed = await refreshBuiltinProviders(db, builtinProviderList);
+      if (refreshed > 0) {
+        loggers.api.info('Refreshed builtin provider configs', { count: refreshed });
+        providers = await listEnabledProviders(db);
+      }
+    } catch (refreshError) {
+      loggers.api.warn('Failed to refresh builtin providers (non-fatal)', {
+        error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+      });
+    }
 
     // Strip config details for listing (security)
     const safeProviders = providers.map((p) => ({

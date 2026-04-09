@@ -35,6 +35,7 @@ const PAGE_ICON_MAP: Record<PageType, string> = {
   TASK_LIST: 'CheckSquare',
   CHANNEL: 'MessageSquare',
   CODE: 'Code',
+  TERMINAL: 'Terminal',
 };
 
 const fetcher = async <T>(url: string): Promise<T> => {

@@ -61,6 +61,7 @@ function getScopedLinks(links: FileLink[], binding: EnforcedAuthContext['resourc
       return links.filter(link => link.driveId === binding.id);
     case 'file':
       return links;
+    /* c8 ignore next 2 -- exhaustive switch, all binding.type values handled above */
     default:
       return [];
   }

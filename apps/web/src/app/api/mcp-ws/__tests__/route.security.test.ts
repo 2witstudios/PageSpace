@@ -17,6 +17,7 @@ import type { NextRequest } from 'next/server';
 
 // Mock dependencies
 vi.mock('@/lib/websocket/ws-connections', () => ({
+  getConnection: vi.fn(),
   registerConnection: vi.fn(),
   unregisterConnection: vi.fn(),
   updateLastPing: vi.fn(),
@@ -32,6 +33,17 @@ vi.mock('@/lib/websocket/ws-connections', () => ({
 vi.mock('@/lib/mcp/mcp-bridge', () => ({
   getMCPBridge: vi.fn(() => ({
     handleToolResponse: vi.fn(),
+  })),
+}));
+
+vi.mock('@/lib/fetch-bridge', () => ({
+  isFetchBridgeInitialized: vi.fn(() => true),
+  getFetchBridge: vi.fn(() => ({
+    handleResponseStart: vi.fn(),
+    handleResponseChunk: vi.fn(),
+    handleResponseEnd: vi.fn(),
+    handleResponseError: vi.fn(),
+    cancelUserRequests: vi.fn(),
   })),
 }));
 
@@ -149,7 +161,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String), 'session_123', mockSessionExpiry, expect.any(String));
+      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, 'mock_fingerprint_hash_1234567890abcdef', 'session_123', mockSessionExpiry, 'svc_mock_opaque_token_12345');
       expect(markChallengeVerified).toHaveBeenCalledWith(mockClient);
     });
 
@@ -171,10 +183,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Insufficient permissions');
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_insufficient_permissions',
-        expect.objectContaining({
+        {
           userId: 'user_123',
+          ip: '192.168.1.1',
           severity: 'warn',
-        })
+          scopes: ['read:pages'],
+        }
       );
     });
   });
@@ -273,7 +287,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         (call) => call[0] === 'message'
       )?.[1];
 
-      expect(messageHandler).toBeDefined();
+      expect(typeof messageHandler).toBe('function');
 
       // Send a ping message to trigger fingerprint verification
       const pingMessage = JSON.stringify({ type: 'ping' });
@@ -281,10 +295,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_fingerprint_mismatch',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           severity: 'critical',
-        })
+          reason: 'Connection fingerprint changed - possible session hijacking',
+        }
       );
 
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Security violation');
@@ -300,10 +315,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_authentication_failed',
-        expect.objectContaining({
+        {
+          ip: '192.168.1.1',
           severity: 'warn',
           reason: 'Invalid or expired session token',
-        })
+        }
       );
 
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Invalid or expired token');
@@ -317,9 +333,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_session_validation_error',
-        expect.objectContaining({
+        {
+          ip: '192.168.1.1',
           severity: 'error',
-        })
+          error: 'Database error',
+        }
       );
 
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Authentication error');
@@ -344,11 +362,13 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_connection_established',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           sessionId: 'session_123',
+          ip: '192.168.1.1',
           severity: 'info',
-        })
+          fingerprint: 'mock_fingerprint...',
+        }
       );
     });
 
@@ -371,17 +391,18 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         (call) => call[0] === 'close'
       )?.[1];
 
-      expect(closeHandler).toBeDefined();
+      expect(typeof closeHandler).toBe('function');
 
       closeHandler!.call(mockClient, 1000, Buffer.from('Normal closure'));
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_connection_closed',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           code: 1000,
+          reason: 'Normal closure',
           severity: 'info',
-        })
+        }
       );
     });
   });
@@ -412,21 +433,23 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         (call) => call[0] === 'message'
       )?.[1];
 
-      expect(messageHandler).toBeDefined();
+      expect(typeof messageHandler).toBe('function');
 
       const largeMessage = JSON.stringify({ type: 'ping' });
       messageHandler!.call(mockClient, Buffer.from(largeMessage));
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_message_too_large',
-        expect.objectContaining({
+        {
           userId: 'user_123',
+          size: 10 * 1024 * 1024,
+          maxSize: 1024 * 1024,
           severity: 'warn',
-        })
+        }
       );
 
       expect(mockClient.send).toHaveBeenCalledWith(
-        expect.stringContaining('message_too_large')
+        JSON.stringify({ type: 'error', error: 'message_too_large', maxSize: 1024 * 1024 })
       );
     });
 
@@ -451,20 +474,19 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         (call) => call[0] === 'message'
       )?.[1];
 
-      expect(messageHandler).toBeDefined();
+      expect(typeof messageHandler).toBe('function');
 
       messageHandler!.call(mockClient, Buffer.from('{ invalid json'));
 
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'ws_message_json_parse_error',
-        expect.objectContaining({
-          userId: 'user_123',
-          severity: 'warn',
-        })
+      const securityArgs = vi.mocked(logSecurityEvent).mock.calls.find(
+        (call) => call[0] === 'ws_message_json_parse_error'
       );
+      expect(securityArgs).not.toBeUndefined();
+      expect(securityArgs![1].userId).toBe('user_123');
+      expect(securityArgs![1].severity).toBe('warn');
 
       expect(mockClient.send).toHaveBeenCalledWith(
-        expect.stringContaining('invalid_json')
+        JSON.stringify({ type: 'error', error: 'invalid_json', reason: 'Message is not valid JSON' })
       );
     });
 
@@ -487,17 +509,17 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         (call) => call[0] === 'error'
       )?.[1];
 
-      expect(errorHandler).toBeDefined();
+      expect(typeof errorHandler).toBe('function');
 
       errorHandler!.call(mockClient, new Error('Test error'));
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_error',
-        expect.objectContaining({
+        {
           userId: 'user_123',
           error: 'Test error',
           severity: 'error',
-        })
+        }
       );
     });
   });

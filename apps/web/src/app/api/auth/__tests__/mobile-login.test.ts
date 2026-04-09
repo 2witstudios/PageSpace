@@ -1,17 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/login/route';
 
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  users: { email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
   },
-  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -82,12 +75,14 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
+  loggers,
 } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -120,7 +115,7 @@ describe('/api/auth/mobile/login', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful login
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser as never);
     vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
   });
 
@@ -175,14 +170,13 @@ describe('/api/auth/mobile/login', () => {
       await POST(request);
 
       // Assert
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          deviceId: 'ios-device-123',
-          platform: 'ios',
-          deviceName: 'iPhone 15',
-        })
-      );
+      const deviceTokenArg = vi.mocked(validateOrCreateDeviceToken).mock.calls[0][0];
+      expect(deviceTokenArg.userId).toBe(mockUser.id);
+      expect(deviceTokenArg.deviceId).toBe('ios-device-123');
+      expect(deviceTokenArg.platform).toBe('ios');
+      expect(deviceTokenArg.deviceName).toBe('iPhone 15');
+      expect(deviceTokenArg.tokenVersion).toBe(0);
+      expect(deviceTokenArg.providedDeviceToken).toBeUndefined();
     });
 
     it('resets rate limits on successful login', async () => {
@@ -219,14 +213,15 @@ describe('/api/auth/mobile/login', () => {
       await POST(request);
 
       // Assert
-      expect(trackAuthEvent).toHaveBeenCalledWith(
-        mockUser.id,
-        'login',
-        expect.objectContaining({
-          platform: 'ios',
-          appVersion: '1.0.0',
-        })
-      );
+      const trackArgs = vi.mocked(trackAuthEvent).mock.calls[0];
+      expect(trackArgs[0]).toBe(mockUser.id);
+      expect(trackArgs[1]).toBe('login');
+      const trackData = trackArgs[2] as Record<string, unknown>;
+      expect(trackData.email).toBe('test@example.com');
+      expect(trackData.platform).toBe('ios');
+      expect(trackData.appVersion).toBe('1.0.0');
+      expect(trackData.userAgent).toBeNull();
+      expect(typeof trackData.ip).toBe('string');
     });
   });
 
@@ -294,18 +289,23 @@ describe('/api/auth/mobile/login', () => {
       await POST(request);
 
       // Assert
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform: 'ios',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: undefined,
+        userAgent: undefined,
+        ipAddress: 'unknown',
+      });
     });
   });
 
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
       vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
@@ -350,7 +350,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('performs timing-safe comparison even for non-existent users', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -363,18 +363,10 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert - security property: bcrypt.compare must be called even for non-existent users
       // This prevents timing attacks that could reveal user existence
-      expect(bcrypt.compare).toHaveBeenCalled();
-
-      // Verify the password was passed (first argument)
-      const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
-      expect(password).toBe(validLoginPayload.password);
-
-      // Verify a valid bcrypt hash was used (not null/undefined/empty)
-      // The specific hash value is an implementation detail; we only care that
-      // a consistent-cost hash comparison occurs
-      expect(hash).toBeTruthy();
-      expect(typeof hash).toBe('string');
-      expect(hash).toMatch(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/); // Full bcrypt hash format
+      expect(bcrypt.compare).toHaveBeenCalledWith(
+        'validPassword123',
+        '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu'
+      );
     });
 
     it('logs failed login attempt', async () => {
@@ -422,7 +414,7 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.email).toBeDefined();
+      expect(body.errors.email).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for missing deviceId', async () => {
@@ -442,7 +434,7 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.deviceId).toBeDefined();
+      expect(body.errors.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 for invalid platform', async () => {
@@ -462,7 +454,7 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert
       expect(response.status).toBe(400);
-      expect(body.errors.platform).toBeDefined();
+      expect(body.errors.platform).toEqual(['Invalid option: expected one of "ios"|"android"|"desktop"']);
     });
   });
 
@@ -529,17 +521,12 @@ describe('/api/auth/mobile/login', () => {
 
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          ipAddress: '192.168.1.1',
-          details: expect.objectContaining({
-            limiter: 'ip',
-            endpoint: '/api/auth/mobile/login',
-          }),
-          riskScore: 0.4,
-        })
-      );
+      expect(securityAudit.logEvent).toHaveBeenCalledWith({
+        eventType: 'security.rate.limited',
+        ipAddress: '192.168.1.1',
+        details: { limiter: 'ip', endpoint: '/api/auth/mobile/login', email: 'te***@example.com' },
+        riskScore: 0.4,
+      });
     });
 
     it('emits security audit event when email rate limit triggers', async () => {
@@ -558,17 +545,46 @@ describe('/api/auth/mobile/login', () => {
 
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          ipAddress: '10.0.0.1',
-          details: expect.objectContaining({
-            limiter: 'email',
-            endpoint: '/api/auth/mobile/login',
-          }),
-          riskScore: 0.4,
-        })
-      );
+      expect(securityAudit.logEvent).toHaveBeenCalledWith({
+        eventType: 'security.rate.limited',
+        ipAddress: '10.0.0.1',
+        details: { limiter: 'email', endpoint: '/api/auth/mobile/login', email: 'te***@example.com' },
+        riskScore: 0.4,
+      });
+    });
+
+    it('uses default Retry-After of 900 when IP retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
+    });
+
+    it('uses default Retry-After of 900 when email retryAfter is undefined', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: undefined, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
     });
 
     it('masks email in security audit event details', async () => {
@@ -584,20 +600,15 @@ describe('/api/auth/mobile/login', () => {
 
       await POST(request);
 
-      expect(securityAudit.logEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          details: expect.objectContaining({
-            email: 'te***@example.com',
-          }),
-        })
-      );
+      const auditArg = vi.mocked(securityAudit.logEvent).mock.calls[0][0] as unknown as Record<string, unknown>;
+      expect((auditArg.details as Record<string, unknown>).email).toBe('te***@example.com');
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -721,7 +732,7 @@ describe('/api/auth/mobile/login', () => {
       // Assert
       expect(response.status).toBe(200);
       expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
-      expect(response.headers.get('X-RateLimit-Remaining')).toBeTruthy();
+      expect(response.headers.get('X-RateLimit-Remaining')).toBe('5');
     });
 
     it('uses login:ip and login:email keys (same as web login)', async () => {
@@ -740,13 +751,96 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert - mobile login shares rate limit with web login
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^login:ip:/),
-        expect.any(Object)
+        'login:ip:10.0.0.1',
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        expect.stringMatching(/^login:email:/),
-        expect.any(Object)
+        'login:email:test@example.com',
+        DISTRIBUTED_RATE_LIMITS.LOGIN
       );
+    });
+  });
+
+  describe('rate limit reset failures', () => {
+    it('logs warning when rate limit reset fails after successful login', async () => {
+      vi.mocked(resetDistributedRateLimit)
+        .mockRejectedValueOnce(new Error('Redis connection failed'))
+        .mockResolvedValueOnce(undefined);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      // Login should still succeed even though rate limit reset failed
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful mobile login',
+        {
+          failureCount: 1,
+          reasons: ['Redis connection failed'],
+        }
+      );
+    });
+
+    it('handles reset failure with non-Error reason (string fallback)', async () => {
+      vi.mocked(resetDistributedRateLimit)
+        .mockRejectedValueOnce('connection timeout')
+        .mockResolvedValueOnce(undefined);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Rate limit reset failed after successful mobile login',
+        {
+          failureCount: 1,
+          reasons: ['connection timeout'],
+        }
+      );
+    });
+  });
+
+  describe('session cookie for platforms', () => {
+    it('does not set session cookie for android platform', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...validLoginPayload, platform: 'android' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Set-Cookie')).toBeNull();
+    });
+  });
+
+  describe('session validation failure', () => {
+    it('returns 500 when newly created session fails validation', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to generate session');
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to validate newly created session');
     });
   });
 });

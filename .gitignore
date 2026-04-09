@@ -137,6 +137,7 @@ tests/load/results/*.json
 tests/load/results/*.html
 
 ## Code coverage
+coverage/
 *.gcda
 *.gcno
 *.gcov
@@ -159,3 +160,15 @@ playground.xcworkspace
 # Git worktrees
 .worktrees/
 .codename-grove/
+
+# Point Guard
+.pg/
+
+# Parallel Universe worktrees
+.pu/
+
+# Claude Code skills & agents (local plugin data)
+.agents/
+.claude/skills/
+.claude/*.local.md
+skills-lock.json

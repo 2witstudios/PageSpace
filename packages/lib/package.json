@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails"
   },
   "exports": {
@@ -188,6 +189,11 @@
       "import": "./dist/utils/file-security.js",
       "require": "./dist/utils/file-security.js"
     },
+    "./utils/language-detection": {
+      "types": "./dist/utils/language-detection.d.ts",
+      "import": "./dist/utils/language-detection.js",
+      "require": "./dist/utils/language-detection.js"
+    },
     "./pages/circular-reference-guard": {
       "types": "./dist/pages/circular-reference-guard.d.ts",
       "import": "./dist/pages/circular-reference-guard.js",
@@ -263,6 +269,11 @@
       "import": "./dist/compliance/retention/retention-engine.js",
       "require": "./dist/compliance/retention/retention-engine.js"
     },
+    "./compliance/retention/monitoring-retention": {
+      "types": "./dist/compliance/retention/monitoring-retention.d.ts",
+      "import": "./dist/compliance/retention/monitoring-retention.js",
+      "require": "./dist/compliance/retention/monitoring-retention.js"
+    },
     "./compliance/file-cleanup/orphan-detector": {
       "types": "./dist/compliance/file-cleanup/orphan-detector.d.ts",
       "import": "./dist/compliance/file-cleanup/orphan-detector.js",
@@ -272,6 +283,11 @@
       "types": "./dist/compliance/export/gdpr-export.d.ts",
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
+    },
+    "./compliance/anonymize": {
+      "types": "./dist/compliance/anonymize.d.ts",
+      "import": "./dist/compliance/anonymize.js",
+      "require": "./dist/compliance/anonymize.js"
     }
   },
   "typesVersions": {
@@ -378,6 +394,9 @@
       "utils/file-security": [
         "./dist/utils/file-security.d.ts"
       ],
+      "utils/language-detection": [
+        "./dist/utils/language-detection.d.ts"
+      ],
       "pages/circular-reference-guard": [
         "./dist/pages/circular-reference-guard.d.ts"
       ],
@@ -423,11 +442,17 @@
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"
       ],
+      "compliance/retention/monitoring-retention": [
+        "./dist/compliance/retention/monitoring-retention.d.ts"
+      ],
       "compliance/file-cleanup/orphan-detector": [
         "./dist/compliance/file-cleanup/orphan-detector.d.ts"
       ],
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
+      ],
+      "compliance/anonymize": [
+        "./dist/compliance/anonymize.d.ts"
       ]
     }
   },
@@ -446,6 +471,8 @@
     "mammoth": "^1.10.0",
     "pako": "^2.1.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
+    "react": "^19.1.2",
+    "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
     "server-only": "^0.0.1",
@@ -459,7 +486,6 @@
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
     "@types/react": "^19.1.13",
-    "@types/xlsx": "^0.0.36",
-    "react": "^19.1.1"
+    "@types/xlsx": "^0.0.36"
   }
 }

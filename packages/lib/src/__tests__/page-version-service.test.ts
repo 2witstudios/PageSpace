@@ -218,7 +218,7 @@ describe('page-version-service', () => {
       const result = await createPageVersion(baseInput, { tx: mockTx as unknown as typeof db });
 
       expect(result.id).toBe('tx-version-id');
-      expect(mockTx.insert).toHaveBeenCalled();
+      expect(mockTx.insert).toHaveBeenCalledTimes(1);
       expect(db.insert).not.toHaveBeenCalled();
     });
 

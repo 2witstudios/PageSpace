@@ -105,6 +105,8 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
   getClientIP: vi.fn().mockReturnValue('unknown'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -210,7 +212,7 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given provisioning throws error, should still return 200 without redirectTo', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { getUsageLimits } from '../usage-service';
 
 // Note: incrementUsage, getCurrentUsage, and getUserUsageSummary require database
@@ -58,6 +58,31 @@ describe('Usage Service', () => {
       });
     });
   });
+
+    describe('tenant deployment mode', () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it('should return unlimited (-1) for any tier in tenant mode', () => {
+        vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+        expect(getUsageLimits('free', 'standard')).toBe(-1);
+        expect(getUsageLimits('free', 'pro')).toBe(-1);
+        expect(getUsageLimits('business', 'standard')).toBe(-1);
+      });
+
+      it('should return unlimited (-1) for onprem mode', () => {
+        vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+        expect(getUsageLimits('free', 'standard')).toBe(-1);
+        expect(getUsageLimits('free', 'pro')).toBe(-1);
+      });
+
+      it('should enforce limits in cloud mode', () => {
+        vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+        expect(getUsageLimits('free', 'standard')).toBe(50);
+        expect(getUsageLimits('free', 'pro')).toBe(0);
+      });
+    });
 
   describe('Usage Limit Business Rules', () => {
     it('should give free tier users no access to pro AI', () => {

@@ -18,23 +18,6 @@ const createAuthContext = (userId = 'user-123') => ({
   experimental_context: { userId } as ToolExecutionContext,
 });
 
-/**
- * @scaffold - happy path coverage deferred
- *
- * These tests cover authentication and authorization error paths.
- * Happy path tests (actual search results, filtering, pagination) are deferred
- * because they require either:
- * - A SearchRepository seam to avoid complex DB iteration mocking, OR
- * - Integration tests against a real database with seeded content
- *
- * The search logic involves iterating over pages and matching patterns,
- * which is impractical to mock without coupling to implementation details.
- *
- * TODO: Add SearchService seam with methods like:
- * - searchByRegex(driveId, pattern, options): SearchResult[]
- * - searchByGlob(driveId, pattern, options): SearchResult[]
- * Then test happy paths against that seam.
- */
 describe('search-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,8 +25,8 @@ describe('search-tools', () => {
 
   describe('regex_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.regex_search).toBeDefined();
-      expect(searchTools.regex_search.description).toBeDefined();
+      expect(typeof searchTools.regex_search).toBe('object');
+      expect(typeof searchTools.regex_search.description).toBe('string');
       // Uses 'regular expression' not 'regex' in description
       expect(searchTools.regex_search.description).toContain('regular expression');
     });
@@ -78,8 +61,8 @@ describe('search-tools', () => {
 
   describe('glob_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.glob_search).toBeDefined();
-      expect(searchTools.glob_search.description).toBeDefined();
+      expect(typeof searchTools.glob_search).toBe('object');
+      expect(typeof searchTools.glob_search.description).toBe('string');
     });
 
     it('requires user authentication', async () => {
@@ -112,8 +95,8 @@ describe('search-tools', () => {
 
   describe('multi_drive_search', () => {
     it('has correct tool definition', () => {
-      expect(searchTools.multi_drive_search).toBeDefined();
-      expect(searchTools.multi_drive_search.description).toBeDefined();
+      expect(typeof searchTools.multi_drive_search).toBe('object');
+      expect(typeof searchTools.multi_drive_search.description).toBe('string');
     });
 
     it('requires user authentication', async () => {

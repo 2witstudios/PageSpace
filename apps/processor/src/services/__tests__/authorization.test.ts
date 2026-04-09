@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const VALID_HASH = 'a'.repeat(64);
 
 const mockGetLinksForFile = vi.fn();
+const mockGetFileDriveId = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
 const mockGetUserDrivePermissions = vi.fn();
-const mockFilesFindFirst = vi.fn();
 
 vi.mock('../file-links', () => ({
   getLinksForFile: (...args: unknown[]) => mockGetLinksForFile(...args),
+  getFileDriveId: (...args: unknown[]) => mockGetFileDriveId(...args),
 }));
 
 vi.mock('@pagespace/lib/permissions-cached', () => ({
@@ -24,18 +25,6 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
-}));
-
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      files: {
-        findFirst: (...args: unknown[]) => mockFilesFindFirst(...args),
-      },
-    },
-  },
-  files: { id: 'files.id' },
-  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
 }));
 
 import type { EnforcedAuthContext } from '../../middleware/auth';
@@ -59,7 +48,7 @@ describe('authorizeFileAccess', () => {
     vi.clearAllMocks();
 
     mockGetLinksForFile.mockResolvedValue([]);
-    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetFileDriveId.mockResolvedValue('drive-1');
     mockGetUserAccessLevel.mockResolvedValue(null);
     mockGetUserDrivePermissions.mockResolvedValue(null);
   });
@@ -253,7 +242,7 @@ describe('authorizeFileAccess', () => {
 
     it('allows drive-bound token for orphan file in bound drive', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -275,7 +264,7 @@ describe('authorizeFileAccess', () => {
   describe('orphan files', () => {
     it('allows view for orphan file when user has drive membership', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -292,7 +281,7 @@ describe('authorizeFileAccess', () => {
 
     it('allows edit for orphan file when user is drive owner/admin', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: true,
@@ -309,7 +298,7 @@ describe('authorizeFileAccess', () => {
 
     it('denies edit for orphan file when user is only member', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -326,7 +315,7 @@ describe('authorizeFileAccess', () => {
 
     it('denies orphan file with no drive association', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue(undefined);
+      mockGetFileDriveId.mockResolvedValue(undefined);
 
       const auth = createAuth();
       const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
@@ -389,6 +378,95 @@ describe('authorizeFileAccess', () => {
       expect(decision.denial?.stage).toBe('binding');
     });
   });
+
+  describe('checkDrivePermissions returns false when drivePerms is null', () => {
+    it('denies view for orphan file when getUserDrivePermissions returns null', async () => {
+      mockGetLinksForFile.mockResolvedValue([]);
+      mockGetFileDriveId.mockResolvedValue('drive-1');
+      // drivePerms is null -> checkDrivePermissions returns false -> permission denied
+      mockGetUserDrivePermissions.mockResolvedValue(null);
+
+      const auth = createAuth();
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+    });
+
+    it('denies view for drive-bound orphan when getUserDrivePermissions returns null', async () => {
+      mockGetLinksForFile.mockResolvedValue([]);
+      mockGetFileDriveId.mockResolvedValue('drive-1');
+      mockGetUserDrivePermissions.mockResolvedValue(null);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'drive', id: 'drive-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+    });
+  });
+
+  describe('scopedLinks is empty when file has links but none in scope', () => {
+    it('denies page-bound token when file has links but none match the bound page', async () => {
+      // File has links to page-2 and page-3, but token is bound to page-1
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-2', driveId: 'drive-1' },
+        { fileId: VALID_HASH, pageId: 'page-3', driveId: 'drive-2' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'page', id: 'page-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      // binding type is 'page', links don't include page-1 so matchType='mismatch'
+      // mismatch is caught at step 3 (binding check), not step 5 (scoped links)
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('binding');
+    });
+
+    it('denies drive-bound token when file has links but none match the bound drive (scopedLinks empty)', async () => {
+      // File has links but to drive-2 only; token is bound to drive-1
+      // determineBindingMatchType for drive-binding checks links.some(l => l.driveId === 'drive-1')
+      // That returns false, so matchType = 'mismatch', caught at step 3
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-2', driveId: 'drive-2' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'drive', id: 'drive-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('binding');
+    });
+
+    it('denies file-bound token when scopedLinks exists but page permissions fail (covers scoped path with file binding)', async () => {
+      // File binding: getScopedLinks returns all links, then page permissions checked
+      // Here permissions fail so we reach the permission denial
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+      ]);
+      mockGetUserAccessLevel.mockResolvedValue({
+        canView: false,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      });
+
+      const auth = createAuth({
+        resourceBinding: { type: 'file', id: VALID_HASH },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+      expect(decision.binding.matchType).toBe('exact');
+    });
+  });
 });
 
 describe('assertFileAccess', () => {
@@ -398,7 +476,7 @@ describe('assertFileAccess', () => {
     mockGetLinksForFile.mockResolvedValue([
       { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
     ]);
-    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetFileDriveId.mockResolvedValue('drive-1');
     mockGetUserAccessLevel.mockResolvedValue({
       canView: true,
       canEdit: true,

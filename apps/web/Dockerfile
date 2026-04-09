@@ -33,11 +33,11 @@ COPY --from=deps /app .
 # Accept build arguments for Next.js environment variables
 # NEXT_PUBLIC_* vars must be available at build time for Next.js to inline them
 # Note: Stripe keys are hardcoded in stripe-config.ts to simplify Docker builds
-ARG NEXT_PUBLIC_REALTIME_URL
+ARG NEXT_PUBLIC_REALTIME_URL=""
 ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
 ARG NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
-ARG NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID
+ARG NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=""
 
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
@@ -52,9 +52,12 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # We are installing devDependencies via the --prod=false flag, so this is not needed
 # ENV NODE_ENV=development
 
+# Build dependent packages first (db + lib must compile before web)
+RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
+
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=2048" pnpm build
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" pnpm build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production

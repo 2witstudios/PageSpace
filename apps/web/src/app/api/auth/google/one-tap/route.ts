@@ -1,7 +1,6 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -16,6 +15,7 @@ import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDrive
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -114,9 +114,7 @@ export async function POST(req: Request) {
     const userName = name || email.split('@')[0] || 'User';
 
     // Check if user exists by Google ID or email
-    let user = await db.query.users.findFirst({
-      where: or(eq(users.googleId, googleId), eq(users.email, email)),
-    });
+    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
 
     let isNewUser = false;
 
@@ -135,22 +133,16 @@ export async function POST(req: Request) {
         (email_verified && !user.emailVerified)
       ) {
         loggers.auth.info('Updating existing user via Google One Tap', { email });
-        await db
-          .update(users)
-          .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
-            name: user.name || userName,
-            image: resolvedImage,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          googleId: googleId || user.googleId,
+          provider: user.password ? 'both' : 'google',
+          name: user.name || userName,
+          image: resolvedImage,
+          emailVerified: email_verified ? new Date() : user.emailVerified,
+        });
 
         // Refetch the user to get updated data
-        user =
-          (await db.query.users.findFirst({
-            where: eq(users.id, user.id),
-          })) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google One Tap', {
           userId: user.id,
           name: user.name,
@@ -160,24 +152,19 @@ export async function POST(req: Request) {
       // Create new user
       isNewUser = true;
       loggers.auth.info('Creating new user via Google One Tap', { email });
-      const [newUser] = await db
-        .insert(users)
-        .values({
-          id: createId(),
-          name: userName,
-          email,
-          emailVerified: email_verified ? new Date() : null,
-          image: null,
-          googleId,
-          provider: 'google',
-          tokenVersion: 0,
-          role: 'user',
-          storageUsedBytes: 0,
-          subscriptionTier: 'free',
-        })
-        .returning();
-
-      user = newUser;
+      user = await authRepository.createUser({
+        id: createId(),
+        name: userName,
+        email,
+        emailVerified: email_verified ? new Date() : null,
+        image: null,
+        googleId,
+        provider: 'google',
+        tokenVersion: 0,
+        role: 'user',
+        storageUsedBytes: 0,
+        subscriptionTier: 'free',
+      });
 
       const resolvedImage = await resolveGoogleAvatarImage({
         userId: user.id,
@@ -186,10 +173,7 @@ export async function POST(req: Request) {
       });
 
       if (resolvedImage !== (user.image ?? null)) {
-        await db
-          .update(users)
-          .set({ image: resolvedImage })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, { image: resolvedImage });
         user = { ...user, image: resolvedImage };
       }
 
@@ -233,54 +217,7 @@ export async function POST(req: Request) {
 
     const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
-    // DESKTOP PLATFORM: Return device token in response body
-    // Desktop uses device tokens, not web sessions
-    if (platform === 'desktop') {
-      if (!deviceId) {
-        loggers.auth.error('Desktop One Tap missing deviceId', {
-          userId: user.id,
-          email: user.email,
-        });
-        return NextResponse.json(
-          { error: 'Device ID required for desktop sign-in' },
-          { status: 400 }
-        );
-      }
-
-      // Generate device token for desktop
-      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
-        providedDeviceToken: undefined,
-        userId: user.id,
-        deviceId: deviceId,
-        platform: 'desktop',
-        tokenVersion: user.tokenVersion,
-        deviceName: deviceName || req.headers.get('user-agent') || 'Desktop App',
-        userAgent: req.headers.get('user-agent') || undefined,
-        ipAddress: clientIP,
-      });
-
-      return NextResponse.json({
-        success: true,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          emailVerified: user.emailVerified,
-        },
-        tokens: {
-          deviceToken: deviceTokenValue,
-        },
-        redirectTo,
-        isNewUser,
-      });
-    }
-
-    // WEB PLATFORM: Use session-based authentication
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Google One Tap login', { userId: user.id, count: revokedCount });
-    }
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
@@ -288,6 +225,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
@@ -299,6 +237,23 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        deviceTokenValue = await createDeviceToken({
+          userId: user.id, deviceId, tokenVersion: user.tokenVersion,
+          platform: platform || 'web',
+          deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token', {
+          userId: user.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
@@ -313,6 +268,8 @@ export async function POST(req: Request) {
           emailVerified: user.emailVerified,
         },
         csrfToken,
+        ...(platform === 'desktop' && { sessionToken }),
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
         isNewUser,
       },

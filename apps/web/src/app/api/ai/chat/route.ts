@@ -4,6 +4,7 @@ import {
   convertToModelMessages,
   UIMessage,
   stepCountIs,
+  hasToolCall,
   createUIMessageStream,
   createUIMessageStreamResponse,
   type LanguageModelUsage,
@@ -12,6 +13,7 @@ import {
 } from 'ai';
 import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -322,12 +324,10 @@ export async function POST(request: Request) {
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
-    let userPromptContent: string | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
         const messageContent = extractMessageContent(userMessage);
-        userPromptContent = messageContent;
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
@@ -659,6 +659,9 @@ export async function POST(request: Request) {
       });
     }
 
+    // Always inject the finish tool so the model can signal task completion
+    filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
+
     // DATABASE-FIRST ARCHITECTURE WITH CACHING:
     // PageSpace uses database as the single source of truth for all messages.
     // Cache provides fast reads while invalidation ensures consistency on edits/deletes.
@@ -859,7 +862,7 @@ export async function POST(request: Request) {
             system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
-            stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
             abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
@@ -1091,8 +1094,6 @@ export async function POST(request: Request) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
-                prompt: userPromptContent?.substring(0, 1000),
-                completion: messageContent?.substring(0, 1000),
                 duration,
                 conversationId, // Use actual conversation ID instead of pageId
                 messageId,

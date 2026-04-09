@@ -323,13 +323,18 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       const response = await GET(request, createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.summary).toBeDefined();
-      expect(body.stats).toBeDefined();
-      expect(body.stats.totalPagesScanned).toBeDefined();
-      expect(body.stats.matchingPages).toBeDefined();
-      expect(body.stats.documentTypes).toBeDefined();
-      expect(body.stats.matchTypes).toBeDefined();
-      expect(body.nextSteps).toBeDefined();
+      expect(body.summary).toBe('Found 1 page matching pattern "*.md"');
+      expect(body.stats).toEqual({
+        totalPagesScanned: 10,
+        matchingPages: 1,
+        documentTypes: ['DOCUMENT'],
+        matchTypes: { path: 0, title: 1 },
+      });
+      expect(body.stats.totalPagesScanned).toBe(10);
+      expect(body.stats.matchingPages).toBe(1);
+      expect(body.stats.documentTypes).toEqual(['DOCUMENT']);
+      expect(body.stats.matchTypes).toEqual({ path: 0, title: 1 });
+      expect(body.nextSteps).toEqual(['Use read_page with the pageId to examine content']);
     });
 
     it('should return empty results when no matches', async () => {
@@ -357,7 +362,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws unexpected error', async () => {
-      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
@@ -369,7 +374,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
     it('should return 500 when globSearchPages throws', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
-      vi.mocked(globSearchPages).mockRejectedValue(new Error('Search failed'));
+      vi.mocked(globSearchPages).mockRejectedValueOnce(new Error('Search failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));

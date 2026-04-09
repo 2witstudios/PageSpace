@@ -1,11 +1,13 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-repository seam extraction
+ * to replace select().from().where() chains with a mockable repository interface.
+ *
+ * REVIEW: listAccessibleDrives.setupMocks uses mockResolvedValueOnce chains that
+ * encode internal query order (owned drives first, then shared drives). This is
+ * an order-dependent mock ladder — it will break if the implementation reorders
+ * its DB calls even though the observable contract (returned drives) is unchanged.
+ */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-// ============================================================================
-// Unit Tests for DriveService (Service Seam)
-//
-// These tests verify the business logic of the drive service functions.
-// We mock the database layer to isolate the service logic.
-// ============================================================================
 
 // Mock the db module
 vi.mock('@pagespace/db', () => ({
@@ -202,7 +204,7 @@ describe('createDrive', () => {
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
-    expect(valuesMock).toHaveBeenCalled();
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Project' }));
     expect(result.isOwned).toBe(true);
     expect(result.role).toBe('OWNER');
   });
@@ -522,9 +524,8 @@ describe('updateDrive', () => {
     expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
       drivePrompt: 'New prompt',
     }));
-    expect(setMock).not.toHaveBeenCalledWith(expect.objectContaining({
-      slug: expect.anything(),
-    }));
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg).not.toHaveProperty('slug');
   });
 
   it('should return null when update returns nothing', async () => {
@@ -557,10 +558,9 @@ describe('trashDrive', () => {
 
     const result = await trashDrive('drive_123');
 
-    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
-      isTrashed: true,
-      trashedAt: expect.any(Date),
-    }));
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg.isTrashed).toBe(true);
+    expect(setCallArg.trashedAt).toBeInstanceOf(Date);
     expect(result?.isTrashed).toBe(true);
   });
 });
