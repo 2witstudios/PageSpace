@@ -165,10 +165,13 @@ describe('secureCompare', () => {
 
     it('hashes both inputs with SHA-256 before comparing', () => {
       const createHashSpy = vi.spyOn(crypto, 'createHash');
-      secureCompare('input-a', 'input-b');
-      const sha256Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha256');
-      expect(sha256Calls).toHaveLength(2);
-      createHashSpy.mockRestore();
+      try {
+        secureCompare('input-a', 'input-b');
+        const sha256Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha256');
+        expect(sha256Calls).toHaveLength(2);
+      } finally {
+        createHashSpy.mockRestore();
+      }
     });
 
     it('returns consistent results regardless of input order', () => {
