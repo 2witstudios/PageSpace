@@ -7,6 +7,7 @@
  */
 
 import crypto from 'crypto';
+import { secureCompare } from '../../auth/secure-compare';
 
 // State expiration: 10 minutes
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -59,19 +60,12 @@ export function verifySignedState<T extends Record<string, unknown> = Record<str
       return null;
     }
 
-    // Verify HMAC signature using double-hash timing-safe comparison.
-    // Hash both sides before comparing to guarantee equal-length buffers
-    // regardless of attacker-controlled sig length — eliminates length-based
-    // timing side-channels.
     const expectedSignature = crypto
       .createHmac('sha256', signingKey)
       .update(JSON.stringify(stateWithSignature.data))
       .digest('hex');
 
-    const actualHash = crypto.createHash('sha256').update(String(stateWithSignature.sig)).digest();
-    const expectedHash = crypto.createHash('sha256').update(expectedSignature).digest();
-
-    if (!crypto.timingSafeEqual(actualHash, expectedHash)) {
+    if (!secureCompare(String(stateWithSignature.sig), expectedSignature)) {
       return null;
     }
 

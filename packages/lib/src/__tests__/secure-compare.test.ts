@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import crypto from 'crypto';
 import { secureCompare } from '../auth/secure-compare';
 
 /**
@@ -156,10 +157,19 @@ describe('secureCompare', () => {
      * 2. Use crypto.timingSafeEqual for actual byte comparison
      * 3. Encode both strings to same buffer type before comparison
      */
-    it('performs length-constant comparison even when lengths differ', () => {
-      // Verify both return false without throwing
+    it('performs length-constant comparison even when lengths differ (both hash to 32 bytes)', () => {
+      // With double-hash pattern, both inputs become 32-byte SHA-256 digests
+      // so timingSafeEqual always compares equal-length buffers
       expect(secureCompare('short', 'much-longer-string')).toBe(false);
       expect(secureCompare('much-longer-string', 'short')).toBe(false);
+    });
+
+    it('hashes both inputs with SHA-256 before comparing', () => {
+      const createHashSpy = vi.spyOn(crypto, 'createHash');
+      secureCompare('input-a', 'input-b');
+      const sha256Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha256');
+      expect(sha256Calls).toHaveLength(2);
+      createHashSpy.mockRestore();
     });
 
     it('returns consistent results regardless of input order', () => {

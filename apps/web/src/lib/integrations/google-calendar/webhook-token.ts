@@ -8,6 +8,7 @@
  */
 
 import crypto from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 
 /**
  * Generate an HMAC token for webhook authentication.
@@ -58,15 +59,7 @@ export const verifyWebhookToken = (token: string): string | null => {
     .update(`webhook:${userId}`)
     .digest('hex');
 
-  // Timing-safe comparison to prevent timing attacks
-  try {
-    const sigBuffer = Buffer.from(signature, 'hex');
-    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-    if (sigBuffer.length !== expectedBuffer.length) return null;
-    if (!crypto.timingSafeEqual(sigBuffer, expectedBuffer)) return null;
-  } catch {
-    return null;
-  }
+  if (!secureCompare(signature, expectedSignature)) return null;
 
   return userId;
 };
