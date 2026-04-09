@@ -158,6 +158,9 @@ describe('executeCalendarTrigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // Default: scheduling user still has drive access
+    mockIsUserDriveMember.mockResolvedValue(true);
+
     // Default: rate limit passes
     mockIncrementUsage.mockResolvedValue({ success: true });
 
@@ -299,8 +302,8 @@ describe('executeCalendarTrigger', () => {
       }]);
     });
 
-    // User does NOT have access to the instruction page's drive
-    mockIsUserDriveMember.mockResolvedValue(false);
+    // First call: drive access check (pass), second call: instruction page drive (deny)
+    mockIsUserDriveMember.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 
     await executeCalendarTrigger(trigger, createEvent());
 
@@ -347,5 +350,15 @@ describe('executeCalendarTrigger', () => {
       (call) => call[0]?.status === 'completed'
     );
     expect(completionCall?.[0]?.conversationId).toBe('conv-abc');
+  });
+
+  it('fails when scheduling user no longer has drive access', async () => {
+    mockIsUserDriveMember.mockResolvedValue(false);
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('drive');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });

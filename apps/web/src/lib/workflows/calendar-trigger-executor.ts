@@ -20,7 +20,15 @@ export async function executeCalendarTrigger(
   const startTime = Date.now();
 
   try {
-    // 1. Rate-limit check: consume one standard AI call from the scheduler's budget
+    // 1. Verify scheduling user still has drive access (may have been removed since scheduling)
+    const hasDriveAccess = await isUserDriveMember(trigger.scheduledById, trigger.driveId);
+    if (!hasDriveAccess) {
+      const error = 'Scheduling user no longer has access to the drive';
+      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 2. Rate-limit check: consume one standard AI call from the scheduler's budget
     const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
     if (!usageResult.success) {
       const error = 'Daily AI call limit reached for scheduling user';
@@ -28,10 +36,10 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 2. Build prompt from trigger instructions + instruction page + event context
+    // 3. Build prompt from trigger instructions + instruction page + event context
     const prompt = await buildTriggerPrompt(trigger, event);
 
-    // 3. Construct synthetic WorkflowRow that executeWorkflow can consume.
+    // 4. Construct synthetic WorkflowRow that executeWorkflow can consume.
     //    We only populate the fields the executor actually reads.
     const syntheticWorkflow = {
       id: trigger.id,
@@ -57,10 +65,10 @@ export async function executeCalendarTrigger(
       updatedAt: trigger.updatedAt,
     };
 
-    // 4. Execute via the standard workflow executor
+    // 5. Execute via the standard workflow executor
     const result = await executeWorkflow(syntheticWorkflow);
 
-    // 5. Update trigger with execution results
+    // 6. Update trigger with execution results
     await db
       .update(calendarTriggers)
       .set({

@@ -6,8 +6,8 @@ AI agents can now self-schedule future work by creating calendar events that tri
 
 #### Added
 
-- **`schedule_agent_work` tool**: Agents create calendar events that fire agent executions at a specified time. Supports natural language dates, cross-agent delegation, and linked instruction pages.
-- **`cancel_scheduled_work` tool**: Cancel pending scheduled work (creator-only).
+- **`agentTrigger` on `create_calendar_event`**: Agents schedule future work by passing an `agentTrigger` when creating a calendar event. Supports natural language dates, cross-agent delegation, and linked instruction pages.
+- **Trigger cancellation via `delete_calendar_event`**: Trashing a trigger-linked event automatically cancels pending triggers. Only the event creator can delete.
 - **`calendarTriggers` table**: Tracks execution state (pending/running/completed/failed/cancelled) with full audit trail.
 - **Cron poller** (`/api/cron/calendar-triggers`): Fires every 2 minutes, claims due triggers with atomic UPDATE...RETURNING, executes in batches of 5.
 - **Calendar read tools**: Now surface trigger status on events so agents can see their scheduled work.
@@ -15,7 +15,8 @@ AI agents can now self-schedule future work by creating calendar events that tri
 #### Security
 
 - Agent and instruction pages validated against caller's accessible drives (no cross-drive page access).
-- Cancellation restricted to the user who scheduled the work (`scheduledById`).
+- Cancellation restricted to the event creator (only the creator can trash the event).
+- Scheduling user's drive membership re-verified at execution time.
 - Trigger rows sync with calendar event mutations (reschedule updates `triggerAt`, trash cancels pending triggers).
 
 #### Cost Control
