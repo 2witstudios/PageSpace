@@ -288,7 +288,7 @@ export function MemoryPane() {
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--amber)" }}>OpenFang</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>Embedded SQLite with vector embeddings. 4-layer memory: episodic, semantic, procedural, canonical. LLM-based session compaction. 12MB/agent</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>Local-first. Single binary, zero network hops. Proves agent memory at ~1.2GB for 100 agents vs 8.4GB CrewAI</td>
-              <td style={{ ...cellTd, color: "var(--mid)" }}>Single-user, no RBAC, no multi-tenant. PageSpace has the team layer they don&apos;t</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Single-user by design. PageSpace adds team-scoped RBAC and multi-tenant access on top of similar memory primitives</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--green)" }}>OpenClaw</td>
@@ -300,7 +300,7 @@ export function MemoryPane() {
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--violet)" }}>Viktor</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>&ldquo;Skills&rdquo; system: structured files that accumulate IDs, tips, and learnings from observed conversations. One agent&apos;s discovery benefits all future agents</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>Institutional memory without explicit save. Learns from Slack conversations. 3,000+ tool integrations</td>
-              <td style={{ ...cellTd, color: "var(--mid)" }}>PageSpace agents could do this today with pages &mdash; missing the automatic accumulation pattern</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>PageSpace agents could adopt a similar automatic accumulation pattern using pages</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--cyan)" }}>Notion AI</td>

@@ -223,12 +223,12 @@ export function IntegrationsPane() {
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>OpenFang</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>40 channels, 53 tools</td>
-              <td style={{ ...cellTd, color: "var(--mid)" }}>Honest count. Agent OS in Rust. Strong channel breadth (Telegram, Discord, WhatsApp, Teams, IRC, Matrix, etc.)</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Agent OS in Rust. Native adapters for messaging, email, social, and developer channels. Strong breadth (Telegram, Discord, WhatsApp, Teams, IRC, Matrix, etc.)</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>OpenClaw</td>
               <td style={{ ...cellTd, color: "var(--mid)" }}>15+ channels, 50+ integrations</td>
-              <td style={{ ...cellTd, color: "var(--mid)" }}>Self-hosted AI gateway. Community extensions via ClawHub. Honest count.</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Self-hosted AI gateway. Community extensions via ClawHub. Native channel adapters.</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>Slack</td>
@@ -287,7 +287,7 @@ export function IntegrationsPane() {
         <Feature
           nameColor="var(--red)"
           name="No channel adapters"
-          description="Agents are only reachable via the PageSpace web UI. No way to talk to agents from Slack, Discord, email, SMS, or WhatsApp. OpenFang has 40 channels."
+          description="Agents are only reachable via the PageSpace web UI. No way to talk to agents from Slack, Discord, email, SMS, or WhatsApp. Other platforms support 40+ channel adapters."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature

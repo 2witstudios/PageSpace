@@ -346,9 +346,9 @@ export function DatabasePane() {
           <h4 style={{ color: "var(--cyan)" }}>OpenFang</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Rust agent OS. 180ms cold start, 40MB RAM. SQLite memory,
-            WASM sandbox, MCP client/server. <strong>Personal database only</strong> &mdash;
-            one agent, one user, one machine. No shared state, no team
-            access, no web UI. A runtime, not a platform.
+            WASM sandbox, MCP client/server. <strong>Local-first by design</strong> &mdash;
+            one agent, one user, one machine. Optimized for personal,
+            local-first agent workflows with minimal overhead.
           </p>
         </Card>
         <Card accent="violet">
@@ -375,13 +375,13 @@ export function DatabasePane() {
       <Card accent="green" style={{ marginBottom: 12 }}>
         <h4 style={{ color: "var(--green)" }}>PageSpace differentiator: cloud, team-accessible data</h4>
         <p style={{ marginTop: 6, fontSize: 12 }}>
-          OpenFang and OpenClaw give you a personal agent with a personal database.
-          PageSpace gives you a <strong>team database in the cloud</strong> &mdash;
+          OpenFang and OpenClaw optimize for personal agents with local databases
+          &mdash; fast, private, zero-latency. PageSpace optimizes for
+          <strong>team agents with a shared cloud database</strong> &mdash;
           75 tables of shared state that humans and agents access concurrently.
           When an agent writes a page, the whole team sees it in real-time. When a
-          teammate updates a task, the agent reacts. Shared data is the primitive
-          that makes agents useful at work, not just useful alone. Their data is
-          personal. Ours is organizational.
+          teammate updates a task, the agent reacts. These are different data models
+          for different use cases: local speed vs. team coordination.
         </p>
       </Card>
 

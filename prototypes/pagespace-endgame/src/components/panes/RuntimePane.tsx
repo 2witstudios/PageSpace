@@ -185,22 +185,22 @@ export function RuntimePane() {
       {/* ── Competitive Context ── */}
       <div className="sl">Competitive Context</div>
       <h2>
-        The market is building{" "}
-        <span className="hl">agent runtimes from scratch.</span>
+        The industry is converging on{" "}
+        <span className="hl">agent runtimes across every surface.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        Competitors are spending massive effort building the runtime layer
-        that PageSpace already has. They&apos;re wiring up tool execution,
-        multi-step loops, and scheduling. PageSpace shipped all of that.
-        The competitive edge: agents already live inside the workspace with
-        real data, real tools, and real state.
+        Agent runtimes with tool execution, multi-step loops, and scheduling
+        are emerging everywhere &mdash; local, cloud, and hybrid. PageSpace
+        shipped these capabilities early. The structural difference:
+        PageSpace agents already live inside the workspace with real data,
+        real tools, and real state.
       </p>
 
       <FeatureRow columns={3} style={{ marginBottom: 0 }}>
         <Feature
-          nameColor="var(--red)"
+          nameColor="var(--cyan)"
           name="OpenFang"
-          description="Rust single-binary agent OS. Autonomous &ldquo;Hands&rdquo; on schedules. WASM dual-metered sandbox. Per-agent budgets. FangHub skill marketplace. 38 built-in tools. Impressive runtime, but agents connect to external data &mdash; they don't live inside a workspace."
+          description="Rust single-binary agent OS. Autonomous &ldquo;Hands&rdquo; on schedules. WASM dual-metered sandbox. Per-agent budgets. FangHub skill marketplace. 38 built-in tools. Optimized for local-first autonomy &mdash; a different deployment model from PageSpace's cloud workspace."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
@@ -234,12 +234,12 @@ export function RuntimePane() {
       <Card style={{ borderColor: "var(--border2)", marginBottom: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>PageSpace&apos;s structural advantage</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          Every competitor above builds a runtime that connects to external
-          data. PageSpace agents already live inside the workspace &mdash;
-          40 tools, 89-table database, page tree as filesystem, persistent
-          conversations, real-time collaboration, cron + event workflows.
-          They&apos;re building the foundation PageSpace already shipped.
-          PageSpace just needs four more trigger types to go always-on.
+          Many of these capabilities overlap with what PageSpace already
+          ships. PageSpace&apos;s structural advantage is that agents live
+          inside the workspace &mdash; 40 tools, 89-table database, page
+          tree as filesystem, persistent conversations, real-time
+          collaboration, cron + event workflows. Four more trigger types
+          and PageSpace agents go always-on.
         </p>
       </Card>
 

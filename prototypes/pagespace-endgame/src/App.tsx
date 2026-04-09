@@ -15,6 +15,7 @@ import { GdprPane } from "./components/panes/GdprPane";
 import { Soc2Pane } from "./components/panes/Soc2Pane";
 import { HipaaPane } from "./components/panes/HipaaPane";
 import { UserStoriesPane } from "./components/panes/UserStoriesPane";
+import { ConvergencePane } from "./components/panes/ConvergencePane";
 
 import { AgentToolsPane } from "./components/panes/AgentToolsPane";
 
@@ -36,6 +37,7 @@ const panes: Record<PaneId, () => ReactNode> = {
   soc2: Soc2Pane,
   hipaa: HipaaPane,
   stories: UserStoriesPane,
+  convergence: ConvergencePane,
 };
 
 export function App() {

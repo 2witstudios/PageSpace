@@ -223,30 +223,29 @@ export function InterfacesPane() {
       {/* ── Competitive Landscape ── */}
       <div className="sl">Landscape</div>
       <h2>
-        Two own the whole machine.{" "}
-        <span className="hl">That&apos;s why they&apos;re dangerous.</span>
+        Three deployment models.{" "}
+        <span className="hl">Local, cloud, and messaging.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         OpenFang and OpenClaw run on the user&apos;s computer &mdash; they
-        own the filesystem, the shell, every file on disk. They already have
-        what PageSpace is building toward: code execution, autonomous agents,
-        full system access. Their gap is team collaboration, permissions,
-        and multi-tenancy. Viktor takes the opposite approach &mdash; team-native
-        in Slack, but owns nothing. If the local-first tools add collaboration
-        before PageSpace adds execution, the window closes.
+        own the filesystem, the shell, every file on disk. They excel at
+        code execution, autonomous agents, and full system access. PageSpace
+        excels at team collaboration, permissions, and multi-tenancy. Viktor
+        takes a third approach &mdash; team-native in Slack, but owns nothing.
+        These are complementary deployment models, not competing products.
       </p>
 
       <FeatureRow columns={3}>
         <Feature
-          nameColor="var(--red)"
+          nameColor="var(--cyan)"
           name="OpenFang &mdash; Agent OS"
-          description="Rust single-binary on your machine. 'Hands': autonomous agents that run on schedules, accumulate knowledge graphs, own the filesystem. 40 channel adapters. WASM sandboxing. Already has what PageSpace needs: code execution + autonomous loops."
+          description="Rust single-binary on your machine. 'Hands': autonomous agents that run on schedules, accumulate knowledge graphs, own the filesystem. 40 channel adapters. WASM sandboxing. Strong local runtime with code execution and autonomous loops."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--red)"
+          nameColor="var(--violet)"
           name="OpenClaw &mdash; A2UI"
-          description="60K+ GitHub stars. Runs locally, owns the whole computer. A2UI protocol lets agents construct UIs declaratively. Canvas renders agent-generated interfaces live. Browser automation, 50+ integrations. Full machine access makes it a personal OS."
+          description="60K+ GitHub stars. Runs locally, owns the whole computer. A2UI protocol lets agents construct UIs declaratively. Canvas renders agent-generated interfaces live. Browser automation, 50+ integrations. Local-first personal agent with full machine access."
           style={{ padding: "20px 16px", fontSize: 14 }}
         />
         <Feature
@@ -288,17 +287,17 @@ export function InterfacesPane() {
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>Owns content?</td>
-              <td style={{ ...cellTd, color: "var(--red)", fontWeight: 600 }}>Yes &mdash; the whole filesystem</td>
-              <td style={{ ...cellTd, color: "var(--red)", fontWeight: 600 }}>Yes &mdash; the whole computer</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Yes &mdash; the whole filesystem</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Yes &mdash; the whole computer</td>
               <td style={{ ...cellTd, color: "var(--dim)" }}>No &mdash; pushes to Notion, Linear</td>
               <td style={{ ...cellTd, color: "var(--green)" }}>Yes &mdash; page tree is the data</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>Code execution</td>
-              <td style={{ ...cellTd, color: "var(--red)", fontWeight: 600 }}>Yes &mdash; WASM + native</td>
-              <td style={{ ...cellTd, color: "var(--red)", fontWeight: 600 }}>Yes &mdash; full shell access</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Yes &mdash; WASM + native</td>
+              <td style={{ ...cellTd, color: "var(--mid)" }}>Yes &mdash; full shell access</td>
               <td style={{ ...cellTd, color: "var(--dim)" }}>No</td>
-              <td style={{ ...cellTd, color: "var(--red)" }}>No &mdash; the critical gap</td>
+              <td style={{ ...cellTd, color: "var(--amber)" }}>Not yet &mdash; in progress</td>
             </tr>
             <tr>
               <td style={{ ...cellTd, fontWeight: 600, color: "var(--text)" }}>Team collaboration</td>
@@ -312,22 +311,22 @@ export function InterfacesPane() {
               <td style={{ ...cellTd, color: "var(--violet)", borderBottom: "none" }}>Autonomous Hands (scheduled agents)</td>
               <td style={{ ...cellTd, color: "var(--cyan)", borderBottom: "none" }}>A2UI (agents generate UI)</td>
               <td style={{ ...cellTd, color: "var(--amber)", borderBottom: "none" }}>Proactive monitoring + long memory</td>
-              <td style={{ ...cellTd, color: "var(--green)", borderBottom: "none", fontWeight: 600 }}>Add execution before they add teams</td>
+              <td style={{ ...cellTd, color: "var(--green)", borderBottom: "none", fontWeight: 600 }}>Close the execution gap &mdash; team layer is the differentiator</td>
             </tr>
           </tbody>
         </table>
       </Card>
 
-      <Card accent="red">
-        <h4 style={{ color: "var(--red)" }}>The race</h4>
+      <Card accent="cyan">
+        <h4 style={{ color: "var(--cyan)" }}>The convergence</h4>
         <p style={{ fontSize: 12 }}>
-          OpenFang and OpenClaw already have code execution, autonomous
-          agent loops, and full system access. PageSpace has team
-          collaboration, permissions, multi-tenancy, and a structured
-          content layer. Whoever closes their gap first wins. If they add
-          collaboration before we add execution, the local-first tools
-          become the OS and PageSpace becomes a content editor. The IDE lens
-          isn&apos;t a nice-to-have &mdash; it&apos;s existential.
+          OpenFang and OpenClaw bring code execution, autonomous agent loops,
+          and full system access. PageSpace brings team collaboration,
+          permissions, multi-tenancy, and a structured content layer. These
+          are complementary strengths across different deployment models
+          &mdash; local-first and cloud-team. The IDE lens closes
+          PageSpace&apos;s execution gap while preserving the team
+          collaboration that makes it unique.
         </p>
       </Card>
 
@@ -438,7 +437,7 @@ export function InterfacesPane() {
         <p style={{ fontSize: 12 }}>
           OpenFang and OpenClaw prove the model works &mdash; agents with
           full system access and autonomous loops become an OS. PageSpace
-          has the team layer they lack: permissions, multi-tenancy,
+          brings the team layer they don&apos;t target: permissions, multi-tenancy,
           structured content, real-time collaboration. The IDE lens
           completes the picture &mdash; once agents can execute code inside
           the same platform where teams collaborate, PageSpace becomes the

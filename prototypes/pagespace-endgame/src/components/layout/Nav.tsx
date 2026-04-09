@@ -50,7 +50,8 @@ export type PaneId =
   | "gdpr"
   | "soc2"
   | "hipaa"
-  | "stories";
+  | "stories"
+  | "convergence";
 
 const infraChildren: { id: PaneId; label: string }[] = [
   // Engine — what runs and what it can do
@@ -83,6 +84,7 @@ const topTabs: { id: PaneId | "infra" | "compliance-menu"; label: string }[] = [
   { id: "infra", label: "Infrastructure" },
   { id: "compliance-menu", label: "Compliance" },
   { id: "stories", label: "User Stories" },
+  { id: "convergence", label: "OpenFang + PageSpace" },
 ];
 
 const dropdownStyle: CSSProperties = {
