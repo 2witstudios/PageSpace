@@ -135,7 +135,7 @@ export async function GET(req: Request) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
         await authRepository.updateUser(user.id, {
           googleId: googleId || user.googleId,
-          provider: user.password ? 'both' : 'google',
+          provider: user.provider === 'email' ? 'google' : user.provider,
           name: user.name || userName,
           image: resolvedImage,
           emailVerified: email_verified ? new Date() : user.emailVerified,

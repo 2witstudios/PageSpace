@@ -47,20 +47,6 @@ Update name and email with validation.
 
 ---
 
-### PATCH /api/account/password
-
-Change password. Requires current password verification.
-
-**Body:**
-\`\`\`json
-{
-  "currentPassword": "string",
-  "newPassword": "string"
-}
-\`\`\`
-
----
-
 ### POST /api/account/avatar
 
 Upload a new avatar image.

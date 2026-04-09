@@ -21,8 +21,6 @@ interface CreateUserFormProps {
 export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<'user' | 'admin'>('user');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,18 +31,13 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
     setError(null);
     setSuccess(null);
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
     setIsSubmitting(true);
 
     try {
       const res = await fetchWithAuth('/api/admin/users/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, role }),
+        body: JSON.stringify({ name, email, role }),
       });
 
       const data = await res.json();
@@ -57,8 +50,6 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
       setSuccess(data.message || 'User created successfully');
       setName('');
       setEmail('');
-      setPassword('');
-      setConfirmPassword('');
       setRole('user');
       onSuccess?.();
     } catch {
@@ -102,32 +93,6 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="jane@clinic.local"
-            required
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="create-password">Password</Label>
-          <Input
-            id="create-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Min 12 chars, upper, lower, number"
-            required
-            minLength={12}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="create-confirm">Confirm Password</Label>
-          <Input
-            id="create-confirm"
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            placeholder="Confirm password"
             required
           />
         </div>

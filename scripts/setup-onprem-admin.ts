@@ -3,41 +3,48 @@
  * Setup script to create the first admin user for on-premise PageSpace deployment.
  *
  * Usage:
- *   pnpm setup:admin --email admin@clinic.local --password "SecurePass123!" --name "Dr. Smith"
+ *   pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"
  *
  * This script:
  * 1. Creates a user with admin role and business-tier subscription
- * 2. Hashes the password with bcrypt (cost 12)
- * 3. Sets emailVerified (pre-verified for on-prem)
- * 4. Creates default Ollama AI settings
+ * 2. Sets emailVerified (pre-verified for on-prem)
+ * 3. Creates default Ollama AI settings
+ * 4. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
 import { db, users, userAiSettings, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import bcrypt from 'bcryptjs';
-import { BCRYPT_COST } from '@pagespace/lib/auth';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
+import { createVerificationToken } from '@pagespace/lib/auth';
 import { parseArgs } from 'node:util';
+
+async function generateSetupLink(userId: string): Promise<string> {
+  const token = await createVerificationToken({
+    userId,
+    type: 'magic_link',
+    expiresInMinutes: 60,
+  });
+  const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || 'http://localhost:3000';
+  return `${baseUrl}/api/auth/magic-link/verify?token=${token}`;
+}
 
 async function main() {
   const { values } = parseArgs({
     options: {
       email: { type: 'string' },
-      password: { type: 'string' },
       name: { type: 'string' },
     },
   });
 
-  if (!values.email || !values.password || !values.name) {
-    console.error('Usage: pnpm setup:admin --email <email> --password <password> --name <name>');
+  if (!values.email || !values.name) {
+    console.error('Usage: pnpm setup:admin --email <email> --name <name>');
     console.error('');
     console.error('Example:');
-    console.error('  pnpm setup:admin --email admin@clinic.local --password "SecurePass123!" --name "Dr. Smith"');
+    console.error('  pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"');
     process.exit(1);
   }
 
   const email = values.email.toLowerCase().trim();
-  const password = values.password;
   const name = values.name.trim();
 
   // Validate trimmed values are non-empty and email format is valid
@@ -54,28 +61,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Validate password strength
-  if (password.length < 12) {
-    console.error('Error: Password must be at least 12 characters long');
-    process.exit(1);
-  }
-  if (Buffer.byteLength(password, 'utf8') > 72) {
-    console.error('Error: Password must be at most 72 bytes (bcrypt limit)');
-    process.exit(1);
-  }
-  if (!/[A-Z]/.test(password)) {
-    console.error('Error: Password must contain at least one uppercase letter');
-    process.exit(1);
-  }
-  if (!/[a-z]/.test(password)) {
-    console.error('Error: Password must contain at least one lowercase letter');
-    process.exit(1);
-  }
-  if (!/[0-9]/.test(password)) {
-    console.error('Error: Password must contain at least one number');
-    process.exit(1);
-  }
-
   // Check if user already exists
   const existing = await db.query.users.findFirst({
     where: eq(users.email, email),
@@ -84,12 +69,15 @@ async function main() {
 
   if (existing) {
     if (existing.role === 'admin') {
-      console.log(`Admin user ${email} already exists. Password was not changed.`);
+      const link = await generateSetupLink(existing.id);
+      console.log(`Admin user ${email} already exists.`);
+      console.log('');
+      console.log('One-time sign-in link (expires in 60 minutes):');
+      console.log(`  ${link}`);
     } else {
-      // Promote to admin and update password
-      const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
+      // Promote to admin
       await db.update(users)
-        .set({ role: 'admin', password: hashedPassword, ...getOnPremUserDefaults() })
+        .set({ role: 'admin', ...getOnPremUserDefaults() })
         .where(eq(users.id, existing.id));
 
       // Ensure default Ollama AI settings exist for promoted user
@@ -104,19 +92,21 @@ async function main() {
         });
       }
 
-      console.log(`Existing user ${email} promoted to admin with business tier and password updated.`);
+      const link = await generateSetupLink(existing.id);
+      console.log(`Existing user ${email} promoted to admin with business tier.`);
+      console.log('');
+      console.log('One-time sign-in link (expires in 60 minutes):');
+      console.log(`  ${link}`);
     }
     process.exit(0);
   }
 
   const userId = createId();
-  const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
 
   await db.insert(users).values({
     id: userId,
     name,
     email,
-    password: hashedPassword,
     role: 'admin',
     emailVerified: new Date(),
     ...getOnPremUserDefaults(),
@@ -129,6 +119,8 @@ async function main() {
     ...getOnPremOllamaSettings(),
   });
 
+  const link = await generateSetupLink(userId);
+
   console.log('');
   console.log('Admin user created successfully!');
   console.log(`  Name:  ${name}`);
@@ -136,7 +128,11 @@ async function main() {
   console.log(`  Role:  admin`);
   console.log(`  Tier:  business`);
   console.log('');
-  console.log('You can now sign in at your PageSpace URL.');
+  console.log('One-time sign-in link (expires in 60 minutes):');
+  console.log(`  ${link}`);
+  console.log('');
+  console.log('After initial sign-in, register a passkey for future logins.');
+  console.log('For email-based magic links, configure SMTP in your environment.');
 
   process.exit(0);
 }

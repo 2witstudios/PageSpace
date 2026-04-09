@@ -11,7 +11,6 @@ type FsLike = {
 type AdminSeeder = {
   seed(input: { slug: string; ownerEmail: string; databaseUrl: string }): Promise<{
     email: string
-    temporaryPassword?: string
     alreadyExisted: boolean
   }>
 }
@@ -19,7 +18,6 @@ type AdminSeeder = {
 type ProvisioningEmailData = {
   loginUrl: string
   adminEmail: string
-  temporaryPassword?: string
 }
 
 export type ProvisioningDeps = {
@@ -127,9 +125,6 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
           await sendProvisioningEmail({
             loginUrl: `https://${request.slug}.${tenantBaseDomain}`,
             adminEmail: request.ownerEmail,
-            ...(!seedResult.alreadyExisted && seedResult.temporaryPassword
-              ? { temporaryPassword: seedResult.temporaryPassword }
-              : {}),
           })
         } catch {
           // Email failure must NOT fail provisioning
@@ -147,7 +142,6 @@ export function createProvisioningEngine(deps: ProvisioningDeps) {
         return {
           tenantId: tenant.id,
           email: seedResult.email,
-          temporaryPassword: seedResult.temporaryPassword,
         }
       } catch (error) {
         const step = (error as { step?: string }).step ?? 'unknown'

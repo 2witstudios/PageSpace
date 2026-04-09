@@ -33,7 +33,6 @@ describe('Magic Link Service', () => {
       id: createId(),
       name: 'Magic Link Test User',
       email: testUserEmail,
-      password: 'hashed_password',
       provider: 'email',
       role: 'user',
       tokenVersion: 1,

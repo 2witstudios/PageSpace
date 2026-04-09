@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { randomBytes } from 'crypto';
 import { hashToken, getTokenPrefix } from './token-utils';
 
-export type VerificationType = 'email_verification' | 'password_reset' | 'magic_link';
+export type VerificationType = 'email_verification' | 'magic_link' | 'webauthn_signup';
 
 interface CreateTokenOptions {
   userId: string;
@@ -12,7 +12,7 @@ interface CreateTokenOptions {
 }
 
 export async function createVerificationToken(options: CreateTokenOptions): Promise<string> {
-  const { userId, type, expiresInMinutes = type === 'password_reset' ? 60 : 1440 } = options;
+  const { userId, type, expiresInMinutes = 1440 } = options;
 
   // Generate cryptographically secure token
   const token = randomBytes(32).toString('hex');

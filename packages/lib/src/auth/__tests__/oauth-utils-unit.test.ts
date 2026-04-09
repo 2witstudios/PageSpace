@@ -217,7 +217,7 @@ describe('oauth-utils', () => {
     it('should update existing user with OAuth provider ID', async () => {
       const existingUser = {
         id: 'user-1', email: 'user@test.com', name: 'Test', googleId: null,
-        password: null, image: null, emailVerified: null, appleId: null,
+        image: null, emailVerified: null, appleId: null,
       };
       vi.mocked(db.query.users.findFirst)
         .mockResolvedValueOnce(existingUser as never) // first lookup

@@ -12,7 +12,6 @@ import {
   OAuthButtons,
   GoogleOneTap,
   MagicLinkForm,
-  PasswordLoginForm,
   PasskeyLoginButton,
   ExternalAuthWaiting,
 } from "@/components/auth";
@@ -90,7 +89,7 @@ function SignInForm() {
     }
   }, [searchParams]);
 
-  // On-prem: password-only sign-in
+  // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
     return (
       <AuthShell>
@@ -108,7 +107,23 @@ function SignInForm() {
           </p>
         </motion.div>
 
-        <PasswordLoginForm />
+        {csrfToken && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.3 }}
+          >
+            <PasskeyLoginButton
+              csrfToken={csrfToken}
+              refreshToken={refreshToken}
+              variant="outline"
+            />
+          </motion.div>
+        )}
+
+        <AuthDivider delay={0.3} />
+
+        <MagicLinkForm />
       </AuthShell>
     );
   }

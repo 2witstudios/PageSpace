@@ -133,7 +133,6 @@ const mockNewUser = {
   tokenVersion: 0,
   role: 'user',
   provider: 'google',
-  password: null,
   image: 'https://example.com/avatar.png',
 };
 
@@ -145,7 +144,6 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null,
   image: 'https://example.com/old-avatar.png',
 };
 
@@ -709,19 +707,5 @@ describe('POST /api/auth/google/native', () => {
       expect((updateArgs[1] as Record<string, unknown>).image).toBe('/processed-avatar.jpg');
     });
 
-    it('given existing user with password, should set provider to both', async () => {
-      const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
-      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
-
-      const request = createNativeRequest(validNativePayload);
-      await POST(request);
-
-      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
-      expect(updateArgs[0]).toBe(userWithPassword.id);
-      const updateData = updateArgs[1] as Record<string, unknown>;
-      expect(updateData.googleId).toBe('google-id-123');
-      expect(updateData.provider).toBe('both');
-    });
   });
 });

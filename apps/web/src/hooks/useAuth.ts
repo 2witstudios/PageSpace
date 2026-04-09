@@ -19,10 +19,6 @@ interface User {
 }
 
 interface AuthActions {
-  login: (
-    email: string,
-    password: string
-  ) => Promise<{ success: boolean; error?: string; redirectTo?: string }>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -48,7 +44,7 @@ export function useAuth(): {
   const hasHydrated = useAuthStore(state => state.hasHydrated);
 
   // Access stable methods without subscribing (they don't change)
-  const { setUser, setLoading, setHydrated, startSession, endSession } = useAuthStore.getState();
+  const { setHydrated, endSession } = useAuthStore.getState();
 
   const { refreshToken, startTokenRefresh, stopTokenRefresh } = useTokenRefresh();
   const router = useRouter();
@@ -65,151 +61,6 @@ export function useAuth(): {
     // Use store's deduplicated loadSession method (store handles loading state)
     await authStoreHelpers.loadSession();
   }, [isLoading]);
-
-  // Login function
-  const login = useCallback(async (email: string, password: string) => {
-    // CRITICAL: Clear permanent auth failure flag to allow retry
-    // This resets the loop detection state so users can attempt to log in again
-    useAuthStore.getState().setAuthFailedPermanently(false);
-
-    setLoading(true);
-    try {
-      // Fetch login CSRF token first (prevents Login CSRF attacks)
-      let loginCsrfToken: string | null = null;
-      try {
-        const csrfResponse = await fetch('/api/auth/login-csrf', {
-          credentials: 'include',
-        });
-        if (csrfResponse.ok) {
-          const csrfData = await csrfResponse.json();
-          loginCsrfToken = csrfData.csrfToken;
-        }
-      } catch (csrfError) {
-        console.error('Failed to fetch login CSRF token:', csrfError);
-        // Continue without CSRF token - server will reject if required
-      }
-
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      if (isDesktop && window.electron) {
-        const [deviceInfo, existingSession] = await Promise.all([
-          window.electron.auth.getDeviceInfo(),
-          window.electron.auth.getSession(),
-        ]);
-
-        const desktopLoginPayload: {
-          email: string;
-          password: string;
-          deviceId: string;
-          platform: 'desktop';
-          deviceName: string;
-          appVersion: string;
-          deviceToken?: string;
-        } = {
-          email,
-          password,
-          deviceId: deviceInfo.deviceId,
-          platform: 'desktop',
-          deviceName: deviceInfo.deviceName,
-          appVersion: deviceInfo.appVersion,
-        };
-
-        if (existingSession?.deviceToken) {
-          desktopLoginPayload.deviceToken = existingSession.deviceToken;
-        }
-
-        const response = await fetch('/api/auth/mobile/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(desktopLoginPayload),
-          credentials: 'include',
-        });
-
-        if (response.ok) {
-          const userData = await response.json();
-
-          await window.electron.auth.storeSession({
-            sessionToken: userData.sessionToken,
-            csrfToken: userData.csrfToken,
-            deviceToken: userData.deviceToken,
-          });
-
-          clearSessionCache();
-
-          // CRITICAL FIX: Verify token is actually retrievable before proceeding
-          // This prevents race condition where loadSession is triggered before storage completes
-          const storedSession = await window.electron.auth.getSessionToken();
-          if (!storedSession) {
-            console.error('[Desktop Login] Token storage verification failed');
-            return {
-              success: false,
-              error: 'Failed to save login session. Please try again.'
-            };
-          }
-
-          setUser(userData.user);
-          startSession();
-          return { success: true };
-        }
-
-        const errorData = await response.json().catch(() => ({}));
-        return {
-          success: false,
-          error: errorData.error || 'Login failed',
-        };
-      }
-
-      // Get device information for device token creation
-      const deviceId = getOrCreateDeviceId();
-      const deviceName = getDeviceName();
-      const existingDeviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
-
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(loginCsrfToken && { 'X-Login-CSRF-Token': loginCsrfToken }),
-        },
-        body: JSON.stringify({
-          email,
-          password,
-          deviceId,
-          deviceName,
-          ...(existingDeviceToken && { deviceToken: existingDeviceToken }),
-        }),
-        credentials: 'include',
-      });
-
-      if (response.ok) {
-        const userData = await response.json();
-
-        // Store device token if returned
-        if (userData.deviceToken && typeof localStorage !== 'undefined') {
-          localStorage.setItem('deviceToken', userData.deviceToken);
-        }
-
-        setUser(userData);
-        startSession();
-        const redirectTo =
-          typeof userData.redirectTo === 'string' ? userData.redirectTo : undefined;
-        return { success: true, ...(redirectTo && { redirectTo }) };
-      } else {
-        const errorData = await response.json();
-        return {
-          success: false,
-          error: errorData.error || 'Login failed'
-        };
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      return {
-        success: false,
-        error: 'Network error. Please try again.'
-      };
-    } finally {
-      setLoading(false);
-    }
-  }, [setUser, setLoading, startSession]);
 
   // Logout function
   const logout = useCallback(async () => {
@@ -417,7 +268,6 @@ export function useAuth(): {
     isRefreshing,
     sessionDuration: authStoreHelpers.getSessionDuration(),
     actions: {
-      login,
       logout,
       refreshAuth,
       checkAuth,

@@ -291,8 +291,8 @@ describe('runImport', () => {
     await writeFile(
       path.join(badBundleDir, 'data.sql'),
       `BEGIN;
-INSERT INTO "users" ("id", "name", "email", "password", "provider", "createdAt", "updatedAt")
-VALUES ('test1', 'Test', 'test@test.com', 'hash', 'email', NOW(), NOW())
+INSERT INTO "users" ("id", "name", "email", "provider", "createdAt", "updatedAt")
+VALUES ('test1', 'Test', 'test@test.com', 'email', NOW(), NOW())
 ON CONFLICT DO NOTHING;
 INSERT INTO "nonexistent_table" ("id") VALUES ('x');
 COMMIT;`,

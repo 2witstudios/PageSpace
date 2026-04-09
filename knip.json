@@ -85,7 +85,7 @@
         "vitest.config.ts"
       ],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["server-only", "@types/bcryptjs"],
+      "ignoreDependencies": ["server-only"],
       "drizzle": false
     },
     "packages/lib": {

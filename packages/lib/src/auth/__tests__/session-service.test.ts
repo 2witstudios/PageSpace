@@ -12,7 +12,6 @@ describe('Session Service', () => {
       id: createId(),
       name: 'Test Session User',
       email: `test-session-${Date.now()}@example.com`,
-      password: 'hashed_password',
       provider: 'email',
       role: 'user',
       tokenVersion: 1,

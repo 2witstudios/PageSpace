@@ -1038,8 +1038,6 @@ class AuthFetch {
 
     // Exempt certain auth endpoints that establish sessions
     const csrfExemptPaths = [
-      '/api/auth/login',
-      '/api/auth/signup',
       // REMOVED: '/api/auth/refresh' - route doesn't exist (dropped in device token migration)
       '/api/auth/google',
       '/api/auth/resend-verification',

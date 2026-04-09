@@ -80,21 +80,18 @@ export const FIXTURES = {
       id: 'test_user_owner_001',
       name: 'Alice Owner',
       email: 'alice@test.local',
-      password: '$2a$12$fakehash',
       provider: 'email' as const,
     },
     member: {
       id: 'test_user_member_002',
       name: 'Bob Member',
       email: 'bob@test.local',
-      password: '$2a$12$fakehash',
       provider: 'email' as const,
     },
     outsider: {
       id: 'test_user_outsider_003',
       name: 'Eve Outsider',
       email: 'eve@test.local',
-      password: '$2a$12$fakehash',
       provider: 'email' as const,
     },
   },
@@ -185,11 +182,11 @@ export async function seedFixtures(db: TestDb): Promise<void> {
 
   // Users
   await db.execute(sql`
-    INSERT INTO users (id, name, email, password, provider, "createdAt", "updatedAt")
+    INSERT INTO users (id, name, email, provider, "createdAt", "updatedAt")
     VALUES
-      (${users.owner.id}, ${users.owner.name}, ${users.owner.email}, ${users.owner.password}, ${users.owner.provider}, ${now}, ${now}),
-      (${users.member.id}, ${users.member.name}, ${users.member.email}, ${users.member.password}, ${users.member.provider}, ${now}, ${now}),
-      (${users.outsider.id}, ${users.outsider.name}, ${users.outsider.email}, ${users.outsider.password}, ${users.outsider.provider}, ${now}, ${now})
+      (${users.owner.id}, ${users.owner.name}, ${users.owner.email}, ${users.owner.provider}, ${now}, ${now}),
+      (${users.member.id}, ${users.member.name}, ${users.member.email}, ${users.member.provider}, ${now}, ${now}),
+      (${users.outsider.id}, ${users.outsider.name}, ${users.outsider.email}, ${users.outsider.provider}, ${now}, ${now})
   `);
 
   // User profiles

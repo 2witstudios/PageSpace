@@ -42,7 +42,6 @@ const mockUser: User = {
   googleId: null,
   appleId: null,
   emailVerified: mockVerifiedDate,
-  password: '$2a$12$hashedpassword',
   tokenVersion: 0,
   adminRoleVersion: 0,
   currentAiProvider: 'pagespace',
@@ -104,12 +103,10 @@ describe('GET /api/auth/me', () => {
       expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
     });
 
-    it('does not expose sensitive fields like password', async () => {
+    it('does not expose sensitive fields like tokenVersion', async () => {
       const response = await GET(createRequest());
       const body = await response.json();
 
-      // Security: password must never be in response
-      expect(body.password).toBeUndefined();
       expect(body.tokenVersion).toBeUndefined();
     });
 

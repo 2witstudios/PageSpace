@@ -139,7 +139,6 @@ const mockNewUser = {
   image: null,
   emailVerified: new Date(),
   tokenVersion: 0,
-  password: null,
   appleId: 'apple-sub-123',
 };
 
@@ -386,7 +385,6 @@ describe('POST /api/auth/apple/native', () => {
       image: null,
       emailVerified: new Date(),
       tokenVersion: 0,
-      password: null,
       appleId: null as string | null,
     };
 
@@ -435,18 +433,6 @@ describe('POST /api/auth/apple/native', () => {
       await POST(createNativeRequest(validPayload));
 
       expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
-    });
-
-    it('sets provider to "both" for user with password', async () => {
-      const userWithPassword = { ...existingUser, password: '$2a$12$hash', appleId: null };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
-      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, appleId: 'apple-sub-123' } as never);
-
-      await POST(createNativeRequest(validPayload));
-
-      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
-      expect(updateArgs[0]).toBe('existing-user-id');
-      expect((updateArgs[1] as Record<string, unknown>).provider).toBe('both');
     });
 
     it('handles re-fetch returning null after update', async () => {

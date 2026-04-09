@@ -1,47 +1,41 @@
 /**
  * @scaffold - migrate.ts Tests
  *
- * migrate.ts is a script that runs drizzle migrations and calls process.exit.
- * We mock out the migrator and the db to avoid any real database connections,
+ * migrate.ts is a custom migration runner that executes each migration in its
+ * own transaction (fixing PostgreSQL enum ADD VALUE limitations).
+ * We mock out readMigrationFiles and the db to avoid any real database connections,
  * then dynamically import the module to trigger its top-level IIFE.
- *
- * Suggested integration tests:
- * - Real DB test: run migrate against test database, verify tables created
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
-// Mock drizzle migrator before importing migrate.ts
-vi.mock('drizzle-orm/node-postgres/migrator', () => ({
-  migrate: vi.fn(),
+// Mock readMigrationFiles before importing migrate.ts
+const mockReadMigrationFiles = vi.fn();
+vi.mock('drizzle-orm/migrator', () => ({
+  readMigrationFiles: mockReadMigrationFiles,
+}));
+
+// Mock drizzle-orm sql template tag
+const mockSqlIdentifier = vi.fn(() => 'identifier');
+const mockSqlRaw = vi.fn(() => 'raw');
+vi.mock('drizzle-orm', () => ({
+  sql: Object.assign(vi.fn(), {
+    identifier: mockSqlIdentifier,
+    raw: mockSqlRaw,
+  }),
 }));
 
 // Mock the db index so no real PG pool is created
+const mockExecute = vi.fn();
+const mockTxExecute = vi.fn();
+const mockTransaction = vi.fn(async (fn: (tx: { execute: typeof mockTxExecute }) => Promise<void>) => {
+  await fn({ execute: mockTxExecute });
+});
+
 vi.mock('../index', () => ({
-  db: {},
-  eq: vi.fn(),
-  and: vi.fn(),
-  or: vi.fn(),
-  not: vi.fn(),
-  inArray: vi.fn(),
-  sql: vi.fn(),
-  asc: vi.fn(),
-  desc: vi.fn(),
-  count: vi.fn(),
-  sum: vi.fn(),
-  avg: vi.fn(),
-  max: vi.fn(),
-  min: vi.fn(),
-  like: vi.fn(),
-  ilike: vi.fn(),
-  exists: vi.fn(),
-  between: vi.fn(),
-  gt: vi.fn(),
-  gte: vi.fn(),
-  lt: vi.fn(),
-  lte: vi.fn(),
-  ne: vi.fn(),
-  isNull: vi.fn(),
-  isNotNull: vi.fn(),
+  db: {
+    execute: mockExecute,
+    transaction: mockTransaction,
+  },
 }));
 
 describe('migrate.ts', () => {
@@ -50,74 +44,68 @@ describe('migrate.ts', () => {
   let consoleErrorSpy: MockInstance;
 
   beforeEach(() => {
-    // Intercept process.exit so the test process doesn't actually exit
     processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Default: no existing migrations in DB
+    mockExecute.mockResolvedValue({ rows: [] });
+    // Default: no pending migrations
+    mockReadMigrationFiles.mockReturnValue([]);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    // Clear module registry so each test gets a fresh import
     vi.resetModules();
+    mockExecute.mockReset();
+    mockTransaction.mockClear();
+    mockTxExecute.mockReset();
+    mockReadMigrationFiles.mockReset();
   });
 
-  it('calls migrate and exits with 0 on success', async () => {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    vi.mocked(migrate).mockResolvedValueOnce(undefined);
+  it('runs migrations and exits with 0 on success', async () => {
+    mockReadMigrationFiles.mockReturnValue([
+      { sql: ['CREATE TABLE test;'], folderMillis: 1000, hash: 'abc123' },
+    ]);
 
-    // Import triggers the IIFE at module load time
     await import('../migrate');
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Allow all microtasks/promises to settle
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(migrate).toHaveBeenCalledTimes(1);
+    expect(mockReadMigrationFiles).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 
-  it('calls migrate with the correct migrationsFolder argument', async () => {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    vi.mocked(migrate).mockResolvedValueOnce(undefined);
+  it('reads migrations from the drizzle folder', async () => {
+    mockReadMigrationFiles.mockReturnValue([]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const callArgs = vi.mocked(migrate).mock.calls[0];
-    expect(callArgs).toBeDefined();
-    // Second argument should be an object with migrationsFolder
-    const config = callArgs[1] as { migrationsFolder: string };
-    expect(config).toHaveProperty('migrationsFolder');
-    expect(typeof config.migrationsFolder).toBe('string');
-    expect(config.migrationsFolder).toContain('drizzle');
+    expect(mockReadMigrationFiles).toHaveBeenCalledWith({ migrationsFolder: 'drizzle' });
   });
 
   it('logs migration progress messages', async () => {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    vi.mocked(migrate).mockResolvedValueOnce(undefined);
+    mockReadMigrationFiles.mockReturnValue([]);
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining('Running migrations'));
   });
 
   it('logs "Not set" when DATABASE_URL is not set', async () => {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    vi.mocked(migrate).mockResolvedValueOnce(undefined);
-
+    mockReadMigrationFiles.mockReturnValue([]);
     const originalDatabaseUrl = process.env.DATABASE_URL;
     delete process.env.DATABASE_URL;
 
     await import('../migrate');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Restore env
     if (originalDatabaseUrl !== undefined) {
       process.env.DATABASE_URL = originalDatabaseUrl;
     }
 
-    // console.log("DATABASE_URL:", "Not set") - two args
     const logCalls = consoleLogSpy.mock.calls;
     const dbUrlCall = logCalls.find((args) => args[0] === 'DATABASE_URL:');
     expect(dbUrlCall).toBeDefined();
@@ -125,14 +113,13 @@ describe('migrate.ts', () => {
   });
 
   it('calls process.exit(1) and logs error when migration fails', async () => {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    const migrationError = new Error('Migration failed: connection refused');
-    vi.mocked(migrate).mockRejectedValueOnce(migrationError);
+    const migrationError = new TypeError('db.execute is not a function');
+    mockExecute.mockRejectedValueOnce(migrationError);
 
     await import('../migrate');
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(migrationError);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.any(Error));
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 });

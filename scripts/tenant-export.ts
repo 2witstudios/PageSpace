@@ -41,7 +41,7 @@ import {
 // data loss (missing column) or an import error (extra column).
 
 const USER_COLUMNS = [
-  'id', 'name', 'email', 'emailVerified', 'image', 'password',
+  'id', 'name', 'email', 'emailVerified', 'image',
   'googleId', 'appleId', 'provider', 'tokenVersion', 'role',
   'adminRoleVersion', 'currentAiProvider', 'currentAiModel',
   'storageUsedBytes', 'activeUploads', 'lastStorageCalculated',

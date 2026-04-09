@@ -66,7 +66,6 @@ pnpm db:migrate
 ```bash
 pnpm setup:admin \
   --email admin@clinic.local \
-  --password "SecurePassword123!" \
   --name "Dr. Smith"
 ```
 

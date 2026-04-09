@@ -1,5 +1,3 @@
-import { randomBytes } from 'crypto'
-import { hash as bcryptHash } from 'bcryptjs'
 import { createId } from '@paralleldrive/cuid2'
 
 export type TenantDbConnection = {
@@ -15,28 +13,14 @@ export type SeedInput = {
 
 export type SeedResult = {
   email: string
-  temporaryPassword?: string
   alreadyExisted: boolean
 }
 
-type BcryptLike = {
-  hash(data: string, saltRounds: number): Promise<string>
-}
-
 type AdminSeederDeps = {
-  bcrypt?: BcryptLike
-  generatePassword?: () => string
   connect: (databaseUrl: string) => Promise<TenantDbConnection>
 }
 
-function defaultGeneratePassword(): string {
-  return randomBytes(16).toString('base64url')
-}
-
 export function createAdminSeeder(deps: AdminSeederDeps) {
-  const bcrypt = deps.bcrypt ?? { hash: bcryptHash }
-  const generatePassword = deps.generatePassword ?? defaultGeneratePassword
-
   return {
     async seed(input: SeedInput): Promise<SeedResult> {
       const db = await deps.connect(input.databaseUrl)
@@ -50,16 +34,14 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
           return { email: input.ownerEmail, alreadyExisted: true }
         }
 
-        const temporaryPassword = generatePassword()
-        const hashedPassword = await bcrypt.hash(temporaryPassword, 12)
         const id = createId()
 
         await db.query(
-          'INSERT INTO users (id, email, password, role, name) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, role',
-          [id, input.ownerEmail, hashedPassword, 'admin', 'Admin']
+          'INSERT INTO users (id, email, role, name) VALUES ($1, $2, $3, $4) RETURNING id, email, role',
+          [id, input.ownerEmail, 'admin', 'Admin']
         )
 
-        return { email: input.ownerEmail, temporaryPassword, alreadyExisted: false }
+        return { email: input.ownerEmail, alreadyExisted: false }
       } finally {
         await db.end()
       }

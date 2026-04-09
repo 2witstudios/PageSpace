@@ -151,7 +151,6 @@ const mockNewUser = {
   image: null,
   emailVerified: new Date(),
   tokenVersion: 0,
-  password: null,
   appleId: 'apple-sub-123',
 };
 
@@ -534,8 +533,7 @@ describe('POST /api/auth/apple/callback', () => {
         image: null,
         emailVerified: new Date(),
         tokenVersion: 0,
-        password: null,
-        appleId: null,
+              appleId: null,
       };
 
       vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
@@ -563,8 +561,7 @@ describe('POST /api/auth/apple/callback', () => {
         image: null,
         emailVerified: new Date(),
         tokenVersion: 0,
-        password: null,
-        appleId: 'apple-sub-123',
+              appleId: 'apple-sub-123',
       };
 
       vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
@@ -591,8 +588,7 @@ describe('POST /api/auth/apple/callback', () => {
         image: null,
         emailVerified: new Date(),
         tokenVersion: 0,
-        password: null,
-        appleId: 'apple-sub-123',
+              appleId: 'apple-sub-123',
       };
 
       vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(existingUser as never);
@@ -617,8 +613,7 @@ describe('POST /api/auth/apple/callback', () => {
         image: null,
         emailVerified: new Date(),
         tokenVersion: 0,
-        password: null,
-        appleId: null,
+              appleId: null,
       };
 
       vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);

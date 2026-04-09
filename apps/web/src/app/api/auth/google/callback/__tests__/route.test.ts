@@ -167,7 +167,6 @@ const mockNewUser = {
   tokenVersion: 0,
   role: 'user',
   provider: 'google',
-  password: null,
   image: null,
   emailVerified: new Date(),
 };
@@ -180,7 +179,6 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null,
   image: null,
   emailVerified: new Date(),
 };
@@ -636,17 +634,6 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       expect(authRepository.updateUser).not.toHaveBeenCalled();
-    });
-
-    it('sets provider to both when existing user has password', async () => {
-      const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
-      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
-
-      const request = createCallbackRequest({ code: 'valid-code' });
-      await GET(request);
-
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
     });
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {

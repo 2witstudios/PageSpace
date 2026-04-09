@@ -133,7 +133,6 @@ describe('GET /api/account', () => {
       name: 'Test User',
       email: 'test@example.com',
       image: null,
-      password: 'hashed-password',
       tokenVersion: 999,
     } as never);
 
@@ -155,7 +154,6 @@ describe('GET /api/account', () => {
       name: 'Test User',
       email: 'test@example.com',
       image: '/avatars/user.jpg',
-      password: 'hashed-password',
       tokenVersion: 0,
     } as never);
 
@@ -172,30 +170,7 @@ describe('GET /api/account', () => {
       name: 'Test User',
       email: 'test@example.com',
       image: '/avatars/user.jpg',
-      hasPassword: true,
     });
-  });
-
-  it('should return hasPassword false when user has no password', async () => {
-    // Arrange
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: mockUserId,
-      name: 'Test User',
-      email: 'test@example.com',
-      image: null,
-      password: null,
-      tokenVersion: 0,
-    } as never);
-
-    const request = new Request('https://example.com/api/account', { method: 'GET' });
-
-    // Act
-    const response = await GET(request);
-    const body = await response.json();
-
-    // Assert
-    expect(response.status).toBe(200);
-    expect(body.hasPassword).toBe(false);
   });
 });
 

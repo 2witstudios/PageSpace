@@ -4,7 +4,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
-export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple', 'both']);
+export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
 export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'android']);
 
 export const users = pgTable('users', {
@@ -13,7 +13,7 @@ export const users = pgTable('users', {
   email: text('email').unique().notNull(),
   emailVerified: timestamp('emailVerified', { mode: 'date' }),
   image: text('image'),
-  password: text('password'),
+
   googleId: text('googleId').unique(),
   appleId: text('appleId').unique(),
   provider: authProvider('provider').default('email').notNull(),
@@ -135,7 +135,7 @@ export const verificationTokens = pgTable('verification_tokens', {
   tokenHash: text('tokenHash').unique().notNull(),
   tokenPrefix: text('tokenPrefix').notNull(),
 
-  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link' | 'webauthn_signup'
+  type: text('type').notNull(), // 'email_verification' | 'magic_link' | 'webauthn_signup'
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   usedAt: timestamp('usedAt', { mode: 'date' }),
