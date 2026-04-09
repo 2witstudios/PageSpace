@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const capturedState = vi.hoisted(() => ({
   insertValues: null as Record<string, unknown> | null,
   logEntries: [] as Array<{ logHash: string }>,
+  executedSql: [] as Array<{ strings: TemplateStringsArray; values: unknown[] }>,
 }));
 
 const mockInsertValues = vi.hoisted(() =>
@@ -27,9 +28,25 @@ const mockFindFirst = vi.hoisted(() =>
 );
 const mockUsersFindFirst = vi.hoisted(() => vi.fn());
 
+const mockCreateTx = vi.hoisted(() => () => ({
+  execute: (sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
+    capturedState.executedSql.push(sqlObj);
+    return Promise.resolve({ rows: [] });
+  },
+  insert: mockInsert,
+  query: {
+    activityLogs: { findFirst: mockFindFirst },
+  },
+}));
+
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: mockInsert,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transaction: vi.fn().mockImplementation(async (callback: any) => {
+      const tx = mockCreateTx();
+      return callback(tx);
+    }),
     query: {
       activityLogs: { findFirst: mockFindFirst },
       users: { findFirst: mockUsersFindFirst },
@@ -38,11 +55,19 @@ vi.mock('@pagespace/db', () => ({
   activityLogs: { id: 'id', logHash: 'logHash', timestamp: 'timestamp' },
   users: { id: 'id' },
   eq: vi.fn((col, val) => ({ type: 'eq', col, val })),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  }),
 }));
 
 vi.mock('drizzle-orm', () => ({
   desc: vi.fn((col) => col),
   isNotNull: vi.fn((col) => col),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  }),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -77,10 +102,24 @@ import {
   logConversationUndo,
   setActivityBroadcastHook,
   setWorkflowTriggerHook,
+  ACTIVITY_CHAIN_LOCK_KEY,
   type ActivityLogInput,
 } from '../activity-logger';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+
+function makeTxWithExecute(insertValuesFn = vi.fn().mockResolvedValue(undefined)) {
+  const executedSql: Array<{ strings: TemplateStringsArray; values: unknown[] }> = [];
+  const tx = {
+    execute: vi.fn().mockImplementation((sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
+      executedSql.push(sqlObj);
+      return Promise.resolve({ rows: [] });
+    }),
+    insert: vi.fn().mockReturnValue({ values: insertValuesFn }),
+    query: { activityLogs: { findFirst: vi.fn().mockResolvedValue(null) } },
+  } as unknown as typeof db;
+  return { tx, executedSql };
+}
 
 const baseHashData = {
   id: 'log-1',
@@ -98,8 +137,15 @@ describe('activity-logger', () => {
     vi.clearAllMocks();
     capturedState.insertValues = null;
     capturedState.logEntries = [];
+    capturedState.executedSql = [];
     setActivityBroadcastHook(null);
     setWorkflowTriggerHook(null);
+    // Restore transaction implementation after clearAllMocks removes it
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(db.transaction).mockImplementation(async (callback: any) => {
+      const tx = mockCreateTx();
+      return callback(tx);
+    });
     mockInsert.mockReturnValue({ values: mockInsertValues });
     mockInsertValues.mockImplementation((values: Record<string, unknown>) => {
       capturedState.insertValues = values;
@@ -438,10 +484,16 @@ describe('activity-logger', () => {
     };
 
     function makeTx(insertValuesFn = vi.fn().mockResolvedValue(undefined)) {
-      return {
+      const executedSqlCalls: Array<{ strings: TemplateStringsArray; values: unknown[] }> = [];
+      const tx = {
+        execute: vi.fn().mockImplementation((sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
+          executedSqlCalls.push(sqlObj);
+          return Promise.resolve({ rows: [] });
+        }),
         insert: vi.fn().mockReturnValue({ values: insertValuesFn }),
         query: { activityLogs: { findFirst: vi.fn().mockResolvedValue(null) } },
       } as unknown as typeof db;
+      return Object.assign(tx, { _executedSql: executedSqlCalls });
     }
 
     it('should insert into the provided transaction', async () => {
@@ -475,6 +527,57 @@ describe('activity-logger', () => {
       setActivityBroadcastHook(broadcastHook);
       await logActivityWithTx(baseInput, makeTx());
       expect(broadcastHook).toHaveBeenCalled();
+    });
+  });
+
+  // ── hash chain serialization (#542) ────────────────────────────────────────
+  describe('hash chain serialization (#542)', () => {
+    const baseInput: ActivityLogInput = {
+      userId: 'user-1',
+      actorEmail: 'john@example.com',
+      operation: 'create',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      driveId: 'drive-1',
+    };
+
+    it('acquires advisory lock before reading last hash (#542)', async () => {
+      await logActivity(baseInput);
+
+      // First SQL execute call inside the transaction should be the advisory lock
+      expect(capturedState.executedSql.length).toBeGreaterThanOrEqual(1);
+      const lockSql = capturedState.executedSql[0];
+      expect(lockSql).toBeDefined();
+      const joinedSql = lockSql!.strings.join('');
+      expect(joinedSql).toContain('pg_advisory_xact_lock');
+    });
+
+    it('uses fixed lock key for activity log chain (#542)', () => {
+      expect(ACTIVITY_CHAIN_LOCK_KEY).toBe(5829174063);
+    });
+
+    it('reads latest hash after acquiring lock (#542)', async () => {
+      await logActivity(baseInput);
+
+      // The advisory lock must be the first SQL call, hash read comes after
+      expect(capturedState.executedSql.length).toBeGreaterThanOrEqual(1);
+      const lockSql = capturedState.executedSql[0];
+      const joinedSql = lockSql!.strings.join('');
+      expect(joinedSql).toContain('pg_advisory_xact_lock');
+      // The hash read uses findFirst (not raw SQL), so it won't appear in executedSql.
+      // Verifying the lock is first confirms ordering.
+    });
+
+    it('logActivityWithTx acquires advisory lock (#542)', async () => {
+      const txValues = vi.fn().mockResolvedValue(undefined);
+      const mockTx = makeTxWithExecute(txValues);
+      await logActivityWithTx(baseInput, mockTx.tx);
+
+      expect(mockTx.executedSql.length).toBeGreaterThanOrEqual(1);
+      const lockSql = mockTx.executedSql[0];
+      expect(lockSql).toBeDefined();
+      const joinedSql = lockSql!.strings.join('');
+      expect(joinedSql).toContain('pg_advisory_xact_lock');
     });
   });
 
@@ -773,6 +876,7 @@ describe('activity-logger', () => {
     it('should use logActivityWithTx when tx is provided', async () => {
       const txValues = vi.fn().mockResolvedValue(undefined);
       const mockTx = {
+        execute: vi.fn().mockResolvedValue({ rows: [] }),
         insert: vi.fn().mockReturnValue({ values: txValues }),
         query: { activityLogs: { findFirst: vi.fn().mockResolvedValue(null) } },
       } as unknown as typeof db;
