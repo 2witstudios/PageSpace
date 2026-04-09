@@ -18,6 +18,7 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     EXPORT_DATA: {
       maxAttempts: 1,
@@ -41,7 +42,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { GET } from '../route';
 
 // Test helpers
@@ -133,6 +134,14 @@ describe('GET /api/account/export', () => {
       expect(response.status).toBe(404);
       expect(body.error).toBe('User not found');
     });
+
+    it('resets rate limit on 404 so user can retry', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(null);
+
+      await GET(createRequest());
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('export:user:user-1');
+    });
   });
 
   describe('successful export', () => {
@@ -184,6 +193,14 @@ describe('GET /api/account/export', () => {
 
       expect(mockArchive.finalize).toHaveBeenCalledTimes(1);
     });
+
+    it('does not reset rate limit on successful export', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(createRequest());
+
+      expect(resetDistributedRateLimit).not.toHaveBeenCalled();
+    });
   });
 
   describe('rate limiting', () => {
@@ -228,6 +245,16 @@ describe('GET /api/account/export', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to generate data export');
       consoleSpy.mockRestore();
+    });
+
+    it('resets rate limit on 500 so user can retry', async () => {
+      vi.mocked(collectAllUserData).mockRejectedValueOnce(new Error('DB error'));
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await GET(createRequest());
+      consoleSpy.mockRestore();
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('export:user:user-1');
     });
 
     it('propagates archive error to ReadableStream controller', async () => {

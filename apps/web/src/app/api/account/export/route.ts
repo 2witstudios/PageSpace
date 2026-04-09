@@ -1,7 +1,7 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -23,8 +23,9 @@ export async function GET(request: Request) {
   const userId = auth.userId;
 
   // Rate limiting (distributed via Redis)
+  const rateLimitKey = `export:user:${userId}`;
   const rateLimitResult = await checkDistributedRateLimit(
-    `export:user:${userId}`,
+    rateLimitKey,
     DISTRIBUTED_RATE_LIMITS.EXPORT_DATA
   );
 
@@ -45,6 +46,7 @@ export async function GET(request: Request) {
     );
 
     if (!data) {
+      await resetDistributedRateLimit(rateLimitKey);
       return Response.json({ error: 'User not found' }, { status: 404 });
     }
 
@@ -88,6 +90,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    await resetDistributedRateLimit(rateLimitKey);
     console.error('[GDPR Export] Error generating export:', error);
     return Response.json(
       { error: 'Failed to generate data export' },
