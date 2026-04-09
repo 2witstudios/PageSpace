@@ -268,8 +268,8 @@ describe('hash-chain-verifier', () => {
     it('should detect tampering when content is modified', async () => {
       // Arrange - create valid chain then modify content
       mockLogEntries = createValidHashChain(3);
-      // Modify the userId of the 2nd entry (which changes its hash)
-      mockLogEntries[1]!.userId = 'modified-user';
+      // Modify a non-PII field of the 2nd entry (which changes its hash)
+      mockLogEntries[1]!.operation = 'modified-operation';
 
       // Mock count query
       vi.mocked(db.select).mockReturnValue({

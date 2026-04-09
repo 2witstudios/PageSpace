@@ -69,12 +69,15 @@ export interface HashChainData {
 /**
  * Data used to compute the hash of a log entry.
  * Includes immutable fields that define the entry's content.
+ *
+ * PII fields (userId, actorEmail) are accepted but excluded from hash
+ * computation for GDPR compliance — see serializeLogDataForHash().
  */
 interface HashableLogData {
   id: string;
   timestamp: Date;
-  userId: string;
-  actorEmail: string;
+  userId?: string;
+  actorEmail?: string;
   operation: string;
   resourceType: string;
   resourceId: string;
@@ -114,16 +117,23 @@ export function computeHash(data: string, previousHash: string): string {
  * Creates a deterministic JSON string from the hashable fields.
  * Uses sorted keys to ensure consistent hash computation.
  *
+ * PII fields excluded from hash computation for GDPR compliance (#541).
+ * These fields may be anonymized/deleted under right-to-erasure requests,
+ * so they must not be part of the hash chain to keep it verifiable.
+ *
+ * Excluded: userId, actorEmail
+ * Included: id, timestamp, operation, resourceType, resourceId, driveId,
+ *           pageId, contentSnapshot, previousValues, newValues, metadata
+ *
  * @param data - Log entry data to serialize
  * @returns Deterministic JSON string
  */
 export function serializeLogDataForHash(data: HashableLogData): string {
   // Create object with sorted keys for deterministic serialization
+  // Note: userId and actorEmail are intentionally excluded (PII — GDPR right-to-erasure)
   const hashableObject = {
     id: data.id,
     timestamp: data.timestamp.toISOString(),
-    userId: data.userId,
-    actorEmail: data.actorEmail,
     operation: data.operation,
     resourceType: data.resourceType,
     resourceId: data.resourceId,

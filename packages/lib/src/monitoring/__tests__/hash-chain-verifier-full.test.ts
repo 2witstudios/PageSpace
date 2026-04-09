@@ -198,7 +198,7 @@ describe('hash-chain-verifier (full coverage)', () => {
 
     it('should detect tampering via content modification', async () => {
       const chain = buildValidChain(3);
-      chain[1]!.userId = 'modified-user'; // hash stays same but content differs
+      chain[1]!.operation = 'modified-operation'; // hash stays same but content differs
       setupDbMocks(chain);
 
       const result = await verifyHashChain();
