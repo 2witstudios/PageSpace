@@ -25,15 +25,13 @@ const IS_BILLING_DISABLED = IS_ONPREM || IS_TENANT;
 
 /**
  * Routes blocked in on-prem and tenant modes. These return 404 to prevent probing.
- * Stripe, OAuth, magic-link, passkey, and self-registration routes are
- * inaccessible - the middleware blocks them before any route handler executes.
+ * Stripe, OAuth, and self-registration routes are inaccessible.
+ * Magic-link and passkey routes are allowed everywhere (passwordless auth).
  */
 const CLOUD_ONLY_ROUTE_PREFIXES = [
   '/api/stripe/',
   '/api/auth/google/',
   '/api/auth/apple/',
-  '/api/auth/magic-link/',
-  '/api/auth/passkey/',
   '/api/auth/signup',
   '/api/auth/mobile/signup',
 ];
@@ -99,6 +97,8 @@ export async function middleware(req: NextRequest) {
     // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
     if (
       pathname.startsWith('/api/auth/csrf') ||
+      pathname.startsWith('/api/auth/login-csrf') ||
+      pathname.startsWith('/api/auth/magic-link/') ||
       pathname.startsWith('/api/auth/google') ||
       pathname.startsWith('/api/auth/passkey/authenticate') ||
       pathname.startsWith('/api/auth/device/') ||

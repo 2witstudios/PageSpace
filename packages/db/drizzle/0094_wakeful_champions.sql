@@ -4,10 +4,6 @@ UPDATE "users" SET "provider" = 'apple' WHERE "provider" = 'both' AND "appleId" 
 UPDATE "users" SET "provider" = 'email' WHERE "provider" = 'both';--> statement-breakpoint
 
 -- Remove 'both' from AuthProvider enum (PG doesn't support DROP VALUE, so recreate)
+-- Step 1: Rename old enum and create new one (values must be committed before use)
 ALTER TYPE "AuthProvider" RENAME TO "AuthProvider_old";--> statement-breakpoint
-CREATE TYPE "AuthProvider" AS ENUM('email', 'google', 'apple');--> statement-breakpoint
-ALTER TABLE "users" ALTER COLUMN "provider" TYPE "AuthProvider" USING "provider"::text::"AuthProvider";--> statement-breakpoint
-DROP TYPE "AuthProvider_old";--> statement-breakpoint
-
--- Drop the password column
-ALTER TABLE "users" DROP COLUMN IF EXISTS "password";
+CREATE TYPE "AuthProvider" AS ENUM('email', 'google', 'apple');

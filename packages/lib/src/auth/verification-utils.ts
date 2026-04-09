@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { randomBytes } from 'crypto';
 import { hashToken, getTokenPrefix } from './token-utils';
 
-export type VerificationType = 'email_verification' | 'magic_link';
+export type VerificationType = 'email_verification' | 'magic_link' | 'webauthn_signup';
 
 interface CreateTokenOptions {
   userId: string;

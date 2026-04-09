@@ -15,7 +15,7 @@ Authentication routes for passkeys, magic links, OAuth, session management, and 
 
 ## Core Authentication
 
-### POST /api/auth/magic-link
+### POST /api/auth/magic-link/send
 
 Send a magic link to an email address for passwordless sign-in.
 

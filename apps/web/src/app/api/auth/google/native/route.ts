@@ -112,7 +112,7 @@ export async function POST(req: Request) {
         loggers.auth.info('Updating existing user via native Google OAuth', { email, platform });
         await authRepository.updateUser(user.id, {
           googleId: googleId || user.googleId,
-          provider: 'google',
+          provider: user.provider === 'email' ? 'google' : user.provider,
           name: user.name || name || email.split('@')[0],
           image: resolvedImage,
           emailVerified: email_verified ? new Date() : user.emailVerified,
