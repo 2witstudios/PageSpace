@@ -8,13 +8,9 @@ import { assert } from './riteway';
 const {
   mockTransaction,
   mockSelect,
-  mockSelectFrom,
-  mockSelectWhere,
 } = vi.hoisted(() => ({
   mockTransaction: vi.fn(),
   mockSelect: vi.fn(),
-  mockSelectFrom: vi.fn(),
-  mockSelectWhere: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
