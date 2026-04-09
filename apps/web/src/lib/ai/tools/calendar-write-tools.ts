@@ -1,60 +1,25 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as chrono from 'chrono-node';
 import {
   db,
   calendarEvents,
+  calendarTriggers,
   eventAttendees,
+  pages,
   eq,
   and,
   ne,
+  inArray,
 } from '@pagespace/db';
+import type { CalendarTriggerMetadata } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
-import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
-
-/**
- * Parse a date string that can be either ISO 8601 or natural language.
- * Uses chrono-node for natural language parsing with timezone awareness.
- * @param input - Date string (ISO 8601 or natural language)
- * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
- * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
- */
-function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
-  // Try ISO 8601 first
-  const isoDate = new Date(input);
-  if (!isNaN(isoDate.getTime())) {
-    // If the input is a naive ISO datetime (no Z or offset) and a timezone is provided,
-    // interpret the time in the specified timezone instead of treating as UTC/server-local.
-    // E.g., "2026-02-19T19:00:00" with timezone "America/Chicago" → 7pm Central, not 7pm UTC.
-    if (timezone && isNaiveISODatetime(input)) {
-      return parseNaiveDatetimeInTimezone(input, timezone);
-    }
-    return isoDate;
-  }
-
-  // Build timezone-aware reference for chrono-node so that
-  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
-  const ref: { instant: Date; timezone?: number } = {
-    instant: referenceDate ?? new Date(),
-  };
-  if (timezone) {
-    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
-  }
-
-  // Try natural language parsing with chrono-node
-  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
-  if (!parsed) {
-    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
-  }
-
-  return parsed;
-}
 
 /**
  * Check if user can edit an event
@@ -106,7 +71,7 @@ export const calendarWriteTools = {
    */
   create_calendar_event: tool({
     description:
-      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule.',
+      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule. Optionally schedule an AI agent to execute when the event time arrives by providing agentTrigger.',
     inputSchema: z.object({
       title: z.string().min(1).max(500).describe('Event title'),
       startAt: z
@@ -132,6 +97,12 @@ export const calendarWriteTools = {
       color: z.string().optional().describe('Color category (default, meeting, deadline, personal, travel, focus)'),
       attendeeIds: z.array(z.string()).optional().describe('User IDs to invite as attendees'),
       pageId: z.string().nullable().optional().describe('Optional page ID to link this event to'),
+      agentTrigger: z.object({
+        agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
+        prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
+        instructionPageId: z.string().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
+        contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+      }).optional().describe('Schedule an AI agent to run when this event time arrives. Requires driveId.'),
     }),
     execute: async (
       {
@@ -148,6 +119,7 @@ export const calendarWriteTools = {
         color: colorInput,
         attendeeIds,
         pageId,
+        agentTrigger,
       },
       { experimental_context: ctx }
     ) => {
@@ -190,6 +162,70 @@ export const calendarWriteTools = {
               success: false,
               error: 'You do not have access to this drive.',
             };
+          }
+        }
+
+        // Validate agent trigger if provided
+        let validatedAgent: { id: string; title: string } | null = null;
+        if (agentTrigger) {
+          if (!driveId) {
+            return { success: false, error: 'Agent triggers require a drive event (driveId must be provided).' };
+          }
+          if (recurrence) {
+            return { success: false, error: 'Agent triggers are not yet supported on recurring events. Create a one-time event instead.' };
+          }
+          if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
+            return { success: false, error: 'Agent trigger needs either a prompt or instructionPageId.' };
+          }
+
+          // Validate agent page
+          const [agent] = await db
+            .select({ id: pages.id, type: pages.type, title: pages.title, isTrashed: pages.isTrashed, driveId: pages.driveId })
+            .from(pages)
+            .where(eq(pages.id, agentTrigger.agentPageId));
+
+          if (!agent) return { success: false, error: 'Agent page not found. Use list_agents to find available agents.' };
+          if (agent.type !== 'AI_CHAT') return { success: false, error: `Page "${agent.title}" is not an AI agent. Only AI_CHAT pages can be triggered.` };
+          if (agent.isTrashed) return { success: false, error: `Agent "${agent.title}" is in trash.` };
+          if (!agent.driveId) return { success: false, error: 'Cannot trigger a personal agent page. Use a drive-based agent.' };
+          if (agent.driveId !== driveId) {
+            const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
+            if (!canAccessAgentDrive) return { success: false, error: 'You do not have access to the drive containing this agent.' };
+          }
+          validatedAgent = { id: agent.id, title: agent.title };
+
+          // Validate instruction page
+          if (agentTrigger.instructionPageId) {
+            const [instrPage] = await db
+              .select({ id: pages.id, isTrashed: pages.isTrashed, driveId: pages.driveId })
+              .from(pages)
+              .where(eq(pages.id, agentTrigger.instructionPageId));
+            if (!instrPage) return { success: false, error: 'Instruction page not found.' };
+            if (instrPage.isTrashed) return { success: false, error: 'Instruction page is in trash.' };
+            if (!instrPage.driveId) return { success: false, error: 'Cannot use a personal page as instructions.' };
+            if (instrPage.driveId !== driveId) {
+              const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
+              if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
+            }
+          }
+
+          // Validate context pages
+          const ctxIds = agentTrigger.contextPageIds ?? [];
+          if (ctxIds.length > 0) {
+            const ctxPages = await db
+              .select({ id: pages.id, driveId: pages.driveId, isTrashed: pages.isTrashed })
+              .from(pages)
+              .where(inArray(pages.id, ctxIds));
+            const foundIds = new Set(ctxPages.map(p => p.id));
+            const missingIds = ctxIds.filter(id => !foundIds.has(id));
+            if (missingIds.length > 0) return { success: false, error: `Context page(s) not found: ${missingIds.join(', ')}` };
+            for (const cp of ctxPages) {
+              if (cp.isTrashed) continue;
+              if (!cp.driveId) return { success: false, error: `Context page ${cp.id} is a personal page and cannot be used.` };
+              if (cp.driveId !== driveId) {
+                return { success: false, error: `Context page ${cp.id} must be in the same drive as the event. Cross-drive context is not loaded at execution time.` };
+              }
+            }
           }
         }
 
@@ -270,20 +306,67 @@ export const calendarWriteTools = {
           );
         }
 
-        // Broadcast event creation
-        await broadcastCalendarEvent({
-          eventId: event.id,
-          driveId: driveId ?? null,
-          operation: 'created',
-          userId,
-          attendeeIds: [userId, ...otherAttendees],
-        });
+        // Create agent trigger if requested (atomically with event metadata)
+        let triggerId: string | null = null;
+        if (agentTrigger && driveId && validatedAgent) {
+          const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
+          const scheduledByAgentPageId = (ctx as ToolExecutionContext)?.chatSource?.agentPageId;
+
+          const { trigger } = await db.transaction(async (tx) => {
+            const [trg] = await tx
+              .insert(calendarTriggers)
+              .values({
+                calendarEventId: event.id,
+                agentPageId: agentTrigger.agentPageId,
+                driveId,
+                scheduledById: userId,
+                prompt: triggerPrompt,
+                instructionPageId: agentTrigger.instructionPageId ?? null,
+                contextPageIds: agentTrigger.contextPageIds ?? [],
+                status: 'pending',
+                triggerAt: parsedStartAt,
+              })
+              .returning();
+
+            await tx
+              .update(calendarEvents)
+              .set({
+                metadata: {
+                  isTrigger: true,
+                  triggerType: 'agent_execution',
+                  triggerId: trg.id,
+                  scheduledByAgentPageId,
+                } satisfies CalendarTriggerMetadata,
+              })
+              .where(eq(calendarEvents.id, event.id));
+
+            return { trigger: trg };
+          });
+
+          triggerId = trigger.id;
+        }
+
+        // Broadcast event creation (best-effort)
+        try {
+          await broadcastCalendarEvent({
+            eventId: event.id,
+            driveId: driveId ?? null,
+            operation: 'created',
+            userId,
+            attendeeIds: [userId, ...otherAttendees],
+          });
+        } catch (broadcastErr) {
+          calendarWriteLogger.error('Failed to broadcast event creation', broadcastErr instanceof Error ? broadcastErr : undefined, {
+            eventId: maskIdentifier(event.id),
+          });
+        }
 
         calendarWriteLogger.info('Calendar event created via AI tool', {
           eventId: maskIdentifier(event.id),
           userId: maskIdentifier(userId),
           driveId: driveId ? maskIdentifier(driveId) : null,
           attendeeCount: otherAttendees.length + 1,
+          hasAgentTrigger: !!agentTrigger,
         });
 
         return {
@@ -296,8 +379,9 @@ export const calendarWriteTools = {
             driveId: event.driveId,
             visibility: event.visibility,
             attendeesInvited: otherAttendees.length,
+            ...(triggerId && { triggerId }),
           },
-          summary: `Created "${title}" for ${formatDateInTimezone(parsedStartAt, timezone)}${otherAttendees.length > 0 ? ` with ${otherAttendees.length} attendee${otherAttendees.length === 1 ? '' : 's'}` : ''}`,
+          summary: `Created "${title}" for ${formatDateInTimezone(parsedStartAt, timezone)}${otherAttendees.length > 0 ? ` with ${otherAttendees.length} attendee${otherAttendees.length === 1 ? '' : 's'}` : ''}${validatedAgent ? ` — agent "${validatedAgent.title}" will execute at that time` : ''}`,
           stats: {
             eventCount: 1,
             attendeesInvited: otherAttendees.length,
@@ -306,6 +390,7 @@ export const calendarWriteTools = {
             'Use list_calendar_events to see upcoming meetings',
             'Use invite_calendar_attendees to add more participants',
             'Use update_calendar_event to modify event details',
+            ...(triggerId ? ['Use delete_calendar_event to cancel the scheduled agent work'] : []),
           ],
         };
       } catch (error) {
@@ -439,6 +524,18 @@ export const calendarWriteTools = {
           .where(eq(calendarEvents.id, eventId))
           .returning();
 
+        // Sync trigger row if this is a trigger-linked event and startAt changed
+        const meta = updatedEvent.metadata as CalendarTriggerMetadata | null;
+        if (meta?.isTrigger && parsedStartAt) {
+          await db
+            .update(calendarTriggers)
+            .set({ triggerAt: parsedStartAt })
+            .where(and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              eq(calendarTriggers.status, 'pending')
+            ));
+        }
+
         // Get all attendee IDs for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
@@ -530,6 +627,18 @@ export const calendarWriteTools = {
 
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
+
+        // Cancel any pending/claimed/running triggers linked to this event
+        const eventMeta = event.metadata as CalendarTriggerMetadata | null;
+        if (eventMeta?.isTrigger) {
+          await db
+            .update(calendarTriggers)
+            .set({ status: 'cancelled', completedAt: new Date() })
+            .where(and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              inArray(calendarTriggers.status, ['pending', 'claimed', 'running'])
+            ));
+        }
 
         // Soft delete the event
         await db

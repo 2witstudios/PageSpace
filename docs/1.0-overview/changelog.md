@@ -1,3 +1,29 @@
+## 2026-04-09
+
+### Scheduled Agent Work via Calendar Events
+
+AI agents can now self-schedule future work by creating calendar events that trigger LLM executions at the specified time. This is the foundation for "alive workspaces" where agents autonomously manage time-bound tasks.
+
+#### Added
+
+- **`agentTrigger` on `create_calendar_event`**: Agents schedule future work by passing an `agentTrigger` when creating a calendar event. Supports natural language dates, cross-agent delegation, and linked instruction pages.
+- **Trigger cancellation via `delete_calendar_event`**: Trashing a trigger-linked event automatically cancels pending triggers. Only the event creator can delete.
+- **`calendarTriggers` table**: Tracks execution state (pending/running/completed/failed/cancelled) with full audit trail.
+- **Cron poller** (`/api/cron/calendar-triggers`): Fires every 2 minutes, claims due triggers with atomic UPDATE...RETURNING, executes in batches of 5.
+- **Calendar read tools**: Now surface trigger status on events so agents can see their scheduled work.
+
+#### Security
+
+- Agent and instruction pages validated against caller's accessible drives (no cross-drive page access).
+- Cancellation restricted to the event creator (only the creator can trash the event).
+- Scheduling user's drive membership re-verified at execution time.
+- Trigger rows sync with calendar event mutations (reschedule updates `triggerAt`, trash cancels pending triggers).
+
+#### Cost Control
+
+- Each trigger execution consumes one standard AI call from the scheduling user's daily budget.
+- Free: 50/day, Pro: 200/day, Founder: 500/day, Business: 1000/day.
+
 ## 2026-02-10
 
 ### Voice Mode Reliability & User-Facing Error Feedback
