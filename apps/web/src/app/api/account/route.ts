@@ -100,7 +100,7 @@ export async function PATCH(req: Request) {
       updatedFields,
     }, actorInfo);
 
-    securityAudit.logDataAccess(userId, 'write', 'account', userId, { operation: 'profile_update', updatedFields }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'write', 'account', userId, { operation: 'profile_update', updatedFields }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       id: updatedUser.id,
@@ -263,7 +263,7 @@ export async function DELETE(req: Request) {
 
     loggers.auth.info(`User account deleted: ${userId}`);
 
-    securityAudit.logEvent({ eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({ message: 'Account deleted successfully' }, { status: 200 });
   } catch (error) {

@@ -60,7 +60,7 @@ export async function DELETE(
       deviceInfo: `${device.platform ?? 'Unknown'} - ${device.deviceName ?? 'Unknown'}`,
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, resourceType: 'device', resourceId: deviceId }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, resourceType: 'device', resourceId: deviceId }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       message: 'Device revoked successfully',

@@ -83,7 +83,7 @@ export async function POST(req: Request) {
 
       loggers.auth.info(`Drive ownership transferred: ${driveId} from ${userId} to ${newOwnerId}`);
 
-      securityAudit.logDataAccess(userId, 'write', 'drive', driveId, { operation: 'ownership_transfer', newOwnerId }).catch(() => {});
+      securityAudit.logDataAccess(userId, 'write', 'drive', driveId, { operation: 'ownership_transfer', newOwnerId }).catch(e => loggers.auth.warn('Audit log failed', e));
 
       return Response.json({
         success: true,
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
 
       loggers.auth.info(`Drive deleted during account deletion preparation: ${driveId} by ${userId}`);
 
-      securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, { operation: 'drive_delete' }).catch(() => {});
+      securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, { operation: 'drive_delete' }).catch(e => loggers.auth.warn('Audit log failed', e));
 
       return Response.json({
         success: true,

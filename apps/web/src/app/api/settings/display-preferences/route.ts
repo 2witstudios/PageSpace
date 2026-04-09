@@ -91,7 +91,7 @@ export async function PATCH(request: Request) {
         ))
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'display_preference' }).catch(() => {});
+      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'display_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
       return NextResponse.json({ preference: updated });
     } else {
       const [created] = await db
@@ -103,7 +103,7 @@ export async function PATCH(request: Request) {
         })
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'display_preference' }).catch(() => {});
+      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'display_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
       return NextResponse.json({ preference: created });
     }
   } catch (error) {

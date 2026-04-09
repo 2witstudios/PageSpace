@@ -192,7 +192,7 @@ export async function DELETE(req: Request) {
 
     loggers.auth.info(`User ${userId} revoked all other devices`);
 
-    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, details: { operation: 'revoke_all_other_devices' } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, resourceType: 'device', details: { operation: 'revoke_all_other_devices' } }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       message: 'All other devices have been logged out',

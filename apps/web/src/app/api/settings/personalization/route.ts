@@ -140,7 +140,7 @@ export async function PATCH(request: Request) {
       })
       .returning();
 
-    securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'personalization' }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'personalization' }).catch(e => loggers.api.warn('Audit log failed', e));
 
     return NextResponse.json({
       personalization: {
