@@ -78,7 +78,7 @@ function formatEventForResponse(event: {
   }>;
   page?: { id: string; title: string; type: string } | null;
   drive?: { id: string; name: string; slug: string } | null;
-}, timezone?: string, triggerInfo?: { status: string; agentPageId: string; triggerId: string } | null) {
+}, timezone?: string, triggerInfo?: { status: string; triggerId: string } | null) {
   const displayTz = timezone ?? event.timezone;
   return {
     id: event.id,
@@ -129,7 +129,6 @@ function formatEventForResponse(event: {
       scheduledWork: {
         triggerId: triggerInfo.triggerId,
         status: triggerInfo.status,
-        agentPageId: triggerInfo.agentPageId,
       },
     }),
   };
@@ -141,7 +140,7 @@ function formatEventForResponse(event: {
  */
 async function fetchTriggerInfoForEvents(
   events: Array<{ id: string; metadata?: unknown }>
-): Promise<Map<string, { status: string; agentPageId: string; triggerId: string }>> {
+): Promise<Map<string, { status: string; triggerId: string }>> {
   const triggerEventIds = events
     .filter(e => {
       const meta = e.metadata as CalendarTriggerMetadata | null;
@@ -156,14 +155,13 @@ async function fetchTriggerInfoForEvents(
       id: calendarTriggers.id,
       calendarEventId: calendarTriggers.calendarEventId,
       status: calendarTriggers.status,
-      agentPageId: calendarTriggers.agentPageId,
     })
     .from(calendarTriggers)
     .where(inArray(calendarTriggers.calendarEventId, triggerEventIds));
 
-  const map = new Map<string, { status: string; agentPageId: string; triggerId: string }>();
+  const map = new Map<string, { status: string; triggerId: string }>();
   for (const t of triggers) {
-    map.set(t.calendarEventId, { status: t.status, agentPageId: t.agentPageId, triggerId: t.id });
+    map.set(t.calendarEventId, { status: t.status, triggerId: t.id });
   }
   return map;
 }

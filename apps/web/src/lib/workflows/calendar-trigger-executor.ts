@@ -2,6 +2,7 @@ import { db, calendarTriggers, pages, eventAttendees, users, eq, and } from '@pa
 import type { CalendarTrigger, CalendarEvent } from '@pagespace/db';
 import { executeWorkflow, type WorkflowExecutionResult } from './workflow-executor';
 import { incrementUsage } from '@/lib/subscription/usage-service';
+import { isUserDriveMember } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
@@ -117,7 +118,7 @@ async function buildTriggerPrompt(trigger: CalendarTrigger, event: CalendarEvent
   }
   parts.push('</scheduled-event>');
 
-  // Instruction page content (if linked) — scoped to trigger's drive for safety
+  // Instruction page content (if linked) — verify access hasn't been revoked since scheduling
   if (trigger.instructionPageId) {
     const [instructionPage] = await db
       .select({ title: pages.title, content: pages.content, driveId: pages.driveId })
@@ -125,9 +126,19 @@ async function buildTriggerPrompt(trigger: CalendarTrigger, event: CalendarEvent
       .where(and(eq(pages.id, trigger.instructionPageId), eq(pages.isTrashed, false)));
 
     if (instructionPage?.content) {
-      parts.push('\n--- Detailed Instructions ---');
-      parts.push(`## ${instructionPage.title}`);
-      parts.push(instructionPage.content);
+      // Re-check access: scheduler must still have access to the instruction page's drive
+      let hasAccess = true;
+      if (instructionPage.driveId) {
+        hasAccess = await isUserDriveMember(trigger.scheduledById, instructionPage.driveId);
+      } else {
+        hasAccess = false; // personal pages rejected at schedule time, guard here too
+      }
+
+      if (hasAccess) {
+        parts.push('\n--- Detailed Instructions ---');
+        parts.push(`## ${instructionPage.title}`);
+        parts.push(instructionPage.content);
+      }
     }
   }
 

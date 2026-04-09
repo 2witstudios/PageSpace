@@ -6,6 +6,8 @@ import {
   calendarTriggers,
   pages,
   eq,
+  and,
+  inArray,
 } from '@pagespace/db';
 import type { CalendarTriggerMetadata } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
@@ -76,15 +78,19 @@ export const calendarTriggerTools = {
         if (agent.isTrashed) {
           return { success: false, error: `Agent "${agent.title}" is in trash.` };
         }
-        // Enforce that the agent belongs to a drive the caller can access
-        if (agent.driveId) {
-          const canAccessAgentDrive = agent.driveId === driveId || await isUserDriveMember(userId, agent.driveId);
+        // Enforce that the agent belongs to a drive the caller can access.
+        // Personal pages (null driveId) that don't belong to the caller are rejected.
+        if (!agent.driveId) {
+          return { success: false, error: 'Cannot schedule a personal agent page. Use a drive-based agent.' };
+        }
+        if (agent.driveId !== driveId) {
+          const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
           if (!canAccessAgentDrive) {
             return { success: false, error: 'You do not have access to the drive containing this agent.' };
           }
         }
 
-        // Validate instruction page if provided — must exist and be in an accessible drive
+        // Validate instruction page if provided — must exist, not trashed, in an accessible drive
         if (instructionPageId) {
           const [instrPage] = await db
             .select({ id: pages.id, isTrashed: pages.isTrashed, driveId: pages.driveId })
@@ -97,10 +103,34 @@ export const calendarTriggerTools = {
           if (instrPage.isTrashed) {
             return { success: false, error: 'Instruction page is in trash.' };
           }
-          if (instrPage.driveId) {
-            const canAccessInstrDrive = instrPage.driveId === driveId || await isUserDriveMember(userId, instrPage.driveId);
+          if (!instrPage.driveId) {
+            return { success: false, error: 'Cannot use a personal page as instructions. Use a drive page.' };
+          }
+          if (instrPage.driveId !== driveId) {
+            const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
             if (!canAccessInstrDrive) {
               return { success: false, error: 'You do not have access to the drive containing the instruction page.' };
+            }
+          }
+        }
+
+        // Validate context pages — must all be in accessible drives
+        if (contextPageIds && contextPageIds.length > 0) {
+          const ctxPages = await db
+            .select({ id: pages.id, driveId: pages.driveId, isTrashed: pages.isTrashed })
+            .from(pages)
+            .where(inArray(pages.id, contextPageIds));
+
+          for (const cp of ctxPages) {
+            if (cp.isTrashed) continue; // trashed pages silently excluded at execution time
+            if (!cp.driveId) {
+              return { success: false, error: `Context page ${cp.id} is a personal page and cannot be used.` };
+            }
+            if (cp.driveId !== driveId) {
+              const canAccessCtxDrive = await isUserDriveMember(userId, cp.driveId);
+              if (!canAccessCtxDrive) {
+                return { success: false, error: `You do not have access to the drive containing context page ${cp.id}.` };
+              }
             }
           }
         }
@@ -233,49 +263,57 @@ export const calendarTriggerTools = {
       }
 
       try {
-        // Load trigger
-        const [trigger] = await db
-          .select()
-          .from(calendarTriggers)
-          .where(eq(calendarTriggers.id, triggerId));
+        // Atomic cancel: UPDATE with status='pending' and scheduledById guard
+        // in a single transaction to avoid race with cron flipping to 'running'.
+        const cancelled = await db.transaction(async (tx) => {
+          const [updated] = await tx
+            .update(calendarTriggers)
+            .set({ status: 'cancelled', completedAt: new Date() })
+            .where(and(
+              eq(calendarTriggers.id, triggerId),
+              eq(calendarTriggers.status, 'pending'),
+              eq(calendarTriggers.scheduledById, userId)
+            ))
+            .returning();
 
-        if (!trigger) {
-          return { success: false, error: 'Scheduled work not found.' };
-        }
+          if (!updated) return null;
 
-        // Only the user who scheduled the work can cancel it
-        if (trigger.scheduledById !== userId) {
-          return { success: false, error: 'Only the user who scheduled this work can cancel it.' };
-        }
+          // Soft-delete the calendar event within the same transaction
+          await tx
+            .update(calendarEvents)
+            .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+            .where(eq(calendarEvents.id, updated.calendarEventId));
 
-        // Check current status
-        if (trigger.status === 'running') {
-          return { success: false, error: 'Cannot cancel work that is already running.' };
-        }
-        if (trigger.status === 'completed' || trigger.status === 'failed' || trigger.status === 'cancelled') {
+          return updated;
+        });
+
+        if (!cancelled) {
+          // Atomic update didn't match — read current state to give a useful error
+          const [current] = await db
+            .select({ status: calendarTriggers.status, scheduledById: calendarTriggers.scheduledById })
+            .from(calendarTriggers)
+            .where(eq(calendarTriggers.id, triggerId));
+
+          if (!current) {
+            return { success: false, error: 'Scheduled work not found.' };
+          }
+          if (current.scheduledById !== userId) {
+            return { success: false, error: 'Only the user who scheduled this work can cancel it.' };
+          }
+          // Already in a terminal or running state
           return {
-            success: true,
-            data: { triggerId, status: trigger.status },
-            summary: `This scheduled work already has status: ${trigger.status}. No action needed.`,
+            success: current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled',
+            data: { triggerId, status: current.status },
+            summary: current.status === 'running'
+              ? 'Cannot cancel work that is already running.'
+              : `This scheduled work already has status: ${current.status}. No action needed.`,
           };
         }
 
-        // Cancel the trigger
-        await db
-          .update(calendarTriggers)
-          .set({ status: 'cancelled', completedAt: new Date() })
-          .where(eq(calendarTriggers.id, triggerId));
-
-        // Soft-delete the calendar event
-        await db
-          .update(calendarEvents)
-          .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
-          .where(eq(calendarEvents.id, trigger.calendarEventId));
-
         // Broadcast deletion
         await broadcastCalendarEvent({
-          eventId: trigger.calendarEventId,
-          driveId: trigger.driveId,
+          eventId: cancelled.calendarEventId,
+          driveId: cancelled.driveId,
           operation: 'deleted',
           userId,
           attendeeIds: [userId],
