@@ -162,7 +162,6 @@ describe('calendar-trigger-tools', () => {
 
       const executeFn = calendarTriggerTools.schedule_agent_work.execute!;
       const result = await executeFn(
-        // @ts-expect-error -- test input shape is intentionally incomplete
         input,
         createAuthContext()
       );
