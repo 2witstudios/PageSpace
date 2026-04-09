@@ -54,14 +54,14 @@ let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Start the cleanup interval for in-memory rate limiting.
- * Uses 2-hour cutoff to match longest rate limit window (1 hour) with buffer.
+ * Uses 25-hour cutoff to match longest rate limit window (EXPORT_DATA 24h) with buffer.
  */
 function startCleanupInterval(): void {
   if (cleanupIntervalId) return;
 
   cleanupIntervalId = setInterval(() => {
     const now = Date.now();
-    const cutoff = now - 2 * 60 * 60 * 1000; // 2 hours (matches longest window + buffer)
+    const cutoff = now - 25 * 60 * 60 * 1000; // 25 hours (matches longest window — EXPORT_DATA 24h — plus buffer)
 
     for (const [key, attempt] of inMemoryAttempts.entries()) {
       if (attempt.lastAttempt < cutoff) {
@@ -410,6 +410,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     maxAttempts: 3,
     windowMs: 60 * 60 * 1000, // 1 hour
     blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  EXPORT_DATA: {
+    maxAttempts: 1,
+    windowMs: 24 * 60 * 60 * 1000, // 24 hours
+    blockDurationMs: 24 * 60 * 60 * 1000,
     progressiveDelay: false,
   },
   MAGIC_LINK: {

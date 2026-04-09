@@ -666,6 +666,13 @@
       "when": 1775702060209,
       "tag": "0094_wakeful_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1775715372849,
+      "tag": "0095_blushing_firelord",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ export interface WorkflowExecutionResult {
   durationMs: number;
   error?: string;
   usage?: { inputTokens?: number; outputTokens?: number };
+  conversationId?: string;
 }
 
 type WorkflowRow = typeof workflowsTable.$inferSelect;
@@ -238,6 +239,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       toolCallCount,
       durationMs,
       usage: usage ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens } : undefined,
+      conversationId,
     };
 
   } catch (error) {
