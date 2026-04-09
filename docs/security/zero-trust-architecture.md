@@ -470,7 +470,8 @@ export const passkeys = pgTable('passkeys', {
 ```typescript
 // packages/lib/src/auth/password-policy.ts
 
-import { scrypt, randomBytes, timingSafeEqual } from 'crypto';
+import { scrypt, randomBytes } from 'crypto';
+import { secureCompare } from '@pagespace/lib';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
@@ -532,8 +533,8 @@ export async function verifyPassword(password: string, storedHash: string): Prom
     p: SCRYPT_PARAMS.p,
   }) as Buffer;
 
-  // Timing-safe comparison
-  return timingSafeEqual(derivedKey, storedKey);
+  // Timing-safe comparison (scrypt output is fixed-length, so secureCompare works here too)
+  return secureCompare(derivedKey.toString('hex'), storedKey.toString('hex'));
 }
 
 /**
@@ -865,40 +866,17 @@ export class EnforcedFileService {
 
 ```typescript
 // packages/lib/src/auth/secure-compare.ts
+import { secureCompare } from '@pagespace/lib';
 
-import { createHash, timingSafeEqual } from 'crypto';
-
-/**
- * Secure token comparison that is immune to:
- * 1. Timing attacks (uses timingSafeEqual on fixed-length hashes)
- * 2. Compiler optimizations (hashing prevents shortcut evaluation)
- * 3. Length-based leakage (all hashes are same length)
- */
-export function secureTokenCompare(provided: string, stored: string): boolean {
-  // Hash both tokens before comparison
-  const providedHash = createHash('sha256').update(provided).digest();
-  const storedHash = createHash('sha256').update(stored).digest();
-
-  // timingSafeEqual on fixed-length buffers
-  return timingSafeEqual(providedHash, storedHash);
-}
-
-/**
- * For tokens already stored as hashes, compare hash to hash
- */
-export function secureHashCompare(providedToken: string, storedHash: string): boolean {
-  const providedHash = createHash('sha256').update(providedToken).digest('hex');
-
-  // Convert to buffers for timing-safe comparison
-  const providedBuffer = Buffer.from(providedHash, 'hex');
-  const storedBuffer = Buffer.from(storedHash, 'hex');
-
-  if (providedBuffer.length !== storedBuffer.length) {
-    return false;
-  }
-
-  return timingSafeEqual(providedBuffer, storedBuffer);
-}
+// secureCompare SHA-256 hashes both inputs before crypto.timingSafeEqual,
+// guaranteeing constant-time comparison regardless of input length.
+// This is the ONLY approved pattern for comparing secrets.
+//
+// Usage:
+//   secureCompare(providedToken, expectedToken)  // string comparison
+//
+// Never use raw timingSafeEqual, Buffer.from + length checks, or === for secrets.
+// Always import secureCompare from @pagespace/lib.
 ```
 
 ---

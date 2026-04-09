@@ -150,16 +150,15 @@ describe('secureCompare', () => {
     /**
      * NOTE: Actual timing-safe verification requires statistical timing analysis
      * which is out of scope for unit tests. This documents expected behavior
-     * and verifies the function uses crypto.timingSafeEqual internally.
+     * and verifies the function uses SHA-256 hashing + crypto.timingSafeEqual.
      *
      * The implementation must:
-     * 1. Always perform comparison even when lengths differ
-     * 2. Use crypto.timingSafeEqual for actual byte comparison
-     * 3. Encode both strings to same buffer type before comparison
+     * 1. SHA-256 hash both inputs to produce fixed 32-byte digests
+     * 2. Use crypto.timingSafeEqual on the equal-length hashes
+     * 3. Never branch on input length or content before comparison
      */
     it('performs length-constant comparison even when lengths differ (both hash to 32 bytes)', () => {
-      // With double-hash pattern, both inputs become 32-byte SHA-256 digests
-      // so timingSafeEqual always compares equal-length buffers
+      // Both inputs are SHA-256 hashed to 32-byte digests before comparison
       expect(secureCompare('short', 'much-longer-string')).toBe(false);
       expect(secureCompare('much-longer-string', 'short')).toBe(false);
     });
