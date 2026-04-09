@@ -1,5 +1,5 @@
 {
-  "id": "94a4aa00-654d-4d77-abe9-4ae6979161aa",
+  "id": "2c8db8b8-d7b7-4ea2-a193-62bf31822444",
   "prevId": "6d5bc46d-0a29-4a1f-8b19-e3da870cd405",
   "version": "7",
   "dialect": "postgresql",
@@ -881,12 +881,6 @@
         },
         "image": {
           "name": "image",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "password": {
-          "name": "password",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -11802,276 +11796,6 @@
         }
       }
     },
-    "public.calendar_triggers": {
-      "name": "calendar_triggers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "calendarEventId": {
-          "name": "calendarEventId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agentPageId": {
-          "name": "agentPageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scheduledById": {
-          "name": "scheduledById",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "prompt": {
-          "name": "prompt",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "instructionPageId": {
-          "name": "instructionPageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contextPageIds": {
-          "name": "contextPageIds",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'[]'::jsonb"
-        },
-        "status": {
-          "name": "status",
-          "type": "CalendarTriggerStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "triggerAt": {
-          "name": "triggerAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "claimedAt": {
-          "name": "claimedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "startedAt": {
-          "name": "startedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completedAt": {
-          "name": "completedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "durationMs": {
-          "name": "durationMs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "occurrenceDate": {
-          "name": "occurrenceDate",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "calendar_triggers_status_trigger_at_idx": {
-          "name": "calendar_triggers_status_trigger_at_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "triggerAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_triggers_scheduled_by_idx": {
-          "name": "calendar_triggers_scheduled_by_idx",
-          "columns": [
-            {
-              "expression": "scheduledById",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_triggers_agent_page_idx": {
-          "name": "calendar_triggers_agent_page_idx",
-          "columns": [
-            {
-              "expression": "agentPageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_triggers_calendar_event_idx": {
-          "name": "calendar_triggers_calendar_event_idx",
-          "columns": [
-            {
-              "expression": "calendarEventId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "calendar_triggers_calendarEventId_calendar_events_id_fk": {
-          "name": "calendar_triggers_calendarEventId_calendar_events_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "calendar_events",
-          "columnsFrom": [
-            "calendarEventId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_triggers_agentPageId_pages_id_fk": {
-          "name": "calendar_triggers_agentPageId_pages_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "agentPageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_triggers_driveId_drives_id_fk": {
-          "name": "calendar_triggers_driveId_drives_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_triggers_scheduledById_users_id_fk": {
-          "name": "calendar_triggers_scheduledById_users_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "users",
-          "columnsFrom": [
-            "scheduledById"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_triggers_instructionPageId_pages_id_fk": {
-          "name": "calendar_triggers_instructionPageId_pages_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "instructionPageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "calendar_triggers_event_occurrence_key": {
-          "name": "calendar_triggers_event_occurrence_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "calendarEventId",
-            "occurrenceDate"
-          ]
-        }
-      }
-    },
     "public.workflows": {
       "name": "workflows",
       "schema": "",
@@ -12353,8 +12077,7 @@
       "values": [
         "email",
         "google",
-        "apple",
-        "both"
+        "apple"
       ]
     },
     "public.PlatformType": {
@@ -12726,18 +12449,6 @@
         "WEEKLY",
         "MONTHLY",
         "YEARLY"
-      ]
-    },
-    "public.CalendarTriggerStatus": {
-      "name": "CalendarTriggerStatus",
-      "schema": "public",
-      "values": [
-        "pending",
-        "claimed",
-        "running",
-        "completed",
-        "failed",
-        "cancelled"
       ]
     },
     "public.WorkflowRunStatus": {
