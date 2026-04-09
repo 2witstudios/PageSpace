@@ -153,6 +153,8 @@ export async function PATCH(
         role: role as string,
         previousRole: oldRole as string,
       }, actorInfo);
+
+      securityAudit.logEvent({ eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } }).catch(() => {});
     }
 
     // Update permissions
@@ -163,7 +165,9 @@ export async function PATCH(
       permissions
     );
 
-    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, newRole: role } }).catch(() => {});
+    if (permissions.length > 0) {
+      securityAudit.logEvent({ eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } }).catch(() => {});
+    }
 
     // Invalidate permission caches so changes take effect immediately
     await Promise.all([
