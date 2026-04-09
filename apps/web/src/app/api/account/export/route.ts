@@ -1,13 +1,10 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
-
-// Rate limit: track last export time per user (in-memory, resets on deploy)
-const lastExportMap = new Map<string, number>();
-const EXPORT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * GET /api/account/export
@@ -25,15 +22,19 @@ export async function GET(request: Request) {
   }
   const userId = auth.userId;
 
-  // Rate limiting
-  const lastExport = lastExportMap.get(userId);
-  if (lastExport && Date.now() - lastExport < EXPORT_COOLDOWN_MS) {
-    const retryAfterSeconds = Math.ceil((EXPORT_COOLDOWN_MS - (Date.now() - lastExport)) / 1000);
+  // Rate limiting (distributed via Redis)
+  const rateLimitKey = `export:user:${userId}`;
+  const rateLimitResult = await checkDistributedRateLimit(
+    rateLimitKey,
+    DISTRIBUTED_RATE_LIMITS.EXPORT_DATA
+  );
+
+  if (!rateLimitResult.allowed) {
     return Response.json(
       { error: 'Export rate limit exceeded. You can request one export per 24 hours.' },
       {
         status: 429,
-        headers: { 'Retry-After': String(retryAfterSeconds) },
+        headers: { 'Retry-After': String(rateLimitResult.retryAfter || 86400) },
       }
     );
   }
@@ -45,11 +46,9 @@ export async function GET(request: Request) {
     );
 
     if (!data) {
+      await resetDistributedRateLimit(rateLimitKey);
       return Response.json({ error: 'User not found' }, { status: 404 });
     }
-
-    // Record this export for rate limiting
-    lastExportMap.set(userId, Date.now());
 
     // Build ZIP archive
     const archive = archiver('zip', { zlib: { level: 6 } });
@@ -91,6 +90,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    await resetDistributedRateLimit(rateLimitKey);
     console.error('[GDPR Export] Error generating export:', error);
     return Response.json(
       { error: 'Failed to generate data export' },

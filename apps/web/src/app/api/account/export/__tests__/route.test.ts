@@ -16,6 +16,19 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/security', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
+    EXPORT_DATA: {
+      maxAttempts: 1,
+      windowMs: 24 * 60 * 60 * 1000,
+      blockDurationMs: 24 * 60 * 60 * 1000,
+      progressiveDelay: false,
+    },
+  },
+}));
+
 // Mock archiver - return an event emitter-like object
 const mockArchive = {
   on: vi.fn(),
@@ -29,6 +42,8 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { GET } from '../route';
 
 // Test helpers
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
@@ -59,16 +74,11 @@ const mockUserData = {
 };
 
 describe('GET /api/account/export', () => {
-  /**
-   * We use dynamic import with vi.resetModules() so each test gets a fresh
-   * module with a clean lastExportMap (the in-memory rate limit state).
-   */
-  let GET: (request: Request) => Promise<Response>;
-
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 0 });
 
     // Reset the archive mock handlers
     mockArchive.on.mockReset();
@@ -89,11 +99,6 @@ describe('GET /api/account/export', () => {
       }
       return mockArchive;
     });
-
-    // Re-import to get fresh module state (clean rate limit map)
-    vi.resetModules();
-    const mod = await import('../route');
-    GET = mod.GET;
   });
 
   describe('authentication', () => {
@@ -128,6 +133,14 @@ describe('GET /api/account/export', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('User not found');
+    });
+
+    it('resets rate limit on 404 so user can retry', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(null);
+
+      await GET(createRequest());
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('export:user:user-1');
     });
   });
 
@@ -180,25 +193,44 @@ describe('GET /api/account/export', () => {
 
       expect(mockArchive.finalize).toHaveBeenCalledTimes(1);
     });
+
+    it('does not reset rate limit on successful export', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(createRequest());
+
+      expect(resetDistributedRateLimit).not.toHaveBeenCalled();
+    });
   });
 
   describe('rate limiting', () => {
-    it('returns 429 on second export within 24 hours', async () => {
+    it('returns 429 when rate limit is exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        retryAfter: 86400,
+        attemptsRemaining: 0,
+      });
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(body.error).toBe('Export rate limit exceeded. You can request one export per 24 hours.');
+      expect(response.headers.get('Retry-After')).toBe('86400');
+    });
+
+    it('calls checkDistributedRateLimit with correct key and config', async () => {
       vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
 
-      // First export should succeed
-      const response1 = await GET(createRequest());
-      expect(response1.status).toBe(200);
+      await GET(createRequest());
 
-      // Second export should be rate limited
-      const response2 = await GET(createRequest());
-      const body = await response2.json();
-
-      expect(response2.status).toBe(429);
-      expect(body.error).toBe('Export rate limit exceeded. You can request one export per 24 hours.');
-      const retryAfter = Number(response2.headers.get('Retry-After'));
-      expect(retryAfter).toBeGreaterThan(0);
-      expect(retryAfter).toBeLessThanOrEqual(86400);
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'export:user:user-1',
+        expect.objectContaining({
+          maxAttempts: 1,
+          windowMs: 24 * 60 * 60 * 1000,
+        })
+      );
     });
   });
 
@@ -213,6 +245,16 @@ describe('GET /api/account/export', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to generate data export');
       consoleSpy.mockRestore();
+    });
+
+    it('resets rate limit on 500 so user can retry', async () => {
+      vi.mocked(collectAllUserData).mockRejectedValueOnce(new Error('DB error'));
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await GET(createRequest());
+      consoleSpy.mockRestore();
+
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith('export:user:user-1');
     });
 
     it('propagates archive error to ReadableStream controller', async () => {
