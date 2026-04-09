@@ -360,7 +360,7 @@ describe('ProvisioningEngine', () => {
       expect(result.tenantId).toBe('tenant-123')
     })
 
-    test('given a new admin user, should send provisioning email with credentials', async () => {
+    test('given a new admin user, should send provisioning email', async () => {
       const deps = makeDeps()
       const engine = createProvisioningEngine(deps)
 
