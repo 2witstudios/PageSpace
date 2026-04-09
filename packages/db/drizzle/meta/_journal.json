@@ -666,13 +666,6 @@
       "when": 1775702060209,
       "tag": "0094_wakeful_champions",
       "breakpoints": true
-    },
-    {
-      "idx": 95,
-      "version": "7",
-      "when": 1775702060210,
-      "tag": "0095_remove_password_column",
-      "breakpoints": true
     }
   ]
 }
