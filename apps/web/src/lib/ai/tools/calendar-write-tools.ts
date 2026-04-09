@@ -1,60 +1,23 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as chrono from 'chrono-node';
 import {
   db,
   calendarEvents,
+  calendarTriggers,
   eventAttendees,
   eq,
   and,
   ne,
 } from '@pagespace/db';
+import type { CalendarTriggerMetadata } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
-import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
-
-/**
- * Parse a date string that can be either ISO 8601 or natural language.
- * Uses chrono-node for natural language parsing with timezone awareness.
- * @param input - Date string (ISO 8601 or natural language)
- * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
- * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
- */
-function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
-  // Try ISO 8601 first
-  const isoDate = new Date(input);
-  if (!isNaN(isoDate.getTime())) {
-    // If the input is a naive ISO datetime (no Z or offset) and a timezone is provided,
-    // interpret the time in the specified timezone instead of treating as UTC/server-local.
-    // E.g., "2026-02-19T19:00:00" with timezone "America/Chicago" → 7pm Central, not 7pm UTC.
-    if (timezone && isNaiveISODatetime(input)) {
-      return parseNaiveDatetimeInTimezone(input, timezone);
-    }
-    return isoDate;
-  }
-
-  // Build timezone-aware reference for chrono-node so that
-  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
-  const ref: { instant: Date; timezone?: number } = {
-    instant: referenceDate ?? new Date(),
-  };
-  if (timezone) {
-    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
-  }
-
-  // Try natural language parsing with chrono-node
-  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
-  if (!parsed) {
-    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
-  }
-
-  return parsed;
-}
 
 /**
  * Check if user can edit an event
@@ -439,6 +402,18 @@ export const calendarWriteTools = {
           .where(eq(calendarEvents.id, eventId))
           .returning();
 
+        // Sync trigger row if this is a trigger-linked event and startAt changed
+        const meta = updatedEvent.metadata as CalendarTriggerMetadata | null;
+        if (meta?.isTrigger && parsedStartAt) {
+          await db
+            .update(calendarTriggers)
+            .set({ triggerAt: parsedStartAt })
+            .where(and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              eq(calendarTriggers.status, 'pending')
+            ));
+        }
+
         // Get all attendee IDs for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
@@ -530,6 +505,18 @@ export const calendarWriteTools = {
 
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
+
+        // Cancel any pending triggers linked to this event
+        const eventMeta = event.metadata as CalendarTriggerMetadata | null;
+        if (eventMeta?.isTrigger) {
+          await db
+            .update(calendarTriggers)
+            .set({ status: 'cancelled', completedAt: new Date() })
+            .where(and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              eq(calendarTriggers.status, 'pending')
+            ));
+        }
 
         // Soft delete the event
         await db

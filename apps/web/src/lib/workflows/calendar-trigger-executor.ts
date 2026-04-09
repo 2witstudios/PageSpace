@@ -57,7 +57,6 @@ export async function executeCalendarTrigger(
     };
 
     // 4. Execute via the standard workflow executor
-    const conversationId = `calendar-trigger-${trigger.id}-${Date.now()}`;
     const result = await executeWorkflow(syntheticWorkflow);
 
     // 5. Update trigger with execution results
@@ -68,7 +67,7 @@ export async function executeCalendarTrigger(
         completedAt: new Date(),
         error: result.error || null,
         durationMs: result.durationMs,
-        conversationId,
+        conversationId: result.conversationId || null,
       })
       .where(eq(calendarTriggers.id, trigger.id));
 
@@ -118,10 +117,10 @@ async function buildTriggerPrompt(trigger: CalendarTrigger, event: CalendarEvent
   }
   parts.push('</scheduled-event>');
 
-  // Instruction page content (if linked)
+  // Instruction page content (if linked) — scoped to trigger's drive for safety
   if (trigger.instructionPageId) {
     const [instructionPage] = await db
-      .select({ title: pages.title, content: pages.content })
+      .select({ title: pages.title, content: pages.content, driveId: pages.driveId })
       .from(pages)
       .where(and(eq(pages.id, trigger.instructionPageId), eq(pages.isTrashed, false)));
 

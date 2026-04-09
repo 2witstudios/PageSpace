@@ -7,6 +7,7 @@ import {
   isNaiveISODatetime,
   normalizeTimezone,
   parseNaiveDatetimeInTimezone,
+  parseDateTime,
 } from '../timestamp-utils';
 
 describe('timestamp-utils', () => {
@@ -247,6 +248,37 @@ describe('timestamp-utils', () => {
       const result = buildTimestampSystemPrompt('UTC');
       expect(result).toContain('CURRENT TIMESTAMP CONTEXT');
       expect(result).toContain('Current date and time');
+    });
+  });
+
+  describe('parseDateTime', () => {
+    it('parses ISO 8601 dates with timezone offset', () => {
+      const result = parseDateTime('2024-06-15T14:00:00Z');
+      expect(result.toISOString()).toBe('2024-06-15T14:00:00.000Z');
+    });
+
+    it('parses naive ISO datetime in specified timezone', () => {
+      const result = parseDateTime('2024-06-15T14:00:00', undefined, 'America/New_York');
+      // 2pm EDT = 6pm UTC
+      expect(result.toISOString()).toBe('2024-06-15T18:00:00.000Z');
+    });
+
+    it('parses natural language dates via chrono-node', () => {
+      vi.setSystemTime(new Date('2024-06-15T12:00:00Z'));
+      const result = parseDateTime('tomorrow at 3pm', undefined, 'UTC');
+      expect(result.getUTCHours()).toBe(15);
+      expect(result.getUTCDate()).toBe(16);
+    });
+
+    it('throws for unparseable date strings', () => {
+      expect(() => parseDateTime('not a date at all')).toThrow('Could not parse date');
+    });
+
+    it('uses referenceDate for relative parsing', () => {
+      const ref = new Date('2024-01-10T12:00:00Z');
+      const result = parseDateTime('tomorrow at 9am', ref, 'UTC');
+      expect(result.getUTCDate()).toBe(11);
+      expect(result.getUTCHours()).toBe(9);
     });
   });
 });

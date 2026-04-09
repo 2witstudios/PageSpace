@@ -1,6 +1,5 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as chrono from 'chrono-node';
 import {
   db,
   calendarEvents,
@@ -13,38 +12,10 @@ import { isUserDriveMember } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
-import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const triggerLogger = loggers.ai.child({ module: 'calendar-trigger-tools' });
-
-/**
- * Parse a date string — ISO 8601 or natural language via chrono-node.
- * Duplicated from calendar-write-tools to avoid coupling; identical logic.
- */
-function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
-  const isoDate = new Date(input);
-  if (!isNaN(isoDate.getTime())) {
-    if (timezone && isNaiveISODatetime(input)) {
-      return parseNaiveDatetimeInTimezone(input, timezone);
-    }
-    return isoDate;
-  }
-
-  const ref: { instant: Date; timezone?: number } = {
-    instant: referenceDate ?? new Date(),
-  };
-  if (timezone) {
-    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
-  }
-
-  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
-  if (!parsed) {
-    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
-  }
-
-  return parsed;
-}
 
 export const calendarTriggerTools = {
   /**
@@ -84,7 +55,13 @@ export const calendarTriggerTools = {
           };
         }
 
-        // Validate agent exists and is AI_CHAT type
+        // Validate drive access
+        const canAccess = await isUserDriveMember(userId, driveId);
+        if (!canAccess) {
+          return { success: false, error: 'You do not have access to this drive.' };
+        }
+
+        // Validate agent exists, is AI_CHAT, and belongs to an accessible drive
         const [agent] = await db
           .select({ id: pages.id, type: pages.type, title: pages.title, isTrashed: pages.isTrashed, driveId: pages.driveId })
           .from(pages)
@@ -99,17 +76,18 @@ export const calendarTriggerTools = {
         if (agent.isTrashed) {
           return { success: false, error: `Agent "${agent.title}" is in trash.` };
         }
-
-        // Validate drive access
-        const canAccess = await isUserDriveMember(userId, driveId);
-        if (!canAccess) {
-          return { success: false, error: 'You do not have access to this drive.' };
+        // Enforce that the agent belongs to a drive the caller can access
+        if (agent.driveId) {
+          const canAccessAgentDrive = agent.driveId === driveId || await isUserDriveMember(userId, agent.driveId);
+          if (!canAccessAgentDrive) {
+            return { success: false, error: 'You do not have access to the drive containing this agent.' };
+          }
         }
 
-        // Validate instruction page if provided
+        // Validate instruction page if provided — must exist and be in an accessible drive
         if (instructionPageId) {
           const [instrPage] = await db
-            .select({ id: pages.id, isTrashed: pages.isTrashed })
+            .select({ id: pages.id, isTrashed: pages.isTrashed, driveId: pages.driveId })
             .from(pages)
             .where(eq(pages.id, instructionPageId));
 
@@ -118,6 +96,12 @@ export const calendarTriggerTools = {
           }
           if (instrPage.isTrashed) {
             return { success: false, error: 'Instruction page is in trash.' };
+          }
+          if (instrPage.driveId) {
+            const canAccessInstrDrive = instrPage.driveId === driveId || await isUserDriveMember(userId, instrPage.driveId);
+            if (!canAccessInstrDrive) {
+              return { success: false, error: 'You do not have access to the drive containing the instruction page.' };
+            }
           }
         }
 
@@ -132,59 +116,63 @@ export const calendarTriggerTools = {
           };
         }
 
-        // Create calendar event with trigger metadata
+        // Create calendar event + trigger row + backfill metadata atomically
         const triggerPrompt = prompt || `Execute instructions from linked page.`;
+        const scheduledByAgentPageId = (ctx as ToolExecutionContext)?.chatSource?.agentPageId;
 
-        const [event] = await db
-          .insert(calendarEvents)
-          .values({
-            driveId,
-            createdById: userId,
-            title,
-            description: `Scheduled agent work: ${agent.title}`,
-            startAt: parsedTriggerAt,
-            endAt: new Date(parsedTriggerAt.getTime() + 15 * 60 * 1000), // 15-min default duration
-            timezone,
-            color: 'focus',
-            visibility: 'DRIVE',
-            metadata: {
-              isTrigger: true,
-              triggerType: 'agent_execution',
-              triggerId: '', // Will be backfilled after trigger row created
-              scheduledByAgentPageId: (ctx as ToolExecutionContext)?.chatSource?.agentPageId,
-            } satisfies CalendarTriggerMetadata,
-            updatedAt: new Date(),
-          })
-          .returning();
+        const { event, trigger } = await db.transaction(async (tx) => {
+          const [evt] = await tx
+            .insert(calendarEvents)
+            .values({
+              driveId,
+              createdById: userId,
+              title,
+              description: `Scheduled agent work: ${agent.title}`,
+              startAt: parsedTriggerAt,
+              endAt: new Date(parsedTriggerAt.getTime() + 15 * 60 * 1000), // 15-min default duration
+              timezone,
+              color: 'focus',
+              visibility: 'DRIVE',
+              metadata: {
+                isTrigger: true,
+                triggerType: 'agent_execution',
+                triggerId: '',
+                scheduledByAgentPageId,
+              } satisfies CalendarTriggerMetadata,
+              updatedAt: new Date(),
+            })
+            .returning();
 
-        // Create trigger row
-        const [trigger] = await db
-          .insert(calendarTriggers)
-          .values({
-            calendarEventId: event.id,
-            agentPageId,
-            driveId,
-            scheduledById: userId,
-            prompt: triggerPrompt,
-            instructionPageId: instructionPageId ?? null,
-            contextPageIds: contextPageIds ?? [],
-            status: 'pending',
-            triggerAt: parsedTriggerAt,
-          })
-          .returning();
+          const [trg] = await tx
+            .insert(calendarTriggers)
+            .values({
+              calendarEventId: evt.id,
+              agentPageId,
+              driveId,
+              scheduledById: userId,
+              prompt: triggerPrompt,
+              instructionPageId: instructionPageId ?? null,
+              contextPageIds: contextPageIds ?? [],
+              status: 'pending',
+              triggerAt: parsedTriggerAt,
+            })
+            .returning();
 
-        // Backfill triggerId in calendar event metadata
-        await db
-          .update(calendarEvents)
-          .set({
-            metadata: {
-              isTrigger: true,
-              triggerType: 'agent_execution',
-              triggerId: trigger.id,
-              scheduledByAgentPageId: (ctx as ToolExecutionContext)?.chatSource?.agentPageId,
-            } satisfies CalendarTriggerMetadata,
-          })
-          .where(eq(calendarEvents.id, event.id));
+          // Backfill triggerId in calendar event metadata
+          await tx
+            .update(calendarEvents)
+            .set({
+              metadata: {
+                isTrigger: true,
+                triggerType: 'agent_execution',
+                triggerId: trg.id,
+                scheduledByAgentPageId,
+              } satisfies CalendarTriggerMetadata,
+            })
+            .where(eq(calendarEvents.id, evt.id));
+
+          return { event: evt, trigger: trg };
+        });
 
         // Broadcast calendar event creation
         await broadcastCalendarEvent({
@@ -255,10 +243,9 @@ export const calendarTriggerTools = {
           return { success: false, error: 'Scheduled work not found.' };
         }
 
-        // Verify access: must be in a drive the user can access
-        const canAccess = await isUserDriveMember(userId, trigger.driveId);
-        if (!canAccess) {
-          return { success: false, error: 'You do not have access to cancel this scheduled work.' };
+        // Only the user who scheduled the work can cancel it
+        if (trigger.scheduledById !== userId) {
+          return { success: false, error: 'Only the user who scheduled this work can cancel it.' };
         }
 
         // Check current status

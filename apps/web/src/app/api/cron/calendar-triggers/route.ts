@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, calendarTriggers, calendarEvents, eq, and, lte, inArray } from '@pagespace/db';
+import { db, calendarTriggers, calendarEvents, eq, and, lte, inArray, asc } from '@pagespace/db';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
 import { loggers } from '@pagespace/lib/server';
@@ -32,7 +32,8 @@ export async function POST(req: Request) {
         )
       );
 
-    // 2. Find pending triggers that are due
+    // 2. Find pending triggers that are due (bounded to prevent unbounded result sets)
+    const MAX_DUE_TRIGGERS = 50;
     const dueTriggers = await db
       .select()
       .from(calendarTriggers)
@@ -41,7 +42,9 @@ export async function POST(req: Request) {
           eq(calendarTriggers.status, 'pending'),
           lte(calendarTriggers.triggerAt, now)
         )
-      );
+      )
+      .orderBy(asc(calendarTriggers.triggerAt))
+      .limit(MAX_DUE_TRIGGERS);
 
     if (dueTriggers.length === 0) {
       return NextResponse.json({ message: 'No calendar triggers due', executed: 0 });
@@ -58,10 +61,11 @@ export async function POST(req: Request) {
       const batch = dueTriggers.slice(i, i + MAX_CONCURRENT_TRIGGERS);
       const batchIds = batch.map(t => t.id);
 
-      // Atomically claim this batch (UPDATE...RETURNING prevents double-execution)
+      // Atomically claim directly to 'running' (no intermediate 'claimed' state
+      // that could strand triggers if the process crashes between claim and start)
       const claimed = await db
         .update(calendarTriggers)
-        .set({ status: 'claimed', claimedAt: now })
+        .set({ status: 'running', claimedAt: now, startedAt: now })
         .where(
           and(
             inArray(calendarTriggers.id, batchIds),
@@ -74,12 +78,6 @@ export async function POST(req: Request) {
       if (claimed.length === 0) continue;
       totalClaimed += claimed.length;
 
-      // Mark as running
-      await db
-        .update(calendarTriggers)
-        .set({ status: 'running', startedAt: new Date() })
-        .where(inArray(calendarTriggers.id, claimed.map(t => t.id)));
-
       // Load associated calendar events
       const eventIds = [...new Set(claimed.map(t => t.calendarEventId))];
       const events = await db
@@ -89,12 +87,16 @@ export async function POST(req: Request) {
 
       const eventMap = new Map(events.map(e => [e.id, e]));
 
-      // Execute batch concurrently
+      // Execute batch concurrently — skip triggers whose events are trashed
       const batchResults = await Promise.allSettled(
         claimed.map(async (trigger) => {
           const event = eventMap.get(trigger.calendarEventId);
-          if (!event) {
-            throw new Error(`Calendar event ${trigger.calendarEventId} not found`);
+          if (!event || event.isTrashed) {
+            await db
+              .update(calendarTriggers)
+              .set({ status: 'cancelled', completedAt: new Date(), error: event ? 'Calendar event was trashed' : 'Calendar event not found' })
+              .where(eq(calendarTriggers.id, trigger.id));
+            return { trigger, result: { success: false, durationMs: 0, error: 'Calendar event unavailable' } as const };
           }
           return { trigger, result: await executeCalendarTrigger(trigger, event) };
         })

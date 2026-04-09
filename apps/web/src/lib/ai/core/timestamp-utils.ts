@@ -3,6 +3,8 @@
  * Provides current date/time context to AI models for temporal awareness
  */
 
+import * as chrono from 'chrono-node';
+
 const DEFAULT_TIMEZONE = 'UTC';
 
 export type TimeOfDay = 'morning' | 'afternoon' | 'evening';
@@ -200,4 +202,38 @@ CURRENT TIMESTAMP CONTEXT:
 • User's timezone: ${tz}
 • When discussing schedules, deadlines, or time-sensitive matters, use this as your reference point
 • For relative time references (e.g., "today", "tomorrow", "this week"), calculate from the current timestamp above in the user's timezone`;
+}
+
+/**
+ * Parse a date string that can be either ISO 8601 or natural language.
+ * Uses chrono-node for natural language parsing with timezone awareness.
+ * @param input - Date string (ISO 8601 or natural language)
+ * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
+ * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
+ */
+export function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
+  // Try ISO 8601 first
+  const isoDate = new Date(input);
+  if (!isNaN(isoDate.getTime())) {
+    if (timezone && isNaiveISODatetime(input)) {
+      return parseNaiveDatetimeInTimezone(input, timezone);
+    }
+    return isoDate;
+  }
+
+  // Build timezone-aware reference for chrono-node so that
+  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
+  const ref: { instant: Date; timezone?: number } = {
+    instant: referenceDate ?? new Date(),
+  };
+  if (timezone) {
+    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
+  }
+
+  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
+  if (!parsed) {
+    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
+  }
+
+  return parsed;
 }
