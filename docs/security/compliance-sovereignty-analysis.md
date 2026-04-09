@@ -139,18 +139,24 @@ qualifying "local models only" is dangerous.
 ### 1.2. AI Usage Logging → Right to Erasure / GDPR Article 17
 
 **What happens**: Every AI interaction logs the first 1000 characters of the
-user's prompt and the AI's response to the `ai_usage_logs` table. This data is
-stored indefinitely with no automatic retention policy or deletion mechanism.
+user's prompt and the AI's response to the `ai_usage_logs` table.
 
-**Why it's incompatible**:
-- No TTL or automatic purge on `ai_usage_logs`
-- No API endpoint to delete a user's AI usage history
+**Status — partially resolved**:
+- ~~Account deletion does NOT purge these logs~~ → **Fixed**: `deleteAiUsageLogsForUser()` purges on account deletion
+- ~~No API endpoint to delete a user's AI usage history~~ → **Fixed**: account deletion handles this via FK cascade
+- ~~Conversation messages retained indefinitely~~ → **Fixed**: 30-day purge cron for soft-deleted messages + FK cascade on account deletion
+
+**Remaining gaps**:
+- No TTL or automatic purge on `ai_usage_logs` for non-deleted accounts (logs accumulate indefinitely while account is active)
 - No mechanism to selectively redact prompt/completion content
-- Account deletion does NOT purge these logs
-- Conversation `messages` table retains full message content indefinitely
 
-**Affected compliance regimes**: GDPR Article 17 (right to erasure), CCPA
-(right to delete), any "right to be forgotten" regulation.
+**Severity**: Downgraded from hard incompatibility to modification-required.
+Account deletion now satisfies Art. 17 for erasure requests. The remaining gap
+is retention minimization for active accounts.
+
+**Affected compliance regimes**: GDPR Article 17 (right to erasure — now
+partially satisfied), CCPA (right to delete — satisfied on account deletion),
+data minimization (active account retention still unbounded).
 
 **Key files**:
 - `packages/db/src/schema/monitoring.ts` (lines 144-203: `ai_usage_logs` schema)
@@ -222,34 +228,42 @@ residency, any regime requiring all PII processing to be on-premise.
 These features work today but would need changes to pass audits in regulated
 environments.
 
-### 2.1. No Data Retention Policy Engine
+### 2.1. No Data Retention Policy Engine (Partial)
 
-**Current state**: No automatic data expiration exists for:
-- AI usage logs (indefinite)
-- Conversation messages (indefinite, soft-delete only via `isActive` flag)
-- Activity/audit logs (indefinite)
-- Client analytics events (indefinite)
-- Security audit logs (indefinite)
+**Current state**: Retention exists for some data categories but not all:
+- ~~AI usage logs (indefinite)~~ → **Partial**: purged on account deletion; no TTL for active accounts
+- ~~Conversation messages (indefinite)~~ → **Fixed**: 30-day purge cron for soft-deleted messages + FK cascade on account deletion
+- Sessions and tokens → **Fixed**: TTL-based cleanup on cron schedule
+- Page versions → **Fixed**: 30-day auto-retention with pinnable exemptions
+- AI logs → **Fixed**: anonymize at 30 days, purge at 90 days (configurable via `AI_LOG_RETENTION_DAYS`)
+- Activity/audit logs (indefinite — no retention policy)
+- Client analytics events (indefinite — no retention policy)
+- Security audit logs (indefinite — no retention policy)
 
-**What's needed**: Configurable retention windows with automatic purge jobs.
-Most compliance frameworks require documented retention schedules.
+**What's needed**: Configurable retention windows for the remaining categories
+(activity logs, analytics, security audit logs) and admin configuration UI.
 
-**Effort**: Medium. Requires cron jobs and admin configuration UI.
+**Effort**: Medium. Core retention engine and cron infrastructure exists; needs
+extension to remaining data categories and admin-facing configuration.
 
 ---
 
-### 2.2. Incomplete Data Subject Access / Export
+### 2.2. ~~Incomplete Data Subject Access / Export~~ → RESOLVED
 
-**Current state**: No mechanism exists for a user to:
-- Export all their personal data (GDPR Article 15 / CCPA right to know)
-- See which third parties received their data
-- Download their conversation history, uploaded files, or activity logs
+**Current state**: Data subject access and export is implemented:
+- **User DSAR export**: `GET /api/account/export` — ZIP archive with JSON files
+  covering profile, drives, pages, messages, files metadata, activity logs,
+  AI usage logs, and tasks. Rate-limited to 1 export per 24 hours.
+- **Admin DSAR endpoint**: `GET /api/admin/users/[userId]/export` — admin-only
+  endpoint for processing data subject access requests. Logs which admin
+  accessed which user's data for audit trail.
 
-**What's needed**: Data export endpoint that packages all user data in a
-portable format (JSON/ZIP).
+**Remaining gap**: No "which third parties received data" view — users cannot
+see a summary of which AI providers, integrations, or external services
+processed their data.
 
-**Effort**: Medium-high. Requires aggregating data across multiple tables and
-file storage.
+**Effort**: Low for the remaining gap (query integration credentials +
+AI usage logs by provider).
 
 ---
 
@@ -365,14 +379,21 @@ accessed, retention limits for cached calendar data, and token revocation UI.
 
 ---
 
-### 2.9. Security Audit Log Integrity Verification
+### 2.9. Security Audit Log Integrity Verification (Partially Resolved)
 
-**Current state**: Tamper-evident hash chain exists in `security_audit_log` but
-no automated verification process runs to detect tampering.
+**Current state**: Security audit chain integrity is now verified automatically:
+- **Fixed (#541)**: Hash chain GDPR-safe — PII fields excluded from hash
+  computation so anonymization doesn't break the chain
+- **Fixed**: Daily verification cron (`/api/cron/verify-audit-chain`) recomputes
+  hashes and verifies chain links. HMAC-signed cron requests. Pluggable
+  `ChainAlertHandler` for Slack/email/PagerDuty alerting.
 
-**What's needed**: Periodic chain integrity verification job with alerting.
+**Remaining gap**: Activity log hash chain still broken by anonymization — PII
+fields are included in `serializeLogDataForHash()`. Fix in progress on branch
+`pu/hash-chain-pii`.
 
-**Effort**: Low. The infrastructure exists; needs a cron job.
+**Effort**: Low. Security audit chain is done; activity log chain fix follows
+the same pattern.
 
 ---
 
@@ -459,11 +480,12 @@ Every path where data leaves the PageSpace deployment boundary.
 
 ### P1 — Required for GDPR/CCPA readiness
 
-4. **Build data subject export endpoint** — Users cannot export their data today.
+4. ~~**Build data subject export endpoint**~~ — **DONE**. `GET /api/account/export`
+   (user) and `GET /api/admin/users/[userId]/export` (admin DSAR). ZIP with JSON.
 5. **Add consent management for AI providers** — No disclosure or consent record
    when selecting external AI providers.
-6. **Implement conversation message hard-delete** — Only soft-delete (`isActive`)
-   exists today.
+6. ~~**Implement conversation message hard-delete**~~ — **DONE**. 30-day purge cron
+   hard-deletes soft-deleted messages. FK cascade on account deletion.
 7. **Document data retention schedules** — No formal retention policy exists for
    any data category.
 
@@ -540,10 +562,10 @@ When entering compliance or white-label conversations, use this framing:
 - "Payment processing" — only relevant for SaaS mode, not on-prem
 
 **Do not promise without engineering work**:
-- GDPR right-to-erasure compliance (file deletion gap)
-- Data subject export / portability
-- Configurable data retention policies
-- Formal audit log integrity verification
+- GDPR right-to-erasure compliance (file deletion gap remains — DB erasure is done)
+- ~~Data subject export / portability~~ → **Resolved**: DSAR export endpoints exist
+- Configurable data retention policies (partial — AI logs and messages have retention; activity/analytics/audit logs do not)
+- ~~Formal audit log integrity verification~~ → **Resolved**: daily verification cron with alerting (activity log chain fix in progress)
 - Database encryption at rest (TDE needed for regulated industries)
 
 **Never promise** (without fundamental changes):

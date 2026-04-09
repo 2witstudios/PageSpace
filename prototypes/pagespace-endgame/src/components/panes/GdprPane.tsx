@@ -66,6 +66,17 @@ export function GdprPane() {
         </Card>
       </div>
 
+      <Card accent="green" style={{ marginBottom: 16 }}>
+        <h4>Message deletion: two-stage hard-delete</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Messages use a two-stage deletion path: soft-delete via{" "}
+          <code>isActive</code> flag, then a 30-day purge cron hard-deletes
+          the rows. On account deletion, FK cascade removes all messages
+          immediately. Satisfies GDPR Art. 17 right to erasure for message
+          content.
+        </p>
+      </Card>
+
       <h3 style={{ marginBottom: 12 }}>Data Retention &amp; Minimization</h3>
       <FeatureRow columns={4}>
         <Feature
@@ -146,35 +157,30 @@ export function GdprPane() {
         />
       </FeatureRow>
 
-      <div className="g2" style={{ marginBottom: 12 }}>
-        <Card accent="amber">
-          <h4>Message deletion is soft-delete only</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Conversation messages use an <code>isActive</code> flag for
-            deletion. GDPR Art. 17 may require true hard-delete. Current
-            soft-delete means message content persists in the database
-            even after &ldquo;deletion.&rdquo;
-          </p>
-        </Card>
-        <Card accent="amber">
-          <h4>Activity log hash chain broken by anonymization</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Account deletion anonymizes activity log entries, but this
-            changes the data that was hashed &mdash; invalidating the
-            hash chain. The tamper-evident property is compromised for
-            entries involving deleted users. Security audit chain is{" "}
-            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
-            {" "}&mdash; PII fields excluded from hash computation.
-          </p>
-        </Card>
-      </div>
+      <Card accent="amber" style={{ marginBottom: 12 }}>
+        <h4>Activity log hash chain broken by anonymization</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Account deletion anonymizes activity log entries, but this
+          changes the data that was hashed &mdash; invalidating the
+          hash chain. The tamper-evident property is compromised for
+          entries involving deleted users. Security audit chain is{" "}
+          <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
+          {" "}&mdash; PII fields excluded from hash computation.{" "}
+          <strong style={{ color: "var(--amber)" }}>
+            Activity log fix in progress (pu/hash-chain-pii).
+          </strong>
+        </p>
+      </Card>
 
       <Card accent="amber" style={{ marginBottom: 12 }}>
         <h4>Export rate limit is in-memory</h4>
         <p style={{ marginTop: 6, fontSize: 12 }}>
           The 1-export-per-24-hours rate limit uses an in-process <code>Map()</code>.
           Resets on deploy/restart. Not shared across instances. Works for single
-          instance but won&apos;t scale.
+          instance but won&apos;t scale.{" "}
+          <strong style={{ color: "var(--amber)" }}>
+            Fix in progress (pu/export-rate-limit).
+          </strong>
         </p>
       </Card>
 
@@ -209,12 +215,12 @@ export function GdprPane() {
       </FeatureRow>
 
       <div className="g2">
-        <Card accent="blue">
-          <h4>Hard-delete for messages</h4>
+        <Card accent="green">
+          <h4>Hard-delete for messages &mdash; Done</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            True deletion path for conversation messages with audit tombstones
-            (record that deletion occurred without preserving content). Supports
-            GDPR Art. 17 right to erasure for all data types.
+            Implemented: 30-day purge cron hard-deletes soft-deleted messages.
+            FK cascade on account deletion removes all messages immediately.
+            GDPR Art. 17 right to erasure satisfied for message content.
           </p>
         </Card>
         <Card accent="blue">
@@ -222,7 +228,10 @@ export function GdprPane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Anonymization that preserves chain link integrity. Hash computed
             over anonymization-stable fields only, or chain links explicitly
-            maintained through the anonymization process.
+            maintained through the anonymization process.{" "}
+            <strong style={{ color: "var(--amber)" }}>
+              In progress (pu/hash-chain-pii).
+            </strong>
           </p>
         </Card>
       </div>

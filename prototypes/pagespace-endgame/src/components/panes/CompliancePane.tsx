@@ -341,7 +341,10 @@ export function CompliancePane() {
             stored <code>logHash</code>. Security audit chain is{" "}
             <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
             {" "}&mdash; PII fields excluded from hash computation so the
-            chain remains valid after GDPR anonymization.
+            chain remains valid after GDPR anonymization.{" "}
+            <strong style={{ color: "var(--amber)" }}>
+              Activity log fix in progress (pu/hash-chain-pii).
+            </strong>
           </p>
         </Card>
       </div>
@@ -351,7 +354,10 @@ export function CompliancePane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             The 1-export-per-24-hours DSAR rate limit uses an in-process{" "}
             <code>Map()</code>. Resets on deploy/restart. Not shared across
-            instances. Works for single instance but won&apos;t scale.
+            instances. Works for single instance but won&apos;t scale.{" "}
+            <strong style={{ color: "var(--amber)" }}>
+              Fix in progress (pu/export-rate-limit).
+            </strong>
           </p>
         </Card>
       </div>
@@ -462,7 +468,7 @@ export function CompliancePane() {
         <Feature
           nameColor="var(--cyan)"
           name="Hash-chain-safe anonymization"
-          description="Anonymization that preserves chain link integrity. Hash computed over anonymization-stable fields only, or chain links maintained through the anonymization process."
+          description="Anonymization that preserves chain link integrity. Hash computed over anonymization-stable fields only, or chain links maintained through the anonymization process. In progress (pu/hash-chain-pii)."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -482,7 +488,7 @@ export function CompliancePane() {
         <Feature
           nameColor="var(--cyan)"
           name="Distributed export rate limit"
-          description="Redis-backed export rate limiting (matching existing auth rate limiter pattern). Shared across instances. Survives deploys."
+          description="Redis-backed export rate limiting (matching existing auth rate limiter pattern). Shared across instances. Survives deploys. In progress (pu/export-rate-limit)."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
