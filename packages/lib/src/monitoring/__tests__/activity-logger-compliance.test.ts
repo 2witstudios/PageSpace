@@ -13,30 +13,57 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Capture the values passed to the database insert
-let capturedInsertValues: Record<string, unknown> | null = null;
+// Hoisted state shared between mock factory and test assertions
+const { testState, createMockTx } = vi.hoisted(() => {
+  const state = {
+    capturedInsertValues: null as Record<string, unknown> | null,
+    lastInsertedHash: null as string | null,
+  };
 
-// Track the last inserted log hash for chain simulation
-let lastInsertedHash: string | null = null;
+  const insertValuesFn = (values: Record<string, unknown>) => {
+    state.capturedInsertValues = values;
+    if (values.logHash) {
+      state.lastInsertedHash = values.logHash as string;
+    }
+    return Promise.resolve(undefined);
+  };
+
+  const findFirstFn = () => {
+    if (state.lastInsertedHash) {
+      return Promise.resolve({ logHash: state.lastInsertedHash });
+    }
+    return Promise.resolve(null);
+  };
+
+  const createTx = () => ({
+    execute: () => Promise.resolve({ rows: [] }),
+    insert: () => ({ values: insertValuesFn }),
+    query: { activityLogs: { findFirst: findFirstFn } },
+  });
+
+  return { testState: state, createMockTx: createTx };
+});
 
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockImplementation((values: Record<string, unknown>) => {
-        capturedInsertValues = values;
-        // Track the log hash for next chain computation
+        testState.capturedInsertValues = values;
         if (values.logHash) {
-          lastInsertedHash = values.logHash as string;
+          testState.lastInsertedHash = values.logHash as string;
         }
         return Promise.resolve(undefined);
       }),
     }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transaction: vi.fn().mockImplementation(async (callback: any) => {
+      return callback(createMockTx());
+    }),
     query: {
       activityLogs: {
         findFirst: vi.fn().mockImplementation(() => {
-          // Return the last inserted hash for chain computation
-          if (lastInsertedHash) {
-            return Promise.resolve({ logHash: lastInsertedHash });
+          if (testState.lastInsertedHash) {
+            return Promise.resolve({ logHash: testState.lastInsertedHash });
           }
           return Promise.resolve(null);
         }),
@@ -45,12 +72,13 @@ vi.mock('@pagespace/db', () => ({
   },
   activityLogs: { id: 'id', logHash: 'logHash', timestamp: 'timestamp' },
   eq: vi.fn(),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
 }));
 
-// Mock drizzle-orm's isNotNull and desc functions
 vi.mock('drizzle-orm', () => ({
   desc: vi.fn().mockImplementation((col) => col),
   isNotNull: vi.fn().mockImplementation((col) => col),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
 }));
 
 import { db } from '@pagespace/db';
@@ -72,13 +100,19 @@ type MockFn = ReturnType<typeof vi.fn>;
 const mockDb = db as unknown as {
   query: { activityLogs: { findFirst: MockFn } };
   insert: MockFn;
+  transaction: MockFn;
 };
 
 describe('activity logger compliance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    capturedInsertValues = null;
-    lastInsertedHash = null;
+    testState.capturedInsertValues = null;
+    testState.lastInsertedHash = null;
+    // Restore transaction mock after clearAllMocks wipes it
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(db.transaction).mockImplementation(async (callback: any) => {
+      return callback(createMockTx());
+    });
   });
 
   describe('ActivityLogInput interface', () => {
@@ -97,7 +131,7 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - verify actorEmail is passed to database
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         userId: 'user-123',
         actorEmail: 'john@example.com',
         operation: 'create',
@@ -123,7 +157,7 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - verify both fields are passed
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
       });
@@ -145,7 +179,7 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - verify the exact values stored
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
       });
@@ -167,11 +201,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution to complete
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
         resourceType: 'page',
@@ -189,11 +223,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - verify fallback behavior
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'unknown@system',
       });
     });
@@ -219,11 +253,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
         operation: 'permission_grant',
@@ -247,11 +281,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
         resourceType: 'drive',
@@ -277,11 +311,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
         operation: 'agent_config_update',
@@ -311,11 +345,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'message_update',
         resourceType: 'message',
         resourceId: 'msg-1',
@@ -346,11 +380,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'message_delete',
         resourceType: 'message',
         driveId: null,
@@ -375,11 +409,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues?.metadata).toMatchObject({
+      expect(testState.capturedInsertValues?.metadata).toMatchObject({
         conversationType: 'channel',
       });
     });
@@ -406,11 +440,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         isAiGenerated: true,
         aiProvider: 'openai',
         aiModel: 'gpt-4',
@@ -435,11 +469,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         actorEmail: 'john@example.com',
         actorDisplayName: 'John Doe',
       });
@@ -463,11 +497,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'role_reorder',
         resourceType: 'role',
         driveId: 'drive-1',
@@ -493,11 +527,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues?.metadata).toMatchObject({
+      expect(testState.capturedInsertValues?.metadata).toMatchObject({
         driveName: 'Test Drive',
       });
     });
@@ -518,11 +552,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - for reorder, resourceId is the driveId since it affects multiple roles
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         resourceId: 'drive-1',
       });
     });
@@ -546,11 +580,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'rollback',
         resourceType: 'page',
         resourceId: 'page-1',
@@ -582,11 +616,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - previousValues = what we're replacing, newValues = what we restored
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         previousValues: { title: 'New Title' },
         newValues: { title: 'Old Title' },
       });
@@ -614,11 +648,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - denormalized source info survives retention policy deletion
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         rollbackFromActivityId: 'source-activity-456',
         rollbackSourceOperation: 'update',
         rollbackSourceTimestamp: sourceTimestamp,
@@ -645,11 +679,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         contentSnapshot: '<p>Restored content</p>',
         contentFormat: 'tiptap',
       });
@@ -675,11 +709,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'conversation_undo',
         resourceType: 'conversation',
         resourceId: 'conv-456',
@@ -707,11 +741,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         operation: 'conversation_undo_with_changes',
         resourceType: 'conversation',
       });
@@ -734,11 +768,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - metadata contains undo details
-      expect(capturedInsertValues?.metadata).toMatchObject({
+      expect(testState.capturedInsertValues?.metadata).toMatchObject({
         messageId: 'msg-789',
         messagesDeleted: 3,
         activitiesRolledBack: 2,
@@ -763,11 +797,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - previousValues tracks that messages were active before undo
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         previousValues: { messagesWereActive: true },
       });
     });
@@ -789,11 +823,11 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert
-      expect(capturedInsertValues).toMatchObject({
+      expect(testState.capturedInsertValues).toMatchObject({
         driveId: null,
       });
     });
@@ -815,15 +849,15 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - verify hash chain fields are present
-      expect(capturedInsertValues).toHaveProperty('logHash');
-      expect(capturedInsertValues?.logHash).toBeDefined();
-      expect(typeof capturedInsertValues?.logHash).toBe('string');
-      expect((capturedInsertValues?.logHash as string).length).toBe(64); // SHA-256 hex length
+      expect(testState.capturedInsertValues).toHaveProperty('logHash');
+      expect(testState.capturedInsertValues?.logHash).toBeDefined();
+      expect(typeof testState.capturedInsertValues?.logHash).toBe('string');
+      expect((testState.capturedInsertValues?.logHash as string).length).toBe(64); // SHA-256 hex length
     });
 
     it('should generate chainSeed for first log entry', async () => {
-      // Arrange - ensure no previous logs exist (lastInsertedHash is null)
-      lastInsertedHash = null;
+      // Arrange - ensure no previous logs exist (testState.lastInsertedHash is null)
+      testState.lastInsertedHash = null;
 
       const input: ActivityLogInput = {
         userId: 'user-123',
@@ -838,17 +872,17 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - first entry should have chainSeed but no previousLogHash
-      expect(capturedInsertValues).toHaveProperty('chainSeed');
-      expect(capturedInsertValues?.chainSeed).toBeDefined();
-      expect(typeof capturedInsertValues?.chainSeed).toBe('string');
-      expect((capturedInsertValues?.chainSeed as string).length).toBe(64); // 32 bytes hex
-      expect(capturedInsertValues?.previousLogHash).toBeNull();
+      expect(testState.capturedInsertValues).toHaveProperty('chainSeed');
+      expect(testState.capturedInsertValues?.chainSeed).toBeDefined();
+      expect(typeof testState.capturedInsertValues?.chainSeed).toBe('string');
+      expect((testState.capturedInsertValues?.chainSeed as string).length).toBe(64); // 32 bytes hex
+      expect(testState.capturedInsertValues?.previousLogHash).toBeNull();
     });
 
     it('should chain to previous log hash for subsequent entries', async () => {
       // Arrange - simulate a previous log entry
       const expectedPreviousHash = 'abc123previoushash0000000000000000000000000000000000000000000000';
-      lastInsertedHash = expectedPreviousHash;
+      testState.lastInsertedHash = expectedPreviousHash;
 
       const input: ActivityLogInput = {
         userId: 'user-123',
@@ -863,11 +897,11 @@ describe('activity logger compliance', () => {
       await logActivity(input);
 
       // Assert - subsequent entry should reference previous hash
-      // Note: lastInsertedHash gets updated by the mock, so compare against saved value
-      expect(capturedInsertValues?.previousLogHash).toBe(expectedPreviousHash);
-      expect(capturedInsertValues?.chainSeed).toBeNull(); // Only first entry has seed
-      expect(capturedInsertValues?.logHash).toBeDefined();
-      expect(capturedInsertValues?.logHash).not.toBe(expectedPreviousHash); // New hash should differ from previous
+      // Note: testState.lastInsertedHash gets updated by the mock, so compare against saved value
+      expect(testState.capturedInsertValues?.previousLogHash).toBe(expectedPreviousHash);
+      expect(testState.capturedInsertValues?.chainSeed).toBeNull(); // Only first entry has seed
+      expect(testState.capturedInsertValues?.logHash).toBeDefined();
+      expect(testState.capturedInsertValues?.logHash).not.toBe(expectedPreviousHash); // New hash should differ from previous
     });
 
     it('should produce deterministic hashes for same input data', async () => {
@@ -885,7 +919,7 @@ describe('activity logger compliance', () => {
       };
 
       await logActivity(input1);
-      const firstHash = capturedInsertValues?.logHash as string;
+      const firstHash = testState.capturedInsertValues?.logHash as string;
 
       // Second entry (will chain to first)
       const input2: ActivityLogInput = {
@@ -898,13 +932,13 @@ describe('activity logger compliance', () => {
       };
 
       await logActivity(input2);
-      const secondHash = capturedInsertValues?.logHash as string;
+      const secondHash = testState.capturedInsertValues?.logHash as string;
 
       // Assert - both should have valid SHA-256 hashes
       expect(firstHash).toHaveLength(64);
       expect(secondHash).toHaveLength(64);
       // And second should reference first
-      expect(capturedInsertValues?.previousLogHash).toBe(firstHash);
+      expect(testState.capturedInsertValues?.previousLogHash).toBe(firstHash);
     });
 
     it('should include hash chain fields in logPageActivity', async () => {
@@ -918,12 +952,12 @@ describe('activity logger compliance', () => {
 
       // Wait for async execution
       await vi.waitFor(() => {
-        expect(capturedInsertValues).not.toBeNull();
+        expect(testState.capturedInsertValues).not.toBeNull();
       });
 
       // Assert - hash chain fields should be present
-      expect(capturedInsertValues).toHaveProperty('logHash');
-      expect(typeof capturedInsertValues?.logHash).toBe('string');
+      expect(testState.capturedInsertValues).toHaveProperty('logHash');
+      expect(typeof testState.capturedInsertValues?.logHash).toBe('string');
     });
   });
 });

@@ -159,37 +159,6 @@ export function computeLogHash(data: HashableLogData, previousHash: string): str
 }
 
 /**
- * Get the latest log hash from the database.
- * Used to fetch the previous hash when inserting a new entry.
- * Returns null if no entries exist (starting a new chain).
- *
- * @returns Object containing the latest log hash and whether this is the first entry
- */
-export async function getLatestLogHash(): Promise<{
-  previousHash: string | null;
-  isFirstEntry: boolean;
-}> {
-  try {
-    const latestEntry = await db.query.activityLogs.findFirst({
-      where: isNotNull(activityLogs.logHash),
-      orderBy: [desc(activityLogs.timestamp)],
-      columns: { logHash: true },
-    });
-
-    if (!latestEntry?.logHash) {
-      return { previousHash: null, isFirstEntry: true };
-    }
-
-    return { previousHash: latestEntry.logHash, isFirstEntry: false };
-  } catch (error) {
-    console.error('[ActivityLogger] Failed to get latest log hash:', error);
-    // Return null on error - allows logging to continue without hash chain
-    // The hash chain can be repaired later if needed
-    return { previousHash: null, isFirstEntry: false };
-  }
-}
-
-/**
  * Get the latest log hash within a transaction.
  * Used for atomic hash chain computation during transactional inserts.
  *

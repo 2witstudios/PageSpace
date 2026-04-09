@@ -745,6 +745,22 @@ export const pageService = {
 
       const [page] = await tx.insert(pages).values(pageData).returning();
 
+      // Create page version BEFORE acquiring the activity chain lock,
+      // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
+      await createPageVersion({
+        pageId: page.id,
+        driveId: page.driveId,
+        createdBy: userId,
+        source: options?.source ?? 'system',
+        content: pageData.content,
+        contentFormat,
+        pageRevision: 0,
+        stateHash,
+        changeGroupId,
+        changeGroupType,
+        metadata: options?.context?.metadata,
+      }, { tx });
+
       deferredTrigger = await logActivityWithTx({
         userId,
         actorEmail: actorInfo.actorEmail,
@@ -769,20 +785,6 @@ export const pageService = {
         changeGroupType,
         stateHashAfter: stateHash,
       }, tx);
-
-      await createPageVersion({
-        pageId: page.id,
-        driveId: page.driveId,
-        createdBy: userId,
-        source: options?.source ?? 'system',
-        content: pageData.content,
-        contentFormat,
-        pageRevision: 0,
-        stateHash,
-        changeGroupId,
-        changeGroupType,
-        metadata: options?.context?.metadata,
-      }, { tx });
 
       return page;
     });

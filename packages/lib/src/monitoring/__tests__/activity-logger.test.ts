@@ -82,7 +82,6 @@ import {
   computeHash,
   serializeLogDataForHash,
   computeLogHash,
-  getLatestLogHash,
   getLatestLogHashWithTx,
   computeHashChainData,
   verifyLogHash,
@@ -264,37 +263,6 @@ describe('activity-logger', () => {
 
     it('should differ when previousHash differs', () => {
       expect(computeLogHash(baseHashData, 'a')).not.toBe(computeLogHash(baseHashData, 'b'));
-    });
-  });
-
-  // ── getLatestLogHash ──────────────────────────────────────────────────────
-  describe('getLatestLogHash', () => {
-    it('should return isFirstEntry=true when no entries', async () => {
-      mockFindFirst.mockResolvedValue(null);
-      const result = await getLatestLogHash();
-      expect(result.isFirstEntry).toBe(true);
-      expect(result.previousHash).toBeNull();
-    });
-
-    it('should return the latest hash when entries exist', async () => {
-      mockFindFirst.mockResolvedValue({ logHash: 'abc123' });
-      const result = await getLatestLogHash();
-      expect(result.isFirstEntry).toBe(false);
-      expect(result.previousHash).toBe('abc123');
-    });
-
-    it('should return isFirstEntry=true when entry has no logHash', async () => {
-      mockFindFirst.mockResolvedValue({ logHash: null });
-      const result = await getLatestLogHash();
-      expect(result.isFirstEntry).toBe(true);
-      expect(result.previousHash).toBeNull();
-    });
-
-    it('should return null previousHash on DB error', async () => {
-      mockFindFirst.mockRejectedValue(new Error('db error'));
-      const result = await getLatestLogHash();
-      expect(result.previousHash).toBeNull();
-      expect(result.isFirstEntry).toBe(false);
     });
   });
 
@@ -554,18 +522,6 @@ describe('activity-logger', () => {
 
     it('uses fixed lock key for activity log chain (#542)', () => {
       expect(ACTIVITY_CHAIN_LOCK_KEY).toBe(5829174063);
-    });
-
-    it('reads latest hash after acquiring lock (#542)', async () => {
-      await logActivity(baseInput);
-
-      // The advisory lock must be the first SQL call, hash read comes after
-      expect(capturedState.executedSql.length).toBeGreaterThanOrEqual(1);
-      const lockSql = capturedState.executedSql[0];
-      const joinedSql = lockSql!.strings.join('');
-      expect(joinedSql).toContain('pg_advisory_xact_lock');
-      // The hash read uses findFirst (not raw SQL), so it won't appear in executedSql.
-      // Verifying the lock is first confirms ordering.
     });
 
     it('logActivityWithTx acquires advisory lock (#542)', async () => {
