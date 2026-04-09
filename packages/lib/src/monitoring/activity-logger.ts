@@ -67,14 +67,13 @@ export interface HashChainData {
 }
 
 /**
- * Data used to compute the hash of a log entry.
- * Includes immutable fields that define the entry's content.
+ * Fields included in the tamper-evident hash chain.
+ * PII (userId, actorEmail) is deliberately excluded so the chain
+ * stays verifiable after GDPR right-to-erasure anonymization (#541).
  */
 interface HashableLogData {
   id: string;
   timestamp: Date;
-  userId: string;
-  actorEmail: string;
   operation: string;
   resourceType: string;
   resourceId: string;
@@ -111,19 +110,12 @@ export function computeHash(data: string, previousHash: string): string {
 
 /**
  * Serialize log entry data for hashing.
- * Creates a deterministic JSON string from the hashable fields.
- * Uses sorted keys to ensure consistent hash computation.
- *
- * @param data - Log entry data to serialize
- * @returns Deterministic JSON string
+ * Creates a deterministic JSON string with sorted keys.
  */
 export function serializeLogDataForHash(data: HashableLogData): string {
-  // Create object with sorted keys for deterministic serialization
   const hashableObject = {
     id: data.id,
     timestamp: data.timestamp.toISOString(),
-    userId: data.userId,
-    actorEmail: data.actorEmail,
     operation: data.operation,
     resourceType: data.resourceType,
     resourceId: data.resourceId,
@@ -517,8 +509,6 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
       {
         id: values.id,
         timestamp: values.timestamp,
-        userId: values.userId,
-        actorEmail: values.actorEmail,
         operation: values.operation,
         resourceType: values.resourceType,
         resourceId: values.resourceId,
@@ -611,8 +601,6 @@ export async function logActivityWithTx(
     {
       id: values.id,
       timestamp: values.timestamp,
-      userId: values.userId,
-      actorEmail: values.actorEmail,
       operation: values.operation,
       resourceType: values.resourceType,
       resourceId: values.resourceId,

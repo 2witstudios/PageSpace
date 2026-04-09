@@ -80,17 +80,16 @@ function buildValidChain(count: number): MockEntry[] {
   for (let i = 0; i < count; i++) {
     const timestamp = new Date(1_700_000_000_000 + i * 1000);
     const id = `entry-${i}`;
-    const entryData = {
+    const hashData = {
       id,
       timestamp,
-      userId: 'u1',
-      actorEmail: 'test@example.com',
       operation: 'create',
       resourceType: 'page',
       resourceId: `page-${i}`,
       driveId: 'drive-1',
     };
-    const logHash = computeLogHash(entryData, prevHash);
+    const logHash = computeLogHash(hashData, prevHash);
+    const entryData = { ...hashData, userId: 'u1', actorEmail: 'test@example.com' };
 
     entries.push({
       ...entryData,
@@ -198,7 +197,7 @@ describe('hash-chain-verifier (full coverage)', () => {
 
     it('should detect tampering via content modification', async () => {
       const chain = buildValidChain(3);
-      chain[1]!.userId = 'modified-user'; // hash stays same but content differs
+      chain[1]!.operation = 'modified-operation'; // hash stays same but content differs
       setupDbMocks(chain);
 
       const result = await verifyHashChain();
@@ -535,20 +534,20 @@ describe('hash-chain-verifier (full coverage)', () => {
     });
 
     it('should use empty string when neither chainSeed nor previousLogHash is present', async () => {
-      const entryData = {
+      const hashData = {
         id: 'orphan',
         timestamp: new Date('2024-01-01T00:00:00.000Z'),
-        userId: 'u1',
-        actorEmail: 'test@example.com',
         operation: 'create',
         resourceType: 'page',
         resourceId: 'page-orphan',
         driveId: 'drive-1',
       };
-      const logHash = computeLogHash(entryData, '');
+      const logHash = computeLogHash(hashData, '');
 
       mockFindFirst.mockResolvedValueOnce({
-        ...entryData,
+        ...hashData,
+        userId: 'u1',
+        actorEmail: 'test@example.com',
         pageId: null,
         contentSnapshot: null,
         previousValues: null,
@@ -592,11 +591,9 @@ describe('hash-chain-verifier (full coverage)', () => {
     });
 
     it('should correctly handle entry with optional fields', async () => {
-      const baseData = {
+      const hashData = {
         id: 'full-entry',
         timestamp: new Date('2024-06-01T12:00:00.000Z'),
-        userId: 'u1',
-        actorEmail: 'test@example.com',
         operation: 'update',
         resourceType: 'page',
         resourceId: 'page-1',
@@ -608,10 +605,12 @@ describe('hash-chain-verifier (full coverage)', () => {
         metadata: { key: 'value' },
       };
       const seed = generateChainSeed();
-      const logHash = computeLogHash(baseData, seed);
+      const logHash = computeLogHash(hashData, seed);
 
       mockFindFirst.mockResolvedValueOnce({
-        ...baseData,
+        ...hashData,
+        userId: 'u1',
+        actorEmail: 'test@example.com',
         previousLogHash: null,
         logHash,
         chainSeed: seed,

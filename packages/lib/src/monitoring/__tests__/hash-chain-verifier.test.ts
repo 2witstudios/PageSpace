@@ -158,18 +158,17 @@ function createValidHashChain(count: number): typeof mockLogEntries {
     const timestamp = new Date(Date.now() + i * 1000);
     const id = `log-${i + 1}`;
 
-    const entryData = {
+    const hashData = {
       id,
       timestamp,
-      userId: 'user-123',
-      actorEmail: 'test@example.com',
       operation: 'create',
       resourceType: 'page',
       resourceId: `page-${i + 1}`,
       driveId: 'drive-1',
     };
 
-    const logHash = computeLogHash(entryData, previousHash);
+    const logHash = computeLogHash(hashData, previousHash);
+    const entryData = { ...hashData, userId: 'user-123', actorEmail: 'test@example.com' };
 
     entries.push({
       ...entryData,
@@ -268,8 +267,8 @@ describe('hash-chain-verifier', () => {
     it('should detect tampering when content is modified', async () => {
       // Arrange - create valid chain then modify content
       mockLogEntries = createValidHashChain(3);
-      // Modify the userId of the 2nd entry (which changes its hash)
-      mockLogEntries[1]!.userId = 'modified-user';
+      // Modify a non-PII field of the 2nd entry (which changes its hash)
+      mockLogEntries[1]!.operation = 'modified-operation';
 
       // Mock count query
       vi.mocked(db.select).mockReturnValue({
