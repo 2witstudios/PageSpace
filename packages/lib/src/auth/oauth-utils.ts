@@ -189,7 +189,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       emailVerified: Date | null;
       googleId: string;
       appleId: string;
-      provider: 'email' | 'google' | 'apple' | 'both';
+      provider: 'email' | 'google' | 'apple';
       name: string;
       image: string;
     }> = {
@@ -204,10 +204,8 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       updateData.appleId = providerId;
     }
 
-    // Update provider field
-    // If user has a password, they signed up with email, so mark as 'both'
-    // Otherwise, just use the OAuth provider
-    updateData.provider = user.password ? 'both' : providerDbValue;
+    // Update provider field to the OAuth provider
+    updateData.provider = providerDbValue;
 
     // Update name if missing
     if (!user.name) {
@@ -238,7 +236,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       email,
       emailVerified: emailVerified ? new Date() : null,
       image: picture || null,
-      provider: providerDbValue as 'email' | 'google' | 'apple' | 'both',
+      provider: providerDbValue as 'email' | 'google' | 'apple',
       tokenVersion: 0,
       role: 'user' as const,
       storageUsedBytes: 0,

@@ -151,7 +151,6 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null,
 };
 
 const createCallbackRequest = (params: Record<string, string>) => {

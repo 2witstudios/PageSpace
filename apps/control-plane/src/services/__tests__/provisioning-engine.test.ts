@@ -44,7 +44,6 @@ function makeMockSeeder() {
   return {
     seed: vi.fn().mockResolvedValue({
       email: 'owner@acme.com',
-      temporaryPassword: 'TempPass!',
       alreadyExisted: false,
     }),
   }
@@ -174,14 +173,13 @@ describe('ProvisioningEngine', () => {
       )
     })
 
-    test('given a valid request, should return seed result with email and temporaryPassword', async () => {
+    test('given a valid request, should return seed result with email', async () => {
       const deps = makeDeps()
       const engine = createProvisioningEngine(deps)
 
       const result = await engine.provision({ slug: 'acme', ownerEmail: 'owner@acme.com', tier: 'business' })
 
       expect(result.email).toBe('owner@acme.com')
-      expect(result.temporaryPassword).toBe('TempPass!')
     })
   })
 
@@ -371,7 +369,6 @@ describe('ProvisioningEngine', () => {
       expect(deps.sendProvisioningEmail).toHaveBeenCalledWith({
         loginUrl: 'https://acme.pagespace.ai',
         adminEmail: 'owner@acme.com',
-        temporaryPassword: 'TempPass!',
       })
     })
 
@@ -386,11 +383,10 @@ describe('ProvisioningEngine', () => {
       )
     })
 
-    test('given an existing admin user, should send email without temporaryPassword', async () => {
+    test('given an existing admin user, should still send provisioning email', async () => {
       const deps = makeDeps()
       ;(deps.seeder.seed as ReturnType<typeof vi.fn>).mockResolvedValue({
         email: 'owner@acme.com',
-        temporaryPassword: 'SomePass!',
         alreadyExisted: true,
       })
       const engine = createProvisioningEngine(deps)
@@ -473,7 +469,7 @@ describe('ProvisioningEngine', () => {
       const seeder = {
         seed: vi.fn().mockImplementation(async () => {
           callOrder.push('seed-admin')
-          return { email: 'owner@acme.com', temporaryPassword: 'pass', alreadyExisted: false }
+          return { email: 'owner@acme.com', alreadyExisted: false }
         }),
       }
 

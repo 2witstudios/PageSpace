@@ -9,7 +9,7 @@ export async function revokeSessionsForLogin(
   userId: string,
   deviceId: string | undefined,
   reason: string,
-  provider = 'password',
+  provider = 'email',
 ): Promise<number> {
   if (deviceId) {
     const count = await sessionService.revokeDeviceSessions(userId, deviceId, reason);

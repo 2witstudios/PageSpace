@@ -96,8 +96,8 @@ export function SessionSecuritySection() {
             <FeatureCard
               icon={Timer}
               title="Instant Revocation"
-              description="Sessions can be revoked immediately—no waiting for token expiration. Password changes invalidate all existing sessions."
-              items={["Revoke individual sessions or all sessions", "Token versioning on password change", "Admin role versioning prevents privilege escalation"]}
+              description="Sessions can be revoked immediately—no waiting for token expiration. Security actions invalidate all existing sessions."
+              items={["Revoke individual sessions or all sessions", "Token versioning for global session invalidation", "Admin role versioning prevents privilege escalation"]}
             />
           </div>
         </div>
@@ -207,7 +207,7 @@ export function AuthenticationSection() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold mb-4">Authentication</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Multiple secure authentication methods with strong password requirements and
+              Multiple secure passwordless authentication methods with
               OAuth integration.
             </p>
           </div>
@@ -215,9 +215,9 @@ export function AuthenticationSection() {
           <div className="grid md:grid-cols-2 gap-8">
             <FeatureCard
               icon={Lock}
-              title="Email & Password"
-              description="Strong password requirements with bcrypt hashing (cost factor 12)."
-              items={["Minimum 12 characters", "Uppercase, lowercase, and numbers required", "bcrypt with cost factor 12"]}
+              title="Passwordless Email"
+              description="Secure magic link authentication with rate limiting and one-time-use tokens."
+              items={["One-time-use tokens", "Configurable expiry", "Rate-limited delivery"]}
               small
             />
             <FeatureCard

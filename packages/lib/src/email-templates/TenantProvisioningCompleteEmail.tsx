@@ -15,13 +15,11 @@ import { emailStyles } from './shared-styles';
 interface TenantProvisioningCompleteEmailProps {
   adminEmail: string;
   loginUrl: string;
-  temporaryPassword?: string;
 }
 
 export function TenantProvisioningCompleteEmail({
   adminEmail,
   loginUrl,
-  temporaryPassword,
 }: TenantProvisioningCompleteEmailProps) {
   return (
     <Html>
@@ -39,13 +37,9 @@ export function TenantProvisioningCompleteEmail({
             <Text style={emailStyles.paragraph}>
               <strong>Login email:</strong> {adminEmail}
             </Text>
-            {temporaryPassword && (
-              <Text style={emailStyles.paragraph}>
-                <strong>Temporary password:</strong> {temporaryPassword}
-                <br />
-                Please change your password after your first login.
-              </Text>
-            )}
+            <Text style={emailStyles.paragraph}>
+              Sign in using a magic link sent to your email address.
+            </Text>
             <Section style={emailStyles.buttonContainer}>
               <Button style={emailStyles.button} href={loginUrl}>
                 Sign In to Your Environment

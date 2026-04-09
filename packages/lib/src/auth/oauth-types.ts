@@ -52,7 +52,7 @@ export interface MobileOAuthResponse {
     email: string;
     name: string;
     picture: string | null;
-    provider: 'email' | 'google' | 'apple' | 'both';
+    provider: 'email' | 'google' | 'apple';
     role: 'user' | 'admin';
     emailVerified: Date | null;
   };

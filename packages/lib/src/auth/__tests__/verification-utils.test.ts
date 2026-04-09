@@ -78,24 +78,6 @@ describe('verification-utils', () => {
       expect(db.insert).toHaveBeenCalledWith(verificationTokens);
     });
 
-    it('should use 60 minutes expiry for password_reset', async () => {
-      const mockDelete = vi.fn();
-      const mockInsertValues = vi.fn();
-      vi.mocked(db.delete).mockReturnValue({ where: mockDelete } as never);
-      vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
-
-      await createVerificationToken({
-        userId: 'user-1',
-        type: 'password_reset',
-      });
-
-      const insertCall = mockInsertValues.mock.calls[0][0];
-      const expiresAt = insertCall.expiresAt as Date;
-      const expectedExpiry = Date.now() + 60 * 60 * 1000;
-      // Within 5 seconds tolerance
-      expect(Math.abs(expiresAt.getTime() - expectedExpiry)).toBeLessThan(5000);
-    });
-
     it('should use 1440 minutes expiry for email_verification', async () => {
       const mockDelete = vi.fn();
       const mockInsertValues = vi.fn();
@@ -171,7 +153,7 @@ describe('verification-utils', () => {
       vi.mocked(db.query.verificationTokens.findFirst).mockResolvedValue({
         usedAt: null,
         expiresAt: new Date(Date.now() + 60000),
-        type: 'password_reset',
+        type: 'magic_link',
         userId: 'user-1',
         id: 'token-1',
         tokenHash: 'hash',

@@ -86,7 +86,6 @@ describe('Passkey Service', () => {
       id: createId(),
       name: 'Passkey Test User',
       email: testUserEmail,
-      password: 'hashed_password',
       provider: 'email',
       role: 'user',
       tokenVersion: 1,

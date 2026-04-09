@@ -15,11 +15,6 @@ describe('auth/constants', () => {
     expect(SESSION_DURATION_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
-  it('should export BCRYPT_COST as 12', async () => {
-    const { BCRYPT_COST } = await import('../constants');
-    expect(BCRYPT_COST).toBe(12);
-  });
-
   it('should return 0 for IDLE_TIMEOUT_MS in cloud mode (default)', async () => {
     delete process.env.DEPLOYMENT_MODE;
     delete process.env.SESSION_IDLE_TIMEOUT_MS;

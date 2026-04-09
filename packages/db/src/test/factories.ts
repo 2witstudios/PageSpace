@@ -2,7 +2,6 @@ import { faker } from '@faker-js/faker'
 import { createId } from '@paralleldrive/cuid2'
 import { users, drives, pages, chatMessages, pagePermissions, driveMembers } from '../schema'
 import { db } from '../index'
-import bcrypt from 'bcryptjs'
 
 export const factories = {
   async createUser(overrides?: Partial<typeof users.$inferInsert>) {
@@ -10,8 +9,6 @@ export const factories = {
       id: createId(),
       name: faker.person.fullName(),
       email: faker.internet.email(),
-      // Must match BCRYPT_COST (12) from @pagespace/lib/auth/constants — can't import due to circular dep (db ← lib)
-      password: await bcrypt.hash('password123', 12),
       emailVerified: new Date(),
       provider: 'email' as const,
       tokenVersion: 0,

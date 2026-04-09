@@ -74,7 +74,6 @@
     "@xyflow/react": "^12.10.0",
     "ai": "^5.0.54",
     "archiver": "^7.0.1",
-    "bcryptjs": "^3.0.2",
     "cheerio": "^1.1.2",
     "chrono-node": "^2.9.0",
     "class-variance-authority": "^0.7.1",

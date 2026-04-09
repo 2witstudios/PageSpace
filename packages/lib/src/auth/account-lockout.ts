@@ -176,7 +176,7 @@ export async function recordFailedLoginAttempt(
 
 /**
  * Record failed login attempt by email (before we know the userId).
- * Useful when the email exists but password is wrong.
+ * Useful when the email exists but authentication fails.
  */
 export async function recordFailedLoginAttemptByEmail(
   email: string

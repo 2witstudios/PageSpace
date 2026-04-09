@@ -72,7 +72,6 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
       tokenVersion: 1,
       role: 'user',
       provider: 'google',
-      password: null,
     }),
     findUserById: vi.fn().mockResolvedValue({
       id: 'user-123',
@@ -82,7 +81,6 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
       tokenVersion: 1,
       role: 'user',
       provider: 'google',
-      password: null,
     }),
     createUser: vi.fn(),
     updateUser: vi.fn().mockResolvedValue(undefined),

@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import bcrypt from 'bcryptjs';
 import { db, users, userAiSettings, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { BCRYPT_COST } from '@pagespace/lib/auth';
 import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -12,11 +10,6 @@ import { loggers } from '@pagespace/lib/server';
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.email(),
-  password: z.string()
-    .min(12, 'Password must be at least 12 characters long')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number'),
   role: z.enum(['user', 'admin']).default('user'),
 });
 
@@ -32,7 +25,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       );
     }
 
-    const { name, email, password, role } = parsed.data;
+    const { name, email, role } = parsed.data;
     const normalizedEmail = email.toLowerCase().trim();
 
     // Check for existing user
@@ -48,7 +41,6 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       );
     }
 
-    const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
     const userId = createId();
     const onPrem = isOnPrem();
 
@@ -56,7 +48,6 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       id: userId,
       name: name.trim(),
       email: normalizedEmail,
-      password: hashedPassword,
       role,
       emailVerified: new Date(), // Admin-created accounts are pre-verified
       ...(onPrem ? getOnPremUserDefaults() : { subscriptionTier: 'free' }),

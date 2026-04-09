@@ -101,7 +101,7 @@ export async function POST(req: Request) {
         loggers.auth.info('Updating existing user via native Apple OAuth', { email, platform });
         await authRepository.updateUser(user.id, {
           appleId: user.appleId || appleId,
-          provider: user.password ? 'both' : 'apple',
+          provider: 'apple',
           name: user.name || name || email.split('@')[0],
           emailVerified: emailVerified ? new Date() : user.emailVerified,
         });

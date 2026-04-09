@@ -30,7 +30,7 @@ export default function PrivacyPolicy() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Secure Cloud Storage:</strong> Your data is stored in our cloud infrastructure with access controls and security logging</li>
-              <li><strong>Authentication Security:</strong> Passwords are securely hashed using bcrypt, and sessions are managed with JWT tokens</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links, with sessions managed using opaque tokens</li>
               <li><strong>Data Protection:</strong> Sensitive information like API keys is encrypted using AES-256-GCM encryption. Note that document content and chat messages are stored as plain text to enable search functionality</li>
               <li><strong>Transparency:</strong> Clear information about how we handle your data and what security measures we implement</li>
             </ul>
@@ -43,7 +43,7 @@ export default function PrivacyPolicy() {
               Information we collect and store includes:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li>User account information (username, email, securely hashed password)</li>
+              <li>User account information (username, email)</li>
               <li>Pages, documents, and content you create (stored as plain text in our database)</li>
               <li>File organization and workspace structure</li>
               <li>Application settings and preferences</li>
@@ -101,7 +101,7 @@ export default function PrivacyPolicy() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Access Controls:</strong> Database access is restricted to authorized services and personnel, with all operations logged for security analysis</li>
-              <li><strong>Password Security:</strong> User passwords are securely hashed using bcrypt</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links</li>
               <li><strong>API Key Encryption:</strong> Personal AI service API keys are encrypted using AES-256-GCM</li>
               <li><strong>Connection Security:</strong> Database connections use secure protocols</li>
               <li><strong>Content Storage:</strong> Document content and chat messages are stored as plain text in our database to enable full-text search and collaboration features. This means content is not encrypted at rest in the database</li>
@@ -132,7 +132,7 @@ export default function PrivacyPolicy() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
-              <li><strong>Password Security:</strong> bcrypt hashing with salt rounds for user passwords</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication eliminates credential-based attack vectors</li>
               <li><strong>Session Management:</strong> JWT tokens with proper expiration and validation</li>
               <li><strong>API Key Protection:</strong> AES-256-GCM encryption for user-provided AI service keys</li>
               <li><strong>Database Access:</strong> Restricted access controls with comprehensive logging of operations, errors, and security events</li>
@@ -141,7 +141,7 @@ export default function PrivacyPolicy() {
               <li><strong>CSRF Protection:</strong> Built-in protection against cross-site request forgery</li>
             </ul>
             <p className="mb-4">
-              While we implement commercially reasonable security measures, no system is 100% secure. We encourage users to use strong passwords, enable two-factor authentication where available, and follow good security practices. You are responsible for maintaining backups of critical data.
+              While we implement commercially reasonable security measures, no system is 100% secure. We encourage users to register passkeys on their devices, use secure email accounts, and follow good security practices. You are responsible for maintaining backups of critical data.
             </p>
           </section>
 

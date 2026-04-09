@@ -42,10 +42,10 @@ Subsequent request → Hash cookie value → Look up hash in DB → Validate
 
 ## Authentication Providers
 
-### Email/Password
+### Magic Links
 
-Standard email/password authentication with:
-- **bcryptjs** hashing (10 salt rounds)
+Passwordless email authentication with:
+- Secure one-time-use tokens
 - Email verification
 - Rate-limited login attempts
 
@@ -77,7 +77,7 @@ Device tokens support automatic rotation:
 ### Version Control
 
 The \`tokenVersion\` field on the user record enables global session invalidation:
-- Changing your password increments \`tokenVersion\`
+- Security actions increment \`tokenVersion\`
 - All existing sessions are invalidated
 - "Log out all devices" increments \`tokenVersion\`
 
@@ -129,7 +129,6 @@ All authentication events are logged:
 - Signup events
 - Token refresh
 - Logout
-- Password changes
 - OAuth connections
 - MCP token creation/revocation
 
@@ -139,8 +138,7 @@ Logs include device information, IP address, and user agent for audit trails.
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| POST | \`/api/auth/signup\` | Register with email/password |
-| POST | \`/api/auth/login\` | Authenticate with email/password |
+| POST | \`/api/auth/magic-link\` | Send magic link email |
 | POST | \`/api/auth/logout\` | Invalidate session |
 | GET | \`/api/auth/me\` | Get current user |
 | POST | \`/api/auth/refresh\` | Refresh access token |

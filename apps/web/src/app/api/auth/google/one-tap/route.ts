@@ -135,7 +135,7 @@ export async function POST(req: Request) {
         loggers.auth.info('Updating existing user via Google One Tap', { email });
         await authRepository.updateUser(user.id, {
           googleId: googleId || user.googleId,
-          provider: user.password ? 'both' : 'google',
+          provider: 'google',
           name: user.name || userName,
           image: resolvedImage,
           emailVerified: email_verified ? new Date() : user.emailVerified,

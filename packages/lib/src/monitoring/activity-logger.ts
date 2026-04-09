@@ -282,6 +282,7 @@ export type ActivityOperation =
   | 'login'
   | 'logout'
   | 'signup'
+  /** @deprecated Historical only. Password auth removed. */
   | 'password_change'
   | 'email_change'
   | 'token_create'
@@ -1008,6 +1009,7 @@ export function logUserActivity(
     | 'signup'
     | 'login'
     | 'logout'
+    /** @deprecated Historical only. Password auth removed. */
     | 'password_change'
     | 'email_change'
     | 'profile_update'

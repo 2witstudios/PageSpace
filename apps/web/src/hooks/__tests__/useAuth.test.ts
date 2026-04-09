@@ -149,9 +149,6 @@ vi.mock('@/stores/useAuthStore', () => {
 // Import after mocks
 import { useAuth } from '../useAuth';
 
-type UseAuthReturn = ReturnType<typeof useAuth>;
-type LoginResult = Awaited<ReturnType<UseAuthReturn['actions']['login']>>;
-
 // Mock localStorage
 const mockLocalStorage = (() => {
   let store: Record<string, string> = {};
@@ -224,118 +221,6 @@ describe('useAuth', () => {
       const { result } = renderHook(() => useAuth());
 
       expect(result.current.isLoading).toBe(true);
-    });
-  });
-
-  describe('login', () => {
-    it('given valid credentials, should update store with user and return success', async () => {
-      const userData = { id: 'user-123', name: 'Test User', email: 'test@example.com' };
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(userData),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'password123');
-      });
-
-      // Primary: observable return value
-      expect(loginResult).toEqual({ success: true });
-      // Primary: observable state change - user is now set
-      expect(mockAuthStore.setUser).toHaveBeenCalledWith(userData);
-      // Verify state transition occurred
-      expect(mockAuthStore.user).toEqual(userData);
-      expect(mockAuthStore.isAuthenticated).toBe(true);
-    });
-
-    it('given invalid credentials, should return error without changing auth state', async () => {
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Invalid credentials' }),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'wrongpassword');
-      });
-
-      // Primary: observable error return
-      expect(loginResult).toEqual({ success: false, error: 'Invalid credentials' });
-      // Primary: state unchanged
-      expect(mockAuthStore.user).toBeNull();
-      expect(mockAuthStore.isAuthenticated).toBe(false);
-    });
-
-    it('given network error, should return generic error without changing auth state', async () => {
-      vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
-
-      const { result } = renderHook(() => useAuth());
-
-      let loginResult: LoginResult | undefined;
-      await act(async () => {
-        loginResult = await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Primary: observable error return
-      expect(loginResult).toEqual({ success: false, error: 'Network error. Please try again.' });
-      // Primary: state unchanged
-      expect(mockAuthStore.user).toBeNull();
-      consoleError.mockRestore();
-    });
-
-    it('given deviceToken in response, should persist to localStorage', async () => {
-      const userData = { id: 'user-123', deviceToken: 'device-token-abc' };
-      vi.mocked(global.fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(userData),
-      } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Observable: deviceToken persisted
-      expect(mockLocalStorage.setItem).toHaveBeenCalledWith('deviceToken', 'device-token-abc');
-    });
-
-    it('should include device information in login request body', async () => {
-      // Mock both CSRF fetch (first call) and login fetch (second call)
-      // Login now returns a deviceToken which gets stored in localStorage,
-      // preventing the lazy device registration effect from firing an extra fetch
-      vi.mocked(global.fetch)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ csrfToken: 'test-csrf-token' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ id: 'user-123', deviceToken: 'ps_dev_test123' }),
-        } as Response);
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.actions.login('test@example.com', 'password');
-      });
-
-      // Observable: API called with correct payload (parse JSON for accurate assertion)
-      // Note: calls[0] is CSRF token fetch, calls[1] is the login call
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      const [, init] = vi.mocked(global.fetch).mock.calls[1] ?? [];
-      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
-        deviceId?: string;
-        deviceName?: string;
-      };
-      expect(body.deviceId).toBe('device-123');
-      expect(body.deviceName).toBe('Test Device');
     });
   });
 

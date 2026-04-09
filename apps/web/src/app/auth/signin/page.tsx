@@ -12,7 +12,6 @@ import {
   OAuthButtons,
   GoogleOneTap,
   MagicLinkForm,
-  PasswordLoginForm,
   PasskeyLoginButton,
   ExternalAuthWaiting,
 } from "@/components/auth";
@@ -90,7 +89,7 @@ function SignInForm() {
     }
   }, [searchParams]);
 
-  // On-prem: password-only sign-in
+  // On-prem: magic link sign-in
   if (onPrem) {
     return (
       <AuthShell>
@@ -108,7 +107,7 @@ function SignInForm() {
           </p>
         </motion.div>
 
-        <PasswordLoginForm />
+        <MagicLinkForm />
       </AuthShell>
     );
   }

@@ -162,9 +162,6 @@ importers:
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2
-      bcryptjs:
-        specifier: ^3.0.2
-        version: 3.0.2
       dotenv:
         specifier: ^17.2.0
         version: 17.2.2
@@ -184,9 +181,6 @@ importers:
         specifier: ^20.1.0
         version: 20.1.0(@types/node@24.5.2)
     devDependencies:
-      '@types/bcryptjs':
-        specifier: ^2.4.6
-        version: 2.4.6
       drizzle-kit:
         specifier: ^0.23.2
         version: 0.23.2
@@ -341,7 +335,7 @@ importers:
         version: 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@remotion/tailwind':
         specifier: ^4.0.421
-        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.25.0))
+        version: 4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -741,9 +735,6 @@ importers:
       archiver:
         specifier: ^7.0.1
         version: 7.0.1
-      bcryptjs:
-        specifier: ^3.0.2
-        version: 3.0.2
       cheerio:
         specifier: ^1.1.2
         version: 1.1.2
@@ -956,15 +947,9 @@ importers:
         specifier: ^8.16.3
         version: 8.16.3
     devDependencies:
-      '@types/bcryptjs':
-        specifier: ^2.4.6
-        version: 2.4.6
       '@types/pg':
         specifier: ^8.15.4
         version: 8.15.5
-      bcryptjs:
-        specifier: ^3.0.2
-        version: 3.0.2
       drizzle-kit:
         specifier: ^0.23.2
         version: 0.23.2
@@ -5205,9 +5190,6 @@ packages:
   '@types/babel__traverse@7.28.0':
     resolution: {integrity: sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==}
 
-  '@types/bcryptjs@2.4.6':
-    resolution: {integrity: sha512-9xlo6R2qDs5uixm0bcIqCeMCE6HiQsIyel9KQySStiyqNl2tnj2mP3DX1Nf56MD6KMenNNlBBsy3LJ7gUEQPXQ==}
-
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
 
@@ -6141,10 +6123,6 @@ packages:
 
   baseline-browser-mapping@2.9.19:
     resolution: {integrity: sha512-ipDqC8FrAl/76p2SSWKSI+H9tFwm7vYqXQrItCuiVPt26Km0jS+NzSsBWAaBusvSbQcfJG+JitdMm+wZAgTYqg==}
-    hasBin: true
-
-  bcryptjs@3.0.2:
-    resolution: {integrity: sha512-k38b3XOZKv60C4E2hVsXTolJWfkGRMbILBIe2IBITXciy5bOsTKot5kDrf3ZfufQtQOUN5mXceUEpU1rTl9Uog==}
     hasBin: true
 
   big-integer@1.6.52:
@@ -15794,13 +15772,13 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.25.0))':
+  '@remotion/tailwind@4.0.423(@remotion/bundler@4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1))(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))':
     dependencies:
       '@remotion/bundler': 4.0.423(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       autoprefixer: 10.4.20(postcss@8.4.47)
       css-loader: 5.2.7(webpack@5.105.0(esbuild@0.25.0))
       postcss: 8.4.47
-      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.25.0))
+      postcss-loader: 7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12))
       postcss-preset-env: 8.5.1(postcss@8.4.47)
       style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
       tailwindcss: 3.4.13(ts-node@10.9.2(@types/node@20.19.17)(typescript@5.9.2))
@@ -16371,8 +16349,6 @@ snapshots:
   '@types/babel__traverse@7.28.0':
     dependencies:
       '@babel/types': 7.28.5
-
-  '@types/bcryptjs@2.4.6': {}
 
   '@types/body-parser@1.19.6':
     dependencies:
@@ -17489,8 +17465,6 @@ snapshots:
   baseline-browser-mapping@2.8.7: {}
 
   baseline-browser-mapping@2.9.19: {}
-
-  bcryptjs@3.0.2: {}
 
   big-integer@1.6.52: {}
 
@@ -22406,7 +22380,7 @@ snapshots:
       postcss: 8.5.6
       ts-node: 10.9.2(@types/node@20.19.17)(typescript@5.9.2)
 
-  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.25.0)):
+  postcss-loader@7.3.4(postcss@8.4.47)(typescript@5.9.2)(webpack@5.105.0(esbuild@0.19.12)):
     dependencies:
       cosmiconfig: 8.3.6(typescript@5.9.2)
       jiti: 1.21.7
