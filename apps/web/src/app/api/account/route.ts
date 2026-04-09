@@ -1,5 +1,5 @@
 import { users, db, eq } from '@pagespace/db';
-import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { loggers, accountRepository, activityLogRepository, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
@@ -99,6 +99,8 @@ export async function PATCH(req: Request) {
       targetUserEmail: updatedUser.email,
       updatedFields,
     }, actorInfo);
+
+    securityAudit.logDataAccess(userId, 'write', 'account', userId, { operation: 'profile_update', updatedFields }).catch(() => {});
 
     return Response.json({
       id: updatedUser.id,
@@ -260,6 +262,8 @@ export async function DELETE(req: Request) {
     await accountRepository.deleteUser(userId);
 
     loggers.auth.info(`User account deleted: ${userId}`);
+
+    securityAudit.logEvent({ eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId }).catch(() => {});
 
     return Response.json({ message: 'Account deleted successfully' }, { status: 200 });
   } catch (error) {
