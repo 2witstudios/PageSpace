@@ -4,7 +4,7 @@ import {
   unregisterPushToken,
   getUserPushTokens,
 } from '@pagespace/lib/notifications';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -61,6 +61,10 @@ export async function POST(req: Request) {
       deviceName,
       webPushSubscription
     );
+
+    securityAudit.logTokenCreated(userId, 'push_token').catch((error) => {
+      loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json({
       success: true,

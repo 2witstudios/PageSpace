@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { deleteNotification } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -17,6 +17,11 @@ export async function DELETE(
 
   try {
     await deleteNotification(id, userId);
+
+    securityAudit.logDataAccess(userId, 'delete', 'notification', id).catch((error) => {
+      loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting notification:', error as Error);
