@@ -1,8 +1,8 @@
 import { describe, it } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import { mapActivityLogToSiemEntry, mapActivityLogsToSiemEntries } from '../siem-event-mapper';
+import { mapActivityLogToSiemEntry, mapActivityLogsToSiemEntries, type ActivityLogSiemRow } from '../siem-event-mapper';
 
-const makeActivityLogRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+const makeActivityLogRow = (overrides: Partial<ActivityLogSiemRow> = {}): ActivityLogSiemRow => ({
   id: 'log_abc123',
   timestamp: new Date('2026-04-10T12:00:00Z'),
   userId: 'user_001',

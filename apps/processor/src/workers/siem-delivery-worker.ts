@@ -1,5 +1,5 @@
 import { loadSiemConfig, validateSiemConfig, deliverToSiemWithRetry } from '../services/siem-adapter';
-import { mapActivityLogsToSiemEntries } from '../services/siem-event-mapper';
+import { mapActivityLogsToSiemEntries, type ActivityLogSiemRow } from '../services/siem-event-mapper';
 import { getPoolForWorker } from '../db';
 
 const CURSOR_ID = 'activity_logs';
@@ -33,8 +33,21 @@ export async function processSiemDelivery(): Promise<void> {
 
   const pool = getPoolForWorker();
   const client = await pool.connect();
+  let lockAcquired = false;
 
   try {
+    // Acquire advisory lock to serialize cursor processing — prevents duplicate
+    // delivery when overlapping pg-boss invocations race on the same cursor.
+    const lockResult = await client.query(
+      'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+      [CURSOR_ID]
+    );
+    lockAcquired = Boolean(lockResult.rows[0]?.acquired);
+
+    if (!lockAcquired) {
+      return;
+    }
+
     // Read cursor position
     const cursorResult = await client.query(
       'SELECT "lastDeliveredId", "lastDeliveredAt", "deliveryCount" FROM siem_delivery_cursors WHERE id = $1',
@@ -79,12 +92,12 @@ export async function processSiemDelivery(): Promise<void> {
     }
 
     // Map and deliver
-    const entries = mapActivityLogsToSiemEntries(logsResult.rows as Record<string, unknown>[]);
+    const entries = mapActivityLogsToSiemEntries(logsResult.rows as unknown as ActivityLogSiemRow[]);
     const result = await deliverToSiemWithRetry(config, entries);
 
     // Advance cursor past any delivered entries (handles both full and partial delivery)
     if (result.entriesDelivered > 0) {
-      const lastDeliveredRow = logsResult.rows[result.entriesDelivered - 1] as Record<string, unknown>;
+      const lastDeliveredRow = logsResult.rows[result.entriesDelivered - 1] as unknown as ActivityLogSiemRow;
       const newCount = (cursor?.deliveryCount ?? 0) + result.entriesDelivered;
 
       await client.query(
@@ -97,7 +110,7 @@ export async function processSiemDelivery(): Promise<void> {
            "lastError" = NULL,
            "lastErrorAt" = NULL,
            "updatedAt" = NOW()`,
-        [CURSOR_ID, lastDeliveredRow.id as string, lastDeliveredRow.timestamp as Date, newCount]
+        [CURSOR_ID, lastDeliveredRow.id, lastDeliveredRow.timestamp, newCount]
       );
     }
 
@@ -118,8 +131,29 @@ export async function processSiemDelivery(): Promise<void> {
       console.error(`[siem-delivery] Delivery failed: ${result.error}${result.entriesDelivered > 0 ? ` (${result.entriesDelivered} entries delivered before failure)` : ''}`);
     }
   } catch (error) {
-    console.error('[siem-delivery] Worker error:', error instanceof Error ? error.message : error);
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Best-effort: persist the error so /health reflects the failure
+    try {
+      await client.query(
+        `INSERT INTO siem_delivery_cursors (id, "lastError", "lastErrorAt", "updatedAt")
+         VALUES ($1, $2, NOW(), NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           "lastError" = $2,
+           "lastErrorAt" = NOW(),
+           "updatedAt" = NOW()`,
+        [CURSOR_ID, message]
+      );
+    } catch {
+      // best-effort only — don't mask the original error
+    }
+
+    console.error('[siem-delivery] Worker error:', message);
+    throw error;
   } finally {
+    if (lockAcquired) {
+      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [CURSOR_ID]).catch(() => undefined);
+    }
     client.release();
   }
 }

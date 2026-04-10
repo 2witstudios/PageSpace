@@ -434,5 +434,10 @@ export const siemDeliveryCursors = pgTable('siem_delivery_cursors', {
   lastErrorAt: timestamp('lastErrorAt', { mode: 'date' }),
   deliveryCount: integer('deliveryCount').default(0).notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
-});
+}, (table) => ({
+  deliveredCursorPair: check(
+    'siem_delivery_cursors_delivered_cursor_pair',
+    sql`(${table.lastDeliveredId} IS NULL) = (${table.lastDeliveredAt} IS NULL)`
+  ),
+}));
 

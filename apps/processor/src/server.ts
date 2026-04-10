@@ -43,34 +43,46 @@ const corsOptions: cors.CorsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
-// Health check
+// SIEM cursor cache — refreshed in the background so /health never blocks on DB
+let siemCursorCache: { lastDeliveredAt: string | null; lastError: string | null; deliveryCount: number } | null = null;
+const SIEM_CACHE_TTL_MS = 15_000; // 15 seconds
+let siemCacheLastRefresh = 0;
+
+export async function refreshSiemCursorCache(): Promise<void> {
+  try {
+    const pool = getPoolForWorker();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'SELECT "lastDeliveredAt", "lastError", "deliveryCount" FROM siem_delivery_cursors WHERE id = $1',
+        ['activity_logs']
+      );
+      if (result.rows.length > 0) {
+        const row = result.rows[0] as Record<string, unknown>;
+        siemCursorCache = {
+          lastDeliveredAt: row.lastDeliveredAt ? String(row.lastDeliveredAt) : null,
+          lastError: (row.lastError as string | null) ?? null,
+          deliveryCount: (row.deliveryCount as number) ?? 0,
+        };
+      } else {
+        siemCursorCache = null;
+      }
+    } finally {
+      client.release();
+    }
+    siemCacheLastRefresh = Date.now();
+  } catch (err) {
+    console.debug('[health] SIEM cursor refresh failed (table may not exist yet):', err instanceof Error ? err.message : err);
+  }
+}
+
+// Health check — serves cached SIEM status to avoid blocking liveness probes on DB
 app.get('/health', async (req, res) => {
   const siemConfig = loadSiemConfig();
-  let siemCursor: { lastDeliveredAt: string | null; lastError: string | null; deliveryCount: number } | null = null;
 
-  if (siemConfig.enabled) {
-    try {
-      const pool = getPoolForWorker();
-      const client = await pool.connect();
-      try {
-        const result = await client.query(
-          'SELECT "lastDeliveredAt", "lastError", "deliveryCount" FROM siem_delivery_cursors WHERE id = $1',
-          ['activity_logs']
-        );
-        if (result.rows.length > 0) {
-          const row = result.rows[0] as Record<string, unknown>;
-          siemCursor = {
-            lastDeliveredAt: row.lastDeliveredAt ? String(row.lastDeliveredAt) : null,
-            lastError: (row.lastError as string | null) ?? null,
-            deliveryCount: (row.deliveryCount as number) ?? 0,
-          };
-        }
-      } finally {
-        client.release();
-      }
-    } catch (err) {
-      console.debug('[health] SIEM cursor query failed (table may not exist yet):', err instanceof Error ? err.message : err);
-    }
+  // Trigger a non-blocking background refresh if cache is stale
+  if (siemConfig.enabled && Date.now() - siemCacheLastRefresh > SIEM_CACHE_TTL_MS) {
+    refreshSiemCursorCache().catch(() => undefined);
   }
 
   res.json({
@@ -85,7 +97,7 @@ app.get('/health', async (req, res) => {
     siem: {
       enabled: siemConfig.enabled,
       type: siemConfig.type,
-      ...(siemCursor && { cursor: siemCursor }),
+      ...(siemCursorCache && { cursor: siemCursorCache }),
     },
   });
 });

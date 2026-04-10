@@ -767,19 +767,31 @@ describe('GET /health', () => {
     expect(siem.cursor).toBeUndefined();
   });
 
-  it('should include siem.cursor when SIEM is enabled and cursor exists', async () => {
+  it('should include siem.cursor when SIEM is enabled and cache is pre-warmed', async () => {
     const { loadSiemConfig } = await import('../services/siem-adapter');
     const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
 
     const mockRelease = vi.fn();
     const mockQuery = vi.fn().mockResolvedValue({
       rows: [{ lastDeliveredAt: new Date('2026-04-10T12:00:00Z'), lastError: null, deliveryCount: 42 }],
       rowCount: 1,
     });
-    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({ enabled: true, type: 'webhook' });
     (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce({
       connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
     });
+
+    // Pre-warm the cache (health endpoint serves cached data, never blocks on DB)
+    await refreshSiemCursorCache();
+
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining('FROM siem_delivery_cursors'),
+      ['activity_logs'],
+    );
+    expect(mockRelease).toHaveBeenCalled();
+
+    // Now call health with SIEM enabled — should serve from cache
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({ enabled: true, type: 'webhook' });
 
     const { req, res, jsonMock } = makeReqRes();
     await getHealthHandler()(req, res);
@@ -790,7 +802,6 @@ describe('GET /health', () => {
     expect(siem.cursor).toBeDefined();
     expect(siem.cursor.deliveryCount).toBe(42);
     expect(siem.cursor.lastError).toBeNull();
-    expect(mockRelease).toHaveBeenCalled();
   });
 });
 

@@ -34,6 +34,16 @@ vi.mock('../../db', () => ({
 
 import { processSiemDelivery } from '../siem-delivery-worker';
 
+/** Stub the advisory lock as acquired (default path for most tests) */
+function stubLockAcquired() {
+  mockQuery.mockResolvedValueOnce({ rows: [{ acquired: true }], rowCount: 1 });
+}
+
+/** Stub the advisory unlock (resolves at end of every successful path) */
+function stubLockRelease() {
+  mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+}
+
 describe('processSiemDelivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,6 +83,35 @@ describe('processSiemDelivery', () => {
     });
   });
 
+  it('skips processing when advisory lock is not acquired', async () => {
+    const config = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: { url: 'https://siem.example.com', secret: 's3cret', batchSize: 100, retryAttempts: 3 },
+    };
+    mockLoadSiemConfig.mockReturnValue(config);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    // Lock NOT acquired (another worker holds it)
+    mockQuery.mockResolvedValueOnce({ rows: [{ acquired: false }], rowCount: 1 });
+
+    await processSiemDelivery();
+
+    assert({
+      given: 'advisory lock not acquired',
+      should: 'only issue the lock query (no cursor/logs queries)',
+      actual: mockQuery.mock.calls.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'advisory lock not acquired',
+      should: 'not attempt delivery',
+      actual: mockDeliverToSiemWithRetry.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   it('successful delivery updates cursor', async () => {
     const config = {
       enabled: true,
@@ -82,10 +121,13 @@ describe('processSiemDelivery', () => {
     mockLoadSiemConfig.mockReturnValue(config);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
-    // Cursor query returns no previous cursor
+    // 1. Lock acquired
+    stubLockAcquired();
+
+    // 2. Cursor query returns no previous cursor
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-    // Activity logs query returns 2 rows
+    // 3. Activity logs query returns 2 rows
     const rows = [
       {
         id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
@@ -109,8 +151,11 @@ describe('processSiemDelivery', () => {
     // Delivery succeeds
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
 
-    // Cursor upsert
+    // 4. Cursor upsert
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    // 5. Advisory unlock in finally
+    stubLockRelease();
 
     await processSiemDelivery();
 
@@ -135,8 +180,8 @@ describe('processSiemDelivery', () => {
       expected: 2,
     });
 
-    // The 3rd query call is the cursor advance (clears error state)
-    const upsertCall = mockQuery.mock.calls[2];
+    // The 4th query call (index 3) is the cursor advance (after lock, cursor read, logs read)
+    const upsertCall = mockQuery.mock.calls[3];
     const upsertSql = upsertCall[0] as string;
 
     assert({
@@ -170,10 +215,13 @@ describe('processSiemDelivery', () => {
     mockLoadSiemConfig.mockReturnValue(config);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
-    // Cursor query returns no previous cursor
+    // 1. Lock acquired
+    stubLockAcquired();
+
+    // 2. Cursor query returns no previous cursor
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-    // Activity logs query returns 1 row
+    // 3. Activity logs query returns 1 row
     mockQuery.mockResolvedValueOnce({
       rows: [{
         id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
@@ -191,20 +239,23 @@ describe('processSiemDelivery', () => {
       success: false, entriesDelivered: 0, error: 'HTTP 502: Bad Gateway',
     });
 
-    // Error cursor upsert (only query after the 2 reads — no cursor advance)
+    // 4. Error cursor upsert (only query after the 3 reads — no cursor advance)
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    // 5. Advisory unlock
+    stubLockRelease();
 
     await processSiemDelivery();
 
-    // Only 3 queries: cursor read, logs read, error upsert (no cursor advance)
+    // 5 queries: lock, cursor read, logs read, error upsert, unlock
     assert({
       given: 'failed delivery with 0 entries delivered',
-      should: 'issue exactly 3 queries (no cursor advance)',
+      should: 'issue exactly 5 queries (lock + cursor + logs + error + unlock)',
       actual: mockQuery.mock.calls.length,
-      expected: 3,
+      expected: 5,
     });
 
-    const errorUpdateCall = mockQuery.mock.calls[2];
+    const errorUpdateCall = mockQuery.mock.calls[3];
     assert({
       given: 'failed delivery with 0 entries delivered',
       should: 'record the error message',
@@ -222,10 +273,13 @@ describe('processSiemDelivery', () => {
     mockLoadSiemConfig.mockReturnValue(config);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
-    // No existing cursor
+    // 1. Lock acquired
+    stubLockAcquired();
+
+    // 2. No existing cursor
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-    // Activity logs returns 3 rows
+    // 3. Activity logs returns 3 rows
     const rows = [
       {
         id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
@@ -259,23 +313,25 @@ describe('processSiemDelivery', () => {
       success: false, entriesDelivered: 2, error: 'TCP connection reset',
     });
 
-    // Cursor advance upsert
+    // 4. Cursor advance upsert
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    // Error upsert
+    // 5. Error upsert
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    // 6. Advisory unlock
+    stubLockRelease();
 
     await processSiemDelivery();
 
-    // 4 queries: cursor read, logs read, cursor advance, error upsert
+    // 6 queries: lock, cursor read, logs read, cursor advance, error upsert, unlock
     assert({
       given: 'partial delivery (2 of 3)',
-      should: 'issue 4 queries (cursor advance + error)',
+      should: 'issue 6 queries (lock + cursor + logs + advance + error + unlock)',
       actual: mockQuery.mock.calls.length,
-      expected: 4,
+      expected: 6,
     });
 
-    // Cursor advance is at index 2 — should point to log_2 (2nd row, index 1)
-    const advanceCall = mockQuery.mock.calls[2];
+    // Cursor advance is at index 3 — should point to log_2 (2nd row, index 1)
+    const advanceCall = mockQuery.mock.calls[3];
     assert({
       given: 'partial delivery of 2 entries',
       should: 'advance cursor to the last delivered entry (log_2)',
@@ -283,8 +339,8 @@ describe('processSiemDelivery', () => {
       expected: 'log_2',
     });
 
-    // Error upsert is at index 3
-    const errorCall = mockQuery.mock.calls[3];
+    // Error upsert is at index 4
+    const errorCall = mockQuery.mock.calls[4];
     assert({
       given: 'partial delivery failure',
       should: 'record the error message',
@@ -302,14 +358,20 @@ describe('processSiemDelivery', () => {
     mockLoadSiemConfig.mockReturnValue(config);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
-    // Cursor with existing position
+    // 1. Lock acquired
+    stubLockAcquired();
+
+    // 2. Cursor with existing position
     mockQuery.mockResolvedValueOnce({
       rows: [{ lastDeliveredId: 'log_99', lastDeliveredAt: new Date('2026-04-10T11:00:00Z'), deliveryCount: 50 }],
       rowCount: 1,
     });
 
-    // Activity logs returns nothing new
+    // 3. Activity logs returns nothing new
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    // 4. Advisory unlock
+    stubLockRelease();
 
     await processSiemDelivery();
 
@@ -330,18 +392,26 @@ describe('processSiemDelivery', () => {
     mockLoadSiemConfig.mockReturnValue(config);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
+    // 1. Lock acquired
+    stubLockAcquired();
+
+    // 2. Existing cursor
     const cursorTimestamp = new Date('2026-04-10T11:00:00Z');
     mockQuery.mockResolvedValueOnce({
       rows: [{ lastDeliveredId: 'log_99', lastDeliveredAt: cursorTimestamp, deliveryCount: 50 }],
       rowCount: 1,
     });
 
+    // 3. No new logs
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    // 4. Advisory unlock
+    stubLockRelease();
 
     await processSiemDelivery();
 
-    // The 2nd query is the activity_logs fetch
-    const logsQuery = mockQuery.mock.calls[1];
+    // The 3rd query (index 2) is the activity_logs fetch
+    const logsQuery = mockQuery.mock.calls[2];
     const sql = logsQuery[0] as string;
     const params = logsQuery[1] as unknown[];
 
@@ -367,7 +437,7 @@ describe('processSiemDelivery', () => {
     });
   });
 
-  it('releases the pool client even on error', async () => {
+  it('releases pool client and advisory lock even on error', async () => {
     mockLoadSiemConfig.mockReturnValue({
       enabled: true,
       type: 'webhook',
@@ -375,16 +445,83 @@ describe('processSiemDelivery', () => {
     });
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
+    // Lock acquired
+    stubLockAcquired();
+
     // Cursor query throws
     mockQuery.mockRejectedValueOnce(new Error('connection reset'));
 
-    await processSiemDelivery();
+    // Best-effort error upsert (in catch block)
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    // Advisory unlock in finally
+    stubLockRelease();
+
+    // Worker now rethrows — expect the error to propagate
+    let thrownError: Error | null = null;
+    try {
+      await processSiemDelivery();
+    } catch (err) {
+      thrownError = err as Error;
+    }
+
+    assert({
+      given: 'a database error',
+      should: 'rethrow the error for pg-boss failure tracking',
+      actual: thrownError?.message,
+      expected: 'connection reset',
+    });
 
     assert({
       given: 'a database error',
       should: 'release the pool client',
       actual: mockRelease.mock.calls.length,
       expected: 1,
+    });
+
+    // Verify best-effort error upsert was attempted (index 2 = after lock + failed cursor)
+    const errorUpsertCall = mockQuery.mock.calls[2];
+    assert({
+      given: 'a database error',
+      should: 'attempt best-effort error persistence',
+      actual: (errorUpsertCall[0] as string).includes('siem_delivery_cursors'),
+      expected: true,
+    });
+  });
+
+  it('acquires advisory lock before reading cursor', async () => {
+    const config = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: { url: 'https://siem.example.com', secret: 's3cret', batchSize: 100, retryAttempts: 3 },
+    };
+    mockLoadSiemConfig.mockReturnValue(config);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    // Lock acquired
+    stubLockAcquired();
+
+    // Cursor + no rows + unlock
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    // First query should be the advisory lock
+    const lockQuery = mockQuery.mock.calls[0];
+    assert({
+      given: 'a valid SIEM config',
+      should: 'acquire advisory lock as the first DB operation',
+      actual: (lockQuery[0] as string).includes('pg_try_advisory_lock'),
+      expected: true,
+    });
+
+    assert({
+      given: 'a valid SIEM config',
+      should: 'use CURSOR_ID as lock key via hashtext',
+      actual: (lockQuery[1] as unknown[])[0],
+      expected: 'activity_logs',
     });
   });
 });
