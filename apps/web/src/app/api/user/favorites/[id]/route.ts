@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, favorites, eq, and } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -14,6 +14,10 @@ export async function DELETE(
   const userId = auth.userId;
 
   const { id } = await context.params;
+
+  securityAudit.logDataAccess(userId, 'delete', 'favorite', id).catch((error) => {
+    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   try {
     const favorite = await db.query.favorites.findFirst({

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, favorites, eq, and, inArray } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -9,6 +9,10 @@ export async function PATCH(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  securityAudit.logDataAccess(userId, 'write', 'favorites', userId, { action: 'reorder' }).catch((error) => {
+    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   try {
     const body = await req.json();
