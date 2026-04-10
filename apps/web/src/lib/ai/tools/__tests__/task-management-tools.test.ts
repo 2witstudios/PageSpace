@@ -28,9 +28,17 @@ vi.mock('@pagespace/db', () => ({
   asc: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-}));
+vi.mock('@pagespace/lib/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/server')>();
+  return {
+    ...actual,
+    canUserEditPage: vi.fn(),
+    canUserViewPage: vi.fn(),
+    getUserDriveAccess: vi.fn(),
+    logPageActivity: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com' }),
+  };
+});
 
 vi.mock('@pagespace/lib', () => ({
   getDefaultContent: vi.fn(() => ''),
