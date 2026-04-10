@@ -9,6 +9,7 @@ import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
 import {
   loggers,
+  securityAudit,
   grantPagePermission,
   revokePagePermission,
 } from '@pagespace/lib/server';
@@ -119,6 +120,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       ctx.userId
     );
 
+    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId, canView, canEdit } })?.catch(() => {});
+
     // Fetch permission details for response
     const page = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
@@ -185,6 +188,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
         {},
         ctx.userId
       );
+
+      securityAudit.logEvent({ eventType: 'authz.permission.revoked', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId } })?.catch(() => {});
 
       // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
       await Promise.all([

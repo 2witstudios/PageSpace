@@ -11,6 +11,10 @@ import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace
 // ============================================================================
 
 vi.mock('@pagespace/lib/server', () => ({
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
   checkDriveAccessForRoles: vi.fn(),
   getRoleById: vi.fn(),
   updateDriveRole: vi.fn(),
