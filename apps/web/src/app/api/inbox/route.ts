@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, getBatchPagePermissions } from '@pagespace/lib/server';
+import { loggers, getBatchPagePermissions, securityAudit } from '@pagespace/lib/server';
 import type { InboxItem, InboxResponse } from '@pagespace/lib';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -15,6 +15,10 @@ export async function GET(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    securityAudit.logDataAccess(userId, 'read', 'inbox', userId).catch((error) => {
+      loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     const { searchParams } = new URL(request.url);
     const limit = parseBoundedIntParam(searchParams.get('limit'), {
