@@ -135,7 +135,7 @@ export async function POST(req: Request) {
         ip: clientIP,
         email: email.substring(0, 3) + '***',
       });
-      securityAudit.logAuthFailure(email || 'unknown', clientIP, `passkey_signup_${result.error.code.toLowerCase()}`).catch((error) => {
+      securityAudit.logAuthFailure('unknown', clientIP, `passkey_signup_${result.error.code.toLowerCase()}`).catch((error) => {
         loggers.security.warn('[SignupPasskey] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
       });
 

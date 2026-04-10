@@ -194,7 +194,7 @@ export async function POST(req: Request) {
         isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
-      securityAudit.logDataAccess(normalizedEmail, 'write', 'magic_link', normalizedEmail).catch((error) => {
+      securityAudit.logDataAccess('anonymous', 'write', 'magic_link', 'magic_link_request').catch((error) => {
         loggers.security.warn('[MagicLinkSend] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error) });
       });
     } catch (error) {
