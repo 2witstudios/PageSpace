@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
@@ -105,6 +105,10 @@ export async function GET(
     // Reverse messages to show oldest first
     messages.reverse();
 
+    securityAudit.logDataAccess(userId, 'read', 'message', conversationId).catch((error) => {
+      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+
     return NextResponse.json({ messages });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
@@ -179,6 +183,10 @@ export async function POST(
         content,
       })
       .returning();
+
+    securityAudit.logDataAccess(userId, 'write', 'message', newMessage.id).catch((error) => {
+      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Update conversation's last message info
     const messagePreview = content.length > 100
@@ -305,6 +313,10 @@ export async function PATCH(
       .update(dmConversations)
       .set(updateField)
       .where(eq(dmConversations.id, conversationId));
+
+    securityAudit.logDataAccess(userId, 'write', 'message', conversationId, { operation: 'mark_read' }).catch((error) => {
+      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
