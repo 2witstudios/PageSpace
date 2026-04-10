@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { getConnectionById, listGrantsByConnection } from '@pagespace/lib/integrations';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
@@ -53,9 +53,7 @@ export async function GET(
       createdAt: g.createdAt,
     }));
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'oauth_grant', connectionId, { grantCount: safeGrants.length }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
-    });
+    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'oauth_grant', connectionId, { grantCount: safeGrants.length }), auth.userId);
 
     return NextResponse.json({ grants: safeGrants, total: safeGrants.length });
   } catch (error) {

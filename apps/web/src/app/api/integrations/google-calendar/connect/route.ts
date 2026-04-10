@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { db, users, eq } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import crypto from 'crypto';
@@ -117,12 +117,7 @@ export async function POST(req: Request) {
       clientIP,
     });
 
-    securityAudit.logTokenCreated(userId, 'google_calendar', clientIP).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
-    securityAudit.logDataAccess(userId, 'write', 'calendar_connection', userId, { operation: 'oauth_initiated' }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_connection', userId, { operation: 'oauth_initiated' }), userId);
 
     return Response.json({ url: oauthUrl });
   } catch (error) {

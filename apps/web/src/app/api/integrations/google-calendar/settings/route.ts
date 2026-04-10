@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -49,9 +49,7 @@ export async function GET(request: Request) {
         )
       );
 
-    securityAudit.logDataAccess(userId, 'read', 'calendar_settings', userId).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
+    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_settings', userId), userId);
 
     return NextResponse.json({
       settings: {
@@ -118,9 +116,7 @@ export async function PATCH(request: Request) {
 
     loggers.api.info('Google Calendar settings updated', { userId, updates });
 
-    securityAudit.logDataAccess(userId, 'write', 'calendar_settings', userId, { operation: 'update' }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_settings', userId, { operation: 'update' }), userId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

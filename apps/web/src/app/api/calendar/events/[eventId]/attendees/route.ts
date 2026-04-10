@@ -7,7 +7,7 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, securityAudit } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { isUserDriveMember } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -278,9 +278,7 @@ export async function POST(
       attendeeIds: newUserIds,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'calendar_attendees', eventId, { operation: 'add_attendees', addedCount: newUserIds.length }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_attendees', eventId, { operation: 'add_attendees', addedCount: newUserIds.length }), userId);
 
     return NextResponse.json({ attendees });
   } catch (error) {
@@ -483,9 +481,7 @@ export async function DELETE(
       attendeeIds: [targetUserId],
     });
 
-    securityAudit.logDataAccess(userId, 'delete', 'calendar_attendees', eventId, { operation: 'remove_attendee', targetUserId }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
-    });
+    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_attendees', eventId, { operation: 'remove_attendee', targetUserId }), userId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

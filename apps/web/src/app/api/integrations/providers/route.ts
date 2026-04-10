@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -74,9 +74,7 @@ export async function GET(request: Request) {
       createdAt: p.createdAt,
     }));
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', 'list', { providerCount: safeProviders.length }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
-    });
+    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', 'list', { providerCount: safeProviders.length }), auth.userId);
 
     return NextResponse.json({ providers: safeProviders });
   } catch (error) {
@@ -126,9 +124,7 @@ export async function POST(request: Request) {
       enabled: true,
     });
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', provider.id, { slug, providerType, operation: 'create' }).catch((err) => {
-      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
-    });
+    auditSafe(securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', provider.id, { slug, providerType, operation: 'create' }), auth.userId);
 
     return NextResponse.json({ provider }, { status: 201 });
   } catch (error) {
