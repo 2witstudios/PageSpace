@@ -27,8 +27,11 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-5': true,
   'gpt-5-mini': true,
   'gpt-5-nano': true,
-  'gpt-5-2025-08-07': true,
-  'gpt-5-chat-latest': true,
+
+  // OpenAI GPT-4.1 Models (all have vision)
+  'gpt-4.1-2025-04-14': true,
+  'gpt-4.1-mini-2025-04-14': true,
+  'gpt-4.1-nano-2025-04-14': true,
 
   // OpenAI GPT-4o Models with Vision
   'gpt-4o': true,
@@ -44,8 +47,15 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'claude-sonnet-4-6-20260217': true,
   'claude-opus-4.6': true,
   'claude-sonnet-4.6': true,
+  'claude-opus-4-5-20251124': true,
+  'claude-sonnet-4-5-20250929': true,
+  'claude-haiku-4-5-20251001': true,
+  'claude-opus-4.5': true,
+  'claude-sonnet-4.5': true,
+  'claude-haiku-4.5': true,
   'claude-opus-4-1-20250805': true,
   'claude-sonnet-4-1-20250805': true,
+  'claude-opus-4.1': true,
   'claude-3-7-sonnet-20250219': true,
   'claude-3-5-sonnet-20241022': true,
   'claude-3-5-sonnet-20240620': true,
@@ -53,9 +63,6 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'claude-3-opus-20240229': true,
   'claude-3-sonnet-20240229': true,
   'claude-3-haiku-20240307': true,
-  'claude-3.5-sonnet': true,
-  'claude-3-haiku': true,
-  'claude-opus-4.1': true,
 
   // Google Gemini (all versions support vision)
   'gemini-3.1-pro-preview': true,
@@ -73,6 +80,9 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   // xAI Grok Vision models
   'grok-4': true,
   'grok-4-fast': true,
+  'grok-4-fast-reasoning': true,
+  'grok-4-fast-non-reasoning': true,
+  'grok-code-fast-1': true,
   'grok-2-vision': true,
   'grok-2-vision-latest': true,
   'grok-2-vision-1212': true,
@@ -133,11 +143,13 @@ export function hasVisionCapability(model: string): boolean {
     return true;
   }
 
-  if (lowerModel.includes('gpt-4o')) {
+  if (lowerModel.includes('gpt-4o') || lowerModel.includes('gpt-4.1')) {
     return true;
   }
 
-  if (lowerModel.includes('claude-3') || lowerModel.includes('claude-4')) {
+  if (lowerModel.includes('claude-3') || lowerModel.includes('claude-4') ||
+      lowerModel.includes('claude-opus-4') || lowerModel.includes('claude-sonnet-4') ||
+      lowerModel.includes('claude-haiku-4')) {
     return true;
   }
 
@@ -158,7 +170,7 @@ export function hasVisionCapability(model: string): boolean {
 export function getSuggestedVisionModels(): string[] {
   return [
     'gpt-4o-mini',
-    'claude-3-haiku',
+    'claude-3-haiku-20240307',
     'gemini-2.5-flash',
   ];
 }
