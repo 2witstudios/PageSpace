@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, files, filePages, eq } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, loggers, securityAudit } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -203,6 +203,10 @@ export async function POST(
     await updateStorageUsage(userId, file.size, {
       driveId,
       eventType: 'upload'
+    });
+
+    securityAudit.logDataAccess(userId, 'write', 'channel_upload', contentHash).catch((error) => {
+      loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     // Log activity
