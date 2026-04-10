@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { checkRateLimit } from '@pagespace/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -60,6 +60,11 @@ export async function POST(request: Request) {
       aborted: result.aborted,
       reason: result.reason,
     });
+
+    securityAudit.logDataAccess(userId, 'write', 'ai_chat_stream', streamId, {
+      action: 'abort',
+      aborted: result.aborted,
+    }).catch(() => {});
 
     return NextResponse.json(result);
   } catch (error) {

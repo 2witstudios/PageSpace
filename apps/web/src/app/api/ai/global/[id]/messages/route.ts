@@ -39,7 +39,7 @@ import {
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -166,6 +166,10 @@ export async function GET(
     const prevCursor = orderedMessages.length > 0
       ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
       : null;
+
+    securityAudit.logDataAccess(userId, 'read', 'global_chat_message', id, {
+      action: 'list_messages',
+    }).catch(() => {});
 
     return NextResponse.json({
       messages: uiMessages,
@@ -325,6 +329,10 @@ export async function POST(
           toolResults: undefined,
           uiMessage: userMessage, // Pass UIMessage to preserve part ordering
         });
+
+        securityAudit.logDataAccess(userId, 'write', 'global_chat_message', conversationId, {
+          action: 'chat_message',
+        }).catch(() => {});
 
         // Update conversation lastMessageAt and auto-generate title if needed
         const updateData: {

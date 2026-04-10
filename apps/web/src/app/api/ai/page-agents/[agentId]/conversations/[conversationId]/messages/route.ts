@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage, loggers, securityAudit } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 // Auth options: GET is read-only operation
@@ -161,6 +160,11 @@ export async function GET(
     const prevCursor = orderedMessages.length > 0
       ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
       : null;
+
+    securityAudit.logDataAccess(auth.userId, 'read', 'page_agent_message', conversationId, {
+      action: 'list_messages',
+      agentId,
+    }).catch(() => {});
 
     return NextResponse.json({
       messages,

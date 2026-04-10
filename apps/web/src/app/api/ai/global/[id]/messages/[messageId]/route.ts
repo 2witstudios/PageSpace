@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
@@ -83,6 +83,11 @@ export async function PATCH(
       conversationId: maskIdentifier(conversationId)
     });
 
+    securityAudit.logDataAccess(userId, 'write', 'global_chat_message', messageId, {
+      action: 'edit_message',
+      conversationId,
+    }).catch(() => {});
+
     return NextResponse.json({
       success: true,
       message: 'Message updated successfully'
@@ -157,6 +162,11 @@ export async function DELETE(
       messageId: maskIdentifier(messageId),
       conversationId: maskIdentifier(conversationId)
     });
+
+    securityAudit.logDataAccess(userId, 'delete', 'global_chat_message', messageId, {
+      action: 'delete_message',
+      conversationId,
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

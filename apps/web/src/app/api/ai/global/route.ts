@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -48,11 +48,20 @@ export async function GET(request: Request) {
         cursor,
         direction,
       });
+      securityAudit.logDataAccess(userId, 'read', 'global_chat', 'list', {
+        action: 'list_conversations',
+      }).catch(() => {});
+
       return NextResponse.json(result);
     } else {
       // Legacy response format (array of all conversations)
       // Still supported for backward compatibility
       const userConversations = await globalConversationRepository.listConversations(userId);
+
+      securityAudit.logDataAccess(userId, 'read', 'global_chat', 'list', {
+        action: 'list_conversations',
+      }).catch(() => {});
+
       return NextResponse.json(userConversations);
     }
   } catch (error) {
@@ -80,6 +89,10 @@ export async function POST(request: Request) {
       type,
       contextId,
     });
+
+    securityAudit.logDataAccess(userId, 'write', 'global_chat', newConversation.id, {
+      action: 'create_conversation',
+    }).catch(() => {});
 
     return NextResponse.json(newConversation);
   } catch (error) {

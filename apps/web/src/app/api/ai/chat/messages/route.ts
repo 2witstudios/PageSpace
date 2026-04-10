@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { loggers, securityAudit, canUserViewPage } from '@pagespace/lib/server';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // Auth options: GET is read-only operation
@@ -45,6 +44,11 @@ export async function GET(request: Request) {
 
     // Convert to UIMessage format with tool calls and results
     const messages = dbMessages.map(convertDbMessageToUIMessage);
+
+    securityAudit.logDataAccess(auth.userId, 'read', 'ai_chat_message', pageId, {
+      action: 'list_messages',
+      conversationId: conversationId || undefined,
+    }).catch(() => {});
 
     return NextResponse.json(messages);
 

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { canUserEditPage, loggers, securityAudit } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   chatMessageRepository,
@@ -99,6 +99,12 @@ export async function PATCH(
       conversationId: maskIdentifier(conversationId),
     });
 
+    securityAudit.logDataAccess(userId, 'write', 'page_agent_message', messageId, {
+      action: 'edit_message',
+      agentId,
+      conversationId,
+    }).catch(() => {});
+
     return NextResponse.json({
       success: true,
       message: 'Message updated successfully',
@@ -187,6 +193,12 @@ export async function DELETE(
       agentId: maskIdentifier(agentId),
       conversationId: maskIdentifier(conversationId),
     });
+
+    securityAudit.logDataAccess(userId, 'delete', 'page_agent_message', messageId, {
+      action: 'delete_message',
+      agentId,
+      conversationId,
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

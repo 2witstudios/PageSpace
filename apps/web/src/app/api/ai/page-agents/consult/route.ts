@@ -16,7 +16,7 @@ import {
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 /**
  * Format tool execution results into human-readable text
@@ -456,6 +456,10 @@ export async function POST(request: Request) {
       responseLength: responseText.length,
       userId
     });
+
+    securityAudit.logDataAccess(userId, 'write', 'page_agent', agentId, {
+      action: 'consult_agent',
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,
