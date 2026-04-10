@@ -43,18 +43,22 @@ export function CalendarSidebar({
       </div>
 
       {calendars.map((cal) => (
-        <label
+        <div
           key={cal.key}
+          role="button"
+          tabIndex={0}
+          onClick={() => onToggle(cal.key)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(cal.key); } }}
           className={cn(
             'flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer transition-colors',
             'hover:bg-muted/50',
             !cal.visible && 'opacity-50'
           )}
         >
-          <button
+          <span
             role="checkbox"
             aria-checked={cal.visible}
-            onClick={() => onToggle(cal.key)}
+            aria-label={`Toggle ${cal.name}`}
             className={cn(
               'size-3.5 shrink-0 rounded-sm border transition-colors',
               cal.visible
@@ -74,9 +78,9 @@ export function CalendarSidebar({
                 />
               </svg>
             )}
-          </button>
+          </span>
           <span className="text-sm truncate">{cal.name}</span>
-        </label>
+        </div>
       ))}
 
       {noneVisible && (
