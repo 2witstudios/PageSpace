@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -40,6 +40,10 @@ export async function GET(request: NextRequest) {
     const paymentMethods = await stripe.paymentMethods.list({
       customer: user.stripeCustomerId,
       type: 'card',
+    });
+
+    securityAudit.logDataAccess(userId, 'read', 'payment_method', 'list', { count: paymentMethods.data.length }).catch((error) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({
@@ -110,6 +114,10 @@ export async function DELETE(request: NextRequest) {
     // Detach payment method
     await stripe.paymentMethods.detach(paymentMethodId);
 
+    securityAudit.logDataAccess(userId, 'delete', 'payment_method', paymentMethodId, { action: 'detach' }).catch((error) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+
     return NextResponse.json({ success: true });
 
   } catch (error) {
@@ -178,6 +186,10 @@ export async function PATCH(request: NextRequest) {
       invoice_settings: {
         default_payment_method: paymentMethodId,
       },
+    });
+
+    securityAudit.logDataAccess(userId, 'write', 'payment_method', paymentMethodId, { action: 'set_default' }).catch((error) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({ success: true, defaultPaymentMethodId: paymentMethodId });
