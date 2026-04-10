@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, activityLogs, users, eq, and, sql, inArray } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
 
@@ -27,6 +27,10 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+
+  securityAudit.logDataAccess(userId, 'read', 'activity_actors', userId).catch((error) => {
+    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   try {
     const parseResult = querySchema.safeParse({
