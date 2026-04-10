@@ -22,6 +22,10 @@ vi.mock('@pagespace/lib/server', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({

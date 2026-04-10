@@ -1,5 +1,5 @@
 import { db, eq, deviceTokens } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { secureCompare } from '@pagespace/lib/secure-compare';
 import { hashToken } from '@pagespace/lib/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -59,6 +59,8 @@ export async function DELETE(
       tokenName: device.deviceName ?? undefined,
       deviceInfo: `${device.platform ?? 'Unknown'} - ${device.deviceName ?? 'Unknown'}`,
     }, actorInfo);
+
+    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, resourceType: 'device', resourceId: deviceId }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       message: 'Device revoked successfully',

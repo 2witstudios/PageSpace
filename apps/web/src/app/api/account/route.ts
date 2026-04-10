@@ -1,5 +1,5 @@
 import { users, db, eq } from '@pagespace/db';
-import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { loggers, accountRepository, activityLogRepository, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
@@ -99,6 +99,8 @@ export async function PATCH(req: Request) {
       targetUserEmail: updatedUser.email,
       updatedFields,
     }, actorInfo);
+
+    securityAudit.logDataAccess(userId, 'write', 'account', userId, { operation: 'profile_update', updatedFields }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       id: updatedUser.id,
@@ -255,6 +257,14 @@ export async function DELETE(req: Request) {
     } catch (error) {
       loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
     }
+
+    // Log security audit BEFORE user deletion so the userId FK is still valid.
+    // Timeout prevents stalling account deletion if the advisory lock hangs.
+    const AUDIT_TIMEOUT_MS = 5000;
+    await Promise.race([
+      securityAudit.logEvent({ eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Audit timeout')), AUDIT_TIMEOUT_MS)),
+    ]).catch(e => loggers.auth.warn('Audit log failed before account deletion', e));
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
     await accountRepository.deleteUser(userId);

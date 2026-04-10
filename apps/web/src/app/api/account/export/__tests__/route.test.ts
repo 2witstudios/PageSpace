@@ -12,6 +12,20 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    auth: {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
