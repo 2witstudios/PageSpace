@@ -14,6 +14,8 @@ import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
+import { loadSiemConfig } from './services/siem-adapter';
+import { getPoolForWorker } from './db';
 
 // Load environment variables
 dotenv.config();
@@ -42,7 +44,35 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const siemConfig = loadSiemConfig();
+  let siemCursor: { lastDeliveredAt: string | null; lastError: string | null; deliveryCount: number } | null = null;
+
+  if (siemConfig.enabled) {
+    try {
+      const pool = getPoolForWorker();
+      const client = await pool.connect();
+      try {
+        const result = await client.query(
+          'SELECT "lastDeliveredAt", "lastError", "deliveryCount" FROM siem_delivery_cursors WHERE id = $1',
+          ['activity_logs']
+        );
+        if (result.rows.length > 0) {
+          const row = result.rows[0] as Record<string, unknown>;
+          siemCursor = {
+            lastDeliveredAt: row.lastDeliveredAt ? String(row.lastDeliveredAt) : null,
+            lastError: (row.lastError as string | null) ?? null,
+            deliveryCount: (row.deliveryCount as number) ?? 0,
+          };
+        }
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      console.debug('[health] SIEM cursor query failed (table may not exist yet):', err instanceof Error ? err.message : err);
+    }
+  }
+
   res.json({
     status: 'healthy',
     service: 'processor',
@@ -51,7 +81,12 @@ app.get('/health', (req, res) => {
       used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
       rss: Math.round(process.memoryUsage().rss / 1024 / 1024)
-    }
+    },
+    siem: {
+      enabled: siemConfig.enabled,
+      type: siemConfig.type,
+      ...(siemCursor && { cursor: siemCursor }),
+    },
   });
 });
 

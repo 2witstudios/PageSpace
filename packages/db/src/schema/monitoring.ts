@@ -422,3 +422,17 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
   }),
 }));
 
+/**
+ * SIEM delivery cursors - tracks the last audit event delivered per source
+ * Used by the processor's SIEM delivery worker for cursor-based polling
+ */
+export const siemDeliveryCursors = pgTable('siem_delivery_cursors', {
+  id: text('id').primaryKey(), // e.g. 'activity_logs', 'security_audit', 'integration_audit'
+  lastDeliveredId: text('lastDeliveredId'),
+  lastDeliveredAt: timestamp('lastDeliveredAt', { mode: 'date' }),
+  lastError: text('lastError'),
+  lastErrorAt: timestamp('lastErrorAt', { mode: 'date' }),
+  deliveryCount: integer('deliveryCount').default(0).notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
+});
+

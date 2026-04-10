@@ -79,6 +79,7 @@ export class QueueManager {
       await this.boss.createQueue('image-optimize');
       await this.boss.createQueue('text-extract');
       await this.boss.createQueue('ocr-process');
+      await this.boss.createQueue('siem-delivery');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -187,6 +188,17 @@ export class QueueManager {
         return await processOCR(job.data as OCRJobData);
       }
     );
+
+    // SIEM delivery worker — cursor-based polling, ignores job data
+    const { processSiemDelivery } = await import('./siem-delivery-worker');
+    await this.boss.work('siem-delivery',
+      async () => {
+        await processSiemDelivery();
+      }
+    );
+
+    // Schedule SIEM delivery every 30 seconds
+    await this.boss.schedule('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
   }
 
   async addJob<Q extends QueueName>(
@@ -240,7 +252,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process'];
+    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process', 'siem-delivery'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

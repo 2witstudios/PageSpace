@@ -68,6 +68,7 @@ export type JobDataMap = {
   'image-optimize': ImageOptimizeJobData;
   'text-extract': TextExtractJobData;
   'ocr-process': OCRJobData;
+  'siem-delivery': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;
