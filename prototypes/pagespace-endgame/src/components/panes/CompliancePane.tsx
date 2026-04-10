@@ -45,6 +45,17 @@ export function CompliancePane() {
         </Card>
       </div>
 
+      <Card accent="green" style={{ marginBottom: 16 }}>
+        <h4>Activity log hash chain integrity</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Activity log writes serialized with{" "}
+          <code>pg_advisory_xact_lock</code> (#867), matching the security
+          audit chain pattern. PII fields excluded from hash computation
+          (#866) so GDPR anonymization preserves chain integrity. Both
+          chains are now tamper-evident and GDPR-safe.
+        </p>
+      </Card>
+
       <h3 style={{ marginBottom: 12 }}>Activity logs</h3>
       <div className="g2" style={{ marginBottom: 16 }}>
         <Card accent="green">
@@ -129,8 +140,9 @@ export function CompliancePane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             User DSAR export (<code>GET /api/account/export</code>): ZIP
             archive with JSON files for profile, drives, pages, messages,
-            files metadata, activity logs, AI usage logs, tasks. Rate-limited
-            to 1 per 24 hours. Admin DSAR endpoint
+            files metadata, activity logs, AI usage logs, tasks. Distributed
+            Redis-backed rate limit (1 per 24 hours, survives deploys).
+            Admin DSAR endpoint
             (<code>GET /api/admin/users/[userId]/export</code>) with
             security audit logging of which admin accessed which user&apos;s data.
           </p>
@@ -269,28 +281,16 @@ export function CompliancePane() {
           </p>
         </Card>
       </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="green">
-          <h4>Activity log hash chain &mdash; Fixed</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Activity log writes now serialized with{" "}
-            <code>pg_advisory_xact_lock</code> (#867), matching the
-            security audit chain pattern. Chain forking on concurrent
-            writes is prevented. PII excluded from hash computation
-            (#866) so GDPR anonymization preserves chain integrity.
-          </p>
-        </Card>
-        <Card accent="red">
-          <h4>No agent-specific audit trails</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Security audit is user-centric. When an agent makes a change,
-            it&apos;s attributed to the user who triggered it, not the agent.
-            Activity logs track <code>isAiGenerated</code> and AI model,
-            but can&apos;t answer: &ldquo;what did agent X do across all
-            conversations?&rdquo;
-          </p>
-        </Card>
-      </div>
+      <Card accent="red" style={{ marginBottom: 8 }}>
+        <h4>No agent-specific audit trails</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Security audit is user-centric. When an agent makes a change,
+          it&apos;s attributed to the user who triggered it, not the agent.
+          Activity logs track <code>isAiGenerated</code> and AI model,
+          but can&apos;t answer: &ldquo;what did agent X do across all
+          conversations?&rdquo;
+        </p>
+      </Card>
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="amber">
           <h4>Capability gates: tools + pages, no budgets</h4>
@@ -332,25 +332,6 @@ export function CompliancePane() {
           </p>
         </Card>
       </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="green">
-          <h4>Activity log hash chain &mdash; Fixed</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Both security audit (#541) and activity log (#866) chains now
-            exclude PII from hash computation &mdash; GDPR anonymization
-            preserves chain integrity. Activity log writes serialized with{" "}
-            <code>pg_advisory_xact_lock</code> (#867).
-          </p>
-        </Card>
-        <Card accent="green">
-          <h4>Export rate limit &mdash; Fixed</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            DSAR export rate limit migrated to distributed Redis (#865).
-            Shared across instances, survives deploys/restarts. Matches
-            existing auth rate limiter pattern.
-          </p>
-        </Card>
-      </div>
 
       <hr />
 
@@ -385,8 +366,8 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Fix chain integrity — Done"
-          description="Activity log hash chain writes serialized with pg_advisory_xact_lock (#867). PII excluded from hash computation (#866). Both chains GDPR-safe. Remaining: GeoIP integration to replace IP prefix heuristic in anomaly detection."
+          name="GeoIP anomaly detection"
+          description="Replace IP prefix heuristic in anomaly detection with real GeoIP integration. Geographic distance-based impossible travel detection instead of /16 and /48 prefix comparison."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -442,7 +423,7 @@ export function CompliancePane() {
       </FeatureRow>
 
       <h3 style={{ marginBottom: 12 }}>Full GDPR compliance</h3>
-      <FeatureRow columns={3}>
+      <FeatureRow columns={4}>
         <Feature
           nameColor="var(--cyan)"
           name="Cookie consent system"
@@ -457,28 +438,14 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Hash-chain-safe anonymization — Done"
-          description="Implemented: PII fields excluded from hash computation in both security audit (#541) and activity log (#866) chains. Writes serialized with advisory locks (#867). Anonymization preserves chain integrity."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-      </FeatureRow>
-      <FeatureRow columns={3}>
-        <Feature
-          nameColor="var(--cyan)"
           name="Wire PII scrubber"
-          description="Integrate existing scrubPII() into AI logging pipeline as defense-in-depth. Schedule orphan file cleanup on cron. Both implementations exist &mdash; just need wiring."
+          description="Integrate existing scrubPII() into AI logging pipeline as defense-in-depth. The utility exists and catches email, phone, SSN, credit card &mdash; just needs wiring into the logging path."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
           nameColor="var(--cyan)"
           name="Formal retention schedules"
           description="Documented retention period per data class with legal basis. Configurable per org. Make AI log purge thresholds (30/90 days) configurable via env vars. Automated enforcement via existing retention engine."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--cyan)"
-          name="Distributed export rate limit — Done"
-          description="Implemented (#865): Redis-backed export rate limiting matching existing auth rate limiter pattern. Shared across instances, survives deploys."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>

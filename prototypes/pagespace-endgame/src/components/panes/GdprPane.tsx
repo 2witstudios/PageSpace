@@ -26,8 +26,9 @@ export function GdprPane() {
             <code>GET /api/account/export</code> &mdash; returns a ZIP archive
             with JSON files covering all user data: profile, drives, pages,
             messages (AI chat, channels, DMs), files metadata, activity logs,
-            AI usage logs, and tasks. Rate-limited to 1 export per 24 hours.
-            Machine-readable JSON format for portability.
+            AI usage logs, and tasks. Distributed Redis-backed rate limit
+            (1 per 24 hours, survives deploys). Machine-readable JSON format
+            for portability.
           </p>
         </Card>
         <Card accent="green">
@@ -66,16 +67,27 @@ export function GdprPane() {
         </Card>
       </div>
 
-      <Card accent="green" style={{ marginBottom: 16 }}>
-        <h4>Message deletion: two-stage hard-delete</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          Messages use a two-stage deletion path: soft-delete via{" "}
-          <code>isActive</code> flag, then a 30-day purge cron hard-deletes
-          the rows. On account deletion, FK cascade removes user-owned
-          messages immediately. Note: shared-page assistant messages stored
-          with <code>userId: null</code> may survive account deletion.
-        </p>
-      </Card>
+      <div className="g2" style={{ marginBottom: 16 }}>
+        <Card accent="green">
+          <h4>Message hard-delete</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Two-stage deletion: soft-delete via <code>isActive</code> flag,
+            then 30-day purge cron hard-deletes the rows. On account deletion,
+            FK cascade removes user-owned messages immediately. Note:
+            shared-page assistant messages with <code>userId: null</code> may
+            survive account deletion.
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>Hash chain GDPR safety</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Both security audit and activity log hash chains exclude PII
+            from hash computation (#541, #866). Anonymization on account
+            deletion preserves chain integrity. Activity log writes
+            serialized with <code>pg_advisory_xact_lock</code> (#867).
+          </p>
+        </Card>
+      </div>
 
       <h3 style={{ marginBottom: 12 }}>Data Retention &amp; Minimization</h3>
       <FeatureRow columns={4}>
@@ -156,26 +168,6 @@ export function GdprPane() {
         />
       </FeatureRow>
 
-      <Card accent="green" style={{ marginBottom: 12 }}>
-        <h4>Activity log hash chain &mdash; Fixed</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          Both security audit and activity log hash chains are now GDPR-safe.
-          PII fields excluded from hash computation (#541, #866) so
-          anonymization preserves chain integrity. Activity log writes
-          serialized with <code>pg_advisory_xact_lock</code> (#867),
-          preventing chain forking on concurrent writes.
-        </p>
-      </Card>
-
-      <Card accent="green" style={{ marginBottom: 12 }}>
-        <h4>Export rate limit &mdash; Fixed</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          DSAR export rate limit migrated to distributed Redis (#865).
-          Shared across instances, survives deploys/restarts. Matches
-          existing auth rate limiter pattern.
-        </p>
-      </Card>
-
       <hr />
 
       {/* ── End Game ── */}
@@ -205,27 +197,6 @@ export function GdprPane() {
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
-
-      <div className="g2">
-        <Card accent="green">
-          <h4>Hard-delete for messages &mdash; Done</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Implemented: 30-day purge cron hard-deletes soft-deleted messages.
-            FK cascade on account deletion removes user-owned messages
-            immediately. Remaining gap: shared-page assistant messages with{" "}
-            <code>userId: null</code> may persist.
-          </p>
-        </Card>
-        <Card accent="green">
-          <h4>Hash-chain-safe anonymization &mdash; Done</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Implemented: PII fields excluded from hash computation in both
-            security audit (#541) and activity log (#866) chains. Activity
-            log writes serialized with advisory locks (#867). Anonymization
-            preserves chain integrity.
-          </p>
-        </Card>
-      </div>
 
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>
