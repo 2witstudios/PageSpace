@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getUserUsageSummary } from '@/lib/subscription/usage-service';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +12,10 @@ export async function GET(request: NextRequest) {
 
     const { userId } = authResult;
     const usageSummary = await getUserUsageSummary(userId);
+
+    securityAudit.logDataAccess(userId, 'read', 'subscription_usage', 'self', { userId }).catch((error) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json(usageSummary);
 
