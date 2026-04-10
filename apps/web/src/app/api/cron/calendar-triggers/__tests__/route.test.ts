@@ -37,6 +37,8 @@ vi.mock('@/lib/workflows/calendar-trigger-executor', () => ({
   executeCalendarTrigger: mockExecuteCalendarTrigger,
 }));
 
+const mockSecurityAudit = { logDataAccess: vi.fn().mockResolvedValue(undefined) };
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -45,6 +47,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -272,6 +275,45 @@ describe('POST /api/cron/calendar-triggers', () => {
     expect(body.executed).toBe(0);
     expect(body.errors).toBeDefined();
     expect(body.errors[0]).toContain('Unexpected crash');
+  });
+
+  it('logs audit event after trigger execution', async () => {
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
+    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+
+    let selectCallCount = 0;
+    mockSelect.mockImplementation(() => {
+      selectCallCount++;
+      return { from: mockSelectFrom };
+    });
+    mockSelectFrom.mockImplementation(() => {
+      if (selectCallCount <= 1) {
+        return { where: mockSelectWhere };
+      }
+      return {
+        where: vi.fn().mockResolvedValue([MOCK_EVENT]),
+      };
+    });
+
+    mockExecuteCalendarTrigger.mockResolvedValue({ success: true, durationMs: 500 });
+
+    const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
+    await POST(request);
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'write', 'cron_job', 'calendar_triggers',
+      { executed: 1, failed: 0 }
+    );
+  });
+
+  it('logs audit event with zero executed when no triggers are due', async () => {
+    const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
+    await POST(request);
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'write', 'cron_job', 'calendar_triggers',
+      { executed: 0, failed: 0 }
+    );
   });
 
   it('returns 500 on catastrophic error', async () => {

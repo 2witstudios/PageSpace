@@ -35,10 +35,13 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
+const mockSecurityAudit = { logDataAccess: vi.fn().mockResolvedValue(undefined) };
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -180,6 +183,36 @@ describe('POST /api/cron/workflows', () => {
     expect(body.executed).toBe(0);
     expect(body.errors).toBeDefined();
     expect(body.errors[0]).toContain('Agent failed');
+  });
+
+  it('should log audit event after workflow execution', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: true,
+      responseText: 'Report generated',
+      toolCallCount: 2,
+      durationMs: 5000,
+    });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'write', 'cron_job', 'workflows',
+      { executed: 1, failed: 0 }
+    );
+  });
+
+  it('should log audit event with zero executed when no workflows are due', async () => {
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'write', 'cron_job', 'workflows',
+      { executed: 0, failed: 0 }
+    );
   });
 
   it('should handle thrown exceptions during execution', async () => {
