@@ -139,18 +139,24 @@ qualifying "local models only" is dangerous.
 ### 1.2. AI Usage Logging → Right to Erasure / GDPR Article 17
 
 **What happens**: Every AI interaction logs the first 1000 characters of the
-user's prompt and the AI's response to the `ai_usage_logs` table. This data is
-stored indefinitely with no automatic retention policy or deletion mechanism.
+user's prompt and the AI's response to the `ai_usage_logs` table.
 
-**Why it's incompatible**:
-- No TTL or automatic purge on `ai_usage_logs`
-- No API endpoint to delete a user's AI usage history
+**Status — partially resolved**:
+- ~~Account deletion does NOT purge these logs~~ → **Fixed**: `deleteAiUsageLogsForUser()` explicitly purges on account deletion (no FK cascade — manual deletion is the only path)
+- ~~No API endpoint to delete a user's AI usage history~~ → **Fixed**: account deletion handles this via explicit purge call
+- ~~Conversation messages retained indefinitely~~ → **Fixed**: 30-day purge cron hard-deletes soft-deleted messages; account deletion cascade removes user-owned messages. **Note**: shared-page assistant messages saved with `userId: null` survive account deletion and may contain user-derived content.
+
+**Remaining gaps**:
+- No TTL or automatic purge on `ai_usage_logs` for non-deleted accounts (logs accumulate indefinitely while account is active)
 - No mechanism to selectively redact prompt/completion content
-- Account deletion does NOT purge these logs
-- Conversation `messages` table retains full message content indefinitely
 
-**Affected compliance regimes**: GDPR Article 17 (right to erasure), CCPA
-(right to delete), any "right to be forgotten" regulation.
+**Severity**: Downgraded from hard incompatibility to modification-required.
+Account deletion now satisfies Art. 17 for erasure requests. The remaining gap
+is retention minimization for active accounts.
+
+**Affected compliance regimes**: GDPR Article 17 (right to erasure — now
+partially satisfied), CCPA (right to delete — satisfied on account deletion),
+data minimization (active account retention still unbounded).
 
 **Key files**:
 - `packages/db/src/schema/monitoring.ts` (lines 144-203: `ai_usage_logs` schema)
@@ -222,34 +228,42 @@ residency, any regime requiring all PII processing to be on-premise.
 These features work today but would need changes to pass audits in regulated
 environments.
 
-### 2.1. No Data Retention Policy Engine
+### 2.1. No Data Retention Policy Engine (Partial)
 
-**Current state**: No automatic data expiration exists for:
-- AI usage logs (indefinite)
-- Conversation messages (indefinite, soft-delete only via `isActive` flag)
-- Activity/audit logs (indefinite)
-- Client analytics events (indefinite)
-- Security audit logs (indefinite)
+**Current state**: Retention exists for some data categories but not all:
+- ~~AI usage logs (indefinite)~~ → **Partial**: purged on account deletion; no TTL for active accounts
+- ~~Conversation messages (indefinite)~~ → **Fixed**: 30-day purge cron for soft-deleted messages + FK cascade on account deletion
+- Sessions and tokens → **Fixed**: TTL-based cleanup on cron schedule
+- Page versions → **Fixed**: 30-day auto-retention with pinnable exemptions
+- AI logs → **Fixed**: anonymize at 30 days, purge at 90 days (configurable via `AI_LOG_RETENTION_DAYS`)
+- Activity/audit logs (indefinite — no retention policy)
+- Client analytics events (indefinite — no retention policy)
+- Security audit logs (indefinite — no retention policy)
 
-**What's needed**: Configurable retention windows with automatic purge jobs.
-Most compliance frameworks require documented retention schedules.
+**What's needed**: Configurable retention windows for the remaining categories
+(activity logs, analytics, security audit logs) and admin configuration UI.
 
-**Effort**: Medium. Requires cron jobs and admin configuration UI.
+**Effort**: Medium. Core retention engine and cron infrastructure exists; needs
+extension to remaining data categories and admin-facing configuration.
 
 ---
 
-### 2.2. Incomplete Data Subject Access / Export
+### 2.2. ~~Incomplete Data Subject Access / Export~~ → RESOLVED
 
-**Current state**: No mechanism exists for a user to:
-- Export all their personal data (GDPR Article 15 / CCPA right to know)
-- See which third parties received their data
-- Download their conversation history, uploaded files, or activity logs
+**Current state**: Data subject access and export is implemented:
+- **User DSAR export**: `GET /api/account/export` — ZIP archive with JSON files
+  covering profile, drives, pages, messages, files metadata, activity logs,
+  AI usage logs, and tasks. Rate-limited to 1 export per 24 hours.
+- **Admin DSAR endpoint**: `GET /api/admin/users/[userId]/export` — admin-only
+  endpoint for processing data subject access requests. Logs which admin
+  accessed which user's data for audit trail.
 
-**What's needed**: Data export endpoint that packages all user data in a
-portable format (JSON/ZIP).
+**Remaining gap**: No "which third parties received data" view — users cannot
+see a summary of which AI providers, integrations, or external services
+processed their data.
 
-**Effort**: Medium-high. Requires aggregating data across multiple tables and
-file storage.
+**Effort**: Low for the remaining gap (query integration credentials +
+AI usage logs by provider).
 
 ---
 
@@ -365,14 +379,18 @@ accessed, retention limits for cached calendar data, and token revocation UI.
 
 ---
 
-### 2.9. Security Audit Log Integrity Verification
+### 2.9. ~~Security Audit Log Integrity Verification~~ → RESOLVED
 
-**Current state**: Tamper-evident hash chain exists in `security_audit_log` but
-no automated verification process runs to detect tampering.
-
-**What's needed**: Periodic chain integrity verification job with alerting.
-
-**Effort**: Low. The infrastructure exists; needs a cron job.
+**Current state**: Both hash chains are now integrity-verified and GDPR-safe:
+- **Fixed (#541)**: Security audit hash chain — PII fields excluded from hash
+  computation so anonymization doesn't break the chain
+- **Fixed (#866)**: Activity log hash chain — PII fields excluded from hash
+  computation (matching security audit pattern)
+- **Fixed (#867)**: Activity log writes now serialized with
+  `pg_advisory_xact_lock`, preventing chain forking on concurrent writes
+- **Fixed**: Daily verification cron (`/api/cron/verify-audit-chain`) recomputes
+  hashes and verifies chain links. HMAC-signed cron requests. Pluggable
+  `ChainAlertHandler` for Slack/email/PagerDuty alerting.
 
 ---
 
@@ -459,19 +477,22 @@ Every path where data leaves the PageSpace deployment boundary.
 
 ### P1 — Required for GDPR/CCPA readiness
 
-4. **Build data subject export endpoint** — Users cannot export their data today.
+4. ~~**Build data subject export endpoint**~~ — **DONE**. `GET /api/account/export`
+   (user) and `GET /api/admin/users/[userId]/export` (admin DSAR). ZIP with JSON.
 5. **Add consent management for AI providers** — No disclosure or consent record
    when selecting external AI providers.
-6. **Implement conversation message hard-delete** — Only soft-delete (`isActive`)
-   exists today.
+6. ~~**Implement conversation message hard-delete**~~ — **DONE**. 30-day purge cron
+   hard-deletes soft-deleted messages. FK cascade on account deletion.
 7. **Document data retention schedules** — No formal retention policy exists for
    any data category.
 
 ### P2 — Required for SOC 2 / enterprise sales
 
-8. **Add audit log integrity verification cron** — Hash chain exists but is never
-   verified.
-9. **Standardize bcrypt cost factor** — Minor inconsistency (cost 10 vs 12).
+8. ~~**Add audit log integrity verification cron**~~ — **RESOLVED**. Daily
+   verification cron exists with alerting. Both security audit and activity log
+   chains are now GDPR-safe and serialized (#541, #866, #867).
+9. ~~**Standardize bcrypt cost factor**~~ — **N/A**. Password-based authentication
+   removed entirely (#861).
 10. **Add AI provider DPA references** — Link to each provider's data processing
     terms.
 
@@ -501,7 +522,7 @@ to be stripped or replaced for a compliance-clean on-premise deployment:
 |---------------|----------------------|--------|-------|
 | Stripe billing | Remove entirely, or license-key model | Low-medium | No billing needed for single-tenant on-prem |
 | Resend email | Self-hosted SMTP (Postfix, etc.) | Medium | Only needed if email verification is required |
-| Google OAuth | Remove; use local email+password auth only | Low | Original auth system already exists |
+| Google OAuth | Remove; use magic links + passkeys | Low | Password auth removed (#861); on-prem uses magic links |
 | Google One Tap | Remove | Trivial | UI-only removal |
 | Google Calendar | Remove | Low | Optional integration |
 | Cloud AI providers | Remove from config; Ollama/LM Studio only | Low | Provider factory already supports this |
@@ -540,10 +561,10 @@ When entering compliance or white-label conversations, use this framing:
 - "Payment processing" — only relevant for SaaS mode, not on-prem
 
 **Do not promise without engineering work**:
-- GDPR right-to-erasure compliance (file deletion gap)
-- Data subject export / portability
-- Configurable data retention policies
-- Formal audit log integrity verification
+- GDPR right-to-erasure compliance (file deletion gap remains — DB erasure is done)
+- ~~Data subject export / portability~~ → **Resolved**: DSAR export endpoints exist
+- Configurable data retention policies (partial — AI logs and messages have retention; activity/analytics/audit logs do not)
+- ~~Formal audit log integrity verification~~ → **Resolved**: daily verification cron with alerting; both chains GDPR-safe and serialized (#541, #866, #867)
 - Database encryption at rest (TDE needed for regulated industries)
 
 **Never promise** (without fundamental changes):

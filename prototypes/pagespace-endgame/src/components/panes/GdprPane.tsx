@@ -26,8 +26,9 @@ export function GdprPane() {
             <code>GET /api/account/export</code> &mdash; returns a ZIP archive
             with JSON files covering all user data: profile, drives, pages,
             messages (AI chat, channels, DMs), files metadata, activity logs,
-            AI usage logs, and tasks. Rate-limited to 1 export per 24 hours.
-            Machine-readable JSON format for portability.
+            AI usage logs, and tasks. Distributed Redis-backed rate limit
+            (1 per 24 hours, survives deploys). Machine-readable JSON format
+            for portability.
           </p>
         </Card>
         <Card accent="green">
@@ -62,6 +63,28 @@ export function GdprPane() {
             (<code>deleted_user_&lt;12-char-hex&gt;</code>). Display name set
             to &ldquo;Deleted User.&rdquo; Preserves audit trail while removing
             PII. Same user always maps to same anonymized ID.
+          </p>
+        </Card>
+      </div>
+
+      <div className="g2" style={{ marginBottom: 16 }}>
+        <Card accent="green">
+          <h4>Message hard-delete</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Two-stage deletion: soft-delete via <code>isActive</code> flag,
+            then 30-day purge cron hard-deletes the rows. On account deletion,
+            FK cascade removes user-owned messages immediately. Note:
+            shared-page assistant messages with <code>userId: null</code> may
+            survive account deletion.
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>Hash chain GDPR safety</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Both security audit and activity log hash chains exclude PII
+            from hash computation (#541, #866). Anonymization on account
+            deletion preserves chain integrity. Activity log writes
+            serialized with <code>pg_advisory_xact_lock</code> (#867).
           </p>
         </Card>
       </div>
@@ -127,8 +150,7 @@ export function GdprPane() {
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         Data subject rights (access, erasure, portability) are solid. AI
         provider consent is handled via TOS &mdash; PageSpace is an AI product.
-        The remaining gaps are cookie consent, data residency, and edge cases
-        around message deletion and hash chain integrity.
+        The remaining gaps are cookie consent and data residency.
       </p>
 
       <FeatureRow columns={2}>
@@ -145,38 +167,6 @@ export function GdprPane() {
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
-
-      <div className="g2" style={{ marginBottom: 12 }}>
-        <Card accent="amber">
-          <h4>Message deletion is soft-delete only</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Conversation messages use an <code>isActive</code> flag for
-            deletion. GDPR Art. 17 may require true hard-delete. Current
-            soft-delete means message content persists in the database
-            even after &ldquo;deletion.&rdquo;
-          </p>
-        </Card>
-        <Card accent="amber">
-          <h4>Activity log hash chain broken by anonymization</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Account deletion anonymizes activity log entries, but this
-            changes the data that was hashed &mdash; invalidating the
-            hash chain. The tamper-evident property is compromised for
-            entries involving deleted users. Security audit chain is{" "}
-            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
-            {" "}&mdash; PII fields excluded from hash computation.
-          </p>
-        </Card>
-      </div>
-
-      <Card accent="amber" style={{ marginBottom: 12 }}>
-        <h4>Export rate limit is in-memory</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          The 1-export-per-24-hours rate limit uses an in-process <code>Map()</code>.
-          Resets on deploy/restart. Not shared across instances. Works for single
-          instance but won&apos;t scale.
-        </p>
-      </Card>
 
       <hr />
 
@@ -207,25 +197,6 @@ export function GdprPane() {
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
-
-      <div className="g2">
-        <Card accent="blue">
-          <h4>Hard-delete for messages</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            True deletion path for conversation messages with audit tombstones
-            (record that deletion occurred without preserving content). Supports
-            GDPR Art. 17 right to erasure for all data types.
-          </p>
-        </Card>
-        <Card accent="blue">
-          <h4>Hash-chain-safe anonymization</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Anonymization that preserves chain link integrity. Hash computed
-            over anonymization-stable fields only, or chain links explicitly
-            maintained through the anonymization process.
-          </p>
-        </Card>
-      </div>
 
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>

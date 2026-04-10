@@ -45,6 +45,17 @@ export function CompliancePane() {
         </Card>
       </div>
 
+      <Card accent="green" style={{ marginBottom: 16 }}>
+        <h4>Activity log hash chain integrity</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Activity log writes serialized with{" "}
+          <code>pg_advisory_xact_lock</code> (#867), matching the security
+          audit chain pattern. PII fields excluded from hash computation
+          (#866) so GDPR anonymization preserves chain integrity. Both
+          chains are now tamper-evident and GDPR-safe.
+        </p>
+      </Card>
+
       <h3 style={{ marginBottom: 12 }}>Activity logs</h3>
       <div className="g2" style={{ marginBottom: 16 }}>
         <Card accent="green">
@@ -129,8 +140,9 @@ export function CompliancePane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             User DSAR export (<code>GET /api/account/export</code>): ZIP
             archive with JSON files for profile, drives, pages, messages,
-            files metadata, activity logs, AI usage logs, tasks. Rate-limited
-            to 1 per 24 hours. Admin DSAR endpoint
+            files metadata, activity logs, AI usage logs, tasks. Distributed
+            Redis-backed rate limit (1 per 24 hours, survives deploys).
+            Admin DSAR endpoint
             (<code>GET /api/admin/users/[userId]/export</code>) with
             security audit logging of which admin accessed which user&apos;s data.
           </p>
@@ -241,19 +253,21 @@ export function CompliancePane() {
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         The security infrastructure is solid but has coverage gaps.
-        The SIEM adapter is built but not wired. The security audit
-        service covers ~1.6% of routes. The activity log hash chain has
-        a known fork vulnerability. Agent-level security is missing entirely.
+        The SIEM adapter is built but not wired. Audit service coverage
+        expanded to pages, drives, permissions, settings, account, files,
+        and export routes (#868-870) but not yet 100%. Agent-level security
+        is missing entirely.
       </p>
 
       <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="red">
-          <h4>SecurityAuditService: ~5 of 252 routes (~2%)</h4>
+        <Card accent="amber">
+          <h4>SecurityAuditService: expanded but not 100%</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Hash chain audit service exists with advisory lock serialization
-            and 35 event types. But only wired to login, logout, and mobile
-            login routes. Core operations (pages, drives, files, permissions,
-            settings, admin actions) are not security-audited.
+            Hash chain audit service with advisory lock serialization and
+            35 event types. Now wired to auth, pages, drives, permissions,
+            settings, account, files, and export routes (#868-870).
+            Remaining: admin actions, trash, invitations, and other
+            secondary routes.
           </p>
         </Card>
         <Card accent="red">
@@ -267,29 +281,16 @@ export function CompliancePane() {
           </p>
         </Card>
       </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="red">
-          <h4>Activity log hash chain can fork</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Activity log writes not serialized with row locking. Concurrent
-            writes can create chain forks. Security audit chain uses
-            advisory locks and is safe. Activity logs have hash chain fields
-            (<code>previousLogHash</code>, <code>logHash</code>,{" "}
-            <code>chainSeed</code>) but no locking to prevent concurrent
-            forking.
-          </p>
-        </Card>
-        <Card accent="red">
-          <h4>No agent-specific audit trails</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Security audit is user-centric. When an agent makes a change,
-            it&apos;s attributed to the user who triggered it, not the agent.
-            Activity logs track <code>isAiGenerated</code> and AI model,
-            but can&apos;t answer: &ldquo;what did agent X do across all
-            conversations?&rdquo;
-          </p>
-        </Card>
-      </div>
+      <Card accent="red" style={{ marginBottom: 8 }}>
+        <h4>No agent-specific audit trails</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Security audit is user-centric. When an agent makes a change,
+          it&apos;s attributed to the user who triggered it, not the agent.
+          Activity logs track <code>isAiGenerated</code> and AI model,
+          but can&apos;t answer: &ldquo;what did agent X do across all
+          conversations?&rdquo;
+        </p>
+      </Card>
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="amber">
           <h4>Capability gates: tools + pages, no budgets</h4>
@@ -331,30 +332,6 @@ export function CompliancePane() {
           </p>
         </Card>
       </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="amber">
-          <h4>Activity log hash chain broken by anonymization</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Account deletion anonymizes <code>actorEmail</code> in activity
-            logs, but this field is included in{" "}
-            <code>serializeLogDataForHash()</code> &mdash; invalidating the
-            stored <code>logHash</code>. Security audit chain is{" "}
-            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
-            {" "}&mdash; PII fields excluded from hash computation so the
-            chain remains valid after GDPR anonymization.
-          </p>
-        </Card>
-      </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="amber">
-          <h4>Export rate limit is in-memory</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            The 1-export-per-24-hours DSAR rate limit uses an in-process{" "}
-            <code>Map()</code>. Resets on deploy/restart. Not shared across
-            instances. Works for single instance but won&apos;t scale.
-          </p>
-        </Card>
-      </div>
 
       <hr />
 
@@ -378,7 +355,7 @@ export function CompliancePane() {
         <Feature
           nameColor="var(--cyan)"
           name="100% audit coverage"
-          description="Wire SecurityAuditService to all security-relevant routes. Every page CRUD, permission change, file upload, admin action produces an immutable audit event. 35 event types already defined &mdash; just need wiring."
+          description="SecurityAuditService now covers auth, pages, drives, permissions, settings, account, files, and export (#868-870). Remaining: admin actions, trash, invitations, and secondary routes."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
@@ -389,8 +366,8 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Fix chain integrity"
-          description="Add pg_advisory_xact_lock serialization to activity log hash chain writes (matching security audit pattern). Add GeoIP integration to replace IP prefix heuristic in anomaly detection."
+          name="GeoIP anomaly detection"
+          description="Replace IP prefix heuristic in anomaly detection with real GeoIP integration. Geographic distance-based impossible travel detection instead of /16 and /48 prefix comparison."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -446,7 +423,7 @@ export function CompliancePane() {
       </FeatureRow>
 
       <h3 style={{ marginBottom: 12 }}>Full GDPR compliance</h3>
-      <FeatureRow columns={3}>
+      <FeatureRow columns={4}>
         <Feature
           nameColor="var(--cyan)"
           name="Cookie consent system"
@@ -461,28 +438,14 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Hash-chain-safe anonymization"
-          description="Anonymization that preserves chain link integrity. Hash computed over anonymization-stable fields only, or chain links maintained through the anonymization process."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-      </FeatureRow>
-      <FeatureRow columns={3}>
-        <Feature
-          nameColor="var(--cyan)"
           name="Wire PII scrubber"
-          description="Integrate existing scrubPII() into AI logging pipeline as defense-in-depth. Schedule orphan file cleanup on cron. Both implementations exist &mdash; just need wiring."
+          description="Integrate existing scrubPII() into AI logging pipeline as defense-in-depth. The utility exists and catches email, phone, SSN, credit card &mdash; just needs wiring into the logging path."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
           nameColor="var(--cyan)"
           name="Formal retention schedules"
           description="Documented retention period per data class with legal basis. Configurable per org. Make AI log purge thresholds (30/90 days) configurable via env vars. Automated enforcement via existing retention engine."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--cyan)"
-          name="Distributed export rate limit"
-          description="Redis-backed export rate limiting (matching existing auth rate limiter pattern). Shared across instances. Survives deploys."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
