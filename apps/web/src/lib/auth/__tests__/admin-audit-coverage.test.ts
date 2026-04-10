@@ -20,6 +20,9 @@ vi.mock('../csrf-validation', () => ({
 // Mock security event logging
 vi.mock('@pagespace/lib/server', () => ({
   logSecurityEvent: vi.fn(),
+  loggers: {
+    security: { warn: vi.fn() },
+  },
   securityAudit: {
     logDataAccess: vi.fn().mockResolvedValue(undefined),
     logEvent: vi.fn().mockResolvedValue(undefined),
@@ -30,12 +33,14 @@ vi.mock('@pagespace/lib/server', () => ({
 import { withAdminAuth } from '../auth';
 import { authenticateSessionRequest } from '../index';
 import { validateAdminAccess } from '../admin-role';
-import { securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const mockAuthenticateRequest = vi.mocked(authenticateSessionRequest);
 const mockValidateAdminAccess = vi.mocked(validateAdminAccess);
 const mockLogDataAccess = vi.mocked(securityAudit.logDataAccess);
 const mockLogEvent = vi.mocked(securityAudit.logEvent);
+const mockLogAccessDenied = vi.mocked(securityAudit.logAccessDenied);
+const mockSecurityWarn = vi.mocked(loggers.security.warn);
 
 function mockAdminAuth() {
   mockAuthenticateRequest.mockResolvedValue({
@@ -334,6 +339,53 @@ describe('Admin audit coverage (withAdminAuth)', () => {
           }),
           riskScore: 0.5,
         })
+      );
+    });
+  });
+
+  describe('audit persistence failure logging', () => {
+    it('logs warning when logDataAccess rejects', async () => {
+      mockAdminAuth();
+      mockLogDataAccess.mockRejectedValueOnce(new Error('DB write timeout'));
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users');
+
+      await wrappedHandler(request);
+      await new Promise(process.nextTick);
+
+      expect(mockSecurityWarn).toHaveBeenCalledWith(
+        '[AdminAuth] audit logDataAccess failed',
+        expect.objectContaining({ error: expect.any(Error), userId: 'admin-123' })
+      );
+    });
+
+    it('logs warning when logEvent rejects', async () => {
+      mockAuthDenied();
+      mockLogEvent.mockRejectedValueOnce(new Error('Audit service down'));
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users');
+
+      await wrappedHandler(request);
+      await new Promise(process.nextTick);
+
+      expect(mockSecurityWarn).toHaveBeenCalledWith(
+        '[AdminAuth] audit logEvent failed',
+        expect.objectContaining({ error: expect.any(Error), endpoint: '/api/admin/users' })
+      );
+    });
+
+    it('logs warning when logAccessDenied rejects', async () => {
+      mockAdminRoleDenied();
+      mockLogAccessDenied.mockRejectedValueOnce(new Error('Connection refused'));
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users');
+
+      await wrappedHandler(request);
+      await new Promise(process.nextTick);
+
+      expect(mockSecurityWarn).toHaveBeenCalledWith(
+        '[AdminAuth] audit logAccessDenied failed',
+        expect.objectContaining({ error: expect.any(Error), userId: 'user-456' })
       );
     });
   });
