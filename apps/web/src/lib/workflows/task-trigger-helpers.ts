@@ -103,12 +103,14 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
     },
   });
 
-  // Mark task metadata
+  // Mark task metadata — store trigger types as array to support both types on one task
+  const existingTypes = ((taskMetadata as Record<string, unknown> | null)?.triggerTypes as string[]) ?? [];
+  const triggerTypes = existingTypes.includes(triggerType) ? existingTypes : [...existingTypes, triggerType];
   await database.update(taskItems).set({
     metadata: {
       ...(taskMetadata || {}),
       hasTrigger: true,
-      triggerType,
+      triggerTypes,
     },
   }).where(eq(taskItems.id, taskId));
 }
