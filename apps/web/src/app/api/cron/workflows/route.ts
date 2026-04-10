@@ -7,7 +7,7 @@ import { loggers } from '@pagespace/lib/server';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_WORKFLOWS = 5;
-const POLLED_TRIGGER_TYPES = ['cron', 'task_due_date'] as const;
+const POLLED_TRIGGER_TYPES: ('cron' | 'task_due_date')[] = ['cron', 'task_due_date'];
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
