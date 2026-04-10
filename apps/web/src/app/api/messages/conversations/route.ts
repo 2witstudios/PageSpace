@@ -221,6 +221,10 @@ export async function POST(request: Request) {
       .limit(1);
 
     if (existingConversation) {
+      securityAudit.logDataAccess(userId, 'read', 'conversation', existingConversation.id).catch((error) => {
+        loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
+
       return NextResponse.json({ conversation: existingConversation });
     }
 
