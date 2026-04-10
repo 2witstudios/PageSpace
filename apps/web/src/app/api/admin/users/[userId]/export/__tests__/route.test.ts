@@ -19,6 +19,7 @@ vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
     auth: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+    security: { warn: vi.fn() },
   },
   logSecurityEvent: vi.fn(),
   securityAudit: {

@@ -86,6 +86,9 @@ vi.mock('@pagespace/lib/server', async () => {
         debug: vi.fn(),
         error: vi.fn(),
       },
+      security: {
+        warn: vi.fn(),
+      },
     },
     logSecurityEvent: vi.fn(),
   };

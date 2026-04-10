@@ -52,6 +52,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    security: { warn: vi.fn() },
   },
 }));
 
