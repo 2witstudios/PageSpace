@@ -38,8 +38,12 @@ export async function POST(req: Request) {
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
     });
-    securityAudit.logLogout(userId, sessionClaims?.sessionId ?? 'unknown', clientIP).catch(() => {});
-    securityAudit.logTokenRevoked(userId, 'session', 'user_logout').catch(() => {});
+    securityAudit.logLogout(userId, sessionClaims?.sessionId ?? 'unknown', clientIP).catch((error) => {
+      loggers.security.warn('[Logout] audit logLogout failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+    securityAudit.logTokenRevoked(userId, 'session', 'user_logout').catch((error) => {
+      loggers.security.warn('[Logout] audit logTokenRevoked failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
   }
 
   const headers = new Headers();

@@ -51,6 +51,9 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
   },
   logAuthEvent: vi.fn(),
   securityAudit: {
@@ -66,7 +69,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 import { sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
-import { logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/logout', () => {
@@ -255,6 +258,54 @@ describe('/api/auth/logout', () => {
       // Should not log when no user ID
       expect(logAuthEvent).not.toHaveBeenCalled();
       expect(trackAuthEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('audit persistence failure logging', () => {
+    const mockSecurityWarn = vi.mocked(loggers.security.warn);
+    const mockLogLogout = vi.mocked(securityAudit.logLogout);
+    const mockLogTokenRevoked = vi.mocked(securityAudit.logTokenRevoked);
+
+    it('logs warning when logLogout rejects and still returns 200', async () => {
+      mockLogLogout.mockRejectedValueOnce(new Error('Audit DB down'));
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
+
+      const response = await POST(request);
+      await new Promise(process.nextTick);
+
+      expect(response.status).toBe(200);
+      expect(mockSecurityWarn).toHaveBeenCalledWith(
+        '[Logout] audit logLogout failed',
+        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
+      );
+    });
+
+    it('logs warning when logTokenRevoked rejects and still returns 200', async () => {
+      mockLogTokenRevoked.mockRejectedValueOnce(new Error('Write failed'));
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
+
+      const response = await POST(request);
+      await new Promise(process.nextTick);
+
+      expect(response.status).toBe(200);
+      expect(mockSecurityWarn).toHaveBeenCalledWith(
+        '[Logout] audit logTokenRevoked failed',
+        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
+      );
     });
   });
 });
