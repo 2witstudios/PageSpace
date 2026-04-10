@@ -9,7 +9,14 @@
 import { db, activityLogs, users, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
-import { desc, isNotNull } from 'drizzle-orm';
+import { desc, isNotNull, sql } from 'drizzle-orm';
+
+/**
+ * Advisory lock key for serializing activity log hash chain writes.
+ * Uses a different key than security audit (8370291546) to avoid contention.
+ * pg_advisory_xact_lock holds the lock until the transaction commits/rolls back.
+ */
+export const ACTIVITY_CHAIN_LOCK_KEY = 5829174063;
 
 /**
  * Actor info for audit logging - snapshotted at write time
@@ -141,37 +148,6 @@ export function serializeLogDataForHash(data: HashableLogData): string {
 export function computeLogHash(data: HashableLogData, previousHash: string): string {
   const serialized = serializeLogDataForHash(data);
   return computeHash(serialized, previousHash);
-}
-
-/**
- * Get the latest log hash from the database.
- * Used to fetch the previous hash when inserting a new entry.
- * Returns null if no entries exist (starting a new chain).
- *
- * @returns Object containing the latest log hash and whether this is the first entry
- */
-export async function getLatestLogHash(): Promise<{
-  previousHash: string | null;
-  isFirstEntry: boolean;
-}> {
-  try {
-    const latestEntry = await db.query.activityLogs.findFirst({
-      where: isNotNull(activityLogs.logHash),
-      orderBy: [desc(activityLogs.timestamp)],
-      columns: { logHash: true },
-    });
-
-    if (!latestEntry?.logHash) {
-      return { previousHash: null, isFirstEntry: true };
-    }
-
-    return { previousHash: latestEntry.logHash, isFirstEntry: false };
-  } catch (error) {
-    console.error('[ActivityLogger] Failed to get latest log hash:', error);
-    // Return null on error - allows logging to continue without hash chain
-    // The hash chain can be repaired later if needed
-    return { previousHash: null, isFirstEntry: false };
-  }
 }
 
 /**
@@ -501,37 +477,45 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
   const insertActivityLog = async (pageId: string | undefined) => {
     const values = prepareActivityInsert({ ...input, pageId });
 
-    // Get the latest log hash to chain this entry
-    const { previousHash, isFirstEntry } = await getLatestLogHash();
+    // Wrap hash read + insert in a transaction with advisory lock to prevent chain forks
+    await db.transaction(async (tx) => {
+      // Acquire advisory lock scoped to this transaction.
+      // Blocks concurrent writers until this transaction completes.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTIVITY_CHAIN_LOCK_KEY})`);
 
-    // Compute hash chain data for this entry
-    const hashChainData = computeHashChainData(
-      {
-        id: values.id,
-        timestamp: values.timestamp,
-        operation: values.operation,
-        resourceType: values.resourceType,
-        resourceId: values.resourceId,
-        driveId: values.driveId,
-        pageId: values.pageId,
-        contentSnapshot: values.contentSnapshot,
-        previousValues: values.previousValues,
-        newValues: values.newValues,
-        metadata: values.metadata,
-      },
-      previousHash,
-      isFirstEntry
-    );
+      // Read the latest log hash — safe from races under the advisory lock
+      const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);
 
-    // Insert with hash chain fields
-    await db.insert(activityLogs).values({
-      ...values,
-      previousLogHash: hashChainData.previousLogHash,
-      logHash: hashChainData.logHash,
-      chainSeed: hashChainData.chainSeed,
+      // Compute hash chain data for this entry
+      const hashChainData = computeHashChainData(
+        {
+          id: values.id,
+          timestamp: values.timestamp,
+          operation: values.operation,
+          resourceType: values.resourceType,
+          resourceId: values.resourceId,
+          driveId: values.driveId,
+          pageId: values.pageId,
+          contentSnapshot: values.contentSnapshot,
+          previousValues: values.previousValues,
+          newValues: values.newValues,
+          metadata: values.metadata,
+        },
+        previousHash,
+        isFirstEntry
+      );
+
+      // Insert with hash chain fields
+      await tx.insert(activityLogs).values({
+        ...values,
+        previousLogHash: hashChainData.previousLogHash,
+        logHash: hashChainData.logHash,
+        chainSeed: hashChainData.chainSeed,
+      });
     });
 
-    // Broadcast for real-time updates (fire and forget)
+    // Broadcast and workflow triggers fire OUTSIDE the transaction
+    // so they don't hold the advisory lock or risk emitting events for rolled-back writes
     if (activityBroadcastHook) {
       activityBroadcastHook({
         activityId: values.id,
@@ -592,6 +576,9 @@ export async function logActivityWithTx(
   tx: typeof db
 ): Promise<DeferredWorkflowTrigger | undefined> {
   const values = prepareActivityInsert(input);
+
+  // Acquire advisory lock to serialize hash chain writes within this transaction
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACTIVITY_CHAIN_LOCK_KEY})`);
 
   // Get the latest log hash within the transaction for atomic chain computation
   const { previousHash, isFirstEntry } = await getLatestLogHashWithTx(tx);

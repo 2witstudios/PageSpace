@@ -224,6 +224,22 @@ export async function applyPageMutation({
       mentionsResult = await syncMentions(pageId, nextContent, transaction, { mentionedByUserId: context.userId });
     }
 
+    // Create page version BEFORE acquiring the activity chain lock,
+    // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
+    await createPageVersion({
+      pageId,
+      driveId: currentPage.driveId,
+      createdBy: context.userId,
+      source: source ?? (context.isAiGenerated ? 'pre_ai' : 'auto'),
+      content: nextContent,
+      contentFormat: contentFormatAfter,
+      pageRevision: nextRevision,
+      stateHash: stateHashAfter,
+      changeGroupId,
+      changeGroupType,
+      metadata: context.metadata,
+    }, { tx: transaction });
+
     deferredTrigger = await logActivityWithTx({
       userId: context.userId,
       actorEmail: context.actorEmail ?? 'unknown@system',
@@ -253,20 +269,6 @@ export async function applyPageMutation({
       stateHashBefore,
       stateHashAfter,
     }, transaction);
-
-    await createPageVersion({
-      pageId,
-      driveId: currentPage.driveId,
-      createdBy: context.userId,
-      source: source ?? (context.isAiGenerated ? 'pre_ai' : 'auto'),
-      content: nextContent,
-      contentFormat: contentFormatAfter,
-      pageRevision: nextRevision,
-      stateHash: stateHashAfter,
-      changeGroupId,
-      changeGroupType,
-      metadata: context.metadata,
-    }, { tx: transaction });
   };
 
   if (tx) {
