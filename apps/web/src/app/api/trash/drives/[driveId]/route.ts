@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { drives, db, eq, and } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
@@ -54,6 +54,16 @@ export async function DELETE(
       }),
       recipientUserIds
     );
+
+    securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, {
+      driveName: drive.name,
+      source: 'trash',
+    }).catch((error) => {
+      loggers.security.warn('[TrashDrive] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

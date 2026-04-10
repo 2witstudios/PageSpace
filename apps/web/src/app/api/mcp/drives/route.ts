@@ -3,7 +3,7 @@ import { db, drives } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
@@ -67,6 +67,16 @@ export async function POST(req: NextRequest) {
       metadata: { source: 'mcp' },
     });
 
+    securityAudit.logDataAccess(userId, 'write', 'drive', newDrive.id, {
+      source: 'mcp',
+      driveName: name,
+    }).catch((error) => {
+      loggers.security.warn('[MCPDrives] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json(newDrive, { status: 201 });
   } catch (error) {
     loggers.api.error('Error in MCP drive creation:', error as Error);
@@ -107,6 +117,16 @@ export async function GET(req: NextRequest) {
       // Token has no scope restrictions - return all accessible drives
       filteredDrives = allAccessibleDrives;
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'drive', '*', {
+      source: 'mcp',
+      driveCount: filteredDrives.length,
+    }).catch((error) => {
+      loggers.security.warn('[MCPDrives] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json(filteredDrives);
   } catch (error) {

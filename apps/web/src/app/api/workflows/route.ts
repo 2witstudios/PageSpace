@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess, loggers, securityAudit } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -57,6 +57,15 @@ export async function GET(request: Request) {
     .from(workflows)
     .where(eq(workflows.driveId, driveId))
     .orderBy(workflows.createdAt);
+
+  securityAudit.logDataAccess(userId, 'read', 'workflow', driveId, {
+    count: results.length,
+  }).catch((error) => {
+    loggers.security.warn('[Workflows] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId,
+    });
+  });
 
   return NextResponse.json(results);
 }
@@ -131,6 +140,17 @@ export async function POST(request: Request) {
     nextRunAt,
     updatedAt: new Date(),
   }).returning();
+
+  securityAudit.logDataAccess(userId, 'write', 'workflow', workflow.id, {
+    driveId: data.driveId,
+    name: data.name,
+    triggerType: data.triggerType,
+  }).catch((error) => {
+    loggers.security.warn('[Workflows] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId,
+    });
+  });
 
   return NextResponse.json(workflow, { status: 201 });
 }
