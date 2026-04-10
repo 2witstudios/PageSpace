@@ -241,6 +241,13 @@ export async function POST(
       lastMessagePreview: messagePreview,
     });
 
+    securityAudit.logDataAccess(userId, 'write', 'conversation', conversationId, {}).catch((error) => {
+      loggers.security.warn('[DirectMessage] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json({ message: newMessage });
   } catch (error) {
     loggers.api.error('Error sending message:', error as Error);

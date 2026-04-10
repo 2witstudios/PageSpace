@@ -234,6 +234,17 @@ export async function POST(
     });
   }
 
+  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, {
+    operation: 'rollback',
+    context: rollbackContext,
+    force,
+  }).catch((error) => {
+    loggers.security.warn('[ActivityRollback] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId,
+    });
+  });
+
   return NextResponse.json({
     ...result,
   });

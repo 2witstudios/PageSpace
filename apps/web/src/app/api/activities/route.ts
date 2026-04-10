@@ -227,6 +227,16 @@ export async function GET(request: Request) {
 
     const total = countResult?.total ?? 0;
 
+    securityAudit.logDataAccess(userId, 'read', 'activity', params.driveId ?? params.pageId ?? '*', {
+      context: params.context,
+      resultCount: activities.length,
+    }).catch((error) => {
+      loggers.security.warn('[Activities] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json({
       activities,
       pagination: {

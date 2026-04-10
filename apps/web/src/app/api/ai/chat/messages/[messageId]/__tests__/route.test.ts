@@ -39,12 +39,10 @@ vi.mock('@pagespace/lib/server', () => ({
     invalidateConversation: mockInvalidateConversation,
   },
   loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-    },
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    security: { warn: vi.fn() },
   },
+  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
 }));
 
 // Mock logging mask (boundary)

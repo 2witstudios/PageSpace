@@ -189,6 +189,15 @@ export async function PATCH(
       });
     }
 
+    securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
+      action,
+    }).catch((error) => {
+      loggers.security.warn('[Connection] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json({ connection: updatedConnection });
   } catch (error) {
     loggers.api.error('Error updating connection:', error as Error);
@@ -239,6 +248,13 @@ export async function DELETE(
 
     // Delete the connection
     await db.delete(connections).where(eq(connections.id, connectionId));
+
+    securityAudit.logDataAccess(userId, 'delete', 'connection', connectionId).catch((error) => {
+      loggers.security.warn('[Connection] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -14,7 +14,7 @@ import {
   count,
 } from '@pagespace/db';
 import { stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { isOnPrem } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth';
 
@@ -223,6 +223,16 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         ...user
       } = userData;
       return user;
+    });
+
+    securityAudit.logDataAccess(_adminUser.id, 'read', 'user', '*', {
+      source: 'admin',
+      userCount: cleanUsers.length,
+    }).catch((error) => {
+      loggers.security.warn('[AdminUsers] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId: _adminUser.id,
+      });
     });
 
     return Response.json({ users: cleanUsers });

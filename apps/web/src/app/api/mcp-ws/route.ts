@@ -152,9 +152,11 @@ export async function UPGRADE(
     fingerprint: fingerprint.substring(0, 16) + '...',
   });
 
-  securityAudit.logDataAccess(userId, 'read', 'mcp_websocket', userId, {
+  securityAudit.logEvent({
+    eventType: 'auth.session.created',
+    userId,
     sessionId: claims.sessionId,
-    source: 'websocket',
+    resourceType: 'mcp_websocket',
   }).catch((error) => {
     loggers.security.warn('[MCP-WS] audit log failed', {
       error: error instanceof Error ? error.message : String(error),

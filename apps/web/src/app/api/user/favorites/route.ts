@@ -96,6 +96,13 @@ export async function GET(req: Request) {
           : {}),
       }));
 
+    securityAudit.logDataAccess(auth.userId, 'read', 'favorite', '*', {}).catch((error) => {
+      loggers.security.warn('[Favorites] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId: auth.userId,
+      });
+    });
+
     return NextResponse.json({ favorites: items });
   } catch (error) {
     loggers.api.error('Error fetching favorites:', error as Error);

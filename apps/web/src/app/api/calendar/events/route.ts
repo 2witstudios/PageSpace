@@ -14,7 +14,7 @@ import {
   isNull,
   asc,
 } from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -273,8 +273,6 @@ export async function GET(request: Request) {
       // Append workflow virtual events
       const workflowEvents = await getWorkflowVirtualEvents([params.driveId], params.startDate, params.endDate);
 
-      auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_event', 'list', { context: 'drive', driveId: params.driveId, eventCount: events.length }), userId);
-
       return NextResponse.json({ events, workflowEvents });
     }
 
@@ -354,8 +352,6 @@ export async function GET(request: Request) {
 
     // Append workflow virtual events
     const workflowEvents = await getWorkflowVirtualEvents(driveIds, params.startDate, params.endDate);
-
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_event', 'list', { context: 'user', eventCount: events.length }), userId);
 
     return NextResponse.json({ events, workflowEvents });
   } catch (error) {
@@ -533,7 +529,12 @@ export async function POST(request: Request) {
       );
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_event', event.id, { operation: 'create', driveId: data.driveId ?? null }), userId);
+    securityAudit.logDataAccess(auth.userId, 'write', 'event', event.id, { driveId: data.driveId }).catch((error) => {
+      loggers.security.warn('[CalendarEvent] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json(completeEvent, { status: 201 });
   } catch (error) {

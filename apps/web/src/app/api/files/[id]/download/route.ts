@@ -93,13 +93,25 @@ export async function GET(
           '5m'
         );
 
-        return await fetchAndDownloadFile(
+        const response = await fetchAndDownloadFile(
           contentHash,
           serviceToken,
           page.originalFileName || page.title,
           page.mimeType || 'application/octet-stream',
           page.fileSize ?? undefined
         );
+
+        securityAudit.logDataAccess(user.id, 'read', 'file', page.id, {
+          source: 'download',
+          mimeType: page.mimeType,
+        }).catch((error) => {
+          loggers.security.warn('[FileDownload] audit log failed', {
+            error: error instanceof Error ? error.message : String(error),
+            userId: user.id,
+          });
+        });
+
+        return response;
       } catch (fileError) {
         const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
         console.error('Error downloading file page:', {
@@ -139,13 +151,25 @@ export async function GET(
         '5m'
       );
 
-      return await fetchAndDownloadFile(
+      const response = await fetchAndDownloadFile(
         contentHash,
         serviceToken,
         filenameParam || contentHash,
         file.mimeType || 'application/octet-stream',
         file.sizeBytes
       );
+
+      securityAudit.logDataAccess(user.id, 'read', 'file', file.id, {
+        source: 'download',
+        mimeType: file.mimeType,
+      }).catch((error) => {
+        loggers.security.warn('[FileDownload] audit log failed', {
+          error: error instanceof Error ? error.message : String(error),
+          userId: user.id,
+        });
+      });
+
+      return response;
     } catch (fileError) {
       const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
       console.error('Error downloading file:', {

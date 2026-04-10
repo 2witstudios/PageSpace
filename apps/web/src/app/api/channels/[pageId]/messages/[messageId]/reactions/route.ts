@@ -94,6 +94,13 @@ export async function POST(req: Request, { params }: RouteParams) {
       }
     }
 
+    securityAudit.logDataAccess(userId, 'write', 'reaction', messageId, {}).catch((error) => {
+      loggers.security.warn('[Reaction] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json(reactionWithUser, { status: 201 });
   } catch (error) {
     // Unique constraint violation - user already reacted with this emoji

@@ -244,6 +244,17 @@ export async function GET(request: Request) {
     // Check if results were truncated
     const isTruncated = activities.length === 10000;
 
+    securityAudit.logDataAccess(userId, 'export', 'activity', params.driveId ?? params.pageId ?? '*', {
+      context: params.context,
+      exportedCount: activities.length,
+      isTruncated,
+    }).catch((error) => {
+      loggers.security.warn('[ActivitiesExport] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return new Response(csvContent, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',

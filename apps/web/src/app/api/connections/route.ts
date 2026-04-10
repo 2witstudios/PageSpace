@@ -83,6 +83,15 @@ export async function GET(request: Request) {
       })
       .filter(conn => conn !== null);
 
+    securityAudit.logDataAccess(userId, 'read', 'connection', '*', {
+      count: validConnections.length,
+    }).catch((error) => {
+      loggers.security.warn('[Connections] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     return NextResponse.json({ connections: validConnections });
   } catch (error) {
     loggers.api.error('Error fetching connections:', error as Error);

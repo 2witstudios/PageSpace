@@ -1,7 +1,7 @@
 import { withAdminAuth } from '@/lib/auth/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 type ExportRouteContext = { params: Promise<{ userId: string }> };
 
@@ -26,6 +26,16 @@ export const GET = withAdminAuth<ExportRouteContext>(
       }
 
       loggers.api.info(`Admin DSAR export: admin=${adminUser.id} target=${userId}`);
+
+      securityAudit.logDataAccess(adminUser.id, 'export', 'user', userId, {
+        source: 'admin',
+        operation: 'dsar-export',
+      }).catch((error) => {
+        loggers.security.warn('[AdminUserExport] audit log failed', {
+          error: error instanceof Error ? error.message : String(error),
+          userId: adminUser.id,
+        });
+      });
 
       return Response.json(
         {

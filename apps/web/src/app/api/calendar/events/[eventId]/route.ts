@@ -7,7 +7,7 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -135,8 +135,6 @@ export async function GET(
     if (!hasAccess) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
-
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_event', eventId), userId);
 
     return NextResponse.json(event);
   } catch (error) {
@@ -287,8 +285,6 @@ export async function PATCH(
       );
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_event', eventId, { operation: 'update' }), userId);
-
     return NextResponse.json(completeEvent);
   } catch (error) {
     loggers.api.error('Error updating calendar event:', error as Error);
@@ -376,7 +372,12 @@ export async function DELETE(
       attendeeIds: attendees.map(a => a.userId),
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_event', eventId), userId);
+    securityAudit.logDataAccess(auth.userId, 'delete', 'event', eventId, {}).catch((error) => {
+      loggers.security.warn('[CalendarEvent] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

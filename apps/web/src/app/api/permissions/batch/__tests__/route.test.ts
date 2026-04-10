@@ -16,13 +16,10 @@ vi.mock('@pagespace/lib/server', () => ({
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
   getPermissionCacheStats: (...args: unknown[]) => mockGetPermissionCacheStats(...args),
   loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
-    },
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
   },
+  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock('@/lib/auth', () => ({

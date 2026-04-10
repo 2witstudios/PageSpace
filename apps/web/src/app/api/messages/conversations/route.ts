@@ -120,8 +120,13 @@ export async function GET(request: Request) {
       ? conversations[conversations.length - 1].lastMessageAt
       : null;
 
-    securityAudit.logDataAccess(userId, 'read', 'conversation', 'self').catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    securityAudit.logDataAccess(userId, 'read', 'conversation', '*', {
+      count: conversations.length,
+    }).catch((error) => {
+      loggers.security.warn('[Conversations] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
     });
 
     return NextResponse.json({
@@ -221,10 +226,6 @@ export async function POST(request: Request) {
       .limit(1);
 
     if (existingConversation) {
-      securityAudit.logDataAccess(userId, 'read', 'conversation', existingConversation.id).catch((error) => {
-        loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-      });
-
       return NextResponse.json({ conversation: existingConversation });
     }
 
@@ -236,10 +237,6 @@ export async function POST(request: Request) {
         participant2Id,
       })
       .returning();
-
-    securityAudit.logDataAccess(userId, 'write', 'conversation', newConversation.id).catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
 
     return NextResponse.json({ conversation: newConversation });
   } catch (error) {
