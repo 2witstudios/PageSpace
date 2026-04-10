@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getValidAccessToken } from '@/lib/integrations/google-calendar/token-refresh';
 import { listCalendars } from '@/lib/integrations/google-calendar/api-client';
 
@@ -53,6 +53,10 @@ export async function GET(request: Request) {
         if (!a.primary && b.primary) return 1;
         return (a.summary || '').localeCompare(b.summary || '');
       });
+
+    securityAudit.logDataAccess(userId, 'read', 'google_calendars', userId, { calendarCount: calendars.length }).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
+    });
 
     return NextResponse.json({ calendars });
   } catch (error) {

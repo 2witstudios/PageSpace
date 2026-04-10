@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { importOpenAPISpec } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -42,6 +42,10 @@ export async function POST(request: Request) {
     const result = await importOpenAPISpec(spec, {
       selectedOperations,
       baseUrlOverride,
+    });
+
+    securityAudit.logDataAccess(auth.userId, 'write', 'openapi_import', 'import').catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
     });
 
     return NextResponse.json({ result });

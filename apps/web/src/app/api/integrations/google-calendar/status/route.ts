@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -51,6 +51,10 @@ export async function GET(request: Request) {
           eq(calendarEvents.isTrashed, false)
         )
       );
+
+    securityAudit.logDataAccess(userId, 'read', 'calendar_status', userId).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
+    });
 
     return NextResponse.json({
       connected: connection.status === 'active',

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { builtinProviderList, listEnabledProviders } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
@@ -26,6 +26,10 @@ export async function GET(request: Request) {
         description: b.description ?? null,
         documentationUrl: b.documentationUrl ?? null,
       }));
+
+    securityAudit.logDataAccess(auth.userId, 'read', 'available_providers', 'list', { availableCount: available.length }).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
+    });
 
     return NextResponse.json({ providers: available });
   } catch (error) {

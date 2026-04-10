@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
@@ -194,6 +194,10 @@ export async function GET(req: Request) {
 
     loggers.auth.info('Google Calendar connected successfully', {
       userId,
+    });
+
+    securityAudit.logDataAccess(userId, 'write', 'calendar_oauth_callback', userId, { googleEmail }).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId });
     });
 
     // Redirect back to settings with success

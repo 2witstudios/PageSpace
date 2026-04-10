@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import {
   getProviderById,
   updateProvider,
@@ -55,6 +55,10 @@ export async function GET(
     if (!provider) {
       return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
     }
+
+    securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', providerId).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
+    });
 
     return NextResponse.json({ provider });
   } catch (error) {
@@ -119,6 +123,11 @@ export async function PUT(
     }
 
     const updated = await updateProvider(db, providerId, updateData);
+
+    securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', providerId, { operation: 'update' }).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
+    });
+
     return NextResponse.json({ provider: updated });
   } catch (error) {
     loggers.api.error('Error updating provider:', error as Error);
@@ -168,6 +177,10 @@ export async function DELETE(
     if (!deleted) {
       return NextResponse.json({ error: 'Failed to delete provider' }, { status: 500 });
     }
+
+    securityAudit.logDataAccess(auth.userId, 'delete', 'integration_provider', providerId).catch((err) => {
+      loggers.security.warn('[SecurityAudit] audit log failed', { error: err instanceof Error ? err.message : String(err), userId: auth.userId });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
