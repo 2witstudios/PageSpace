@@ -131,7 +131,7 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
         action: 'deny_access',
       });
       securityAudit.logAccessDenied(user.id, 'admin_route', method, 'csrf_validation_failed').catch((error) => {
-        loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error, userId: user.id, reason: 'csrf_validation_failed' });
+        loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error: error instanceof Error ? error.message : String(error), userId: user.id, reason: 'csrf_validation_failed' });
       });
       // Return the CSRF error response directly to preserve error codes
       return csrfError;
@@ -160,7 +160,7 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
       'admin_access',
       validationResult.reason ?? 'admin_role_version_validation_failed'
     ).catch((error) => {
-      loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error, userId: user.id });
+      loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
     });
     return NextResponse.json(
       { error: 'Forbidden: Admin access required' },
@@ -192,7 +192,7 @@ function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: st
     endpoint,
     { method: request.method, ipAddress }
   ).catch((error) => {
-    loggers.security.warn('[AdminAuth] audit logDataAccess failed', { error, userId: user.id, endpoint });
+    loggers.security.warn('[AdminAuth] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id, endpoint });
   });
 }
 
@@ -206,6 +206,6 @@ function emitAdminAuditDenied(request: Request, endpoint: string, ipAddress?: st
     details: { method: request.method, reason: 'admin_auth_denied' },
     riskScore: 0.5,
   }).catch((error) => {
-    loggers.security.warn('[AdminAuth] audit logEvent failed', { error, userId, endpoint });
+    loggers.security.warn('[AdminAuth] audit logEvent failed', { error: error instanceof Error ? error.message : String(error), userId, endpoint });
   });
 }

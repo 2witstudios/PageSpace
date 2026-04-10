@@ -283,7 +283,7 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
       expect(mockSecurityWarn).toHaveBeenCalledWith(
         '[Logout] audit logLogout failed',
-        expect.objectContaining({ error: expect.any(Error), userId: 'test-user-id' })
+        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
       );
     });
 
@@ -304,7 +304,7 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
       expect(mockSecurityWarn).toHaveBeenCalledWith(
         '[Logout] audit logTokenRevoked failed',
-        expect.objectContaining({ error: expect.any(Error), userId: 'test-user-id' })
+        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
       );
     });
   });

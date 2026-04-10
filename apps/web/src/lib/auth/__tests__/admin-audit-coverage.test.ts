@@ -355,7 +355,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       expect(mockSecurityWarn).toHaveBeenCalledWith(
         '[AdminAuth] audit logDataAccess failed',
-        expect.objectContaining({ error: expect.any(Error), userId: 'admin-123' })
+        expect.objectContaining({ error: 'DB write timeout', userId: 'admin-123' })
       );
     });
 
@@ -370,7 +370,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       expect(mockSecurityWarn).toHaveBeenCalledWith(
         '[AdminAuth] audit logEvent failed',
-        expect.objectContaining({ error: expect.any(Error), endpoint: '/api/admin/users' })
+        expect.objectContaining({ error: 'Audit service down', endpoint: '/api/admin/users' })
       );
     });
 
@@ -385,7 +385,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       expect(mockSecurityWarn).toHaveBeenCalledWith(
         '[AdminAuth] audit logAccessDenied failed',
-        expect.objectContaining({ error: expect.any(Error), userId: 'user-456' })
+        expect.objectContaining({ error: 'Connection refused', userId: 'user-456' })
       );
     });
   });
