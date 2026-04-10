@@ -38,13 +38,14 @@ describe('QueueManager type contracts', () => {
       'image-optimize': { active: 0, pending: 0, completed: 0, failed: 0 },
       'text-extract': { active: 0, pending: 0, completed: 0, failed: 0 },
       'ocr-process': { active: 0, pending: 0, completed: 0, failed: 0 },
+      'siem-delivery': { active: 0, pending: 0, completed: 0, failed: 0 },
     };
 
     assert({
       given: 'a Record<QueueName, QueueStats>',
-      should: 'have 4 queue keys',
+      should: 'have 5 queue keys',
       actual: Object.keys(status).length,
-      expected: 4,
+      expected: 5,
     });
   });
 });

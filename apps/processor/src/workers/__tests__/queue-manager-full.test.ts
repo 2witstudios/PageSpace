@@ -9,6 +9,8 @@ const mockBossSend = vi.fn().mockResolvedValue('job-id-123');
 const mockBossGetJobById = vi.fn();
 const mockBossOn = vi.fn();
 
+const mockBossSchedule = vi.fn().mockResolvedValue(undefined);
+
 const mockBossInstance = {
   start: mockBossStart,
   stop: mockBossStop,
@@ -17,6 +19,7 @@ const mockBossInstance = {
   send: mockBossSend,
   getJobById: mockBossGetJobById,
   on: mockBossOn,
+  schedule: mockBossSchedule,
 };
 
 vi.mock('pg-boss', () => ({
@@ -29,6 +32,12 @@ vi.mock('../../db', () => ({
   setPageCompleted: vi.fn().mockResolvedValue(undefined),
   setPageFailed: vi.fn().mockResolvedValue(undefined),
   setPageVisual: vi.fn().mockResolvedValue(undefined),
+  getPoolForWorker: vi.fn(),
+}));
+
+// Mock SIEM delivery worker (dynamically imported by queue-manager)
+vi.mock('../siem-delivery-worker', () => ({
+  processSiemDelivery: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock workers
@@ -89,16 +98,19 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(4);
+      expect(mockBossWork).toHaveBeenCalledTimes(5);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
       expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(4);
+      expect(mockBossWork.mock.calls[4][0]).toBe('siem-delivery');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(5);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
+      expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
     });
 
     it('handles queue creation errors gracefully', async () => {
@@ -307,6 +319,7 @@ describe('QueueManager', () => {
       expect(status['image-optimize']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['text-extract']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['ocr-process']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
+      expect(status['siem-delivery']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
     });
 
     it('maps queue states correctly', async () => {
