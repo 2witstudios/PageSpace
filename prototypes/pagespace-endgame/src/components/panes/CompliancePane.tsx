@@ -253,7 +253,7 @@ export function CompliancePane() {
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         The security infrastructure is solid but has coverage gaps.
-        The SIEM adapter is built but not wired. Audit service coverage
+        SIEM delivery is now connected (#873). Audit service coverage
         expanded to pages, drives, permissions, settings, account, files,
         and export routes (#868-870) but not yet 100%. Agent-level security
         is missing entirely.
@@ -270,14 +270,14 @@ export function CompliancePane() {
             secondary routes.
           </p>
         </Card>
-        <Card accent="red">
-          <h4>SIEM adapter: built, not connected</h4>
+        <Card accent="green">
+          <h4>SIEM adapter: connected (#873)</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Full SIEM adapter in <code>apps/processor</code>: webhook +
             syslog (TCP/UDP), HMAC-SHA256 signatures, RFC 5424 format,
             batched delivery, retry with backoff, AI attribution in output.
-            Zero production callers. <code>deliverToSiem()</code> is never
-            invoked from the audit pipeline.
+            Now wired via cursor-based pg-boss worker polling{" "}
+            <code>activity_logs</code> every 30s. Health endpoint exposed.
           </p>
         </Card>
       </div>
@@ -359,9 +359,9 @@ export function CompliancePane() {
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
-          nameColor="var(--cyan)"
-          name="Connect SIEM"
-          description="Wire the existing SIEM adapter to the audit pipeline. Audit events stream to external SIEM in real time. The adapter code is fully built (webhook + syslog + RFC 5424) &mdash; it just needs callers."
+          nameColor="var(--green)"
+          name="SIEM connected &#10003;"
+          description="SIEM adapter wired to audit pipeline via cursor-based pg-boss worker (#873). Activity logs stream to external SIEM (Splunk, Datadog, etc.) every 30s. Webhook + syslog delivery with HMAC signing."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature

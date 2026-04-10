@@ -77,14 +77,14 @@ export function Soc2Pane() {
         </Card>
         <Card accent="amber">
           <h4>
-            Coverage gap: 5 of 252 routes{" "}
-            <span style={{ color: "var(--red)" }}>(~2%)</span>
+            Coverage expanding: ~47 of 248 routes{" "}
+            <span style={{ color: "var(--amber)" }}>(~19%)</span>
           </h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            SecurityAuditService is only wired to login, logout, and mobile
-            login routes. Core operations (page CRUD, drive management, settings
-            changes, file uploads, permission changes) are <strong>not covered</strong>.
-            The service works &mdash; it just needs to be called from more places.
+            SecurityAuditService wired to auth, pages, drives, permissions,
+            settings, account, file upload, and export routes (#868-870).
+            Remaining gaps: AI/chat endpoints, integrations, calendar,
+            notifications, admin actions, trash, and invitations.
           </p>
         </Card>
       </div>
@@ -121,14 +121,14 @@ export function Soc2Pane() {
             Results feed into security audit events.
           </p>
         </Card>
-        <Card accent="amber">
-          <h4>SIEM adapter (built, not connected)</h4>
+        <Card accent="green">
+          <h4>SIEM adapter (connected)</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Full SIEM adapter exists: webhook delivery with HMAC-SHA256
-            signatures, syslog (TCP/UDP) with RFC 5424 format, batched delivery,
-            retry with backoff, SSRF protection. <strong>Gap:</strong> zero
-            production calls to <code>deliverToSiem()</code>. The adapter is
-            built but not wired to the logging pipeline.
+            Full SIEM adapter with webhook delivery (HMAC-SHA256), syslog
+            (TCP/UDP, RFC 5424), batched delivery, retry with backoff, SSRF
+            protection. Wired into the processor via cursor-based pg-boss
+            worker (#873). Polls <code>activity_logs</code> every 30s,
+            delivers to configured external SIEM. Health endpoint exposed.
           </p>
         </Card>
       </div>
@@ -197,30 +197,24 @@ export function Soc2Pane() {
         <span className="hl">Operationalization doesn&apos;t.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        Recent PRs closed 4 gaps (distributed rate limiting, webhook
-        alerting, rate-limit audit events, admin read auditing). What
-        remains: wiring the audit service to all routes, connecting the
-        SIEM adapter, fixing the activity log chain fork, and formalizing
-        an SLA.
+        Recent PRs closed major gaps: distributed rate limiting, webhook
+        alerting, rate-limit audit events, admin read auditing, SIEM
+        delivery (#873), and audit wiring to pages/drives/settings/account
+        (#868-870). What remains: expanding audit coverage to 100% of
+        routes and formalizing an SLA.
       </p>
 
       <FeatureRow columns={3}>
         <Feature
-          nameColor="var(--red)"
-          name="Audit coverage at 2%"
-          description="SecurityAuditService exists with hash chain integrity, but only 5 of 252 API routes call it. Core product operations (pages, drives, files, settings) are not security-audited."
+          nameColor="var(--amber)"
+          name="Audit coverage at ~19%"
+          description="SecurityAuditService wired to ~47 of 248 routes (auth, pages, drives, permissions, settings, account, files, export). Remaining: AI/chat, integrations, calendar, notifications, admin, trash, invitations."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
           nameColor="var(--red)"
           name="Activity chain can fork"
           description="Activity log hash chain writes not serialized with row locking (#542). Concurrent writes can create forks. Security audit chain is safe (uses pg_advisory_xact_lock). Activity logs do not."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--red)"
-          name="SIEM not connected"
-          description="Full SIEM adapter built (webhook + syslog, HMAC-signed, RFC 5424) but zero production calls. Audit events go to database only. No external SIEM delivery."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -244,17 +238,11 @@ export function Soc2Pane() {
         <span className="hl">Every control operationalized.</span>
       </h2>
 
-      <FeatureRow columns={3}>
+      <FeatureRow columns={2}>
         <Feature
           nameColor="var(--cyan)"
           name="100% audit coverage"
-          description="SecurityAuditService wired to all security-relevant routes. Every page CRUD, permission change, file operation, admin action, and settings change produces an immutable audit event."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--cyan)"
-          name="SIEM delivery"
-          description="Connect the existing SIEM adapter to the logging pipeline. Audit events stream to external SIEM (Splunk, Datadog, etc.) in real time. The adapter is built — it just needs wiring."
+          description="Expand SecurityAuditService from ~19% to all security-relevant routes. Remaining: AI/chat endpoints, integrations, calendar, notifications, admin actions, trash, invitations."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
@@ -279,13 +267,12 @@ export function Soc2Pane() {
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>The pattern</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          Most remaining SOC 2 gaps are &ldquo;built but not
-          connected&rdquo; or &ldquo;connected but not
-          comprehensive.&rdquo; The SIEM adapter exists but isn&apos;t
-          wired. The audit service exists but only covers 2% of routes.
-          Recent fixes closed 4 gaps (rate limiting, webhook alerting,
-          rate-limit audit events, admin read auditing). The remaining
-          fix is operationalization, not new infrastructure.
+          The SIEM adapter is now connected (#873) and audit coverage
+          has expanded from 2% to ~19% (#868-870). The remaining SOC 2
+          gaps are &ldquo;connected but not comprehensive&rdquo; &mdash;
+          expanding audit coverage to all routes, fixing the activity
+          log chain fork, and formalizing an SLA. The pattern is
+          operationalization, not new infrastructure.
         </p>
       </Card>
     </div>

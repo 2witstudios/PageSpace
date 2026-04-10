@@ -167,26 +167,26 @@ export function ObservabilityPane() {
         </Card>
       </div>
 
-      <h3 style={{ marginBottom: 12 }}>SIEM integration (implemented, not connected)</h3>
+      <h3 style={{ marginBottom: 12 }}>SIEM integration (connected)</h3>
       <div className="g2" style={{ marginBottom: 12 }}>
-        <Card accent="amber">
-          <h4>Webhook delivery &mdash; dead code</h4>
+        <Card accent="green">
+          <h4>Webhook delivery</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Full implementation exists: HMAC-SHA256 signed payloads, batched
-            delivery (up to 1000), exponential backoff with jitter (capped
-            60s), SSRF protection. But <strong>nothing calls it</strong>.
-            No cron job, no event handler, no pipeline feeds audit entries
-            into the adapter. Env vars not set in deploy repo.
+            HMAC-SHA256 signed payloads, batched delivery (up to 1000),
+            exponential backoff with jitter (capped 60s), SSRF protection.
+            Wired into the processor via cursor-based pg-boss worker (#873).
+            Polls <code>activity_logs</code> every 30s and delivers to
+            configured SIEM endpoint. Health status exposed at{" "}
+            <code>/health</code>.
           </p>
         </Card>
-        <Card accent="amber">
-          <h4>Syslog (RFC 5424) &mdash; dead code</h4>
+        <Card accent="green">
+          <h4>Syslog (RFC 5424)</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            TCP and UDP protocols implemented. Structured data elements,
-            configurable facility, octet-counting framing. Fully tested.
-            But same problem: <strong>no call site</strong>. The adapter
-            sits in <code>apps/processor/src/services/</code> with zero
-            imports from production code.
+            TCP and UDP protocols. Structured data elements, configurable
+            facility, octet-counting framing. Available as an alternative
+            delivery target alongside webhook. Configured via{" "}
+            <code>AUDIT_SIEM_TYPE</code> env var.
           </p>
         </Card>
       </div>
@@ -271,7 +271,7 @@ export function ObservabilityPane() {
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Webhook alerting exists for audit chain failure. But no
             threshold-based alerts (error rate spikes, cost anomalies, agent
-            failure patterns). SIEM integration delivers logs but
+            failure patterns). SIEM delivers logs but
             doesn&apos;t trigger on conditions.
           </p>
         </Card>
