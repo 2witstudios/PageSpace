@@ -71,9 +71,9 @@ export function GdprPane() {
         <p style={{ marginTop: 6, fontSize: 12 }}>
           Messages use a two-stage deletion path: soft-delete via{" "}
           <code>isActive</code> flag, then a 30-day purge cron hard-deletes
-          the rows. On account deletion, FK cascade removes all messages
-          immediately. Satisfies GDPR Art. 17 right to erasure for message
-          content.
+          the rows. On account deletion, FK cascade removes user-owned
+          messages immediately. Note: shared-page assistant messages stored
+          with <code>userId: null</code> may survive account deletion.
         </p>
       </Card>
 
@@ -211,8 +211,9 @@ export function GdprPane() {
           <h4>Hard-delete for messages &mdash; Done</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Implemented: 30-day purge cron hard-deletes soft-deleted messages.
-            FK cascade on account deletion removes all messages immediately.
-            GDPR Art. 17 right to erasure satisfied for message content.
+            FK cascade on account deletion removes user-owned messages
+            immediately. Remaining gap: shared-page assistant messages with{" "}
+            <code>userId: null</code> may persist.
           </p>
         </Card>
         <Card accent="green">

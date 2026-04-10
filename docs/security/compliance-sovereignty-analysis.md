@@ -522,7 +522,7 @@ to be stripped or replaced for a compliance-clean on-premise deployment:
 |---------------|----------------------|--------|-------|
 | Stripe billing | Remove entirely, or license-key model | Low-medium | No billing needed for single-tenant on-prem |
 | Resend email | Self-hosted SMTP (Postfix, etc.) | Medium | Only needed if email verification is required |
-| Google OAuth | Remove; use local email+password auth only | Low | Original auth system already exists |
+| Google OAuth | Remove; use magic links + passkeys | Low | Password auth removed (#861); on-prem uses magic links |
 | Google One Tap | Remove | Trivial | UI-only removal |
 | Google Calendar | Remove | Low | Optional integration |
 | Cloud AI providers | Remove from config; Ollama/LM Studio only | Low | Provider factory already supports this |
