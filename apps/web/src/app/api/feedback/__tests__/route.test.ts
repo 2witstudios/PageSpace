@@ -34,6 +34,10 @@ vi.mock('@pagespace/db', () => ({
   feedbackSubmissions: {},
 }));
 
+const { mockSecurityAudit } = vi.hoisted(() => ({
+  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -43,6 +47,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -391,6 +396,28 @@ describe('/api/feedback', () => {
           declaredType: 'image/png',
         })
       );
+    });
+  });
+
+  describe('security audit', () => {
+    it('POST_withValidFeedback_logsAuditEvent', async () => {
+      const request = createRequest({ message: 'Feedback message' });
+      await POST(request);
+
+      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user-123', 'write', 'feedback', 'user-123',
+        { hasAttachments: false }
+      );
+    });
+
+    it('POST_withAuthFailure_doesNotLogAuditEvent', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError());
+      vi.mocked(isAuthError).mockReturnValue(true);
+
+      const request = createRequest({ message: 'Feedback' });
+      await POST(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
     });
   });
 

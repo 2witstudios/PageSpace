@@ -23,7 +23,9 @@ vi.mock('@pagespace/lib', () => ({
   verifyAndAlert: mockVerifyAndAlert,
 }));
 
-const mockSecurityAudit = { logDataAccess: vi.fn().mockResolvedValue(undefined) };
+const mockSecurityAudit = vi.hoisted(() => ({
+  logDataAccess: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,

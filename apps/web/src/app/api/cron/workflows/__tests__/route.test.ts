@@ -35,7 +35,9 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-const mockSecurityAudit = { logDataAccess: vi.fn().mockResolvedValue(undefined) };
+const mockSecurityAudit = vi.hoisted(() => ({
+  logDataAccess: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
