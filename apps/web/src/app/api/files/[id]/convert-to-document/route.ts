@@ -6,6 +6,7 @@ import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -27,6 +28,10 @@ export async function POST(
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    securityAudit.logDataAccess(userId, 'write', 'file', id, { action: 'convert' }).catch((error) => {
+      loggers.security.warn('[Files] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Get request body
     const body = await request.json();

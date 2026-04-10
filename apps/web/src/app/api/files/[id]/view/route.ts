@@ -4,6 +4,7 @@ import { db, pages, files, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
 import { canUserAccessFile } from '@pagespace/lib/permissions';
 import { sanitizeFilenameForHeader, isDangerousMimeType, getCSPHeaderForFile } from '@pagespace/lib/utils/file-security';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 interface RouteParams {
   params: Promise<{
@@ -68,6 +69,10 @@ export async function GET(
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    securityAudit.logDataAccess(user.id, 'read', 'file', id).catch((error) => {
+      loggers.security.warn('[Files] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     // First, try to find as a FILE-type page (existing behavior)
     const page = await db.query.pages.findFirst({
