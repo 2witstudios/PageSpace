@@ -673,6 +673,13 @@
       "when": 1775715372849,
       "tag": "0095_blushing_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1775836996998,
+      "tag": "0096_glorious_pet_avengers",
+      "breakpoints": true
     }
   ]
 }

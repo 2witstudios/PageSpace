@@ -45,6 +45,7 @@ import {
   sanitizeMessagesForModel,
   convertDbMessageToUIMessage,
   processMentionsInMessage,
+  buildMentionSystemPrompt,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   buildPersonalizationPrompt,
@@ -320,6 +321,7 @@ export async function POST(request: Request) {
     });
 
     // Process @mentions in the user's message
+    let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
 
     // Save user's message immediately to database (database-first approach)
@@ -328,12 +330,13 @@ export async function POST(request: Request) {
       try {
         const messageId = userMessage.id || createId();
         const messageContent = extractMessageContent(userMessage);
-        
+
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
         mentionedPageIds = processedMessage.pageIds;
-        
+
         if (processedMessage.mentions.length > 0) {
+          mentionSystemPrompt = buildMentionSystemPrompt(processedMessage.mentions);
           loggers.ai.info('AI Chat API: Found @mentions in user message', {
             mentionCount: processedMessage.mentions.length,
             pageIds: mentionedPageIds
@@ -859,7 +862,7 @@ export async function POST(request: Request) {
           // Start the AI response
           const aiResult = streamText({
             model,
-            system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt,
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],

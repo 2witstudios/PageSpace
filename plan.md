@@ -24,7 +24,8 @@ A generic integration sandbox allowing:
 
 ## Completed Epics
 
-_None yet_
+### SIEM Connect ✅ (2026-04-10)
+**Epic**: [tasks/siem-connect.md](tasks/siem-connect.md)
 
 ---
 
