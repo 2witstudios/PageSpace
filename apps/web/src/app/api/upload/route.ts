@@ -353,7 +353,8 @@ export async function POST(request: NextRequest) {
         eventType: 'upload'
       });
 
-      securityAudit.logDataAccess(userId, 'write', 'file', contentHash, { fileName: file.name, driveId, pageId: newPage.id }).catch(() => {});
+      const fileExtension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : undefined;
+      securityAudit.logDataAccess(userId, 'write', 'file', contentHash, { fileExtension, driveId, pageId: newPage.id }).catch(() => {});
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

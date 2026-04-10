@@ -209,7 +209,9 @@ export async function POST(request: Request) {
       );
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'page', 'bulk', { operation: 'bulk_move', count: pageIds.length }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'write', 'page', 'bulk', { operation: 'bulk_move', count: pageIds.length }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'bulk_move' });
+    });
 
     return NextResponse.json({
       success: true,

@@ -30,7 +30,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'page', pageId, { operation: 'read' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'read', 'page', pageId, { operation: 'read' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceId: pageId });
+    });
 
     return jsonResponse(result.page);
   } catch (error) {
@@ -143,7 +145,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       hasTitleUpdate: !!safeBody.title
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'page', pageId, { operation: 'update' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'write', 'page', pageId, { operation: 'update' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'update', resourceId: pageId });
+    });
 
     return jsonResponse(result.page);
   } catch (error) {
@@ -227,7 +231,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       pageType: result.pageType
     });
 
-    securityAudit.logDataAccess(userId, 'delete', 'page', pageId, { operation: 'trash' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'delete', 'page', pageId, { operation: 'trash' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'trash', resourceId: pageId });
+    });
 
     return NextResponse.json({ message: 'Page moved to trash successfully.' });
   } catch (error) {
