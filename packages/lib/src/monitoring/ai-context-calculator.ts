@@ -165,6 +165,7 @@ export function getContextWindowSize(model: string, provider?: string): number {
       }
       return 272_000;
     }
+    if (modelLower.includes('gpt-4.1')) return 1_000_000;
     if (modelLower.includes('gpt-4o')) return 128_000;
     if (modelLower.includes('gpt-4-turbo')) return 128_000;
     if (modelLower.includes('gpt-4')) return 8_192;

@@ -28,6 +28,11 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-5-mini': true,
   'gpt-5-nano': true,
 
+  // OpenAI GPT-4.1 Models (all have vision)
+  'gpt-4.1-2025-04-14': true,
+  'gpt-4.1-mini-2025-04-14': true,
+  'gpt-4.1-nano-2025-04-14': true,
+
   // OpenAI GPT-4o Models with Vision
   'gpt-4o': true,
   'gpt-4o-mini': true,
@@ -138,7 +143,7 @@ export function hasVisionCapability(model: string): boolean {
     return true;
   }
 
-  if (lowerModel.includes('gpt-4o')) {
+  if (lowerModel.includes('gpt-4o') || lowerModel.includes('gpt-4.1')) {
     return true;
   }
 

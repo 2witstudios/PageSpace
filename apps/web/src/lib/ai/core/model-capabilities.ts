@@ -141,7 +141,7 @@ export function getSuggestedToolCapableModels(provider: string): string[] {
       return ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'];
     case 'openrouter':
     case 'openrouter_free':
-      return ['meta-llama/llama-3.1-8b-instruct', 'qwen/qwen-2.5-7b-instruct'];
+      return ['meta-llama/llama-3.1-405b-instruct', 'mistralai/mistral-small-3.2-24b-instruct'];
     case 'google':
       return ['gemini-2.5-flash', 'gemini-1.5-flash'];
     case 'openai':
