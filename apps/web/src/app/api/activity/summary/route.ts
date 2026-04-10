@@ -42,8 +42,6 @@ export async function GET(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'read', 'activity_summary', userId).catch(() => {});
-
   try {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -194,6 +192,8 @@ export async function GET(req: Request) {
         updatedThisWeek: pagesUpdatedThisWeek,
       },
     };
+
+    securityAudit.logDataAccess(userId, 'read', 'activity_summary', userId).catch(() => {});
 
     return NextResponse.json(summary);
   } catch (error) {

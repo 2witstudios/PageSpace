@@ -54,9 +54,6 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
-  const context = searchParams.get('context') || 'user';
-
-  securityAudit.logDataAccess(userId, 'read', 'tasks', userId, { context }).catch(() => {});
 
   try {
     // Parse and validate query parameters
@@ -402,6 +399,8 @@ export async function GET(request: Request) {
         slug: c.slug, color: c.color, group: c.group, position: c.position,
       }));
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'tasks', userId, { context: params.context }).catch(() => {});
 
     return NextResponse.json({
       tasks: enrichedTasks,

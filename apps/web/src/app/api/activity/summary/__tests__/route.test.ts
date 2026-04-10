@@ -76,6 +76,20 @@ describe('GET /api/activity/summary', () => {
     );
   });
 
+  it('does not log audit event when query throws', async () => {
+    const { db } = await import('@pagespace/db');
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockRejectedValue(new Error('DB error')),
+      }),
+    } as never);
+
+    const request = new Request('https://example.com/api/activity/summary');
+    await GET(request);
+
+    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+  });
+
   it('does not log audit event when auth fails', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError());
     vi.mocked(isAuthError).mockReturnValue(true);
