@@ -450,14 +450,14 @@ export async function DELETE(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  // Disable any task trigger workflows before deletion
-  void disableTaskTriggers(taskId, 'Task deleted');
-
   const linkedPageId = existingTask.pageId;
 
   if (!linkedPageId) {
     // Task without a page (conversation-based) - delete the task record directly
     await db.delete(taskItems).where(eq(taskItems.id, taskId));
+
+    // Disable triggers only after successful deletion
+    void disableTaskTriggers(taskId, 'Task deleted');
 
     await broadcastTaskEvent({
       type: 'task_deleted',
@@ -529,6 +529,9 @@ export async function DELETE(
       throw error;
     }
   }
+
+  // Disable triggers only after successful page trash
+  void disableTaskTriggers(taskId, 'Task deleted');
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [

@@ -278,21 +278,8 @@ Agent Triggers:
             }
           }
 
-          // Task trigger cascades
-          if (dueDate !== undefined) {
-            void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
-          }
-          if (status !== undefined) {
-            const completedSlugs = validConfigs.length > 0
-              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
-              : new Set(['completed']);
-            if (completedSlugs.has(status) && !existingTask.completedAt) {
-              void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
-              void fireCompletionTrigger(taskId);
-            }
-          }
-
-          // Create agent trigger workflow if requested on update
+          // Create agent trigger workflow BEFORE firing cascades so the workflow
+          // exists when fireCompletionTrigger looks for it
           if (agentTrigger) {
             if (!taskListDriveId) {
               return { success: false, error: 'Agent triggers require a drive-based task list' };
@@ -307,6 +294,20 @@ Agent Triggers:
               dueDate: resultTask.dueDate,
               timezone: (context as ToolExecutionContext).timezone || 'UTC',
             });
+          }
+
+          // Task trigger cascades
+          if (dueDate !== undefined) {
+            void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+          }
+          if (status !== undefined) {
+            const completedSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+              : new Set(['completed']);
+            if (completedSlugs.has(status) && !existingTask.completedAt) {
+              void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
+              void fireCompletionTrigger(taskId);
+            }
           }
 
           // Broadcast update event

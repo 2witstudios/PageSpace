@@ -205,14 +205,21 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
 
     if (claimed.length === 0) return; // Another caller already claimed it
 
-    // Fire-and-forget execution
+    // Fire-and-forget execution with fully guarded promise chain
     void executeWorkflow(completionWorkflow).then(async (result) => {
-      await db.update(workflows).set({
-        lastRunStatus: result.success ? 'success' : 'error',
-        lastRunError: result.error || null,
-        lastRunDurationMs: result.durationMs,
-        isEnabled: false,
-      }).where(eq(workflows.id, completionWorkflow.id));
+      try {
+        await db.update(workflows).set({
+          lastRunStatus: result.success ? 'success' : 'error',
+          lastRunError: result.error || null,
+          lastRunDurationMs: result.durationMs,
+          isEnabled: false,
+        }).where(eq(workflows.id, completionWorkflow.id));
+      } catch (dbErr) {
+        logger.error('Failed to update workflow status after execution', {
+          workflowId: completionWorkflow.id,
+          error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        });
+      }
 
       logger.info('Completion trigger executed', {
         workflowId: completionWorkflow.id,
@@ -227,11 +234,18 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
         taskItemId: taskId,
         error: errorMsg,
       });
-      await db.update(workflows).set({
-        lastRunStatus: 'error',
-        lastRunError: errorMsg,
-        isEnabled: false,
-      }).where(eq(workflows.id, completionWorkflow.id));
+      try {
+        await db.update(workflows).set({
+          lastRunStatus: 'error',
+          lastRunError: errorMsg,
+          isEnabled: false,
+        }).where(eq(workflows.id, completionWorkflow.id));
+      } catch (dbErr) {
+        logger.error('Failed to update workflow error status', {
+          workflowId: completionWorkflow.id,
+          error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        });
+      }
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

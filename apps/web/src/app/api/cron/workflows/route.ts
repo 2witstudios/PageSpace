@@ -69,22 +69,31 @@ export async function POST(req: Request) {
     const executeOne = async (workflow: WorkflowRow) => {
       const isOneShot = workflow.triggerType === 'task_due_date';
 
-      // Pre-execution check: skip task_due_date triggers if the task is already completed
+      // Pre-execution check: skip task_due_date triggers whose task is completed,
+      // deleted, or whose due date was cleared/postponed after the workflow was claimed
       if (isOneShot && workflow.taskItemId) {
         const [task] = await db
-          .select({ completedAt: taskItems.completedAt })
+          .select({ completedAt: taskItems.completedAt, dueDate: taskItems.dueDate })
           .from(taskItems)
           .where(eq(taskItems.id, workflow.taskItemId));
 
-        if (!task || task.completedAt) {
+        const skipReason = !task
+          ? 'Task not found'
+          : task.completedAt
+            ? 'Task completed before due date'
+            : (!task.dueDate || task.dueDate.getTime() > now.getTime())
+              ? 'Task due date cleared or postponed'
+              : null;
+
+        if (skipReason) {
           await db.update(workflows).set({
             lastRunAt: new Date(),
             lastRunStatus: 'error',
-            lastRunError: !task ? 'Task not found' : 'Task completed before due date',
+            lastRunError: skipReason,
             isEnabled: false,
             nextRunAt: null,
           }).where(eq(workflows.id, workflow.id));
-          return { workflow, result: { success: false, durationMs: 0, error: 'Task already completed or not found' } as const };
+          return { workflow, result: { success: false, durationMs: 0, error: skipReason } as const };
         }
       }
 

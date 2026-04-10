@@ -68,7 +68,7 @@ export async function executeCalendarTrigger(
       watchedFolderIds: null,
       eventDebounceSecs: null,
       taskItemId: null,
-      instructionPageId: trigger.instructionPageId,
+      instructionPageId: null, // already loaded by buildTriggerPrompt — avoid double injection
       isEnabled: true,
       lastRunAt: null,
       nextRunAt: null,

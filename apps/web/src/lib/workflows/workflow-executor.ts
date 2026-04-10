@@ -314,11 +314,10 @@ async function buildTaskContext(taskItemId: string, triggerType: string): Promis
     }
   }
 
-  // Assignees
+  // Assignees (avoid email PII — use names/titles only)
   const assignees = await db
     .select({
       userName: users.name,
-      userEmail: users.email,
       agentTitle: pages.title,
     })
     .from(taskAssignees)
@@ -327,7 +326,7 @@ async function buildTaskContext(taskItemId: string, triggerType: string): Promis
     .where(eq(taskAssignees.taskId, taskItemId));
 
   if (assignees.length > 0) {
-    const names = assignees.map(a => a.userName || a.agentTitle || a.userEmail || 'Unknown');
+    const names = assignees.map(a => a.userName || a.agentTitle || 'Unknown assignee');
     parts.push(`Assignees: ${names.join(', ')}`);
   }
 
