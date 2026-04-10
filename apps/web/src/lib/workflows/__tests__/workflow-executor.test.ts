@@ -85,6 +85,8 @@ const createWorkflowFixture = (overrides: Record<string, unknown> = {}) => ({
   eventTriggers: null,
   watchedFolderIds: null,
   eventDebounceSecs: null,
+  taskItemId: null,
+  instructionPageId: null,
   isEnabled: true,
   lastRunAt: null,
   nextRunAt: null,

@@ -673,6 +673,13 @@
       "when": 1775715372849,
       "tag": "0095_blushing_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1775841190931,
+      "tag": "0096_sour_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

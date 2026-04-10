@@ -67,6 +67,8 @@ export async function executeCalendarTrigger(
       eventTriggers: null,
       watchedFolderIds: null,
       eventDebounceSecs: null,
+      taskItemId: null,
+      instructionPageId: trigger.instructionPageId,
       isEnabled: true,
       lastRunAt: null,
       nextRunAt: null,

@@ -11,6 +11,17 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
+  loggers: {
+    api: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+    ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  },
+}));
+
+vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
+  syncTaskDueDateTrigger: vi.fn().mockResolvedValue(undefined),
+  cancelTaskDueDateTrigger: vi.fn().mockResolvedValue(undefined),
+  fireCompletionTrigger: vi.fn().mockResolvedValue(undefined),
+  disableTaskTriggers: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib', () => ({

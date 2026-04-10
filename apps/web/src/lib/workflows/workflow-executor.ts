@@ -11,8 +11,8 @@ import {
 } from '@/lib/ai/core';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
-import { db, pages, drives, eq, and, inArray, workflows as workflowsTable } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db, pages, drives, eq, and, inArray, workflows as workflowsTable, taskItems, taskLists, taskAssignees, taskStatusConfigs, users } from '@pagespace/db';
+import { isUserDriveMember, loggers } from '@pagespace/lib/server';
 
 export interface WorkflowExecutionResult {
   success: boolean;
@@ -93,6 +93,22 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
         for (const page of validContextPages) {
           userMessage += `\n\n## ${page.title}\n${page.content || '(empty)'}`;
         }
+      }
+    }
+
+    // 4b. Inject task context when this is a task trigger workflow
+    if (workflow.taskItemId) {
+      const taskContext = await buildTaskContext(workflow.taskItemId, workflow.triggerType);
+      if (taskContext) {
+        userMessage = taskContext + '\n\n' + userMessage;
+      }
+    }
+
+    // 4c. Load instruction page content if present
+    if (workflow.instructionPageId) {
+      const instrContent = await loadInstructionPage(workflow.instructionPageId, workflow.createdBy);
+      if (instrContent) {
+        userMessage += '\n\n--- Detailed Instructions ---\n' + instrContent;
       }
     }
 
@@ -258,4 +274,92 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       error: errorMessage,
     };
   }
+}
+
+/**
+ * Build a task context block for task trigger workflows.
+ */
+async function buildTaskContext(taskItemId: string, triggerType: string): Promise<string | null> {
+  const task = await db.query.taskItems.findFirst({
+    where: eq(taskItems.id, taskItemId),
+    with: {
+      taskList: {
+        columns: { id: true, title: true, pageId: true },
+      },
+    },
+  });
+
+  if (!task) return null;
+
+  const parts: string[] = ['<task-context>'];
+  parts.push(`Title: ${task.title}`);
+  if (task.description) parts.push(`Description: ${task.description}`);
+  parts.push(`Status: ${task.status}`);
+  parts.push(`Priority: ${task.priority}`);
+  if (task.dueDate) parts.push(`Due Date: ${task.dueDate.toISOString()}`);
+  if (task.completedAt) parts.push(`Completed At: ${task.completedAt.toISOString()}`);
+
+  // Status group context
+  if (task.taskList) {
+    parts.push(`Task List: ${task.taskList.title}`);
+    const statusConfig = await db.query.taskStatusConfigs.findFirst({
+      where: and(
+        eq(taskStatusConfigs.taskListId, task.taskList.id),
+        eq(taskStatusConfigs.slug, task.status),
+      ),
+      columns: { group: true, name: true },
+    });
+    if (statusConfig) {
+      parts.push(`Status Label: ${statusConfig.name} (${statusConfig.group})`);
+    }
+  }
+
+  // Assignees
+  const assignees = await db
+    .select({
+      userName: users.name,
+      userEmail: users.email,
+      agentTitle: pages.title,
+    })
+    .from(taskAssignees)
+    .leftJoin(users, eq(taskAssignees.userId, users.id))
+    .leftJoin(pages, eq(taskAssignees.agentPageId, pages.id))
+    .where(eq(taskAssignees.taskId, taskItemId));
+
+  if (assignees.length > 0) {
+    const names = assignees.map(a => a.userName || a.agentTitle || a.userEmail || 'Unknown');
+    parts.push(`Assignees: ${names.join(', ')}`);
+  }
+
+  // Trigger type context
+  if (triggerType === 'task_due_date') {
+    parts.push('Trigger: This task\'s due date has arrived.');
+  } else if (triggerType === 'task_completion') {
+    parts.push('Trigger: This task was just completed.');
+  }
+
+  parts.push('</task-context>');
+  return parts.join('\n');
+}
+
+/**
+ * Load instruction page content for a workflow, re-checking drive access at execution time.
+ */
+async function loadInstructionPage(pageId: string, userId: string): Promise<string | null> {
+  const [instrPage] = await db
+    .select({ title: pages.title, content: pages.content, driveId: pages.driveId, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(eq(pages.id, pageId));
+
+  if (!instrPage || instrPage.isTrashed || !instrPage.content) return null;
+
+  // Re-check drive access at execution time
+  if (instrPage.driveId) {
+    const hasAccess = await isUserDriveMember(userId, instrPage.driveId);
+    if (!hasAccess) return null;
+  } else {
+    return null; // Personal pages not allowed
+  }
+
+  return `## ${instrPage.title}\n${instrPage.content}`;
 }

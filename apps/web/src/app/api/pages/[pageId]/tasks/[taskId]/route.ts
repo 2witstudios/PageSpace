@@ -7,6 +7,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -73,6 +74,8 @@ export async function PATCH(
     updates.description = description?.trim() || null;
   }
 
+  let statusMovedToDone = false;
+
   if (status !== undefined) {
     // Validate against task list's custom status configs
     const validStatuses = await db.query.taskStatusConfigs.findMany({
@@ -90,6 +93,7 @@ export async function PATCH(
       // Set completedAt based on status group
       if (validConfig.group === 'done') {
         updates.completedAt = new Date();
+        statusMovedToDone = !existingTask.completedAt; // Only true if newly completed
       } else if (existingTask.completedAt) {
         updates.completedAt = null;
       }
@@ -101,6 +105,7 @@ export async function PATCH(
       updates.status = status;
       if (status === 'completed') {
         updates.completedAt = new Date();
+        statusMovedToDone = !existingTask.completedAt;
       } else if (existingTask.status === 'completed' && status !== 'completed') {
         updates.completedAt = null;
       }
@@ -299,6 +304,15 @@ export async function PATCH(
     throw error;
   }
 
+  // Task trigger cascades (after transaction commits)
+  if (dueDate !== undefined) {
+    void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+  }
+  if (statusMovedToDone) {
+    void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
+    void fireCompletionTrigger(taskId);
+  }
+
   // Fetch with relations (including assignees)
   const taskWithRelations = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, updatedTask.id),
@@ -435,6 +449,9 @@ export async function DELETE(
   if (!existingTask) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
+
+  // Disable any task trigger workflows before deletion
+  void disableTaskTriggers(taskId, 'Task deleted');
 
   const linkedPageId = existingTask.pageId;
 

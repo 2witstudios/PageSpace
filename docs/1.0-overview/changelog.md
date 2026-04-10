@@ -1,3 +1,30 @@
+## 2026-04-10
+
+### Task-Triggered Workflows
+
+AI agents can now be scheduled to execute when a task's due date arrives or when a task is completed. This extends the workflow system with two new trigger types alongside existing cron and event triggers.
+
+#### Added
+
+- **`task_due_date` and `task_completion` trigger types**: New workflow triggers that fire based on task lifecycle events. Due-date triggers are polled by the cron poller; completion triggers fire inline when a task status moves to done.
+- **`agentTrigger` on task creation/update**: Both the REST API and AI tools accept an `agentTrigger` parameter when creating or updating tasks, linking a workflow to an agent page with a prompt and optional instruction/context pages.
+- **`instructionPageId` on workflows**: Workflows can reference a page containing detailed instructions, loaded at execution time with drive access re-verification.
+- **Task context injection**: When a task trigger fires, the workflow executor injects structured task metadata (title, description, status, priority, assignees, due date) into the agent prompt.
+- **`task-trigger-helpers.ts`**: Centralized helper module for trigger lifecycle operations (sync, cancel, fire, disable, create).
+
+#### Fixed
+
+- **Race condition in completion triggers**: `fireCompletionTrigger` now uses `UPDATE...RETURNING` to atomically claim the workflow, preventing double-execution under concurrent requests.
+- **Unhandled promise rejections**: All fire-and-forget trigger calls now have internal try/catch to prevent silent rejections.
+- **One-shot trigger lifecycle**: Due-date triggers disable themselves after execution or when the due date is cleared/task is completed.
+- **Unique constraint handling**: Duplicate triggers for the same task/type upsert via `onConflictDoUpdate` instead of throwing raw DB errors.
+- **Context page validation**: `contextPageIds` are now validated at creation time to ensure all pages exist in the same drive.
+
+#### Schema
+
+- `workflows` table: added `taskItemId` (FK to `task_items`, cascade delete), `instructionPageId` (FK to `pages`, set null), unique constraint on `(taskItemId, triggerType)`.
+- `WorkflowTriggerType` enum: added `task_due_date`, `task_completion`.
+
 ## 2026-04-09
 
 ### Scheduled Agent Work via Calendar Events
