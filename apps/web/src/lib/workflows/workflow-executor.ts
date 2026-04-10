@@ -11,7 +11,7 @@ import {
 } from '@/lib/ai/core';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
-import { db, pages, drives, eq, and, inArray, workflows as workflowsTable, taskItems, taskLists, taskAssignees, taskStatusConfigs, users } from '@pagespace/db';
+import { db, pages, drives, eq, and, inArray, workflows as workflowsTable, taskItems, taskAssignees, taskStatusConfigs, users } from '@pagespace/db';
 import { isUserDriveMember, loggers } from '@pagespace/lib/server';
 
 export interface WorkflowExecutionResult {
