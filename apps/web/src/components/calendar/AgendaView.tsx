@@ -19,9 +19,10 @@ import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
   ATTENDEE_STATUS_CONFIG,
 } from './calendar-types';
@@ -32,9 +33,11 @@ interface AgendaViewProps {
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
   showGoogleCalendarHint?: boolean;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
-export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCalendarHint = true }: AgendaViewProps) {
+export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCalendarHint = true, driveColorMap, context = 'drive' }: AgendaViewProps) {
   // Get all days in the current month
   const monthDays = useMemo(() => {
     const monthStart = startOfMonth(currentDate);
@@ -135,6 +138,7 @@ export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCal
                   <EventCard
                     key={event.id}
                     event={event}
+                    colors={resolveEventColor(event, context, driveColorMap ?? null)}
                     onClick={() => handlers.onEventClick(event)}
                   />
                 ))}
@@ -159,12 +163,13 @@ export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCal
 // Event card component
 function EventCard({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
   const isAllDay = event.allDay;
   const startTime = format(new Date(event.startAt), 'h:mm a');
   const endTime = format(new Date(event.endAt), 'h:mm a');

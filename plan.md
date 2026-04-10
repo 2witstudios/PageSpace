@@ -22,7 +22,25 @@ A generic integration sandbox allowing:
 
 ---
 
+### Drive Calendar Filtering
+
+**Status**: ✅ COMPLETED
+**Epic**: [tasks/drive-calendar-filtering.md](tasks/drive-calendar-filtering.md)
+**Goal**: Google Calendar-style drive filtering for the root calendar
+
+All tasks delivered:
+1. ✅ Drive Color Palette
+2. ✅ Calendar Filter Store
+3. ✅ Calendar Sidebar Component
+4. ✅ CalendarView Integration
+5. ✅ View Color Resolution (7 view files)
+6. ✅ Mobile Filter Sheet
+
+---
+
 ## Completed Epics
+
+- **Drive Calendar Filtering** — Google Calendar-style drive filtering for the root calendar
 
 ### SIEM Connect ✅ (2026-04-10)
 **Epic**: [tasks/siem-connect.md](tasks/siem-connect.md)

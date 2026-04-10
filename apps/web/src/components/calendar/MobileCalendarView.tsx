@@ -14,10 +14,17 @@ import {
   isYesterday,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ListTodo, CalendarDays, Calendar } from 'lucide-react';
+import { ChevronDown, ListTodo, CalendarDays, Calendar, SlidersHorizontal } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,16 +34,25 @@ import {
 import { MobileWeekStrip } from './MobileWeekStrip';
 import { MobileDayAgenda } from './MobileDayAgenda';
 import { MobileMonthPicker } from './MobileMonthPicker';
+import { CalendarSidebar } from './CalendarSidebar';
 import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
   isToday,
 } from './calendar-types';
+
+interface CalendarEntryForMobile {
+  key: string;
+  name: string;
+  color: EventColorConfig;
+  visible: boolean;
+}
 
 interface MobileCalendarViewProps {
   events: CalendarEvent[];
@@ -47,6 +63,12 @@ interface MobileCalendarViewProps {
   showGoogleCalendarHint?: boolean;
   isLoading?: boolean;
   currentDate?: Date;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
+  calendarEntries?: CalendarEntryForMobile[];
+  onToggleCalendar?: (key: string) => void;
+  onShowAllCalendars?: () => void;
+  onHideAllCalendars?: () => void;
 }
 
 type MobileViewMode = 'day' | 'month';
@@ -60,6 +82,12 @@ export function MobileCalendarView({
   showGoogleCalendarHint = true,
   isLoading,
   currentDate: parentDate,
+  driveColorMap,
+  context = 'drive',
+  calendarEntries,
+  onToggleCalendar,
+  onShowAllCalendars,
+  onHideAllCalendars,
 }: MobileCalendarViewProps) {
   const [selectedDate, setSelectedDate] = useState(() => parentDate ?? new Date());
   const [currentWeekStart, setCurrentWeekStart] = useState(() =>
@@ -205,6 +233,29 @@ export function MobileCalendarView({
 
         {/* Right controls */}
         <div className="flex items-center gap-1">
+          {/* Calendar filter (root calendar only) */}
+          {calendarEntries && onToggleCalendar && onShowAllCalendars && onHideAllCalendars && (
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Filter calendars">
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="bottom" className="h-auto max-h-[60vh]">
+                <SheetHeader>
+                  <SheetTitle>Calendars</SheetTitle>
+                </SheetHeader>
+                <div className="py-4">
+                  <CalendarSidebar
+                    calendars={calendarEntries}
+                    onToggle={onToggleCalendar}
+                    onShowAll={onShowAllCalendars}
+                    onHideAll={onHideAllCalendars}
+                  />
+                </div>
+              </SheetContent>
+            </Sheet>
+          )}
           {/* View mode toggle */}
           <div className="flex items-center bg-muted rounded-md p-0.5">
             <button
@@ -256,6 +307,8 @@ export function MobileCalendarView({
         tasks={showTasks ? tasks : []}
         onDateSelect={handleDateSelect}
         onWeekChange={handleWeekChange}
+        driveColorMap={driveColorMap}
+        context={context}
       />
 
       {/* Main content area with swipe support */}
@@ -273,6 +326,8 @@ export function MobileCalendarView({
             tasks={tasks}
             handlers={handlers}
             showTasks={showTasks}
+            driveColorMap={driveColorMap}
+            context={context}
           />
         ) : (
           // Month agenda view - shows all events for the month
@@ -284,6 +339,8 @@ export function MobileCalendarView({
             showTasks={showTasks}
             showGoogleCalendarHint={showGoogleCalendarHint}
             onDateSelect={handleDateSelect}
+            driveColorMap={driveColorMap}
+            context={context}
           />
         )}
       </div>
@@ -308,6 +365,8 @@ function MobileMonthAgenda({
   showTasks,
   showGoogleCalendarHint,
   onDateSelect,
+  driveColorMap,
+  context = 'drive',
 }: {
   selectedDate: Date;
   events: CalendarEvent[];
@@ -316,6 +375,8 @@ function MobileMonthAgenda({
   showTasks: boolean;
   showGoogleCalendarHint: boolean;
   onDateSelect: (date: Date) => void;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }) {
   // Get all days in the current month with events/tasks
   const dayGroups = useMemo(() => {
@@ -400,7 +461,7 @@ function MobileMonthAgenda({
               {/* Events for this day */}
               <div className="space-y-2 pl-13">
                 {group.events.map((event: CalendarEvent) => {
-                  const colors = getEventColors(event.color);
+                  const colors = resolveEventColor(event, context, driveColorMap ?? null);
                   return (
                     <button
                       key={event.id}

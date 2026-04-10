@@ -11,9 +11,10 @@ import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
   ATTENDEE_STATUS_CONFIG,
 } from './calendar-types';
@@ -24,6 +25,8 @@ interface MobileDayAgendaProps {
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
   showTasks: boolean;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 export function MobileDayAgenda({
@@ -32,6 +35,8 @@ export function MobileDayAgenda({
   tasks,
   handlers,
   showTasks,
+  driveColorMap,
+  context = 'drive',
 }: MobileDayAgendaProps) {
   // Get events and tasks for the selected day
   const dayEvents = useMemo(() => getEventsForDay(events, selectedDate), [events, selectedDate]);
@@ -110,6 +115,7 @@ export function MobileDayAgenda({
                     <MobileEventCard
                       key={event.id}
                       event={event}
+                      colors={resolveEventColor(event, context, driveColorMap ?? null)}
                       onClick={() => handlers.onEventClick(event)}
                     />
                   ))}
@@ -130,6 +136,7 @@ export function MobileDayAgenda({
                     <MobileEventCard
                       key={event.id}
                       event={event}
+                      colors={resolveEventColor(event, context, driveColorMap ?? null)}
                       onClick={() => handlers.onEventClick(event)}
                     />
                   ))}
@@ -180,12 +187,13 @@ function EmptyState({ onCreateEvent }: { onCreateEvent: () => void }) {
 // Mobile-optimized event card
 function MobileEventCard({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
   const startTime = format(new Date(event.startAt), 'h:mm a');
   const endTime = format(new Date(event.endAt), 'h:mm a');
 

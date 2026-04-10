@@ -16,10 +16,11 @@ import { Button } from '@/components/ui/button';
 import {
   CalendarEvent,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
 } from './calendar-types';
 
 interface MobileWeekStripProps {
@@ -29,6 +30,8 @@ interface MobileWeekStripProps {
   tasks: TaskWithDueDate[];
   onDateSelect: (date: Date) => void;
   onWeekChange: (date: Date) => void;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -40,6 +43,8 @@ export function MobileWeekStrip({
   tasks,
   onDateSelect,
   onWeekChange,
+  driveColorMap,
+  context = 'drive',
 }: MobileWeekStripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -110,7 +115,7 @@ export function MobileWeekStrip({
 
           // Get the primary event color for the indicator
           const primaryEventColor = dayEvents.length > 0
-            ? getEventColors(dayEvents[0].color).dot
+            ? resolveEventColor(dayEvents[0], context, driveColorMap ?? null).dot
             : null;
 
           return (
