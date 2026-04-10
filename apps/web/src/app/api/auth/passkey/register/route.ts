@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { verifyRegistration, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -131,6 +131,9 @@ export async function POST(req: Request) {
       userId,
       passkeyId: result.data.passkeyId,
       ip: clientIP,
+    });
+    securityAudit.logTokenCreated(userId, 'passkey', clientIP).catch((error) => {
+      loggers.security.warn('[PasskeyRegister] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({

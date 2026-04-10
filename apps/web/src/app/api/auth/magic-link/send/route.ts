@@ -8,7 +8,7 @@ import {
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
@@ -193,6 +193,9 @@ export async function POST(req: Request) {
         email: maskEmail(normalizedEmail),
         isNewUser: result.data.isNewUser,
         ip: clientIP,
+      });
+      securityAudit.logDataAccess(normalizedEmail, 'write', 'magic_link', normalizedEmail).catch((error) => {
+        loggers.security.warn('[MagicLinkSend] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error) });
       });
     } catch (error) {
       // Log but don't expose email sending errors

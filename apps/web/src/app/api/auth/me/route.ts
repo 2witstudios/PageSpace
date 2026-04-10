@@ -1,4 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 
@@ -17,6 +18,10 @@ export async function GET(req: Request) {
   if (process.env.NODE_ENV === 'development' && process.env.DEBUG_AUTH === 'true') {
     console.log(`[AUTH] User profile loaded: ${user.email} (provider: ${user.provider}, id: ${user.id})`);
   }
+
+  securityAudit.logDataAccess(auth.userId, 'read', 'user_profile', auth.userId).catch((error) => {
+    loggers.security.warn('[AuthMe] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
+  });
 
   const safeImage = isExternalHttpUrl(user.image) ? null : user.image;
 

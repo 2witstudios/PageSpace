@@ -14,7 +14,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
@@ -161,6 +161,9 @@ export async function POST(req: Request) {
     await updateDeviceTokenActivity(activeDeviceTokenId, normalizedIP);
 
     logAuthEvent('login', user.id, user.email, normalizedIP ?? 'unknown', 'Device token refresh');
+    securityAudit.logTokenCreated(user.id, 'device_refresh', normalizedIP ?? 'unknown').catch((error) => {
+      loggers.security.warn('[DeviceRefresh] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
     trackAuthEvent(user.id, 'refresh', {
       platform: deviceRecord.platform,
       ip: normalizedIP ?? 'unknown',

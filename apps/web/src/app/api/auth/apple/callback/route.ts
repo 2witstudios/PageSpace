@@ -6,7 +6,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
@@ -55,6 +55,9 @@ export async function POST(req: Request) {
         errorHint: errorHint ? String(errorHint).slice(0, 100) : 'none',
       });
       const errorType = errorHint === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
+      securityAudit.logAuthFailure('unknown', getClientIP(req), 'apple_oauth_rejected').catch((error) => {
+        loggers.security.warn('[AppleCallback] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      });
 
       if (verifiedState?.platform === 'desktop') {
         return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
@@ -209,6 +212,9 @@ export async function POST(req: Request) {
       provider: 'apple',
       userAgent: req.headers.get('user-agent')
     });
+    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[AppleCallback] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
     if (platform === 'desktop') {
@@ -325,6 +331,9 @@ export async function POST(req: Request) {
 
   } catch (error) {
     loggers.auth.error('Apple OAuth callback error', error as Error);
+    securityAudit.logAuthFailure('unknown', getClientIP(req), 'apple_oauth_error').catch((auditError) => {
+      loggers.security.warn('[AppleCallback] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    });
     const errorRedirectBase = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', errorRedirectBase));
   }

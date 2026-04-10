@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
@@ -76,6 +76,8 @@ export async function POST(req: NextRequest) {
       driveScopes = await sessionRepository.findDrivesByIds(driveIds);
     }
 
+    const clientIP = getClientIP(req);
+
     // Log activity for audit trail (token creation is a security event)
     const actorInfo = await getActorInfo(userId);
     logTokenActivity(userId, 'token_create', {
@@ -83,6 +85,9 @@ export async function POST(req: NextRequest) {
       tokenType: 'mcp',
       tokenName: newToken.name,
     }, actorInfo);
+    securityAudit.logTokenCreated(userId, 'mcp', clientIP).catch((error) => {
+      loggers.security.warn('[McpTokenCreate] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Return the raw token ONCE to the user - this is the only time they'll see it
     // Response format matches GET for consistency
@@ -111,6 +116,9 @@ export async function GET(req: NextRequest) {
 
   try {
     const tokensWithDrives = await sessionRepository.findUserMcpTokensWithDrives(userId);
+    securityAudit.logDataAccess(userId, 'read', 'mcp_token', userId).catch((error) => {
+      loggers.security.warn('[McpTokenList] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
     return NextResponse.json(tokensWithDrives);
   } catch (error) {
     loggers.auth.error('Error fetching MCP tokens:', error as Error);

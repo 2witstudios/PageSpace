@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -135,6 +135,9 @@ export async function POST(req: Request) {
         ip: clientIP,
         email: email.substring(0, 3) + '***',
       });
+      securityAudit.logAuthFailure(email || 'unknown', clientIP, `passkey_signup_${result.error.code.toLowerCase()}`).catch((error) => {
+        loggers.security.warn('[SignupPasskey] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      });
 
       return NextResponse.json(
         { error: errorInfo.message, code: result.error.code },
@@ -233,6 +236,12 @@ export async function POST(req: Request) {
     loggers.auth.info('Passkey signup session created', {
       userId,
       ip: clientIP,
+    });
+    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[SignupPasskey] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+    securityAudit.logTokenCreated(userId, 'passkey', clientIP).catch((error) => {
+      loggers.security.warn('[SignupPasskey] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     // Build response headers with session cookie

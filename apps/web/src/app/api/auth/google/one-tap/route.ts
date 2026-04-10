@@ -7,7 +7,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
@@ -85,6 +85,9 @@ export async function POST(req: Request) {
     } catch (verifyError) {
       loggers.auth.warn('Google ID token verification failed', {
         error: verifyError instanceof Error ? verifyError.message : String(verifyError),
+      });
+      securityAudit.logAuthFailure('unknown', clientIP, 'google_one_tap_verify_failed').catch((error) => {
+        loggers.security.warn('[GoogleOneTap] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
       });
       return NextResponse.json(
         { error: 'Invalid Google credential. Please try again.' },
@@ -237,6 +240,9 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[GoogleOneTap] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     let deviceTokenValue: string | undefined;
     if (deviceId) {
@@ -277,6 +283,9 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     loggers.auth.error('Google One Tap error', error as Error);
+    securityAudit.logAuthFailure('unknown', getClientIP(req), 'google_one_tap_error').catch((auditError) => {
+      loggers.security.warn('[GoogleOneTap] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    });
     return NextResponse.json(
       { error: 'An unexpected error occurred. Please try again.' },
       { status: 500 }

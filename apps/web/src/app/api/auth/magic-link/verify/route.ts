@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -48,6 +48,9 @@ export async function GET(req: Request) {
       loggers.auth.warn('Magic link verification failed', {
         error: result.error.code,
         ip: clientIP,
+      });
+      securityAudit.logAuthFailure('unknown', clientIP, `magic_link_${result.error.code.toLowerCase()}`).catch((error) => {
+        loggers.security.warn('[MagicLinkVerify] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
       });
 
       return redirectWithError(errorCode);
@@ -165,6 +168,9 @@ export async function GET(req: Request) {
           });
 
           loggers.auth.info('Magic link login successful (desktop)', { userId, ip: clientIP });
+          securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+            loggers.security.warn('[MagicLinkVerify] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+          });
 
           const headers = new Headers();
           appendSessionCookie(headers, sessionToken);
@@ -227,6 +233,9 @@ export async function GET(req: Request) {
       userId,
       isNewUser,
       ip: clientIP,
+    });
+    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[MagicLinkVerify] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.redirect(redirectUrl.toString(), {
