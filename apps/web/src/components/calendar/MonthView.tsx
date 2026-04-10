@@ -15,10 +15,11 @@ import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -27,12 +28,14 @@ interface MonthViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MAX_VISIBLE_EVENTS = 3;
 
-export function MonthView({ currentDate, events, tasks, handlers }: MonthViewProps) {
+export function MonthView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: MonthViewProps) {
   // Calculate the days to display
   const calendarDays = useMemo(() => {
     const monthStart = startOfMonth(currentDate);
@@ -129,6 +132,7 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
                       <EventPill
                         key={event.id}
                         event={event}
+                        colors={resolveEventColor(event, context, driveColorMap ?? null)}
                         onClick={(e) => {
                           e.stopPropagation();
                           handlers.onEventClick(event);
@@ -177,12 +181,13 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
 // Event pill component
 function EventPill({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: (e: React.MouseEvent) => void;
 }) {
-  const colors = getEventColors(event.color);
   const isAllDay = event.allDay;
   const startTime = isAllDay ? '' : format(new Date(event.startAt), 'h:mm a');
 

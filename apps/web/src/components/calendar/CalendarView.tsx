@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft } from 'lucide-react';
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
@@ -16,6 +16,8 @@ import {
 import { cn } from '@/lib/utils';
 import { useDeviceTier } from '@/hooks/useDeviceTier';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useCalendarFilterStore } from '@/stores/useCalendarFilterStore';
 import { useCalendarData } from './useCalendarData';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
@@ -23,10 +25,13 @@ import { DayView } from './DayView';
 import { AgendaView } from './AgendaView';
 import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
+import { CalendarSidebar } from './CalendarSidebar';
 import {
   CalendarViewMode,
   CalendarEvent,
   CalendarHandlers,
+  EventColorConfig,
+  getDriveCalendarColor,
 } from './calendar-types';
 
 interface CalendarViewProps {
@@ -81,6 +86,69 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     includePersonal: context === 'user',
     includeTasks: showTasks,
   });
+
+  // Drive filtering (root calendar only)
+  const drives = useDriveStore((s) => s.drives);
+  const fetchDrives = useDriveStore((s) => s.fetchDrives);
+  const { hiddenCalendars, toggleCalendar, showAll, hideAll, isVisible } =
+    useCalendarFilterStore();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Fetch drives on mount for sidebar
+  const isUserContext = context === 'user';
+  useEffect(() => {
+    if (isUserContext) fetchDrives();
+  }, [isUserContext, fetchDrives]);
+
+  // Build drive color map
+  const driveColorMap = useMemo(() => {
+    if (!isUserContext) return null;
+    const map = new Map<string | null, EventColorConfig>();
+    const driveIds = drives.map((d) => d.id);
+    map.set(null, getDriveCalendarColor(null, driveIds));
+    for (const drive of drives) {
+      map.set(drive.id, getDriveCalendarColor(drive.id, driveIds));
+    }
+    return map;
+  }, [isUserContext, drives]);
+
+  // Build sidebar calendar entries
+  const calendarEntries = useMemo(() => {
+    if (!isUserContext || !driveColorMap) return [];
+    const entries = [
+      {
+        key: 'personal',
+        name: 'Personal',
+        color: driveColorMap.get(null)!,
+        visible: isVisible('personal'),
+      },
+    ];
+    for (const drive of drives) {
+      entries.push({
+        key: drive.id,
+        name: drive.name,
+        color: driveColorMap.get(drive.id)!,
+        visible: isVisible(drive.id),
+      });
+    }
+    return entries;
+  }, [isUserContext, driveColorMap, drives, isVisible, hiddenCalendars]);
+
+  // Filter events and tasks by visibility
+  const filteredEvents = useMemo(() => {
+    if (!isUserContext) return events;
+    return events.filter((e) => isVisible(e.driveId ?? 'personal'));
+  }, [isUserContext, events, isVisible, hiddenCalendars]);
+
+  const filteredTasks = useMemo(() => {
+    if (!isUserContext) return tasks;
+    return tasks.filter((t) => isVisible(t.driveId));
+  }, [isUserContext, tasks, isVisible, hiddenCalendars]);
+
+  const allCalendarKeys = useMemo(
+    () => calendarEntries.map((c) => c.key),
+    [calendarEntries]
+  );
 
   const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(
     '/api/integrations/google-calendar/status',
@@ -205,14 +273,20 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     return (
       <div className={cn('flex flex-col h-full', className)}>
         <MobileCalendarView
-          events={events}
-          tasks={tasks}
+          events={filteredEvents}
+          tasks={filteredTasks}
           handlers={handlers}
           showTasks={showTasks}
           onShowTasksChange={setShowTasks}
           showGoogleCalendarHint={showGoogleCalendarHint}
           isLoading={isLoading}
           currentDate={currentDate}
+          driveColorMap={driveColorMap}
+          context={context}
+          calendarEntries={isUserContext ? calendarEntries : undefined}
+          onToggleCalendar={toggleCalendar}
+          onShowAllCalendars={showAll}
+          onHideAllCalendars={() => hideAll(allCalendarKeys)}
         />
         {/* Event modal - shared between mobile and desktop */}
         <EventModal
@@ -234,6 +308,18 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-3">
+          {/* Sidebar toggle (root calendar only) */}
+          {isUserContext && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen((o) => !o)}
+              aria-label={sidebarOpen ? 'Hide calendars sidebar' : 'Show calendars sidebar'}
+              className="hidden sm:flex"
+            >
+              <PanelLeft className="h-4 w-4" />
+            </Button>
+          )}
           {/* Navigation */}
           <div className="flex items-center gap-1">
             <Button variant="outline" size="icon" onClick={handlePrevious} aria-label="Previous">
@@ -362,49 +448,72 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         </div>
       </div>
 
-      {/* Calendar content */}
-      <div className="flex-1 overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-          </div>
-        ) : (
-          <>
-            {viewMode === 'month' && (
-              <MonthView
-                currentDate={currentDate}
-                events={events}
-                tasks={showTasks ? tasks : []}
-                handlers={handlers}
-              />
-            )}
-            {viewMode === 'week' && (
-              <WeekView
-                currentDate={currentDate}
-                events={events}
-                tasks={showTasks ? tasks : []}
-                handlers={handlers}
-              />
-            )}
-            {viewMode === 'day' && (
-              <DayView
-                currentDate={currentDate}
-                events={events}
-                tasks={showTasks ? tasks : []}
-                handlers={handlers}
-              />
-            )}
-            {viewMode === 'agenda' && (
-              <AgendaView
-                currentDate={currentDate}
-                events={events}
-                tasks={showTasks ? tasks : []}
-                handlers={handlers}
-                showGoogleCalendarHint={showGoogleCalendarHint}
-              />
-            )}
-          </>
+      {/* Calendar body: sidebar + content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar (root calendar, desktop only) */}
+        {isUserContext && sidebarOpen && (
+          <aside className="w-52 shrink-0 border-r overflow-y-auto p-3 hidden sm:block">
+            <CalendarSidebar
+              calendars={calendarEntries}
+              onToggle={toggleCalendar}
+              onShowAll={showAll}
+              onHideAll={() => hideAll(allCalendarKeys)}
+            />
+          </aside>
         )}
+
+        {/* Calendar content */}
+        <div className="flex-1 overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+            </div>
+          ) : (
+            <>
+              {viewMode === 'month' && (
+                <MonthView
+                  currentDate={currentDate}
+                  events={filteredEvents}
+                  tasks={showTasks ? filteredTasks : []}
+                  handlers={handlers}
+                  driveColorMap={driveColorMap}
+                  context={context}
+                />
+              )}
+              {viewMode === 'week' && (
+                <WeekView
+                  currentDate={currentDate}
+                  events={filteredEvents}
+                  tasks={showTasks ? filteredTasks : []}
+                  handlers={handlers}
+                  driveColorMap={driveColorMap}
+                  context={context}
+                />
+              )}
+              {viewMode === 'day' && (
+                <DayView
+                  currentDate={currentDate}
+                  events={filteredEvents}
+                  tasks={showTasks ? filteredTasks : []}
+                  handlers={handlers}
+                  driveColorMap={driveColorMap}
+                  context={context}
+                />
+              )}
+              {viewMode === 'agenda' && (
+                <AgendaView
+                  currentDate={currentDate}
+                  events={filteredEvents}
+                  tasks={showTasks ? filteredTasks : []}
+                  handlers={handlers}
+                  showGoogleCalendarHint={showGoogleCalendarHint}
+                  driveColorMap={driveColorMap}
+                  context={context}
+                />
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Event modal */}

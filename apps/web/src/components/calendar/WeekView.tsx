@@ -16,9 +16,10 @@ import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -27,12 +28,14 @@ interface WeekViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 48; // pixels per hour
 
-export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps) {
+export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: WeekViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Calculate the days of the current week
@@ -136,6 +139,7 @@ export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps
                     <AllDayEventPill
                       key={event.id}
                       event={event}
+                      colors={resolveEventColor(event, context, driveColorMap ?? null)}
                       onClick={() => handlers.onEventClick(event)}
                     />
                   ))}
@@ -202,7 +206,7 @@ export function WeekView({ currentDate, events, tasks, handlers }: WeekViewProps
                 {/* Timed events */}
                 {dayTimedEvents.map((event) => {
                   const { top, height } = getEventStyle(event, day);
-                  const colors = getEventColors(event.color);
+                  const colors = resolveEventColor(event, context, driveColorMap ?? null);
 
                   return (
                     <button
@@ -259,12 +263,13 @@ function CurrentTimeIndicator() {
 // All-day event pill
 function AllDayEventPill({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
 
   return (
     <button

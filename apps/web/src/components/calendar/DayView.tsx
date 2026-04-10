@@ -14,10 +14,11 @@ import {
   CalendarEvent,
   CalendarHandlers,
   TaskWithDueDate,
+  EventColorConfig,
   getEventsForDay,
   getTasksForDay,
   isToday,
-  getEventColors,
+  resolveEventColor,
   TASK_OVERLAY_STYLE,
 } from './calendar-types';
 
@@ -26,12 +27,14 @@ interface DayViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  driveColorMap?: Map<string | null, EventColorConfig> | null;
+  context?: 'user' | 'drive';
 }
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const HOUR_HEIGHT = 64; // Taller for day view
 
-export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) {
+export function DayView({ currentDate, events, tasks, handlers, driveColorMap, context = 'drive' }: DayViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Get events and tasks for the current day
@@ -115,6 +118,7 @@ export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) 
               <AllDayEventCard
                 key={event.id}
                 event={event}
+                colors={resolveEventColor(event, context, driveColorMap ?? null)}
                 onClick={() => handlers.onEventClick(event)}
               />
             ))}
@@ -172,6 +176,7 @@ export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) 
                 <TimedEventCard
                   key={event.id}
                   event={event}
+                  colors={resolveEventColor(event, context, driveColorMap ?? null)}
                   style={{ top, height }}
                   onClick={() => handlers.onEventClick(event)}
                 />
@@ -206,14 +211,15 @@ function CurrentTimeIndicator() {
 // Timed event card (expanded)
 function TimedEventCard({
   event,
+  colors,
   style,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   style: { top: number; height: number };
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
   const showDetails = style.height > 60;
 
   return (
@@ -269,12 +275,13 @@ function TimedEventCard({
 // All-day event card
 function AllDayEventCard({
   event,
+  colors,
   onClick,
 }: {
   event: CalendarEvent;
+  colors: EventColorConfig;
   onClick: () => void;
 }) {
-  const colors = getEventColors(event.color);
 
   return (
     <button

@@ -22,6 +22,19 @@ A generic integration sandbox allowing:
 
 ---
 
+### Drive Calendar Filtering
+
+**Status**: 📋 PLANNED
+**Epic**: [tasks/drive-calendar-filtering.md](tasks/drive-calendar-filtering.md)
+**Goal**: Google Calendar-style drive filtering for the root calendar
+
+**Next Steps**:
+1. Drive Color Palette
+2. Calendar Filter Store
+3. Calendar Sidebar Component
+
+---
+
 ## Completed Epics
 
 _None yet_
