@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { canUserEditPage } from '@pagespace/lib/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
@@ -36,6 +36,10 @@ export async function GET(
   const { agentId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+
+  securityAudit.logDataAccess(auth.userId, 'read', 'agent_integrations', agentId).catch((error) => {
+    loggers.security.warn('[Agents] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
+  });
 
   try {
     // Verify user can view the agent

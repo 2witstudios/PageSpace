@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { canUserEditPage } from '@pagespace/lib/permissions';
 import { getGrantById, updateGrant, deleteGrant } from '@pagespace/lib/integrations';
 
@@ -81,6 +81,11 @@ export async function DELETE(
     }
 
     await deleteGrant(db, grantId);
+
+    securityAudit.logDataAccess(auth.userId, 'delete', 'agent_grant', grantId).catch((error) => {
+      loggers.security.warn('[Agents] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting agent integration grant:', error as Error);
