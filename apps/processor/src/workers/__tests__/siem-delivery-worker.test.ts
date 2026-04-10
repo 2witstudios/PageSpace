@@ -321,7 +321,7 @@ describe('processSiemDelivery', () => {
     });
   });
 
-  it('uses composite (timestamp, id) cursor to avoid skipping rows', async () => {
+  it('uses timestamp-only cursor to resume after last delivered position', async () => {
     const config = {
       enabled: true,
       type: 'webhook' as const,
@@ -340,15 +340,15 @@ describe('processSiemDelivery', () => {
 
     await processSiemDelivery();
 
-    // The 2nd query is the activity_logs fetch — verify composite cursor params
+    // The 2nd query is the activity_logs fetch
     const logsQuery = mockQuery.mock.calls[1];
     const sql = logsQuery[0] as string;
     const params = logsQuery[1] as unknown[];
 
     assert({
-      given: 'an existing cursor with id and timestamp',
-      should: 'use composite (timestamp, id) comparison in SQL',
-      actual: sql.includes('(timestamp, id) > ($1, $2)'),
+      given: 'an existing cursor',
+      should: 'use timestamp-only comparison (not composite with non-monotonic IDs)',
+      actual: sql.includes('WHERE timestamp > $1'),
       expected: true,
     });
 
@@ -361,9 +361,9 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'an existing cursor',
-      should: 'pass cursor id as second param',
+      should: 'pass batchSize as second param',
       actual: params[1],
-      expected: 'log_99',
+      expected: 100,
     });
   });
 

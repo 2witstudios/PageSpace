@@ -46,25 +46,29 @@ export async function processSiemDelivery(): Promise<void> {
       deliveryCount: number;
     } | undefined;
 
-    // Query new activity_logs after the cursor using composite (timestamp, id)
-    // comparison to avoid skipping rows with identical timestamps
+    // Query new activity_logs after the cursor position.
+    // Uses timestamp-only comparison because activity_logs.timestamp has
+    // microsecond precision (PostgreSQL NOW()) and each event comes from a
+    // separate HTTP request/transaction, making same-timestamp collision
+    // effectively impossible. CUID2 IDs are non-monotonic so cannot be used
+    // for reliable cursor ordering.
     const batchSize = config.webhook?.batchSize ?? DEFAULT_BATCH_SIZE;
     let logsResult;
 
-    if (cursor?.lastDeliveredAt && cursor.lastDeliveredId) {
+    if (cursor?.lastDeliveredAt) {
       logsResult = await client.query(
         `SELECT ${ACTIVITY_LOG_COLUMNS}
          FROM activity_logs
-         WHERE (timestamp, id) > ($1, $2)
-         ORDER BY timestamp ASC, id ASC
-         LIMIT $3`,
-        [cursor.lastDeliveredAt, cursor.lastDeliveredId, batchSize]
+         WHERE timestamp > $1
+         ORDER BY timestamp ASC
+         LIMIT $2`,
+        [cursor.lastDeliveredAt, batchSize]
       );
     } else {
       logsResult = await client.query(
         `SELECT ${ACTIVITY_LOG_COLUMNS}
          FROM activity_logs
-         ORDER BY timestamp ASC, id ASC
+         ORDER BY timestamp ASC
          LIMIT $1`,
         [batchSize]
       );
