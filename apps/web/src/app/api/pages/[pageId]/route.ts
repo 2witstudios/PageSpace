@@ -30,6 +30,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
+    securityAudit.logDataAccess(userId, 'read', 'page', pageId, { operation: 'read' }).catch(() => {});
+
     return jsonResponse(result.page);
   } catch (error) {
     loggers.api.error('Error fetching page details:', error as Error);

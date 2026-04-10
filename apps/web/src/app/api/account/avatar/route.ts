@@ -179,7 +179,7 @@ export async function DELETE(request: NextRequest) {
       .set({ image: null })
       .where(eq(users.id, userId));
 
-    securityAudit.logDataAccess(userId, 'delete', 'avatar', userId, {}).catch(() => {});
+    securityAudit.logDataAccess(userId, 'delete', 'avatar', userId, { operation: 'delete' }).catch(() => {});
 
     return NextResponse.json({
       success: true,

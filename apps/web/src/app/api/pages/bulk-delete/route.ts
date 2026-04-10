@@ -145,7 +145,7 @@ export async function DELETE(request: Request) {
       );
     }
 
-    securityAudit.logDataAccess(userId, 'delete', 'page', 'bulk', { pageIds, count: pageIds.length }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'delete', 'page', 'bulk', { count: pageIds.length }).catch(() => {});
 
     return NextResponse.json({
       success: true,

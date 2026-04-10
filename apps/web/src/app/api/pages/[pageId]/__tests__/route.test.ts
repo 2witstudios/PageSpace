@@ -56,6 +56,9 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
@@ -74,7 +77,7 @@ vi.mock('@pagespace/lib/api-utils', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache, loggers } from '@pagespace/lib/server';
+import { agentAwarenessCache, pageTreeCache, loggers, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
@@ -143,6 +146,7 @@ describe('GET /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.getPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -202,6 +206,26 @@ describe('GET /api/pages/[pageId]', () => {
 
       expect(pageService.getPage).toHaveBeenCalledWith(mockPageId, mockUserId);
     });
+
+    it('logs read audit event on successful page retrieval', async () => {
+      await GET(createRequest(), { params: mockParams });
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'page', mockPageId, { operation: 'read' }
+      );
+    });
+
+    it('does NOT log read audit event when page not found', async () => {
+      vi.mocked(pageService.getPage).mockResolvedValue({
+        success: false,
+        error: 'Page not found',
+        status: 404,
+      });
+
+      await GET(createRequest(), { params: mockParams });
+
+      expect(securityAudit.logDataAccess).not.toHaveBeenCalled();
+    });
   });
 
   describe('MCP scope check', () => {
@@ -256,6 +280,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -565,6 +590,14 @@ describe('PATCH /api/pages/[pageId]', () => {
       );
     });
 
+    it('logs write audit event on successful page update', async () => {
+      await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'write', 'page', mockPageId, { operation: 'update' }
+      );
+    });
+
     it('passes Socket-ID header to broadcast', async () => {
       const request = new Request(`https://example.com/api/pages/${mockPageId}`, {
         method: 'PATCH',
@@ -659,6 +692,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -843,6 +877,14 @@ describe('DELETE /api/pages/[pageId]', () => {
           pageTitle: 'Test Page',
           pageType: 'DOCUMENT',
         })
+      );
+    });
+
+    it('logs delete audit event on successful page trash', async () => {
+      await DELETE(createRequest({}), { params: mockParams });
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'delete', 'page', mockPageId, { operation: 'trash' }
       );
     });
 
