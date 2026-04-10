@@ -138,8 +138,7 @@ export function GdprPane() {
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         Data subject rights (access, erasure, portability) are solid. AI
         provider consent is handled via TOS &mdash; PageSpace is an AI product.
-        The remaining gaps are cookie consent, data residency, and edge cases
-        around message deletion and hash chain integrity.
+        The remaining gaps are cookie consent and data residency.
       </p>
 
       <FeatureRow columns={2}>
@@ -157,30 +156,23 @@ export function GdprPane() {
         />
       </FeatureRow>
 
-      <Card accent="amber" style={{ marginBottom: 12 }}>
-        <h4>Activity log hash chain broken by anonymization</h4>
+      <Card accent="green" style={{ marginBottom: 12 }}>
+        <h4>Activity log hash chain &mdash; Fixed</h4>
         <p style={{ marginTop: 6, fontSize: 12 }}>
-          Account deletion anonymizes activity log entries, but this
-          changes the data that was hashed &mdash; invalidating the
-          hash chain. The tamper-evident property is compromised for
-          entries involving deleted users. Security audit chain is{" "}
-          <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
-          {" "}&mdash; PII fields excluded from hash computation.{" "}
-          <strong style={{ color: "var(--amber)" }}>
-            Activity log fix in progress (pu/hash-chain-pii).
-          </strong>
+          Both security audit and activity log hash chains are now GDPR-safe.
+          PII fields excluded from hash computation (#541, #866) so
+          anonymization preserves chain integrity. Activity log writes
+          serialized with <code>pg_advisory_xact_lock</code> (#867),
+          preventing chain forking on concurrent writes.
         </p>
       </Card>
 
-      <Card accent="amber" style={{ marginBottom: 12 }}>
-        <h4>Export rate limit is in-memory</h4>
+      <Card accent="green" style={{ marginBottom: 12 }}>
+        <h4>Export rate limit &mdash; Fixed</h4>
         <p style={{ marginTop: 6, fontSize: 12 }}>
-          The 1-export-per-24-hours rate limit uses an in-process <code>Map()</code>.
-          Resets on deploy/restart. Not shared across instances. Works for single
-          instance but won&apos;t scale.{" "}
-          <strong style={{ color: "var(--amber)" }}>
-            Fix in progress (pu/export-rate-limit).
-          </strong>
+          DSAR export rate limit migrated to distributed Redis (#865).
+          Shared across instances, survives deploys/restarts. Matches
+          existing auth rate limiter pattern.
         </p>
       </Card>
 
@@ -223,15 +215,13 @@ export function GdprPane() {
             GDPR Art. 17 right to erasure satisfied for message content.
           </p>
         </Card>
-        <Card accent="blue">
-          <h4>Hash-chain-safe anonymization</h4>
+        <Card accent="green">
+          <h4>Hash-chain-safe anonymization &mdash; Done</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Anonymization that preserves chain link integrity. Hash computed
-            over anonymization-stable fields only, or chain links explicitly
-            maintained through the anonymization process.{" "}
-            <strong style={{ color: "var(--amber)" }}>
-              In progress (pu/hash-chain-pii).
-            </strong>
+            Implemented: PII fields excluded from hash computation in both
+            security audit (#541) and activity log (#866) chains. Activity
+            log writes serialized with advisory locks (#867). Anonymization
+            preserves chain integrity.
           </p>
         </Card>
       </div>

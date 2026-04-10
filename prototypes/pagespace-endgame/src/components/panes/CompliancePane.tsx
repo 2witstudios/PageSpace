@@ -241,19 +241,21 @@ export function CompliancePane() {
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
         The security infrastructure is solid but has coverage gaps.
-        The SIEM adapter is built but not wired. The security audit
-        service covers ~1.6% of routes. The activity log hash chain has
-        a known fork vulnerability. Agent-level security is missing entirely.
+        The SIEM adapter is built but not wired. Audit service coverage
+        expanded to pages, drives, permissions, settings, account, files,
+        and export routes (#868-870) but not yet 100%. Agent-level security
+        is missing entirely.
       </p>
 
       <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="red">
-          <h4>SecurityAuditService: ~5 of 252 routes (~2%)</h4>
+        <Card accent="amber">
+          <h4>SecurityAuditService: expanded but not 100%</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Hash chain audit service exists with advisory lock serialization
-            and 35 event types. But only wired to login, logout, and mobile
-            login routes. Core operations (pages, drives, files, permissions,
-            settings, admin actions) are not security-audited.
+            Hash chain audit service with advisory lock serialization and
+            35 event types. Now wired to auth, pages, drives, permissions,
+            settings, account, files, and export routes (#868-870).
+            Remaining: admin actions, trash, invitations, and other
+            secondary routes.
           </p>
         </Card>
         <Card accent="red">
@@ -268,15 +270,14 @@ export function CompliancePane() {
         </Card>
       </div>
       <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="red">
-          <h4>Activity log hash chain can fork</h4>
+        <Card accent="green">
+          <h4>Activity log hash chain &mdash; Fixed</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Activity log writes not serialized with row locking. Concurrent
-            writes can create chain forks. Security audit chain uses
-            advisory locks and is safe. Activity logs have hash chain fields
-            (<code>previousLogHash</code>, <code>logHash</code>,{" "}
-            <code>chainSeed</code>) but no locking to prevent concurrent
-            forking.
+            Activity log writes now serialized with{" "}
+            <code>pg_advisory_xact_lock</code> (#867), matching the
+            security audit chain pattern. Chain forking on concurrent
+            writes is prevented. PII excluded from hash computation
+            (#866) so GDPR anonymization preserves chain integrity.
           </p>
         </Card>
         <Card accent="red">
@@ -332,32 +333,21 @@ export function CompliancePane() {
         </Card>
       </div>
       <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="amber">
-          <h4>Activity log hash chain broken by anonymization</h4>
+        <Card accent="green">
+          <h4>Activity log hash chain &mdash; Fixed</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Account deletion anonymizes <code>actorEmail</code> in activity
-            logs, but this field is included in{" "}
-            <code>serializeLogDataForHash()</code> &mdash; invalidating the
-            stored <code>logHash</code>. Security audit chain is{" "}
-            <strong style={{ color: "var(--green)" }}>fixed (#541)</strong>
-            {" "}&mdash; PII fields excluded from hash computation so the
-            chain remains valid after GDPR anonymization.{" "}
-            <strong style={{ color: "var(--amber)" }}>
-              Activity log fix in progress (pu/hash-chain-pii).
-            </strong>
+            Both security audit (#541) and activity log (#866) chains now
+            exclude PII from hash computation &mdash; GDPR anonymization
+            preserves chain integrity. Activity log writes serialized with{" "}
+            <code>pg_advisory_xact_lock</code> (#867).
           </p>
         </Card>
-      </div>
-      <div className="g2" style={{ marginBottom: 8 }}>
-        <Card accent="amber">
-          <h4>Export rate limit is in-memory</h4>
+        <Card accent="green">
+          <h4>Export rate limit &mdash; Fixed</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            The 1-export-per-24-hours DSAR rate limit uses an in-process{" "}
-            <code>Map()</code>. Resets on deploy/restart. Not shared across
-            instances. Works for single instance but won&apos;t scale.{" "}
-            <strong style={{ color: "var(--amber)" }}>
-              Fix in progress (pu/export-rate-limit).
-            </strong>
+            DSAR export rate limit migrated to distributed Redis (#865).
+            Shared across instances, survives deploys/restarts. Matches
+            existing auth rate limiter pattern.
           </p>
         </Card>
       </div>
@@ -384,7 +374,7 @@ export function CompliancePane() {
         <Feature
           nameColor="var(--cyan)"
           name="100% audit coverage"
-          description="Wire SecurityAuditService to all security-relevant routes. Every page CRUD, permission change, file upload, admin action produces an immutable audit event. 35 event types already defined &mdash; just need wiring."
+          description="SecurityAuditService now covers auth, pages, drives, permissions, settings, account, files, and export (#868-870). Remaining: admin actions, trash, invitations, and secondary routes."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
@@ -395,8 +385,8 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Fix chain integrity"
-          description="Add pg_advisory_xact_lock serialization to activity log hash chain writes (matching security audit pattern). Add GeoIP integration to replace IP prefix heuristic in anomaly detection."
+          name="Fix chain integrity — Done"
+          description="Activity log hash chain writes serialized with pg_advisory_xact_lock (#867). PII excluded from hash computation (#866). Both chains GDPR-safe. Remaining: GeoIP integration to replace IP prefix heuristic in anomaly detection."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -467,8 +457,8 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Hash-chain-safe anonymization"
-          description="Anonymization that preserves chain link integrity. Hash computed over anonymization-stable fields only, or chain links maintained through the anonymization process. In progress (pu/hash-chain-pii)."
+          name="Hash-chain-safe anonymization — Done"
+          description="Implemented: PII fields excluded from hash computation in both security audit (#541) and activity log (#866) chains. Writes serialized with advisory locks (#867). Anonymization preserves chain integrity."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>
@@ -487,8 +477,8 @@ export function CompliancePane() {
         />
         <Feature
           nameColor="var(--cyan)"
-          name="Distributed export rate limit"
-          description="Redis-backed export rate limiting (matching existing auth rate limiter pattern). Shared across instances. Survives deploys. In progress (pu/export-rate-limit)."
+          name="Distributed export rate limit — Done"
+          description="Implemented (#865): Redis-backed export rate limiting matching existing auth rate limiter pattern. Shared across instances, survives deploys."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
       </FeatureRow>

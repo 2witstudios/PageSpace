@@ -142,9 +142,9 @@ qualifying "local models only" is dangerous.
 user's prompt and the AI's response to the `ai_usage_logs` table.
 
 **Status — partially resolved**:
-- ~~Account deletion does NOT purge these logs~~ → **Fixed**: `deleteAiUsageLogsForUser()` purges on account deletion
-- ~~No API endpoint to delete a user's AI usage history~~ → **Fixed**: account deletion handles this via FK cascade
-- ~~Conversation messages retained indefinitely~~ → **Fixed**: 30-day purge cron for soft-deleted messages + FK cascade on account deletion
+- ~~Account deletion does NOT purge these logs~~ → **Fixed**: `deleteAiUsageLogsForUser()` explicitly purges on account deletion (no FK cascade — manual deletion is the only path)
+- ~~No API endpoint to delete a user's AI usage history~~ → **Fixed**: account deletion handles this via explicit purge call
+- ~~Conversation messages retained indefinitely~~ → **Fixed**: 30-day purge cron hard-deletes soft-deleted messages; account deletion cascade removes user-owned messages. **Note**: shared-page assistant messages saved with `userId: null` survive account deletion and may contain user-derived content.
 
 **Remaining gaps**:
 - No TTL or automatic purge on `ai_usage_logs` for non-deleted accounts (logs accumulate indefinitely while account is active)
@@ -379,21 +379,18 @@ accessed, retention limits for cached calendar data, and token revocation UI.
 
 ---
 
-### 2.9. Security Audit Log Integrity Verification (Partially Resolved)
+### 2.9. ~~Security Audit Log Integrity Verification~~ → RESOLVED
 
-**Current state**: Security audit chain integrity is now verified automatically:
-- **Fixed (#541)**: Hash chain GDPR-safe — PII fields excluded from hash
+**Current state**: Both hash chains are now integrity-verified and GDPR-safe:
+- **Fixed (#541)**: Security audit hash chain — PII fields excluded from hash
   computation so anonymization doesn't break the chain
+- **Fixed (#866)**: Activity log hash chain — PII fields excluded from hash
+  computation (matching security audit pattern)
+- **Fixed (#867)**: Activity log writes now serialized with
+  `pg_advisory_xact_lock`, preventing chain forking on concurrent writes
 - **Fixed**: Daily verification cron (`/api/cron/verify-audit-chain`) recomputes
   hashes and verifies chain links. HMAC-signed cron requests. Pluggable
   `ChainAlertHandler` for Slack/email/PagerDuty alerting.
-
-**Remaining gap**: Activity log hash chain still broken by anonymization — PII
-fields are included in `serializeLogDataForHash()`. Fix in progress on branch
-`pu/hash-chain-pii`.
-
-**Effort**: Low. Security audit chain is done; activity log chain fix follows
-the same pattern.
 
 ---
 
@@ -491,9 +488,11 @@ Every path where data leaves the PageSpace deployment boundary.
 
 ### P2 — Required for SOC 2 / enterprise sales
 
-8. **Add audit log integrity verification cron** — Hash chain exists but is never
-   verified.
-9. **Standardize bcrypt cost factor** — Minor inconsistency (cost 10 vs 12).
+8. ~~**Add audit log integrity verification cron**~~ — **RESOLVED**. Daily
+   verification cron exists with alerting. Both security audit and activity log
+   chains are now GDPR-safe and serialized (#541, #866, #867).
+9. ~~**Standardize bcrypt cost factor**~~ — **N/A**. Password-based authentication
+   removed entirely (#861).
 10. **Add AI provider DPA references** — Link to each provider's data processing
     terms.
 
@@ -565,7 +564,7 @@ When entering compliance or white-label conversations, use this framing:
 - GDPR right-to-erasure compliance (file deletion gap remains — DB erasure is done)
 - ~~Data subject export / portability~~ → **Resolved**: DSAR export endpoints exist
 - Configurable data retention policies (partial — AI logs and messages have retention; activity/analytics/audit logs do not)
-- ~~Formal audit log integrity verification~~ → **Resolved**: daily verification cron with alerting (activity log chain fix in progress)
+- ~~Formal audit log integrity verification~~ → **Resolved**: daily verification cron with alerting; both chains GDPR-safe and serialized (#541, #866, #867)
 - Database encryption at rest (TDE needed for regulated industries)
 
 **Never promise** (without fundamental changes):
