@@ -107,6 +107,7 @@ describe('POST /api/cron/workflows', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
+    mockSecurityAudit.logDataAccess.mockResolvedValue(undefined);
 
     // db.select().from(workflows).where(...) — discovery query
     mockSelect.mockReturnValue({ from: mockSelectFrom });

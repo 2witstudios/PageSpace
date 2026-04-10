@@ -108,6 +108,7 @@ describe('POST /api/cron/calendar-triggers', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
+    mockSecurityAudit.logDataAccess.mockResolvedValue(undefined);
 
     // Default: stuck trigger reset (update returns nothing special)
     mockUpdate.mockReturnValue({ set: mockUpdateSet });

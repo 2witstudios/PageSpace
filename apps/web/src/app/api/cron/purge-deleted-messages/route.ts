@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { securityAudit } from '@pagespace/lib/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
@@ -28,6 +29,8 @@ export async function GET(request: Request) {
     console.log(
       `[Cron] Purged deleted messages: chat=${chatMessagesPurged}, global=${globalMessagesPurged}, conversations=${conversationsPurged}`
     );
+
+    securityAudit.logDataAccess('system', 'delete', 'cron_job', 'purge_deleted_messages', { chatMessagesPurged, globalMessagesPurged, conversationsPurged }).catch(() => {});
 
     return NextResponse.json({
       success: true,
