@@ -105,7 +105,7 @@ export async function GET(
     // Redirect to a confirmation page
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-    securityAudit.logDataAccess(userId, 'write', 'notification_prefs', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'notification_prefs', 'self').catch((error) => {
       loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

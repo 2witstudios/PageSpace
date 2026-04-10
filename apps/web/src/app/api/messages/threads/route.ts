@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       fetchChannelsWithLastMessage(userId),
     ]);
 
-    securityAudit.logDataAccess(userId, 'read', 'message_threads', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'message_threads', 'self').catch((error) => {
       loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

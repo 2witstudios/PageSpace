@@ -632,4 +632,58 @@ describe('GDPR-Safe Hash Chain (#541)', () => {
 
     expect(hash1).not.toBe(hash2);
   });
+
+  it('resourceId containing userId cannot be anonymized without breaking chain', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const userId = 'user-abc-123';
+
+    // Simulates the bug: passing userId as resourceId
+    const eventWithUserIdInResource: AuditEvent = {
+      eventType: 'data.read',
+      userId,
+      resourceType: 'inbox',
+      resourceId: userId,
+    };
+
+    const hashBefore = computeSecurityEventHash(eventWithUserIdInResource, 'genesis', timestamp);
+
+    // After GDPR anonymization: userId column nulled, but resourceId remains
+    const anonymizedEvent: AuditEvent = {
+      ...eventWithUserIdInResource,
+      userId: undefined,
+      // resourceId still contains the userId — can't be nulled without breaking hash
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    // Hash is stable (userId excluded) but resourceId still leaks the user ID
+    expect(hashBefore).toBe(hashAfter);
+    // The PII is permanently embedded — this is why callers must use 'self' instead
+    expect(anonymizedEvent.resourceId).toBe(userId);
+  });
+
+  it('using "self" as resourceId avoids PII in hash-protected fields', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+
+    const event: AuditEvent = {
+      eventType: 'data.read',
+      userId: 'user-abc-123',
+      resourceType: 'inbox',
+      resourceId: 'self',
+    };
+
+    const hashBefore = computeSecurityEventHash(event, 'genesis', timestamp);
+
+    // After GDPR anonymization: only PII fields nulled
+    const anonymizedEvent: AuditEvent = {
+      ...event,
+      userId: undefined,
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    // Hash stable AND no PII remains anywhere in the record
+    expect(hashBefore).toBe(hashAfter);
+    expect(anonymizedEvent.resourceId).toBe('self');
+  });
 });

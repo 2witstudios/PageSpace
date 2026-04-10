@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     const notifications = await getUserNotifications(userId, limit);
     const unreadCount = await getUnreadNotificationCount(userId);
 
-    securityAudit.logDataAccess(userId, 'read', 'notification', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'notification', 'self').catch((error) => {
       loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

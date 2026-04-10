@@ -120,7 +120,7 @@ export async function GET(request: Request) {
       ? conversations[conversations.length - 1].lastMessageAt
       : null;
 
-    securityAudit.logDataAccess(userId, 'read', 'conversation', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'conversation', 'self').catch((error) => {
       loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
