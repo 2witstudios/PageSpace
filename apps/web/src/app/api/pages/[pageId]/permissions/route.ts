@@ -120,7 +120,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       ctx.userId
     );
 
-    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId, canView, canEdit } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId, canView, canEdit } })?.catch(() => {});
 
     // Fetch permission details for response
     const page = await db.query.pages.findFirst({
@@ -189,7 +189,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
         ctx.userId
       );
 
-      securityAudit.logEvent({ eventType: 'authz.permission.revoked', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId } }).catch(() => {});
+      securityAudit.logEvent({ eventType: 'authz.permission.revoked', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId } })?.catch(() => {});
 
       // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
       await Promise.all([

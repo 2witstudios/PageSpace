@@ -88,7 +88,7 @@ export async function DELETE(
       deletedBy: auth.userId,
     });
 
-    securityAudit.logDataAccess(auth.userId, 'delete', 'drive', driveId, { connectionId, connectionName: connection.name, operation: 'delete_integration' }).catch(() => {});
+    securityAudit.logDataAccess(auth.userId, 'delete', 'drive', driveId, { connectionId, connectionName: connection.name, operation: 'delete_integration' })?.catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

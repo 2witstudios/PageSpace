@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/server', () => ({
   updateMemberPermissions: vi.fn(),
   invalidateUserPermissions: vi.fn().mockResolvedValue(undefined),
   invalidateDrivePermissions: vi.fn().mockResolvedValue(undefined),
+  securityAudit: { logEvent: vi.fn().mockResolvedValue(undefined), logDataAccess: vi.fn().mockResolvedValue(undefined) },
   loggers: {
     api: {
       info: vi.fn(),

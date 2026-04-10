@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       name: newDrive.name,
     }, actorInfo);
 
-    securityAudit.logDataAccess(userId, 'write', 'drive', newDrive.id, { name, operation: 'create' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'write', 'drive', newDrive.id, { name, operation: 'create' })?.catch(() => {});
 
     return jsonResponse(newDrive, { status: 201 });
   } catch (error) {

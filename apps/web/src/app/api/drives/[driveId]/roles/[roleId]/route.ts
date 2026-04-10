@@ -129,7 +129,7 @@ export async function PATCH(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } })?.catch(() => {});
 
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
@@ -182,7 +182,7 @@ export async function DELETE(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } })?.catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

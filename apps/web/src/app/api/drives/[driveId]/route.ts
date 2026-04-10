@@ -157,7 +157,7 @@ export async function PATCH(
       newValues: Object.keys(newValues).length > 0 ? newValues : undefined,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'drive', driveId, { operation: 'update' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'write', 'drive', driveId, { operation: 'update' })?.catch(() => {});
 
     return NextResponse.json(updatedDrive);
   } catch (error) {
@@ -241,7 +241,7 @@ export async function DELETE(
       newValues: { isTrashed: true },
     });
 
-    securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, { operation: 'trash' }).catch(() => {});
+    securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, { operation: 'trash' })?.catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

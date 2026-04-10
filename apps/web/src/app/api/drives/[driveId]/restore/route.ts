@@ -66,7 +66,7 @@ export async function POST(
       newValues: { isTrashed: false },
     });
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'restore' }).catch(() => {});
+    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'restore' })?.catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

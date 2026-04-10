@@ -88,7 +88,7 @@ export async function GET(
 
     const csv = `${CSV_HEADER}\n${csvRows.join('\n')}`;
 
-    securityAudit.logDataAccess(auth.userId, 'export', 'drive', driveId, { format: 'csv' }).catch(() => {});
+    securityAudit.logDataAccess(auth.userId, 'export', 'drive', driveId, { format: 'csv' })?.catch(() => {});
 
     return new Response(csv, {
       headers: {

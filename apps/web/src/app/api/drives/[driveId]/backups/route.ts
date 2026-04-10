@@ -68,7 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ dri
       return NextResponse.json({ error: result.error }, { status: 403 });
     }
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'create_backup' }).catch(() => {});
+    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'create_backup' })?.catch(() => {});
 
     return NextResponse.json({
       backupId: result.backupId,

@@ -98,7 +98,7 @@ export async function POST(
       role: role as string,
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role } })?.catch(() => {});
 
     return NextResponse.json({ member: newMember });
   } catch (error) {

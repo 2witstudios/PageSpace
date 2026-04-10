@@ -59,7 +59,7 @@ export async function PATCH(
       newOrder: roleIds,
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'reorder', previousOrder, newOrder: roleIds } }).catch(() => {});
+    securityAudit.logEvent({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'reorder', previousOrder, newOrder: roleIds } })?.catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {
