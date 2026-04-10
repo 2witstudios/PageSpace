@@ -67,7 +67,7 @@ describe('GET /api/storage/check', () => {
     await GET(request as never);
 
     expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user_1', 'read', 'storage', 'user_1', undefined
+      'user_1', 'read', 'storage', 'user_1'
     );
   });
 

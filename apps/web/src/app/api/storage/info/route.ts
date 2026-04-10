@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 import {
   getUserStorageQuota,
   getUserFileCount,
@@ -39,6 +40,8 @@ export async function GET(request: NextRequest) {
 
     // Get file count
     const fileCount = await getUserFileCount(user.id);
+
+    securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
 
     // Get user's drives
     const userDrives = await db.query.drives.findMany({

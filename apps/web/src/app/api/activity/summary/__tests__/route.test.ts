@@ -72,7 +72,7 @@ describe('GET /api/activity/summary', () => {
     await GET(request);
 
     expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user_1', 'read', 'activity_summary', 'user_1', undefined
+      'user_1', 'read', 'activity_summary', 'user_1'
     );
   });
 

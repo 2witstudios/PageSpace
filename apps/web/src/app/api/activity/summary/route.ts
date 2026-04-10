@@ -17,7 +17,7 @@ import {
   sql,
   count,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -41,6 +41,8 @@ export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  securityAudit.logDataAccess(userId, 'read', 'activity_summary', userId).catch(() => {});
 
   try {
     const now = new Date();
