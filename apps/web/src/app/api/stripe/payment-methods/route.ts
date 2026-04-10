@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       type: 'card',
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'payment_method', 'list', { count: paymentMethods.data.length }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'payment_method', 'list', { count: paymentMethods.data.length }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
@@ -114,7 +114,7 @@ export async function DELETE(request: NextRequest) {
     // Detach payment method
     await stripe.paymentMethods.detach(paymentMethodId);
 
-    securityAudit.logDataAccess(userId, 'delete', 'payment_method', paymentMethodId, { action: 'detach' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'delete', 'payment_method', paymentMethodId, { action: 'detach' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
@@ -188,7 +188,7 @@ export async function PATCH(request: NextRequest) {
       },
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'payment_method', paymentMethodId, { action: 'set_default' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'payment_method', paymentMethodId, { action: 'set_default' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

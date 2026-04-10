@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-    securityAudit.logDataAccess(userId, 'read', 'subscription_status', 'self', { tier: subscriptionTier }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'subscription_status', 'self', { tier: subscriptionTier }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

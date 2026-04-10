@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
       starting_after: startingAfter,
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'invoices', 'list', { count: invoices.data.length }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'invoices', 'list', { count: invoices.data.length }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

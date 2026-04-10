@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
       return_url: `${process.env.WEB_APP_URL}/settings/billing`,
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_portal', 'portal_session', { customerId: user.stripeCustomerId }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'billing_portal', 'portal_session', { customerId: user.stripeCustomerId }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

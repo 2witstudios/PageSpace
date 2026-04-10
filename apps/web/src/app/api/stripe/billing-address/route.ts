@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: !!user.stripeCustomerId }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: !!user.stripeCustomerId }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
@@ -110,7 +110,7 @@ export async function PUT(request: NextRequest) {
         throw dbError;
       }
 
-      securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error) => {
+      securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error: unknown) => {
         loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
       });
 
@@ -134,7 +134,7 @@ export async function PUT(request: NextRequest) {
       },
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

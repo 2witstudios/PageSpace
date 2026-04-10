@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
       })
       .where(eq(subscriptions.id, currentSubscription.id));
 
-    securityAudit.logDataAccess(userId, 'write', 'subscription_schedule', currentSubscription.stripeScheduleId, { action: 'cancel' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'subscription_schedule', currentSubscription.stripeScheduleId, { action: 'cancel' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

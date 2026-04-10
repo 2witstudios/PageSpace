@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
-      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: true }).catch((error) => {
+      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: true }).catch((error: unknown) => {
         loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
       });
 
@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
-      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: false }).catch((error) => {
+      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: false }).catch((error: unknown) => {
         loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
       });
 

@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
       0
     );
 
-    securityAudit.logDataAccess(userId, 'read', 'invoice', 'upcoming', { hasPricePreview: !!newPriceId }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'invoice', 'upcoming', { hasPricePreview: !!newPriceId }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

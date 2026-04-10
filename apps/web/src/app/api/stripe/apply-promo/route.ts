@@ -133,7 +133,7 @@ export async function POST(request: NextRequest) {
     // In Stripe v20, coupon is nested under source.coupon
     const coupon = discount?.source?.coupon;
 
-    securityAudit.logDataAccess(userId, 'write', 'promo_code', promotionCodeId, { action: 'apply', oldSubscriptionId: subscriptionId, newSubscriptionId: newSubscription.id }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'promo_code', promotionCodeId, { action: 'apply', oldSubscriptionId: subscriptionId, newSubscriptionId: newSubscription.id }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

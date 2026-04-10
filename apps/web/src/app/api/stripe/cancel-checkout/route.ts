@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       userId,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'checkout', subscriptionId, { action: 'cancel' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'checkout', subscriptionId, { action: 'cancel' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

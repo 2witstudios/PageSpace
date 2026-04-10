@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ customer: null });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_customer', 'self', { hasCustomer: true }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'billing_customer', 'self', { hasCustomer: true }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

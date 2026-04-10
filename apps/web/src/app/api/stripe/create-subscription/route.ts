@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'create', priceId }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'create', priceId }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

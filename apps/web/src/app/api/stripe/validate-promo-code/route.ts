@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
       amountOff: coupon.amount_off,
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'promo_code', normalizedCode, { promoId: promoCode.id }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'promo_code', normalizedCode, { promoId: promoCode.id }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

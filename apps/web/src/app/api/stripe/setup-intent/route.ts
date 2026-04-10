@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       metadata: { userId: user.id },
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'payment_method', setupIntent.id, { action: 'setup_intent' }).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'payment_method', setupIntent.id, { action: 'setup_intent' }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
