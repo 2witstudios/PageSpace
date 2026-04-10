@@ -156,6 +156,42 @@ The heuristic fallback `lowerModel.includes('grok') && lowerModel.includes('visi
 
 ---
 
+## HIGH: GPT-4.1 Models Missing from Vision Map + Wrong Context Window
+
+**Files**:
+- `apps/web/src/lib/ai/core/vision-models.ts`
+- `packages/lib/src/monitoring/ai-context-calculator.ts`
+
+**The bug**: Three GPT-4.1 models in the OpenAI provider config are missing from the vision map AND get the wrong context window:
+
+| Model ID | Vision Detection | Context Window |
+|---|---|---|
+| `gpt-4.1-2025-04-14` | Returns `false` (should be `true`) | Returns 8,192 (should be 1,000,000) |
+| `gpt-4.1-mini-2025-04-14` | Returns `false` (should be `true`) | Returns 8,192 (should be 1,000,000) |
+| `gpt-4.1-nano-2025-04-14` | Returns `false` (should be `true`) | Returns 8,192 (should be 1,000,000) |
+
+**Why**: `gpt-4.1` doesn't match any heuristic (`gpt-4o`, `gpt-5`, etc.) and falls through to the `gpt-4` catch-all in the context calculator which returns the GPT-4 base context of 8K.
+
+---
+
+## HIGH: @mentions Processed But Not Injected in Page Agent Prompts
+
+**File**: `apps/web/src/app/api/ai/chat/route.ts`
+
+**The bug**: The page AI chat route processes @mentions at line 333 (`processMentionsInMessage(messageContent)`) and logs them, but never calls `buildMentionSystemPrompt()` or includes the mention prompt in the system prompt at line 862. The global assistant route correctly does this at line 309.
+
+**Impact**: @mentioning a document in a page agent chat appears to work (UI resolves the mention, backend logs it) but the AI never receives instructions to read the mentioned document.
+
+---
+
+## HIGH: OpenRouter Suggestion Models Not in Config
+
+**File**: `apps/web/src/lib/ai/core/model-capabilities.ts:144`
+
+**The bug**: `getSuggestedToolCapableModels()` for OpenRouter suggested `meta-llama/llama-3.1-8b-instruct` and `qwen/qwen-2.5-7b-instruct`, neither of which exists in the PageSpace OpenRouter config. Users can't switch to models not in the dropdown.
+
+---
+
 ## Summary
 
 | # | Finding | Severity | Type | Impact |
@@ -164,8 +200,11 @@ The heuristic fallback `lowerModel.includes('grok') && lowerModel.includes('visi
 | 2 | Vision detection fails for Claude 4.5 models | CRITICAL | Missing map entries + broken heuristic | Image handling broken for Claude 4.5 |
 | 3 | Wrong model IDs in user-facing suggestions | HIGH | Wrong string constants | Suggests non-existent models to users |
 | 4 | Context window calculator missing GPT-5.3/5.4 | HIGH | Missing version branches | Premature conversation truncation |
-| 5 | Hallucinated model IDs in vision map | MEDIUM | Dead code | Inconsistency, indicates systematic issue |
-| 6 | Tool summary display incomplete (12+ tools) | MEDIUM | Incomplete hardcoded list | Admin UI shows wrong tool count |
-| 7 | Vision map missing Grok 4 variants | MEDIUM | Missing map entries | Potential false negative on vision |
+| 5 | GPT-4.1 missing from vision map + context calculator | HIGH | Missing entries + wrong catch-all | Vision broken + 8K context instead of 1M |
+| 6 | @mentions not injected into page agent prompts | HIGH | Missing wiring | @mention feature non-functional for page agents |
+| 7 | OpenRouter suggestions reference non-existent models | HIGH | Phantom model IDs | Unusable fallback suggestions |
+| 8 | Hallucinated model IDs in vision map | MEDIUM | Dead code | Inconsistency, indicates systematic issue |
+| 9 | Tool summary display incomplete (12+ tools) | MEDIUM | Incomplete hardcoded list | Admin UI shows wrong tool count |
+| 10 | Vision map missing Grok 4 variants | MEDIUM | Missing map entries | Potential false negative on vision |
 
 All findings verified against source code. No speculative issues included.
