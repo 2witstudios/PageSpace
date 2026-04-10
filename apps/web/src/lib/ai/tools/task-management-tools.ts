@@ -293,7 +293,10 @@ Agent Triggers:
           }
 
           // Create agent trigger workflow if requested on update
-          if (agentTrigger && taskListDriveId) {
+          if (agentTrigger) {
+            if (!taskListDriveId) {
+              return { success: false, error: 'Agent triggers require a drive-based task list' };
+            }
             await createTaskTriggerWorkflow({
               database: db,
               driveId: taskListDriveId,
@@ -458,7 +461,10 @@ Agent Triggers:
             }
 
             // Create agent trigger workflow if requested
-            if (agentTrigger && taskListPage.driveId) {
+            if (agentTrigger) {
+              if (!taskListPage.driveId) {
+                throw new Error('Agent triggers require a drive-based task list');
+              }
               await createTaskTriggerWorkflow({
                 database: tx,
                 driveId: taskListPage.driveId,

@@ -47,6 +47,15 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
   if (!triggerAgent) throw new Error('Agent trigger target not found or not an AI agent');
   if (triggerAgent.driveId !== driveId) throw new Error('Agent must be in the same drive as the task list');
 
+  // Validate instruction page if provided
+  if (agentTrigger.instructionPageId) {
+    const instrPage = await database.query.pages.findFirst({
+      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
+      columns: { id: true },
+    });
+    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
+  }
+
   // Validate context pages if provided
   const contextPageIds = agentTrigger.contextPageIds ?? [];
   if (contextPageIds.length > 0) {
@@ -182,6 +191,7 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
     if (!completionWorkflow) return;
 
     // Atomically claim — only proceed if we actually updated a row
+    // Re-check isEnabled to guard against concurrent disableTaskTriggers
     const claimed = await db.update(workflows).set({
       lastRunStatus: 'running',
       lastRunAt: new Date(),
@@ -189,6 +199,7 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       and(
         eq(workflows.id, completionWorkflow.id),
         eq(workflows.lastRunStatus, 'never_run'),
+        eq(workflows.isEnabled, true),
       ),
     ).returning();
 

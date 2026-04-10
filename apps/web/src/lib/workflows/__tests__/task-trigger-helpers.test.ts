@@ -270,6 +270,21 @@ describe('task-trigger-helpers', () => {
         .rejects.toThrow('Agent must be in the same drive as the task list');
     });
 
+    it('given invalid instructionPageId, should throw', async () => {
+      // findFirst: agent page OK
+      mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', type: 'AI_CHAT', driveId: 'drive-1' });
+      // findFirst: instruction page not found
+      mockQueryPages.findFirst.mockResolvedValueOnce(null);
+
+      await expect(createTaskTriggerWorkflow({
+        ...validParams,
+        agentTrigger: {
+          ...validParams.agentTrigger,
+          instructionPageId: 'bad-page-id',
+        },
+      })).rejects.toThrow('Instruction page not found or not in the same drive');
+    });
+
     it('given contextPageIds with pages not in the same drive, should throw', async () => {
       // findFirst for agent page succeeds
       mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', type: 'AI_CHAT', driveId: 'drive-1' });
