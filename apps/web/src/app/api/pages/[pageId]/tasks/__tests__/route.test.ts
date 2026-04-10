@@ -9,13 +9,17 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  canUserEditPage: vi.fn(),
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
-}));
+vi.mock('@pagespace/lib/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/server')>();
+  return {
+    ...actual,
+    canUserViewPage: vi.fn(),
+    canUserEditPage: vi.fn(),
+    securityAudit: {
+      logDataAccess: vi.fn().mockResolvedValue(undefined),
+    },
+  };
+});
 
 vi.mock('@pagespace/lib', () => ({
   PageType: {

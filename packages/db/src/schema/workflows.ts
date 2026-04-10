@@ -1,8 +1,9 @@
-import { pgTable, text, timestamp, jsonb, boolean, integer, index, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, boolean, integer, index, pgEnum, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
+import { taskItems } from './tasks';
 
 export const workflowRunStatus = pgEnum('WorkflowRunStatus', [
   'never_run',
@@ -11,7 +12,7 @@ export const workflowRunStatus = pgEnum('WorkflowRunStatus', [
   'running',
 ]);
 
-export const workflowTriggerType = pgEnum('WorkflowTriggerType', ['cron', 'event']);
+export const workflowTriggerType = pgEnum('WorkflowTriggerType', ['cron', 'event', 'task_due_date', 'task_completion']);
 
 export type EventTrigger = {
   operation: string;
@@ -32,6 +33,11 @@ export const workflows = pgTable('workflows', {
   eventTriggers: jsonb('eventTriggers').$type<EventTrigger[]>(),
   watchedFolderIds: jsonb('watchedFolderIds').$type<string[]>(),
   eventDebounceSecs: integer('eventDebounceSecs').default(30),
+
+  // Task trigger fields (for task_due_date / task_completion trigger types)
+  taskItemId: text('taskItemId').references(() => taskItems.id, { onDelete: 'cascade' }),
+  instructionPageId: text('instructionPageId').references(() => pages.id, { onDelete: 'set null' }),
+
   isEnabled: boolean('isEnabled').default(true).notNull(),
   lastRunAt: timestamp('lastRunAt', { mode: 'date' }),
   nextRunAt: timestamp('nextRunAt', { mode: 'date' }),
@@ -47,6 +53,8 @@ export const workflows = pgTable('workflows', {
     agentPageIdx: index('workflows_agent_page_id_idx').on(table.agentPageId),
     enabledNextRunIdx: index('workflows_enabled_next_run_idx').on(table.isEnabled, table.nextRunAt),
     enabledTriggerTypeIdx: index('workflows_enabled_trigger_type_idx').on(table.isEnabled, table.triggerType),
+    taskItemIdx: index('workflows_task_item_id_idx').on(table.taskItemId),
+    taskItemTriggerTypeKey: unique('workflows_task_item_trigger_type_key').on(table.taskItemId, table.triggerType),
   };
 });
 
@@ -62,5 +70,14 @@ export const workflowsRelations = relations(workflows, ({ one }) => ({
   agentPage: one(pages, {
     fields: [workflows.agentPageId],
     references: [pages.id],
+  }),
+  taskItem: one(taskItems, {
+    fields: [workflows.taskItemId],
+    references: [taskItems.id],
+  }),
+  instructionPage: one(pages, {
+    fields: [workflows.instructionPageId],
+    references: [pages.id],
+    relationName: 'workflowInstructionPage',
   }),
 }));

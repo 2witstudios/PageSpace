@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc } from '@pagespace/db';
+import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage, securityAudit } from '@pagespace/lib/server';
@@ -248,6 +249,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     assigneeAgentId,
     assigneeIds,
     dueDate,
+    agentTrigger,
   } = body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -282,6 +284,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     if (agentPage.driveId !== taskListPage.driveId) {
       return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
     }
+  }
+
+  // Validate agent trigger shape (business logic validation done by createTaskTriggerWorkflow)
+  if (agentTrigger) {
+    if (!taskListPage.driveId) {
+      return NextResponse.json({ error: 'Agent triggers require a drive-based task list' }, { status: 400 });
+    }
+    if (!agentTrigger.agentPageId || typeof agentTrigger.agentPageId !== 'string') {
+      return NextResponse.json({ error: 'agentTrigger.agentPageId is required' }, { status: 400 });
+    }
+    if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
+      return NextResponse.json({ error: 'Agent trigger needs either a prompt or instructionPageId' }, { status: 400 });
+    }
+    if (agentTrigger.prompt && (typeof agentTrigger.prompt !== 'string' || agentTrigger.prompt.length > 10000)) {
+      return NextResponse.json({ error: 'agentTrigger.prompt must be a string of at most 10000 characters' }, { status: 400 });
+    }
+    const triggerType = agentTrigger.triggerType || 'due_date';
+    if (triggerType !== 'due_date' && triggerType !== 'completion') {
+      return NextResponse.json({ error: 'agentTrigger.triggerType must be "due_date" or "completion"' }, { status: 400 });
+    }
+    if (triggerType === 'due_date' && !dueDate) {
+      return NextResponse.json({ error: 'Due date is required for due_date triggers' }, { status: 400 });
+    }
+    if (agentTrigger.contextPageIds && (!Array.isArray(agentTrigger.contextPageIds) || agentTrigger.contextPageIds.length > 10)) {
+      return NextResponse.json({ error: 'contextPageIds must be an array of at most 10 page IDs' }, { status: 400 });
+    }
+    // Normalize triggerType for downstream
+    agentTrigger.triggerType = triggerType;
   }
 
   // Get or create task list
@@ -370,6 +400,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     if (assigneeRows.length > 0) {
       await tx.insert(taskAssignees).values(assigneeRows);
+    }
+
+    // Create agent trigger workflow if requested
+    if (agentTrigger && taskListPage.driveId) {
+      await createTaskTriggerWorkflow({
+        database: tx,
+        driveId: taskListPage.driveId,
+        userId,
+        taskId: newTask.id,
+        taskMetadata: newTask.metadata as Record<string, unknown> | null,
+        agentTrigger,
+        dueDate: dueDate ? new Date(dueDate) : null,
+        timezone: 'UTC',
+      });
     }
 
     return { task: newTask, page: taskPage };

@@ -5,6 +5,7 @@ import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -61,7 +62,13 @@ Assignment:
 - Use assigneeIds array to assign multiple users and/or agents
 - Each entry: { type: 'user'|'agent', id: 'string' }
 - Or use legacy assigneeId/assigneeAgentId for single assignment
-- Agents can assign tasks to themselves or other agents`,
+- Agents can assign tasks to themselves or other agents
+
+Agent Triggers:
+- Schedule an AI agent to run at task due date or on task completion
+- Provide agentTrigger with agentPageId and either prompt or instructionPageId
+- triggerType 'due_date' fires when the due date arrives (requires dueDate)
+- triggerType 'completion' fires when the task is marked done`,
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
@@ -78,9 +85,16 @@ Assignment:
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
       position: z.number().optional().describe('Position in the list (for new tasks, defaults to end)'),
+      agentTrigger: z.object({
+        agentPageId: z.string().describe('ID of the AI agent page to execute'),
+        prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
+        instructionPageId: z.string().optional().describe('Page ID containing detailed instructions'),
+        contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+        triggerType: z.enum(['due_date', 'completion']).default('due_date').describe('When to trigger: at due date or on completion'),
+      }).optional().describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position } = params;
+      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -264,6 +278,38 @@ Assignment:
             }
           }
 
+          // Create agent trigger workflow BEFORE firing cascades so the workflow
+          // exists when fireCompletionTrigger looks for it
+          if (agentTrigger) {
+            if (!taskListDriveId) {
+              return { success: false, error: 'Agent triggers require a drive-based task list' };
+            }
+            await createTaskTriggerWorkflow({
+              database: db,
+              driveId: taskListDriveId,
+              userId,
+              taskId,
+              taskMetadata: resultTask.metadata as Record<string, unknown> | null,
+              agentTrigger,
+              dueDate: resultTask.dueDate,
+              timezone: (context as ToolExecutionContext).timezone || 'UTC',
+            });
+          }
+
+          // Task trigger cascades
+          if (dueDate !== undefined) {
+            void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+          }
+          if (status !== undefined) {
+            const completedSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+              : new Set(['completed']);
+            if (completedSlugs.has(status) && !existingTask.completedAt) {
+              void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
+              void fireCompletionTrigger(taskId);
+            }
+          }
+
           // Broadcast update event
           await broadcastTaskEvent({
             type: 'task_updated',
@@ -413,6 +459,23 @@ Assignment:
             }
             if (assigneeRows.length > 0) {
               await tx.insert(taskAssignees).values(assigneeRows);
+            }
+
+            // Create agent trigger workflow if requested
+            if (agentTrigger) {
+              if (!taskListPage.driveId) {
+                throw new Error('Agent triggers require a drive-based task list');
+              }
+              await createTaskTriggerWorkflow({
+                database: tx,
+                driveId: taskListPage.driveId,
+                userId,
+                taskId: newTask.id,
+                taskMetadata: newTask.metadata as Record<string, unknown> | null,
+                agentTrigger,
+                dueDate: dueDate ? new Date(dueDate) : null,
+                timezone: (context as ToolExecutionContext).timezone || 'UTC',
+              });
             }
 
             return { task: newTask, page: taskPage };
