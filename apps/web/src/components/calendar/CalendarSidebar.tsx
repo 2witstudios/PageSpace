@@ -25,8 +25,9 @@ export function CalendarSidebar({
   onHideAll,
   className,
 }: CalendarSidebarProps) {
-  const allVisible = calendars.every((c) => c.visible);
-  const noneVisible = calendars.every((c) => !c.visible);
+  const hasCalendars = calendars.length > 0;
+  const allVisible = hasCalendars && calendars.every((c) => c.visible);
+  const noneVisible = hasCalendars && calendars.every((c) => !c.visible);
 
   return (
     <div className={cn('flex flex-col gap-1', className)}>
