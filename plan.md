@@ -42,6 +42,9 @@ All tasks delivered:
 
 - **Drive Calendar Filtering** — Google Calendar-style drive filtering for the root calendar
 
+### SIEM Connect ✅ (2026-04-10)
+**Epic**: [tasks/siem-connect.md](tasks/siem-connect.md)
+
 ---
 
 ## Backlog

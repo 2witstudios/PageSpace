@@ -141,15 +141,15 @@ export function getSuggestedToolCapableModels(provider: string): string[] {
       return ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'];
     case 'openrouter':
     case 'openrouter_free':
-      return ['meta-llama/llama-3.1-8b-instruct', 'qwen/qwen-2.5-7b-instruct'];
+      return ['meta-llama/llama-3.1-405b-instruct', 'mistralai/mistral-small-3.2-24b-instruct'];
     case 'google':
       return ['gemini-2.5-flash', 'gemini-1.5-flash'];
     case 'openai':
       return ['gpt-4o-mini', 'gpt-3.5-turbo'];
     case 'anthropic':
-      return ['claude-3-haiku', 'claude-3-5-sonnet'];
+      return ['claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022'];
     default:
-      return ['gpt-4o-mini', 'claude-3-haiku', 'gemini-2.5-flash'];
+      return ['gpt-4o-mini', 'claude-3-haiku-20240307', 'gemini-2.5-flash'];
   }
 }
 

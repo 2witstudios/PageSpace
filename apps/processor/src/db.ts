@@ -26,6 +26,10 @@ function getPool(): PgPool {
   return pool;
 }
 
+export function getPoolForWorker(): PgPool {
+  return getPool();
+}
+
 export async function setPageProcessing(pageId: string): Promise<void> {
   const client = await getPool().connect();
   try {
