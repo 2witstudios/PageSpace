@@ -5,7 +5,8 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -166,10 +167,10 @@ export async function PUT(
       userId
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'page_agent', agentId, {
+    logAuditEvent(request, userId, 'write', 'page_agent', agentId, {
       action: 'update_config',
       updatedFields,
-    }).catch(() => {});
+    });
 
     return NextResponse.json({
       success: true,

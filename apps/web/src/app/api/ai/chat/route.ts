@@ -60,7 +60,8 @@ import {
 } from '@/lib/ai/core';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, securityAudit, conversationCache, type CachedMessage } from '@pagespace/lib/server';
+import { loggers, conversationCache, type CachedMessage } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -359,10 +360,10 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: User message saved to database');
 
-        securityAudit.logDataAccess(userId, 'write', 'ai_chat', chatId, {
+        logAuditEvent(request, userId, 'write', 'ai_chat', chatId, {
           action: 'chat_message',
           conversationId,
-        }).catch(() => {});
+        });
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
@@ -1270,9 +1271,9 @@ export async function GET(request: Request) {
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
-    securityAudit.logDataAccess(userId, 'read', 'ai_chat_settings', pageId || userId, {
+    logAuditEvent(request, userId, 'read', 'ai_chat_settings', pageId || userId, {
       action: 'get_provider_settings',
-    }).catch(() => {});
+    });
 
     return NextResponse.json({
       currentProvider,
@@ -1515,11 +1516,11 @@ export async function PATCH(request: Request) {
       model: sanitizedModel
     });
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'ai_chat_settings', sanitizedPageId, {
+    logAuditEvent(request, auth.userId, 'write', 'ai_chat_settings', sanitizedPageId, {
       action: 'update_page_settings',
       provider: sanitizedProvider,
       model: sanitizedModel,
-    }).catch(() => {});
+    });
 
     return NextResponse.json({
       success: true,

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
 import {
   globalConversationRepository,
@@ -37,9 +38,9 @@ export async function GET(
     // Calculate summary statistics (pure function)
     const summary = calculateUsageSummary(logs, getContextWindow);
 
-    securityAudit.logDataAccess(userId, 'read', 'global_chat_usage', id, {
+    logAuditEvent(request, userId, 'read', 'global_chat_usage', id, {
       action: 'view_usage',
-    }).catch(() => {});
+    });
 
     return NextResponse.json({
       logs,

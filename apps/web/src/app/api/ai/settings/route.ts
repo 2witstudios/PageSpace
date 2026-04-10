@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
@@ -122,9 +123,9 @@ export async function GET(request: Request) {
     // Check Azure OpenAI settings
     const azureOpenAISettings = await getUserAzureOpenAISettings(userId);
 
-    securityAudit.logDataAccess(userId, 'read', 'ai_settings', userId, {
+    logAuditEvent(request, userId, 'read', 'ai_settings', userId, {
       action: 'get_settings',
-    }).catch(() => {});
+    });
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
@@ -280,10 +281,10 @@ export async function POST(request: Request) {
         await createAzureOpenAISettings(userId, sanitizedApiKey, sanitizedBaseUrl);
       }
 
-      securityAudit.logDataAccess(userId, 'write', 'ai_settings', provider, {
+      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
         action: 'save_api_key',
         provider,
-      }).catch(() => {});
+      });
 
       return NextResponse.json(
         {
@@ -370,11 +371,11 @@ export async function PATCH(request: Request) {
     try {
       await aiSettingsRepository.updateProviderSettings(userId, { provider, model });
 
-      securityAudit.logDataAccess(userId, 'write', 'ai_settings', provider, {
+      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
         action: 'update_model_selection',
         provider,
         model,
-      }).catch(() => {});
+      });
 
       return NextResponse.json(
         {
@@ -445,10 +446,10 @@ export async function DELETE(request: Request) {
         await deleteAzureOpenAISettings(userId);
       }
 
-      securityAudit.logDataAccess(userId, 'delete', 'ai_settings', provider, {
+      logAuditEvent(request, userId, 'delete', 'ai_settings', provider, {
         action: 'delete_api_key',
         provider,
-      }).catch(() => {});
+      });
 
       // Return success with 204 No Content
       return new Response(null, { status: 204 });
