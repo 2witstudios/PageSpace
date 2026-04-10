@@ -9,7 +9,7 @@ import {
   lte,
   sql,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 
@@ -95,7 +95,7 @@ function logToCSVRow(log: Record<string, unknown>): string {
  * - search: Full-text search in resourceTitle, actorEmail, actorDisplayName
  * - format: Export format (default: csv, only csv supported currently)
  */
-export const GET = withAdminAuth(async (_adminUser, request) => {
+export const GET = withAdminAuth(async (adminUser, request) => {
   try {
 
     // Parse query parameters
@@ -238,6 +238,10 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
           controller.error(error);
         }
       },
+    });
+
+    securityAudit.logDataAccess(adminUser.id, 'export', 'audit_logs', 'all', { action: 'export' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'export', resourceType: 'audit_logs' });
     });
 
     // Return streaming response with appropriate headers

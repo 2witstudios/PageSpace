@@ -14,11 +14,11 @@ import {
   count,
 } from '@pagespace/db';
 import { stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { isOnPrem } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth';
 
-export const GET = withAdminAuth(async (_adminUser, _request) => {
+export const GET = withAdminAuth(async (adminUser, _request) => {
   try {
     // Get all users
     const allUsers = await db
@@ -223,6 +223,10 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         ...user
       } = userData;
       return user;
+    });
+
+    securityAudit.logDataAccess(adminUser.id, 'read', 'admin_users', 'all', { action: 'list' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceType: 'admin_users' });
     });
 
     return Response.json({ users: cleanUsers });

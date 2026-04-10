@@ -1,4 +1,4 @@
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import {
   verifyHashChain,
   quickIntegrityCheck,
@@ -30,7 +30,7 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
  * - stopOnFirstBreak: Stop at first break point (default: true)
  * - batchSize: Batch size for full verification (default: 1000)
  */
-export const GET = withAdminAuth(async (_adminUser, request) => {
+export const GET = withAdminAuth(async (adminUser, request) => {
   try {
 
     // Parse query parameters
@@ -45,6 +45,10 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       defaultValue: 1000,
       min: 100,
       max: 5000,
+    });
+
+    securityAudit.logDataAccess(adminUser.id, 'read', 'audit_integrity', 'all', { action: 'verify', mode }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceType: 'audit_integrity' });
     });
 
     switch (mode) {
