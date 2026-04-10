@@ -147,9 +147,9 @@ export function getSuggestedToolCapableModels(provider: string): string[] {
     case 'openai':
       return ['gpt-4o-mini', 'gpt-3.5-turbo'];
     case 'anthropic':
-      return ['claude-3-haiku', 'claude-3-5-sonnet'];
+      return ['claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022'];
     default:
-      return ['gpt-4o-mini', 'claude-3-haiku', 'gemini-2.5-flash'];
+      return ['gpt-4o-mini', 'claude-3-haiku-20240307', 'gemini-2.5-flash'];
   }
 }
 

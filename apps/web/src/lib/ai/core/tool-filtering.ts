@@ -16,6 +16,7 @@ const WRITE_TOOLS = new Set([
   // Drive operations
   'create_drive',
   'rename_drive',
+  'update_drive_context',
   // Unified trash/restore (pages and drives)
   'trash',
   'restore',
@@ -25,6 +26,13 @@ const WRITE_TOOLS = new Set([
   'update_task',
   // Channel operations
   'send_channel_message',
+  // Calendar write operations
+  'create_calendar_event',
+  'update_calendar_event',
+  'delete_calendar_event',
+  'rsvp_calendar_event',
+  'invite_calendar_attendees',
+  'remove_calendar_attendee',
   // GitHub import (creates pages)
   'import_from_github',
 ]);
@@ -109,9 +117,16 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'list_pages',
     'read_page',
     'list_trash',
+    'list_conversations',
+    'read_conversation',
     'list_agents',
     'multi_drive_list_agents',
     'get_activity',
+    'get_assigned_tasks',
+    // Calendar read tools
+    'list_calendar_events',
+    'get_calendar_event',
+    'check_calendar_availability',
     // Search tools
     'regex_search',
     'glob_search',
