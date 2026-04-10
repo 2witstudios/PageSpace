@@ -8,13 +8,14 @@ export function Soc2Pane() {
       <div className="sl">Current</div>
       <h2>
         Strong SOC 2 coverage.{" "}
-        <span className="hl">Gaps are in operationalization.</span>
+        <span className="hl">Closing the last gaps.</span>
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
         PageSpace maps well to SOC 2 Trust Service Criteria across Security,
-        Monitoring, Vulnerability Management, and Change Management. The
-        infrastructure is built. The gap is wiring it comprehensively and
-        making the audit trail operational.
+        Monitoring, Vulnerability Management, and Change Management. SIEM
+        delivery is connected (#873) and audit coverage has expanded to ~19%
+        of routes (#868-870). The remaining work is expanding audit coverage
+        to 100% and formalizing operational commitments.
       </p>
 
       {/* ── Security (CC6) ── */}
@@ -72,19 +73,20 @@ export function Soc2Pane() {
             <code>pg_advisory_xact_lock</code> serialization to prevent chain
             forking (works even on empty tables). 35 event types across auth,
             authorization, data access, admin, and security categories. Risk
-            scoring and anomaly flags per event.
+            scoring and anomaly flags per event. ~47 of 248 routes wired
+            (#868-870), covering auth, pages, drives, permissions, settings,
+            account, files, and export.
           </p>
         </Card>
-        <Card accent="amber">
-          <h4>
-            Coverage expanding: ~47 of 248 routes{" "}
-            <span style={{ color: "var(--amber)" }}>(~19%)</span>
-          </h4>
+        <Card accent="green">
+          <h4>SIEM delivery</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            SecurityAuditService wired to auth, pages, drives, permissions,
-            settings, account, file upload, and export routes (#868-870).
-            Remaining gaps: AI/chat endpoints, integrations, calendar,
-            notifications, admin actions, trash, and invitations.
+            Full SIEM adapter: webhook (HMAC-SHA256 signed), syslog (TCP/UDP,
+            RFC 5424), batched delivery, retry with backoff, SSRF protection.
+            Connected via cursor-based pg-boss worker (#873) &mdash; polls{" "}
+            <code>activity_logs</code> every 30s and delivers to external SIEM
+            (Splunk, Datadog, etc.). Health endpoint at <code>/health</code>.
+            Cursor tracking in <code>siem_delivery_cursors</code> table.
           </p>
         </Card>
       </div>
@@ -111,27 +113,15 @@ export function Soc2Pane() {
           </p>
         </Card>
       </div>
-      <div className="g2" style={{ marginBottom: 12 }}>
-        <Card accent="green">
-          <h4>Anomaly detection</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Login pattern analysis: impossible travel detection (IP geolocation
-            heuristic), high-frequency access patterns, new user agent
-            detection, known bad IP blocking. Configurable risk weights.
-            Results feed into security audit events.
-          </p>
-        </Card>
-        <Card accent="green">
-          <h4>SIEM adapter (connected)</h4>
-          <p style={{ marginTop: 6, fontSize: 12 }}>
-            Full SIEM adapter with webhook delivery (HMAC-SHA256), syslog
-            (TCP/UDP, RFC 5424), batched delivery, retry with backoff, SSRF
-            protection. Wired into the processor via cursor-based pg-boss
-            worker (#873). Polls <code>activity_logs</code> every 30s,
-            delivers to configured external SIEM. Health endpoint exposed.
-          </p>
-        </Card>
-      </div>
+      <Card accent="green" style={{ marginBottom: 12 }}>
+        <h4>Anomaly detection</h4>
+        <p style={{ marginTop: 6, fontSize: 12 }}>
+          Login pattern analysis: impossible travel detection (IP geolocation
+          heuristic), high-frequency access patterns, new user agent
+          detection, known bad IP blocking. Configurable risk weights.
+          Results feed into security audit events.
+        </p>
+      </Card>
 
       {/* ── Vulnerability Management (CC6.5) ── */}
       <h3 style={{ marginBottom: 12 }}>
@@ -193,33 +183,35 @@ export function Soc2Pane() {
       {/* ── Gaps ── */}
       <div className="sl">Gaps</div>
       <h2>
-        Controls exist.{" "}
-        <span className="hl">Operationalization doesn&apos;t.</span>
+        Mostly operationalized.{" "}
+        <span className="hl">Three items remain.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        Recent PRs closed major gaps: distributed rate limiting, webhook
-        alerting, rate-limit audit events, admin read auditing, SIEM
-        delivery (#873), and audit wiring to pages/drives/settings/account
-        (#868-870). What remains: expanding audit coverage to 100% of
-        routes and formalizing an SLA.
+        SIEM delivery, rate limiting, webhook alerting, and broad audit wiring
+        are all shipped. What remains: expanding audit coverage from ~19% to
+        100%, fixing the activity log chain fork, and formalizing an SLA.
       </p>
 
-      <FeatureRow columns={3}>
-        <Feature
-          nameColor="var(--amber)"
-          name="Audit coverage at ~19%"
-          description="SecurityAuditService wired to ~47 of 248 routes (auth, pages, drives, permissions, settings, account, files, export). Remaining: AI/chat, integrations, calendar, notifications, admin, trash, invitations."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--red)"
-          name="Activity chain can fork"
-          description="Activity log hash chain writes not serialized with row locking (#542). Concurrent writes can create forks. Security audit chain is safe (uses pg_advisory_xact_lock). Activity logs do not."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-      </FeatureRow>
-
-      <div className="g2" style={{ marginBottom: 12 }}>
+      <div className="g3" style={{ marginBottom: 12 }}>
+        <Card accent="amber">
+          <h4>Audit coverage at ~19%</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            SecurityAuditService wired to ~47 of 248 routes: auth, pages,
+            drives, permissions, settings, account, files, export. Remaining
+            gaps: AI/chat endpoints, integrations, calendar, notifications,
+            admin actions, trash, and invitations. The service works &mdash;
+            it just needs more call sites.
+          </p>
+        </Card>
+        <Card accent="red">
+          <h4>Activity chain can fork</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Activity log hash chain writes not serialized with row locking
+            (#542). Concurrent writes can create forks. Security audit chain
+            is safe (uses <code>pg_advisory_xact_lock</code>). Activity logs
+            do not.
+          </p>
+        </Card>
         <Card accent="amber">
           <h4>No formal SLA</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
@@ -237,24 +229,33 @@ export function Soc2Pane() {
         Audit-ready.{" "}
         <span className="hl">Every control operationalized.</span>
       </h2>
+      <p style={{ marginBottom: 20, maxWidth: 720 }}>
+        The infrastructure is built and increasingly wired. The end game is
+        closing the last coverage gaps: every security-relevant route audited,
+        both hash chains non-forkable, and a formal SLA for availability.
+      </p>
 
-      <FeatureRow columns={2}>
-        <Feature
-          nameColor="var(--cyan)"
-          name="100% audit coverage"
-          description="Expand SecurityAuditService from ~19% to all security-relevant routes. Remaining: AI/chat endpoints, integrations, calendar, notifications, admin actions, trash, invitations."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--cyan)"
-          name="Chain integrity"
-          description="Fix activity log hash chain: add pg_advisory_xact_lock serialization (matching security audit pattern). Fix GDPR anonymization chain break. Both chains verified and non-forkable."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-      </FeatureRow>
-
-      <div className="g2">
-        <Card accent="blue">
+      <div className="g3" style={{ marginBottom: 12 }}>
+        <Card accent="cyan">
+          <h4>100% audit coverage</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Expand SecurityAuditService from ~19% to all security-relevant
+            routes. Every page CRUD, permission change, file operation, admin
+            action, and settings change produces an immutable audit event.
+            AI/chat, integrations, calendar, notifications, trash, and
+            invitations are the remaining categories.
+          </p>
+        </Card>
+        <Card accent="cyan">
+          <h4>Chain integrity</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Fix activity log hash chain: add{" "}
+            <code>pg_advisory_xact_lock</code> serialization (matching security
+            audit pattern). Fix GDPR anonymization chain break. Both chains
+            verified and non-forkable.
+          </p>
+        </Card>
+        <Card accent="cyan">
           <h4>Formal SLA + evidence collection</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
             Documented availability SLA with RTO/RPO targets. Automated
@@ -267,12 +268,10 @@ export function Soc2Pane() {
       <Card style={{ borderColor: "var(--border2)", marginTop: 12 }}>
         <h4 style={{ color: "var(--dim)" }}>The pattern</h4>
         <p style={{ fontSize: 12, color: "var(--dim)" }}>
-          The SIEM adapter is now connected (#873) and audit coverage
-          has expanded from 2% to ~19% (#868-870). The remaining SOC 2
-          gaps are &ldquo;connected but not comprehensive&rdquo; &mdash;
-          expanding audit coverage to all routes, fixing the activity
-          log chain fork, and formalizing an SLA. The pattern is
-          operationalization, not new infrastructure.
+          SIEM delivery is connected (#873). Audit coverage expanded from 2%
+          to ~19% (#868-870). Rate limiting, webhook alerting, and admin
+          auditing are all shipped. The remaining SOC 2 work is coverage
+          expansion and formalization &mdash; not new infrastructure.
         </p>
       </Card>
     </div>

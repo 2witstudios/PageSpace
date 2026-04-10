@@ -12,9 +12,9 @@ export function CompliancePane() {
       </h2>
       <p style={{ marginBottom: 28, maxWidth: 720 }}>
         Tamper-evident audit logs, AES-256-GCM encryption, anomaly detection,
-        per-event re-authorization, distributed rate limiting, and GDPR export
-        are production features today. Every claim below is verified against
-        the codebase.
+        per-event re-authorization, distributed rate limiting, SIEM delivery,
+        and GDPR export are production features today. Every claim below is
+        verified against the codebase.
       </p>
 
       <h3 style={{ marginBottom: 12 }}>Audit trail</h3>
@@ -28,7 +28,8 @@ export function CompliancePane() {
             serialization prevents chain forking on concurrent writes
             (works even on empty tables). 35 event types across auth,
             authorization, data access, admin, and security categories.
-            Risk scoring and anomaly flags per event.
+            Risk scoring and anomaly flags per event. ~47 of 248 routes
+            wired (#868-870).
           </p>
         </Card>
         <Card accent="green">
@@ -45,16 +46,29 @@ export function CompliancePane() {
         </Card>
       </div>
 
-      <Card accent="green" style={{ marginBottom: 16 }}>
-        <h4>Activity log hash chain integrity</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          Activity log writes serialized with{" "}
-          <code>pg_advisory_xact_lock</code> (#867), matching the security
-          audit chain pattern. PII fields excluded from hash computation
-          (#866) so GDPR anonymization preserves chain integrity. Both
-          chains are now tamper-evident and GDPR-safe.
-        </p>
-      </Card>
+      <div className="g2" style={{ marginBottom: 16 }}>
+        <Card accent="green">
+          <h4>Activity log hash chain integrity</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Activity log writes serialized with{" "}
+            <code>pg_advisory_xact_lock</code> (#867), matching the security
+            audit chain pattern. PII fields excluded from hash computation
+            (#866) so GDPR anonymization preserves chain integrity. Both
+            chains are now tamper-evident and GDPR-safe.
+          </p>
+        </Card>
+        <Card accent="green">
+          <h4>SIEM delivery</h4>
+          <p style={{ marginTop: 6, fontSize: 12 }}>
+            Full SIEM adapter in <code>apps/processor</code>: webhook
+            (HMAC-SHA256 signed) + syslog (TCP/UDP, RFC 5424). Batched
+            delivery, retry with backoff, SSRF protection, AI attribution
+            in output. Connected via cursor-based pg-boss worker (#873)
+            polling <code>activity_logs</code> every 30s. Health endpoint
+            exposed at <code>/health</code>.
+          </p>
+        </Card>
+      </div>
 
       <h3 style={{ marginBottom: 12 }}>Activity logs</h3>
       <div className="g2" style={{ marginBottom: 16 }}>
@@ -161,7 +175,7 @@ export function CompliancePane() {
         </Card>
       </div>
 
-      <div className="g2" style={{ marginBottom: 16 }}>
+      <div className="g3" style={{ marginBottom: 16 }}>
         <Card accent="green">
           <h4>Data retention &amp; AI log lifecycle</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
@@ -248,49 +262,37 @@ export function CompliancePane() {
       {/* ── Gaps ── */}
       <div className="sl">Gaps</div>
       <h2>
-        Infrastructure exists.{" "}
-        <span className="hl">Operationalization doesn&apos;t.</span>
+        Infrastructure is solid.{" "}
+        <span className="hl">Coverage and agent security remain.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The security infrastructure is solid but has coverage gaps.
-        SIEM delivery is now connected (#873). Audit service coverage
-        expanded to pages, drives, permissions, settings, account, files,
-        and export routes (#868-870) but not yet 100%. Agent-level security
-        is missing entirely.
+        SIEM delivery is connected (#873). Audit service coverage expanded
+        to ~19% of routes (#868-870). The remaining gaps are: expanding
+        audit coverage to 100%, agent-level security, and GDPR
+        operationalization.
       </p>
 
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="amber">
-          <h4>SecurityAuditService: expanded but not 100%</h4>
+          <h4>Audit coverage at ~19%</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Hash chain audit service with advisory lock serialization and
-            35 event types. Now wired to auth, pages, drives, permissions,
-            settings, account, files, and export routes (#868-870).
-            Remaining: admin actions, trash, invitations, and other
-            secondary routes.
+            SecurityAuditService wired to ~47 of 248 routes: auth, pages,
+            drives, permissions, settings, account, files, and export
+            (#868-870). Remaining: AI/chat endpoints, integrations,
+            calendar, notifications, admin actions, trash, and invitations.
           </p>
         </Card>
-        <Card accent="green">
-          <h4>SIEM adapter: connected (#873)</h4>
+        <Card accent="red">
+          <h4>No agent-specific audit trails</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            Full SIEM adapter in <code>apps/processor</code>: webhook +
-            syslog (TCP/UDP), HMAC-SHA256 signatures, RFC 5424 format,
-            batched delivery, retry with backoff, AI attribution in output.
-            Now wired via cursor-based pg-boss worker polling{" "}
-            <code>activity_logs</code> every 30s. Health endpoint exposed.
+            Security audit is user-centric. When an agent makes a change,
+            it&apos;s attributed to the user who triggered it, not the agent.
+            Activity logs track <code>isAiGenerated</code> and AI model,
+            but can&apos;t answer: &ldquo;what did agent X do across all
+            conversations?&rdquo;
           </p>
         </Card>
       </div>
-      <Card accent="red" style={{ marginBottom: 8 }}>
-        <h4>No agent-specific audit trails</h4>
-        <p style={{ marginTop: 6, fontSize: 12 }}>
-          Security audit is user-centric. When an agent makes a change,
-          it&apos;s attributed to the user who triggered it, not the agent.
-          Activity logs track <code>isAiGenerated</code> and AI model,
-          but can&apos;t answer: &ldquo;what did agent X do across all
-          conversations?&rdquo;
-        </p>
-      </Card>
       <div className="g2" style={{ marginBottom: 8 }}>
         <Card accent="amber">
           <h4>Capability gates: tools + pages, no budgets</h4>
@@ -342,26 +344,19 @@ export function CompliancePane() {
         <span className="hl">Humans and agents.</span>
       </h2>
       <p style={{ marginBottom: 20, maxWidth: 720 }}>
-        The roadmap runs: operationalize what exists &rarr; per-org
-        isolation (AWS migration) &rarr; agent-level security &rarr;
-        container auth. Security follows the infrastructure dependency
-        chain in the roadmap &mdash; you can&apos;t do container auth
-        without containers, can&apos;t do per-agent budgets without
-        a runtime.
+        The roadmap runs: expand audit coverage &rarr; per-org isolation
+        (AWS migration) &rarr; agent-level security &rarr; container auth.
+        Security follows the infrastructure dependency chain in the
+        roadmap &mdash; you can&apos;t do container auth without containers,
+        can&apos;t do per-agent budgets without a runtime.
       </p>
 
-      <h3 style={{ marginBottom: 12 }}>Operationalize what exists</h3>
-      <FeatureRow columns={3}>
+      <h3 style={{ marginBottom: 12 }}>Expand coverage</h3>
+      <FeatureRow columns={2}>
         <Feature
           nameColor="var(--cyan)"
           name="100% audit coverage"
-          description="SecurityAuditService now covers auth, pages, drives, permissions, settings, account, files, and export (#868-870). Remaining: admin actions, trash, invitations, and secondary routes."
-          style={{ padding: "16px 14px", fontSize: 14 }}
-        />
-        <Feature
-          nameColor="var(--green)"
-          name="SIEM connected &#10003;"
-          description="SIEM adapter wired to audit pipeline via cursor-based pg-boss worker (#873). Activity logs stream to external SIEM (Splunk, Datadog, etc.) every 30s. Webhook + syslog delivery with HMAC signing."
+          description="Expand SecurityAuditService from ~19% to all security-relevant routes. AI/chat, integrations, calendar, notifications, admin actions, trash, invitations. The service works &mdash; it needs more call sites."
           style={{ padding: "16px 14px", fontSize: 14 }}
         />
         <Feature
