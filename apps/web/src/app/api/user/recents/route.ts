@@ -45,7 +45,7 @@ export async function GET(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'read', 'recents', userId).catch((error) => {
+  securityAudit.logDataAccess(userId, 'read', 'recents', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 

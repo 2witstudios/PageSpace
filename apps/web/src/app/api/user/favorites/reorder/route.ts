@@ -10,7 +10,7 @@ export async function PATCH(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'write', 'favorites', userId, { action: 'reorder' }).catch((error) => {
+  securityAudit.logDataAccess(userId, 'write', 'favorites', 'self', { action: 'reorder' }).catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 

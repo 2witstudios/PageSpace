@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
-  securityAudit.logDataAccess(auth.userId, 'read', 'user_integrations', auth.userId).catch((error) => {
+  securityAudit.logDataAccess(auth.userId, 'read', 'user_integrations', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
   });
 

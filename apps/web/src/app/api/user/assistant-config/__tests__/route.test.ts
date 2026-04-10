@@ -65,7 +65,7 @@ describe('GET /api/user/assistant-config audit', () => {
     await GET(new Request('http://localhost/api/user/assistant-config'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'assistant_config', mockUserId
+      mockUserId, 'read', 'assistant_config', 'self'
     );
   });
 });
@@ -87,7 +87,7 @@ describe('PUT /api/user/assistant-config audit', () => {
     await PUT(request);
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'assistant_config', mockUserId
+      mockUserId, 'write', 'assistant_config', 'self'
     );
   });
 });

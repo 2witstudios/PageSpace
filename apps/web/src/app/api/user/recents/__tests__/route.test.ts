@@ -73,7 +73,7 @@ describe('GET /api/user/recents audit', () => {
     await GET(new Request('http://localhost/api/user/recents'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'recents', mockUserId
+      mockUserId, 'read', 'recents', 'self'
     );
   });
 });

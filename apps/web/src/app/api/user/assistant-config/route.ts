@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
-  securityAudit.logDataAccess(auth.userId, 'read', 'assistant_config', auth.userId).catch((error) => {
+  securityAudit.logDataAccess(auth.userId, 'read', 'assistant_config', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
   });
 
@@ -55,7 +55,7 @@ export async function PUT(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  securityAudit.logDataAccess(auth.userId, 'write', 'assistant_config', auth.userId).catch((error) => {
+  securityAudit.logDataAccess(auth.userId, 'write', 'assistant_config', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
   });
 

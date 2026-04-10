@@ -80,7 +80,7 @@ describe('GET /api/activities/export audit', () => {
     await GET(new Request('http://localhost/api/activities/export?context=user'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'export', 'activities', mockUserId
+      mockUserId, 'export', 'activities', 'self'
     );
   });
 });

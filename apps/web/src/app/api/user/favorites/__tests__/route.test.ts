@@ -70,7 +70,7 @@ describe('GET /api/user/favorites audit', () => {
     await GET(new Request('http://localhost/api/user/favorites'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'favorites', mockUserId
+      mockUserId, 'read', 'favorites', 'self'
     );
   });
 });
@@ -93,7 +93,7 @@ describe('POST /api/user/favorites audit', () => {
     await POST(request);
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'favorites', mockUserId
+      mockUserId, 'write', 'favorites', 'self'
     );
   });
 });

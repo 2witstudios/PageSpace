@@ -75,7 +75,7 @@ describe('PATCH /api/user/favorites/reorder audit', () => {
     await PATCH(request);
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'favorites', mockUserId, { action: 'reorder' }
+      mockUserId, 'write', 'favorites', 'self', { action: 'reorder' }
     );
   });
 });

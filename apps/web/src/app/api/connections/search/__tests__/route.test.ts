@@ -57,7 +57,7 @@ describe('GET /api/connections/search audit', () => {
     await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'connection_search', mockUserId
+      mockUserId, 'read', 'connection_search', 'self'
     );
   });
 });

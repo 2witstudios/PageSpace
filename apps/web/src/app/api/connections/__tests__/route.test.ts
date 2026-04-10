@@ -71,7 +71,7 @@ describe('GET /api/connections audit', () => {
     await GET(new Request('http://localhost/api/connections'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'connections', mockUserId
+      mockUserId, 'read', 'connections', 'self'
     );
   });
 });
@@ -92,7 +92,7 @@ describe('POST /api/connections audit', () => {
     await POST(request);
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'connection', mockUserId
+      mockUserId, 'write', 'connection', 'self'
     );
   });
 });

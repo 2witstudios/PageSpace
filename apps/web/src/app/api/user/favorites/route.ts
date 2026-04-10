@@ -29,7 +29,7 @@ export async function GET(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'read', 'favorites', userId).catch((error) => {
+  securityAudit.logDataAccess(userId, 'read', 'favorites', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 
@@ -108,7 +108,7 @@ export async function POST(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'write', 'favorites', userId).catch((error) => {
+  securityAudit.logDataAccess(userId, 'write', 'favorites', 'self').catch((error) => {
     loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 

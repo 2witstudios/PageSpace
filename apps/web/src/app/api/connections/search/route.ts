@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    securityAudit.logDataAccess(user.id, 'read', 'connection_search', user.id).catch((error) => {
+    securityAudit.logDataAccess(user.id, 'read', 'connection_search', 'self').catch((error) => {
       loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
     });
 

@@ -73,7 +73,7 @@ describe('GET /api/activities/actors audit', () => {
     await GET(new Request('http://localhost/api/activities/actors?context=user'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'activity_actors', mockUserId
+      mockUserId, 'read', 'activity_actors', 'self'
     );
   });
 });

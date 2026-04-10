@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    securityAudit.logDataAccess(userId, 'read', 'connections', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'read', 'connections', 'self').catch((error) => {
       loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    securityAudit.logDataAccess(userId, 'write', 'connection', userId).catch((error) => {
+    securityAudit.logDataAccess(userId, 'write', 'connection', 'self').catch((error) => {
       loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

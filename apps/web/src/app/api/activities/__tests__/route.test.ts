@@ -78,7 +78,7 @@ describe('GET /api/activities audit', () => {
     await GET(new Request('http://localhost/api/activities?context=user'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'activities', mockUserId
+      mockUserId, 'read', 'activities', 'self'
     );
   });
 });

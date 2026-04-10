@@ -38,7 +38,7 @@ export async function GET(request: Request) {
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
-  securityAudit.logDataAccess(userId, 'export', 'activities', userId).catch((error) => {
+  securityAudit.logDataAccess(userId, 'export', 'activities', 'self').catch((error) => {
     loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 

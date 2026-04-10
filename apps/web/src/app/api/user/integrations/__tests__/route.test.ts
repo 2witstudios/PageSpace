@@ -61,7 +61,7 @@ describe('GET /api/user/integrations audit', () => {
     await GET(new Request('http://localhost/api/user/integrations'));
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'user_integrations', mockUserId
+      mockUserId, 'read', 'user_integrations', 'self'
     );
   });
 });
