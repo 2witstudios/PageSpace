@@ -89,9 +89,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -265,6 +277,23 @@ describe('POST /api/stripe/reactivate-subscription', () => {
     const response = await POST(request);
 
     expect(response.status).toBe(401);
+  });
+
+  it('should log audit event on successful reactivation', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/reactivate-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    await POST(request);
+
+    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+      mockUserId,
+      'write',
+      'subscription',
+      'sub_123',
+      expect.objectContaining({ action: 'reactivate' })
+    );
   });
 
   it('should retrieve subscription to check cancellation status first', async () => {

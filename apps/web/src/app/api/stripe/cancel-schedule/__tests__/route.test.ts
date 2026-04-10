@@ -90,9 +90,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -177,6 +189,23 @@ describe('POST /api/stripe/cancel-schedule', () => {
       await POST(request);
 
       expect(mockStripeSubscriptionSchedulesRelease).toHaveBeenCalledWith('sch_123');
+    });
+
+    it('should log audit event on successful schedule cancellation', async () => {
+      const request = createMockRequest('https://example.com/api/stripe/cancel-schedule', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId,
+        'write',
+        'subscription_schedule',
+        'sch_123',
+        expect.objectContaining({ action: 'cancel' })
+      );
     });
 
     it('should clear schedule info in database', async () => {

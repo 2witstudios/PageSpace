@@ -61,9 +61,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -254,6 +266,34 @@ describe('POST /api/stripe/create-subscription', () => {
 
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to create payment intent');
+  });
+
+  it('should log audit event on successful subscription creation', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    await POST(request);
+
+    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+      mockUserId,
+      'write',
+      'subscription',
+      'sub_123',
+      expect.objectContaining({ action: 'create', priceId: mockPriceId })
+    );
+  });
+
+  it('should not log audit event when subscription creation fails', async () => {
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({}), // Missing priceId
+    });
+
+    await POST(request);
+
+    expect(securityAudit.logDataAccess).not.toHaveBeenCalled();
   });
 
   it('should create subscription with correct parameters', async () => {
