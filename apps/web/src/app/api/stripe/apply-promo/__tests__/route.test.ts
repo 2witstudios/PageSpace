@@ -66,19 +66,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-// Mock loggers
+// Mock @pagespace/lib/server
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-    },
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -402,6 +404,20 @@ describe('POST /api/stripe/apply-promo', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to apply promotion code');
+    });
+
+    it('should log audit event on successful promo application', async () => {
+      const request = new Request('https://example.com/api/stripe/apply-promo', {
+        method: 'POST',
+        body: JSON.stringify({ subscriptionId: 'sub_123', promotionCodeId: 'promo_123' }),
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'write', 'promo_code', 'promo_123',
+        expect.objectContaining({ action: 'apply' })
+      );
     });
   });
 });
