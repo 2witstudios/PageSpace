@@ -94,10 +94,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Fetch drives on mount for sidebar
+  // Force-refresh drives on mount so the sidebar reflects current memberships
   const isUserContext = context === 'user';
   useEffect(() => {
-    if (isUserContext) fetchDrives();
+    if (isUserContext) fetchDrives(false, true);
   }, [isUserContext, fetchDrives]);
 
   // Build drive color map
