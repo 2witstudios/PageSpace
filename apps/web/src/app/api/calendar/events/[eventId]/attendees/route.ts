@@ -481,7 +481,7 @@ export async function DELETE(
       attendeeIds: [targetUserId],
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_attendees', eventId, { operation: 'remove_attendee', targetUserId }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_attendees', eventId, { operation: 'remove_attendee' }), userId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

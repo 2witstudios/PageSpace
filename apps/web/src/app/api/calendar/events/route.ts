@@ -533,7 +533,7 @@ export async function POST(request: Request) {
       );
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_event', event.id, { operation: 'create', title: data.title, driveId: data.driveId ?? null }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_event', event.id, { operation: 'create', driveId: data.driveId ?? null }), userId);
 
     return NextResponse.json(completeEvent, { status: 201 });
   } catch (error) {
