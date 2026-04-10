@@ -28,6 +28,9 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib', () => ({

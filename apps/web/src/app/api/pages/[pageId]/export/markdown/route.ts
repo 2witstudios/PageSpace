@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { sanitizeFilename } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import TurndownService from 'turndown';
@@ -67,6 +67,8 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       exportFormat: 'markdown',
       pageTitle: page.title,
     });
+
+    securityAudit.logDataAccess(userId, 'export', 'page', pageId, { format: 'markdown' }).catch(() => {});
 
     // Return markdown as a downloadable file
     return new NextResponse(markdownContent, {

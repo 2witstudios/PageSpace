@@ -100,6 +100,9 @@ vi.mock('@pagespace/lib/server', () => ({
     invalidateDriveTree: (...args: unknown[]) => mockPageTreeCacheInvalidate(...args),
   },
   getActorInfo: (...args: unknown[]) => mockGetActorInfo(...args),
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -114,6 +117,7 @@ vi.mock('@pagespace/lib/monitoring', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../restore/route';
+import { securityAudit } from '@pagespace/lib/server';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -248,6 +252,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
     });
     mockCreateChangeGroupId.mockReturnValue('cg-123');
     mockInferChangeGroupType.mockReturnValue('user');
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     setupTransaction();
   });
 

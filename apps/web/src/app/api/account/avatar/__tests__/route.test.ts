@@ -21,6 +21,12 @@ vi.mock('@pagespace/lib', () => ({
   createUserServiceToken: vi.fn().mockResolvedValue({ token: 'mock-service-token' }),
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Mock global fetch
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -28,6 +34,7 @@ vi.stubGlobal('fetch', mockFetch);
 import { POST, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Test helpers
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
@@ -496,6 +503,18 @@ describe('DELETE /api/account/avatar', () => {
       expect(body.success).toBe(true);
       expect(body.message).toBe('Avatar deleted successfully');
       expect(chain.set).toHaveBeenCalledWith({ image: null });
+    });
+
+    it('logs delete audit event with operation details', async () => {
+      mockSelectChain([{ image: '/api/avatar/user-1/avatar.png' }]);
+      mockUpdateChain();
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await DELETE(createDeleteRequest());
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user-1', 'delete', 'avatar', 'user-1', { operation: 'delete' }
+      );
     });
   });
 

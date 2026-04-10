@@ -18,6 +18,7 @@ import {
 } from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Define allowed file types and size limits
 
@@ -351,6 +352,9 @@ export async function POST(request: NextRequest) {
         driveId,
         eventType: 'upload'
       });
+
+      const fileExtension = file.name.includes('.') ? file.name.split('.').pop()?.toLowerCase() : undefined;
+      securityAudit.logDataAccess(userId, 'write', 'file', contentHash, { fileExtension, driveId, pageId: newPage.id }).catch(() => {});
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

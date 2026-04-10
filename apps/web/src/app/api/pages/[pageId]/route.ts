@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -29,6 +29,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'page', pageId, { operation: 'read' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceId: pageId });
+    });
 
     return jsonResponse(result.page);
   } catch (error) {
@@ -141,6 +145,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       hasTitleUpdate: !!safeBody.title
     });
 
+    securityAudit.logDataAccess(userId, 'write', 'page', pageId, { operation: 'update' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'update', resourceId: pageId });
+    });
+
     return jsonResponse(result.page);
   } catch (error) {
     loggers.api.error('Error updating page:', error as Error);
@@ -221,6 +229,10 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       trashChildren: trashChildren,
       pageTitle: result.pageTitle,
       pageType: result.pageType
+    });
+
+    securityAudit.logDataAccess(userId, 'delete', 'page', pageId, { operation: 'trash' }).catch(err => {
+      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'trash', resourceId: pageId });
     });
 
     return NextResponse.json({ message: 'Page moved to trash successfully.' });

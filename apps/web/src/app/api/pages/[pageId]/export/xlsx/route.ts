@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateExcel, sanitizeFilename } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
@@ -69,6 +69,8 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       exportFormat: 'xlsx',
       pageTitle: page.title,
     });
+
+    securityAudit.logDataAccess(userId, 'export', 'page', pageId, { format: 'xlsx' }).catch(() => {});
 
     // Return the Excel file as a downloadable file
     // Convert Buffer to Uint8Array for Next.js 15 compatibility

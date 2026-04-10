@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, agentAwarenessCache } from '@pagespace/lib/server';
+import { loggers, pageTreeCache, agentAwarenessCache, securityAudit } from '@pagespace/lib/server';
 import { pages, db, eq, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
@@ -144,6 +144,8 @@ export async function DELETE(request: Request) {
         createPageEventPayload(driveId, '', 'trashed')
       );
     }
+
+    securityAudit.logDataAccess(userId, 'delete', 'page', 'bulk', { count: pageIds.length }).catch(() => {});
 
     return NextResponse.json({
       success: true,

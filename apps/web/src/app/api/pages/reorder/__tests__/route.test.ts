@@ -51,6 +51,9 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 // Mock database for capturing current page state
@@ -71,7 +74,7 @@ vi.mock('@pagespace/db', () => ({
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageTreeCache, loggers } from '@pagespace/lib/server';
+import { pageTreeCache, loggers, securityAudit } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 
 // Test helpers
@@ -118,8 +121,9 @@ describe('PATCH /api/pages/reorder', () => {
     vi.mocked(pageReorderService.validateMove).mockResolvedValue({ valid: true });
     // Default: reorder succeeds
     vi.mocked(pageReorderService.reorderPage).mockResolvedValue(successResult);
-    // Re-set up cache and websocket mocks
+    // Re-set up cache, websocket, and audit mocks
     vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,

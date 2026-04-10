@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
-import { loggers, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
+import { loggers, pageTreeCache, getActorInfo, securityAudit } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
@@ -133,6 +133,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       pageTitle: page.title,
       pageType: page.type,
     });
+
+    securityAudit.logDataAccess(auth.userId, 'write', 'page', pageId, { operation: 'restore' }).catch(() => {});
 
     return NextResponse.json({ message: 'Page restored successfully.' });
   } catch (error) {
