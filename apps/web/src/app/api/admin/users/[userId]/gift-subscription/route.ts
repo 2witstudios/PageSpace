@@ -5,7 +5,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 
 type GiftTier = 'pro' | 'founder' | 'business';
 
@@ -124,10 +124,6 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
       reason: reason || 'Admin gift',
     });
 
-    securityAudit.logDataAccess(adminUser.id, 'write', 'subscription', targetUserId, { action: 'gift' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'write', resourceId: targetUserId });
-    });
-
     return NextResponse.json({
       success: true,
       subscriptionId: subscription.id,
@@ -207,10 +203,6 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       targetUserEmail: targetUser.email,
       subscriptionId: activeSubscription.stripeSubscriptionId,
       previousTier: targetUser.subscriptionTier,
-    });
-
-    securityAudit.logDataAccess(adminUser.id, 'write', 'subscription', targetUserId, { action: 'revoke' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'write', resourceId: targetUserId });
     });
 
     return NextResponse.json({

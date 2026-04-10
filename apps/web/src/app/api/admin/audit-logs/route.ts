@@ -11,11 +11,11 @@ import {
   lte,
   ilike,
 } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
-export const GET = withAdminAuth(async (adminUser, request) => {
+export const GET = withAdminAuth(async (_adminUser, request) => {
   try {
 
     // Parse query parameters
@@ -141,10 +141,6 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       .orderBy(desc(activityLogs.timestamp))
       .limit(limit)
       .offset(offset);
-
-    securityAudit.logDataAccess(adminUser.id, 'read', 'audit_logs', 'all', { action: 'list' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceType: 'audit_logs' });
-    });
 
     return Response.json({
       logs,

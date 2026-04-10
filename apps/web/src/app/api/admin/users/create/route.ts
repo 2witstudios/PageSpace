@@ -5,7 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -76,10 +76,6 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       adminId: adminUser.id,
       newUserId: userId,
       role,
-    });
-
-    securityAudit.logDataAccess(adminUser.id, 'write', 'user', userId, { action: 'admin_create' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'write', resourceId: userId });
     });
 
     return NextResponse.json(

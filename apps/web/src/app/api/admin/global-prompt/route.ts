@@ -10,7 +10,7 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
@@ -371,10 +371,6 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       },
       locationContext: locationContext || null,
     };
-
-    securityAudit.logDataAccess(adminUser.id, 'read', 'global_prompt', 'all', { action: 'view' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceType: 'global_prompt' });
-    });
 
     return Response.json({
       promptData,

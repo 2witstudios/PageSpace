@@ -343,6 +343,20 @@ describe('Admin audit coverage (withAdminAuth)', () => {
     });
   });
 
+  describe('single audit point contract', () => {
+    it('middleware is the sole audit point — exactly one logDataAccess call per request', async () => {
+      mockAdminAuth();
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users');
+
+      await wrappedHandler(request);
+
+      // withAdminAuth is the single audit point. Route handlers must NOT add their own
+      // securityAudit calls — doing so doubles audit volume and scatters the concern.
+      expect(mockLogDataAccess).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('audit persistence failure logging', () => {
     it('logs warning when logDataAccess rejects', async () => {
       mockAdminAuth();

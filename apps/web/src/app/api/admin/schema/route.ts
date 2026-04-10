@@ -1,8 +1,8 @@
 import { db, sql } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { withAdminAuth } from '@/lib/auth';
 
-export const GET = withAdminAuth(async (adminUser) => {
+export const GET = withAdminAuth(async (_adminUser) => {
   try {
     // Get all table information from PostgreSQL information_schema
     const tablesQuery = sql`
@@ -147,10 +147,6 @@ export const GET = withAdminAuth(async (adminUser) => {
         constraints: tableConstraints,
         indexes: tableIndexes
       };
-    });
-
-    securityAudit.logDataAccess(adminUser.id, 'read', 'schema', 'all', { action: 'view' }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'read', resourceType: 'schema' });
     });
 
     return Response.json({ tables: schemaData });
