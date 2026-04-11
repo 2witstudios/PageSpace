@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { generateRegistrationOptions, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -36,10 +36,11 @@ export async function POST(req: Request) {
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        logSecurityEvent('passkey_csrf_invalid', {
+        auditRequest(req, {
+          eventType: 'security.anomaly.detected',
           userId,
-          ip: clientIP,
-          flow: 'register_options',
+          details: { originalEvent: 'passkey_csrf_invalid', flow: 'register_options' },
+          riskScore: 0.4,
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -56,10 +57,11 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_register', {
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
         userId,
-        ip: clientIP,
-        retryAfter: rateLimitResult.retryAfter,
+        details: { originalEvent: 'passkey_rate_limit_register', retryAfter: rateLimitResult.retryAfter },
+        riskScore: 0.4,
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },

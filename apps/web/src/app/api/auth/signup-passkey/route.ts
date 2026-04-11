@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, auditRequest, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -61,10 +61,10 @@ export async function POST(req: Request) {
     // Verify login CSRF token BEFORE rate limiting so stale tokens
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: email.substring(0, 3) + '***',
-        flow: 'signup',
+      auditRequest(req, {
+        eventType: 'security.anomaly.detected',
+        details: { originalEvent: 'passkey_csrf_invalid', flow: 'signup', email: email.substring(0, 3) + '***' },
+        riskScore: 0.4,
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -80,9 +80,10 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_ip', {
-        ip: clientIP,
-        retryAfter: ipRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        details: { originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: ipRateLimitResult.retryAfter },
+        riskScore: 0.4,
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -98,9 +99,10 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_email', {
-        email: email.substring(0, 3) + '***',
-        retryAfter: emailRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        details: { originalEvent: 'passkey_rate_limit_signup_email', email: email.substring(0, 3) + '***', retryAfter: emailRateLimitResult.retryAfter },
+        riskScore: 0.4,
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },

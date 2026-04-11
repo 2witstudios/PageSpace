@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logSecurityEvent: vi.fn(),
+  auditRequest: vi.fn(),
   securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
@@ -51,7 +51,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { DELETE, PATCH } from '../route';
 import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
@@ -170,9 +170,14 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'delete',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.anomaly.detected',
+          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'delete' }),
+          riskScore: 0.4,
+        })
+      );
     });
 
     it('skips CSRF validation for Bearer token auth', async () => {
@@ -337,9 +342,14 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'update',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.anomaly.detected',
+          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'update' }),
+          riskScore: 0.4,
+        })
+      );
     });
 
     it('returns 403 when CSRF token is missing', async () => {

@@ -22,7 +22,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  logSecurityEvent: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -41,7 +41,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { POST } from '../route';
 import { generateRegistrationOptions, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
@@ -144,9 +144,14 @@ describe('POST /api/auth/passkey/register/options', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'register_options',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.anomaly.detected',
+          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'register_options' }),
+          riskScore: 0.4,
+        })
+      );
     });
 
     it('returns 403 when CSRF token is missing', async () => {
@@ -225,10 +230,15 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many requests');
       expect(body.retryAfter).toBe(300);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_register', expect.objectContaining({
-        userId: 'user-1',
-        retryAfter: 300,
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          userId: 'user-1',
+          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_register', retryAfter: 300 }),
+          riskScore: 0.4,
+        })
+      );
     });
   });
 

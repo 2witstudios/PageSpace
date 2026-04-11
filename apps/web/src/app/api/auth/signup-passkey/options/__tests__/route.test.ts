@@ -21,7 +21,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  logSecurityEvent: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -38,7 +38,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { POST } from '../route';
 import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
@@ -179,10 +179,14 @@ describe('POST /api/auth/signup-passkey/options', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'signup_options',
-        email: 'use***',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.anomaly.detected',
+          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'signup_options', email: 'use***' }),
+          riskScore: 0.4,
+        })
+      );
     });
   });
 
@@ -197,9 +201,14 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many requests from this IP');
       expect(body.retryAfter).toBe(3600);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_signup_ip', expect.objectContaining({
-        retryAfter: 3600,
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: 3600 }),
+          riskScore: 0.4,
+        })
+      );
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
@@ -213,9 +222,14 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many signup attempts for this email');
       expect(body.retryAfter).toBe(3600);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_signup_email', expect.objectContaining({
-        email: 'use***',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_email', email: 'use***' }),
+          riskScore: 0.4,
+        })
+      );
     });
   });
 

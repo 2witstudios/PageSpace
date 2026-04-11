@@ -8,7 +8,7 @@ import {
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest, securityAudit } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
@@ -40,10 +40,10 @@ export async function POST(req: Request) {
     const csrfTokenCookie = cookies.login_csrf;
 
     if (!csrfTokenHeader || !csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_missing', {
-        ip: clientIP,
-        hasHeader: !!csrfTokenHeader,
-        hasCookie: !!csrfTokenCookie,
+      auditRequest(req, {
+        eventType: 'security.anomaly.detected',
+        details: { originalEvent: 'magic_link_csrf_missing', hasHeader: !!csrfTokenHeader, hasCookie: !!csrfTokenCookie },
+        riskScore: 0.4,
       });
       return Response.json(
         {
@@ -56,7 +56,11 @@ export async function POST(req: Request) {
     }
 
     if (csrfTokenHeader !== csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_mismatch', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.anomaly.detected',
+        details: { originalEvent: 'magic_link_csrf_mismatch' },
+        riskScore: 0.4,
+      });
       return Response.json(
         {
           error: 'Invalid CSRF token',
@@ -68,7 +72,11 @@ export async function POST(req: Request) {
     }
 
     if (!validateLoginCSRFToken(csrfTokenHeader)) {
-      logSecurityEvent('magic_link_csrf_invalid', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.anomaly.detected',
+        details: { originalEvent: 'magic_link_csrf_invalid' },
+        riskScore: 0.4,
+      });
       return Response.json(
         {
           error: 'Invalid or expired CSRF token',
@@ -108,7 +116,11 @@ export async function POST(req: Request) {
     ]);
 
     if (!ipRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_ip', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        details: { originalEvent: 'magic_link_rate_limit_ip' },
+        riskScore: 0.4,
+      });
       return Response.json(
         {
           error: 'Too many requests. Please try again later.',
@@ -126,7 +138,11 @@ export async function POST(req: Request) {
     }
 
     if (!emailRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_email', { email: maskEmail(normalizedEmail), ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        details: { originalEvent: 'magic_link_rate_limit_email', email: maskEmail(normalizedEmail) },
+        riskScore: 0.4,
+      });
       return Response.json(
         {
           error: 'Too many requests for this email. Please try again later.',
@@ -156,7 +172,11 @@ export async function POST(req: Request) {
     // Even if user is suspended, we return success but don't send email
     if (!result.ok) {
       if (result.error.code === 'USER_SUSPENDED') {
-        logSecurityEvent('magic_link_suspended_user', { email: maskEmail(normalizedEmail), ip: clientIP });
+        auditRequest(req, {
+          eventType: 'authz.access.denied',
+          details: { originalEvent: 'magic_link_suspended_user', email: maskEmail(normalizedEmail) },
+          riskScore: 0.5,
+        });
         // Return success to prevent enumeration, but don't send email
         return Response.json({
           message: 'If an account exists with this email, we have sent a sign-in link.',
