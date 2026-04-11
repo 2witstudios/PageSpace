@@ -69,7 +69,6 @@ export async function POST(req: NextRequest) {
 
     securityAudit.logDataAccess(userId, 'write', 'drive', newDrive.id, {
       source: 'mcp',
-      driveName: name,
     }).catch((error) => {
       loggers.security.warn('[MCPDrives] audit log failed', {
         error: error instanceof Error ? error.message : String(error),

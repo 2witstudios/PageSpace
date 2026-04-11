@@ -122,6 +122,14 @@ export async function PATCH(
           triggeredByUserId: userId,
         });
 
+        securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
+          action: 'reject',
+        }).catch((error) => {
+          loggers.security.warn('[Connection] audit log failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+
         return NextResponse.json({ success: true });
 
       case 'block':
@@ -147,6 +155,15 @@ export async function PATCH(
         }
         // Reset to pending or delete based on your preference
         await db.delete(connections).where(eq(connections.id, connectionId));
+
+        securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
+          action: 'unblock',
+        }).catch((error) => {
+          loggers.security.warn('[Connection] audit log failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+
         return NextResponse.json({ success: true });
     }
 

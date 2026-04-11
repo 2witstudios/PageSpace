@@ -56,7 +56,6 @@ export async function DELETE(
     );
 
     securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, {
-      driveName: drive.name,
       source: 'trash',
     }).catch((error) => {
       loggers.security.warn('[TrashDrive] audit log failed', {

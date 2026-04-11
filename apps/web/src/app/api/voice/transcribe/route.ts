@@ -125,7 +125,7 @@ export async function POST(request: Request) {
 
     const result = await response.json();
 
-    securityAudit.logDataAccess(userId, 'read', 'voice', userId, {
+    securityAudit.logDataAccess(userId, 'read', 'voice', 'self', {
       operation: 'transcribe',
       audioSize: audioFile.size,
     }).catch((error) => {

@@ -120,7 +120,7 @@ export async function GET(request: Request) {
       ? conversations[conversations.length - 1].lastMessageAt
       : null;
 
-    securityAudit.logDataAccess(userId, 'read', 'conversation', '*', {
+    securityAudit.logDataAccess(userId, 'read', 'conversation', 'self', {
       count: conversations.length,
     }).catch((error) => {
       loggers.security.warn('[Conversations] audit log failed', {

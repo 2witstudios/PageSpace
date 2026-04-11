@@ -79,7 +79,6 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       securityAudit.logDataAccess(adminUser.id, 'delete', 'user', userId, {
         source: 'admin',
         operation: 'dsar-deletion',
-        reason,
       }).catch((error) => {
         loggers.security.warn('[AdminUserData] audit log failed', {
           error: error instanceof Error ? error.message : String(error),

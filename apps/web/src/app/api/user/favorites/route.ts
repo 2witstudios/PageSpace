@@ -96,7 +96,7 @@ export async function GET(req: Request) {
           : {}),
       }));
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'favorite', '*', {}).catch((error) => {
+    securityAudit.logDataAccess(auth.userId, 'read', 'favorite', 'self').catch((error) => {
       loggers.security.warn('[Favorites] audit log failed', {
         error: error instanceof Error ? error.message : String(error),
         userId: auth.userId,

@@ -59,7 +59,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     }, actorInfo);
 
     securityAudit.logDataAccess(userId, 'delete', 'page', pageId, {
-      pageTitle,
       driveId,
       source: 'trash',
     }).catch((error) => {

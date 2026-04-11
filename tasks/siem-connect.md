@@ -138,7 +138,7 @@ Wire the delivery worker into pg-boss scheduling via `queue-manager.ts` and upda
 
 ## Fix: GDPR — Remove PII from audit details
 
-The `details` field is included in the tamper-evident hash chain and cannot be erased under GDPR Article 17. User-typed search queries and filter userIds must not appear in `details`.
+The `details` field is included in the tamper-evident hash chain and cannot be erased under GDPR Article 17. User-typed search queries and filter user IDs must not appear in `details`.
 
 **Requirements**:
 - Given a search audit log, should not include the raw query text in details (could contain names/emails)

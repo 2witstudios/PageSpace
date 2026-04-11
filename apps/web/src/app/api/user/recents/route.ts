@@ -102,7 +102,7 @@ export async function GET(req: Request) {
         viewedAt: view.viewedAt.toISOString(),
       }));
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'recent', '*', {}).catch((error) => {
+    securityAudit.logDataAccess(auth.userId, 'read', 'recent', 'self').catch((error) => {
       loggers.security.warn('[Recents] audit log failed', {
         error: error instanceof Error ? error.message : String(error),
         userId: auth.userId,

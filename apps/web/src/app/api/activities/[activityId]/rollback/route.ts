@@ -117,8 +117,14 @@ export async function POST(
     rollbackActivityId: result.rollbackActivityId,
   });
 
-  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, { action: 'rollback' }).catch((error) => {
-    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, {
+    operation: 'rollback',
+    context: rollbackContext,
+    force,
+  }).catch((error) => {
+    loggers.security.warn('[ActivityRollback] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
 
   // Broadcast real-time updates for affected resources
@@ -233,17 +239,6 @@ export async function POST(
       resourceType: activity.resourceType,
     });
   }
-
-  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, {
-    operation: 'rollback',
-    context: rollbackContext,
-    force,
-  }).catch((error) => {
-    loggers.security.warn('[ActivityRollback] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId,
-    });
-  });
 
   return NextResponse.json({
     ...result,

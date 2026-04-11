@@ -143,7 +143,6 @@ export async function POST(request: Request) {
 
   securityAudit.logDataAccess(userId, 'write', 'workflow', workflow.id, {
     driveId: data.driveId,
-    name: data.name,
     triggerType: data.triggerType,
   }).catch((error) => {
     loggers.security.warn('[Workflows] audit log failed', {

@@ -149,7 +149,7 @@ export async function POST(request: Request) {
     // Stream the audio response
     const audioData = await response.arrayBuffer();
 
-    securityAudit.logDataAccess(userId, 'read', 'voice', userId, {
+    securityAudit.logDataAccess(userId, 'read', 'voice', 'self', {
       operation: 'synthesize',
       voice,
       model,

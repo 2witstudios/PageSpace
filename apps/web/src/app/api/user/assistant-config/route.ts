@@ -91,7 +91,7 @@ export async function PUT(request: Request) {
 
     const config = await updateConfig(db, auth.userId, updateData);
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'config', auth.userId, {}).catch((error) => {
+    securityAudit.logDataAccess(auth.userId, 'write', 'config', 'self').catch((error) => {
       loggers.security.warn('[AssistantConfig] audit log failed', {
         error: error instanceof Error ? error.message : String(error),
         userId: auth.userId,
