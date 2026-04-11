@@ -22,6 +22,8 @@ on:
       - 'apps/realtime/src/**/*auth*'
       - 'scripts/test-security.sh'
       - '.github/workflows/security.yml'
+      - 'apps/web/src/app/api/**/route.ts'
+      - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
   pull_request:
     branches: [master]
     paths:
@@ -43,6 +45,8 @@ on:
       - 'apps/realtime/src/**/*auth*'
       - 'scripts/test-security.sh'
       - '.github/workflows/security.yml'
+      - 'apps/web/src/app/api/**/route.ts'
+      - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
   # Allow manual trigger
   workflow_dispatch:
   # Run on schedule for continuous security monitoring
@@ -178,6 +182,11 @@ jobs:
         run: pnpm --filter processor vitest run tests/security-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      - name: Run security audit route coverage gate
+        run: pnpm --filter web vitest run src/app/api/__tests__/security-audit-coverage.test.ts
+        env:
           NODE_ENV: test
 
   dependency-audit:
