@@ -94,13 +94,15 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogDataAccess).toHaveBeenCalledTimes(1);
-      expect(mockLogDataAccess).toHaveBeenCalledWith(
-        'admin-123',
-        'read',
-        'admin-endpoint',
-        '/api/admin/users',
-        expect.objectContaining({ method: 'GET' })
+      expect(mockLogEvent).toHaveBeenCalledTimes(1);
+      expect(mockLogEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'data.read',
+          userId: 'admin-123',
+          resourceType: 'admin-endpoint',
+          resourceId: '/api/admin/users',
+          details: expect.objectContaining({ method: 'GET' }),
+        })
       );
     });
 
@@ -111,13 +113,15 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogDataAccess).toHaveBeenCalledTimes(1);
-      expect(mockLogDataAccess).toHaveBeenCalledWith(
-        'admin-123',
-        'read',
-        'admin-endpoint',
-        '/api/admin/schema',
-        expect.objectContaining({ method: 'GET' })
+      expect(mockLogEvent).toHaveBeenCalledTimes(1);
+      expect(mockLogEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'data.read',
+          userId: 'admin-123',
+          resourceType: 'admin-endpoint',
+          resourceId: '/api/admin/schema',
+          details: expect.objectContaining({ method: 'GET' }),
+        })
       );
     });
 
@@ -128,11 +132,11 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      const [userId, operation, resourceType, resourceId] = mockLogDataAccess.mock.calls[0];
-      expect(userId).toBe('admin-123');
-      expect(operation).toBe('read');
-      expect(resourceType).toBe('admin-endpoint');
-      expect(resourceId).toBe('/api/admin/users');
+      const event = mockLogEvent.mock.calls[0][0];
+      expect(event.userId).toBe('admin-123');
+      expect(event.eventType).toBe('data.read');
+      expect(event.resourceType).toBe('admin-endpoint');
+      expect(event.resourceId).toBe('/api/admin/users');
     });
 
     it('includes IP address from x-forwarded-for header', async () => {
@@ -144,8 +148,8 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      const details = mockLogDataAccess.mock.calls[0][4];
-      expect(details).toEqual(expect.objectContaining({ ipAddress: '203.0.113.50' }));
+      const event = mockLogEvent.mock.calls[0][0];
+      expect(event.ipAddress).toBe('203.0.113.50');
     });
 
     it('logs write operation for POST requests', async () => {
@@ -157,12 +161,12 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogDataAccess).toHaveBeenCalledWith(
-        'admin-123',
-        'write',
-        'admin-endpoint',
-        '/api/admin/users/create',
-        expect.objectContaining({ method: 'POST' })
+      expect(mockLogEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'data.write',
+          resourceId: '/api/admin/users/create',
+          details: expect.objectContaining({ method: 'POST' }),
+        })
       );
     });
 
@@ -175,12 +179,12 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogDataAccess).toHaveBeenCalledWith(
-        'admin-123',
-        'delete',
-        'admin-endpoint',
-        '/api/admin/users/123/gift-subscription',
-        expect.objectContaining({ method: 'DELETE' })
+      expect(mockLogEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'data.delete',
+          resourceId: '/api/admin/users/123/gift-subscription',
+          details: expect.objectContaining({ method: 'DELETE' }),
+        })
       );
     });
 
@@ -191,7 +195,11 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogEvent).not.toHaveBeenCalled();
+      // Only one logEvent call (the data.read access event), no denied event
+      expect(mockLogEvent).toHaveBeenCalledTimes(1);
+      expect(mockLogEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'authz.access.denied' })
+      );
     });
   });
 
@@ -306,16 +314,18 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       await wrappedHandler(request);
 
-      expect(mockLogDataAccess).toHaveBeenCalledWith(
-        'admin-123',         // actor identity (userId)
-        'read',              // action
-        'admin-endpoint',    // resource type
-        '/api/admin/users',  // resource id (endpoint path)
-        expect.objectContaining({
-          method: 'GET',
-          ipAddress: '10.0.0.1',
-        })
+      const accessCall = mockLogEvent.mock.calls.find(
+        (call) => call[0].eventType === 'data.read'
       );
+      expect(accessCall).toBeDefined();
+      expect(accessCall![0]).toEqual(expect.objectContaining({
+        eventType: 'data.read',     // action
+        userId: 'admin-123',        // actor identity
+        resourceType: 'admin-endpoint',
+        resourceId: '/api/admin/users',
+        ipAddress: '10.0.0.1',      // top-level, excluded from hash
+        details: expect.objectContaining({ method: 'GET' }),
+      }));
     });
 
     it('denied audit entry contains all required fields', async () => {
@@ -343,8 +353,31 @@ describe('Admin audit coverage (withAdminAuth)', () => {
     });
   });
 
+  describe('GDPR: IP address excluded from hash chain', () => {
+    it('success audit passes IP via top-level ipAddress field, not inside details', async () => {
+      mockAdminAuth();
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users', {
+        headers: { 'x-forwarded-for': '203.0.113.50, 70.41.3.18' },
+      });
+
+      await wrappedHandler(request);
+
+      // IP must be passed via AuditEvent.ipAddress (excluded from hash chain),
+      // NOT inside details (included in hash chain). Putting PII in details
+      // makes it impossible to anonymize without breaking the hash chain (#541).
+      const auditCall = mockLogEvent.mock.calls.find(
+        (call) => call[0].eventType?.startsWith('data.')
+      );
+      expect(auditCall).toBeDefined();
+      const event = auditCall![0];
+      expect(event.ipAddress).toBe('203.0.113.50');
+      expect(event.details).not.toHaveProperty('ipAddress');
+    });
+  });
+
   describe('single audit point contract', () => {
-    it('middleware is the sole audit point — exactly one logDataAccess call per request', async () => {
+    it('middleware is the sole audit point — exactly one logEvent call per request', async () => {
       mockAdminAuth();
       const wrappedHandler = withAdminAuth(handler);
       const request = new Request('http://localhost/api/admin/users');
@@ -353,14 +386,14 @@ describe('Admin audit coverage (withAdminAuth)', () => {
 
       // withAdminAuth is the single audit point. Route handlers must NOT add their own
       // securityAudit calls — doing so doubles audit volume and scatters the concern.
-      expect(mockLogDataAccess).toHaveBeenCalledTimes(1);
+      expect(mockLogEvent).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('audit persistence failure logging', () => {
-    it('logs warning when logDataAccess rejects', async () => {
+    it('logs warning when success audit logEvent rejects', async () => {
       mockAdminAuth();
-      mockLogDataAccess.mockRejectedValueOnce(new Error('DB write timeout'));
+      mockLogEvent.mockRejectedValueOnce(new Error('DB write timeout'));
       const wrappedHandler = withAdminAuth(handler);
       const request = new Request('http://localhost/api/admin/users');
 

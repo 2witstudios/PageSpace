@@ -185,13 +185,19 @@ function getAuditOperation(method: string): 'read' | 'write' | 'delete' {
 }
 
 function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: string, ipAddress?: string): void {
-  securityAudit.logDataAccess(
-    user.id,
-    getAuditOperation(request.method),
-    'admin-endpoint',
-    endpoint,
-    { method: request.method, ipAddress }
-  ).catch((error) => {
+  const eventTypeMap: Record<string, 'data.read' | 'data.write' | 'data.delete'> = {
+    read: 'data.read', write: 'data.write', delete: 'data.delete',
+  };
+  const operation = getAuditOperation(request.method);
+
+  securityAudit.logEvent({
+    eventType: eventTypeMap[operation],
+    userId: user.id,
+    resourceType: 'admin-endpoint',
+    resourceId: endpoint,
+    ipAddress,
+    details: { method: request.method },
+  }).catch((error) => {
     loggers.security.warn('[AdminAuth] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id, endpoint });
   });
 }
