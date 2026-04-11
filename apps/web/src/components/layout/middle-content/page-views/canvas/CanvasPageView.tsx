@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { useDocument } from '@/hooks/useDocument';
+import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
@@ -97,7 +98,10 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           const response = await fetchWithAuth(`/api/pages/${pageId}`);
           if (response.ok) {
             const updatedPage = await response.json();
-            if (!documentState?.isDirty) {
+            // Re-read dirty state from store at merge time (not from stale closure)
+            // to prevent overwriting edits that started while the fetch was in-flight
+            const currentDoc = useDocumentManagerStore.getState().getDocument(pageId);
+            if (!currentDoc?.isDirty) {
               updateContentFromServer(
                 typeof updatedPage.content === 'string' ? updatedPage.content : '',
                 updatedPage.revision
@@ -115,7 +119,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, pageId, documentState?.isDirty, updateContentFromServer]);
+  }, [socket, pageId, updateContentFromServer]);
 
   // Handle content changes from Monaco editor
   const handleContentChange = useCallback((newContent: string | undefined) => {
