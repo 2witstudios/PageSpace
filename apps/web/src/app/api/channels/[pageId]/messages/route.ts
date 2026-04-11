@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 
@@ -106,6 +106,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     ? `${page[0].createdAt.toISOString()}|${page[0].id}`
     : null;
 
+  securityAudit.logDataAccess(userId, 'read', 'channel_message', pageId).catch((error) => {
+    loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
+
   return NextResponse.json({ messages: page, nextCursor, hasMore });
 }
 
@@ -157,6 +161,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
   }).returning();
+
+  securityAudit.logDataAccess(userId, 'write', 'channel_message', createdMessage.id).catch((error) => {
+    loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   // Update sender's read status - sending a message means they've read the channel
   await db

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, emailNotificationPreferences, emailUnsubscribeTokens, eq, and, gt, isNull } from '@pagespace/db';
 import { hashToken } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 type NotificationType =
   | 'PERMISSION_GRANTED'
@@ -104,6 +104,10 @@ export async function GET(
 
     // Redirect to a confirmation page
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+    securityAudit.logDataAccess(userId, 'write', 'notification_prefs', 'self').catch((error) => {
+      loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Validate notification type before using in redirect URL
     if (!VALID_NOTIFICATION_TYPES.has(notificationType)) {
