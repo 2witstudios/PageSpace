@@ -165,6 +165,7 @@ describe('GET /api/user/integrations/callback', () => {
     mockUpdateConnectionCredentials.mockResolvedValue(undefined);
     mockUpdateConnectionStatus.mockResolvedValue(undefined);
     mockGetDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true });
+    mockSecurityAudit.logTokenCreated.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
