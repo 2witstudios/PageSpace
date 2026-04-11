@@ -25,16 +25,22 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
+      securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: false }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
 
     // Get customer
     const customer = await stripe.customers.retrieve(user.stripeCustomerId);
     if (customer.deleted) {
+      securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: false }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: !!user.stripeCustomerId }).catch((error: unknown) => {
+    securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: true }).catch((error: unknown) => {
       loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 

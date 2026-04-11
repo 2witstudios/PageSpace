@@ -548,7 +548,7 @@ describe('Billing Address API', () => {
   });
 
   describe('Audit logging', () => {
-    it('should log audit event on GET billing address', async () => {
+    it('should log audit event on GET billing address with customer', async () => {
       const request = new Request('https://example.com/api/stripe/billing-address', {
         method: 'GET',
       }) as unknown as import('next/server').NextRequest;
@@ -557,7 +557,37 @@ describe('Billing Address API', () => {
 
       expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
         'user_123', 'read', 'billing_address', 'self',
-        expect.any(Object)
+        expect.objectContaining({ hasCustomer: true })
+      );
+    });
+
+    it('should log audit event on GET when user has no Stripe customer', async () => {
+      mockSelectWhere.mockResolvedValue([mockUser({ stripeCustomerId: null })]);
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'billing_address', 'self',
+        expect.objectContaining({ hasCustomer: false })
+      );
+    });
+
+    it('should log audit event on GET when Stripe customer is deleted', async () => {
+      mockStripeCustomersRetrieve.mockResolvedValue(mockCustomer({ deleted: true }));
+
+      const request = new Request('https://example.com/api/stripe/billing-address', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'billing_address', 'self',
+        expect.objectContaining({ hasCustomer: false })
       );
     });
 
