@@ -3,6 +3,7 @@ import { db, eq, and } from '@pagespace/db';
 import { drives, pages, pagePermissions, driveMembers } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 interface PageNode {
   id: string;
@@ -122,6 +123,8 @@ export async function GET(
       slug: drive[0].slug,
       ownerId: drive[0].ownerId,
     };
+
+    logAuditEvent(request, user.id, 'read', 'drive_permissions', driveId, { action: 'view_permissions_tree', pageCount: allPages.length });
 
     return NextResponse.json({
       drive: driveInfo,

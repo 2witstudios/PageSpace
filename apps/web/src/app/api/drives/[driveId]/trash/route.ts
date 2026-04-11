@@ -3,6 +3,7 @@ import { drives, pages, driveMembers, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -70,6 +71,8 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     });
 
     const tree = buildTree(trashedPages);
+
+    logAuditEvent(request, auth.userId, 'read', 'drive_trash', driveId, { action: 'list_trashed_pages', count: trashedPages.length });
 
     return NextResponse.json(tree);
   } catch (error) {

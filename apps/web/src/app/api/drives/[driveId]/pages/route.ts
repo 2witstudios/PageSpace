@@ -4,6 +4,7 @@ import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db,
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -190,6 +191,7 @@ export async function GET(
     });
 
     const pageTree = buildTree(pagesWithFlags);
+    logAuditEvent(request, userId, 'read', 'drive_page_tree', driveId, { action: 'list_pages', count: pageResults.length });
     return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);

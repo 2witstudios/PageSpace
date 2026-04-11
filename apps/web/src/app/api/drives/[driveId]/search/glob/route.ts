@@ -6,6 +6,7 @@ import {
   globSearchPages,
   loggers,
 } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -90,6 +91,8 @@ export async function GET(
       resultCount: searchResults.results.length,
       userId,
     });
+
+    logAuditEvent(request, userId, 'read', 'drive_search', driveId, { action: 'glob_search', resultCount: searchResults.results.length });
 
     return NextResponse.json({
       success: true,

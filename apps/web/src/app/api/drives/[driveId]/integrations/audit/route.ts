@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, count, desc, integrationAuditLog } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { buildAuditLogWhereClause, parseAuditListParams } from './audit-filters';
 
@@ -47,6 +48,8 @@ export async function GET(
     ]);
 
     const total = Number(countResult[0]?.count ?? 0);
+
+    logAuditEvent(request, auth.userId, 'read', 'integration_audit_log', driveId, { action: 'view_integration_audit', count: logs.length });
 
     return NextResponse.json({
       logs: logs.map((log) => ({
