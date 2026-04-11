@@ -52,7 +52,7 @@ export async function GET(request: Request) {
         )
       );
 
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_status', userId), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_status', 'self'), userId);
 
     return NextResponse.json({
       connected: connection.status === 'active',

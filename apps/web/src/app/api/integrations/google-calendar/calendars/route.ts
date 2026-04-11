@@ -54,7 +54,7 @@ export async function GET(request: Request) {
         return (a.summary || '').localeCompare(b.summary || '');
       });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'google_calendars', userId, { calendarCount: calendars.length }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'read', 'google_calendars', 'self', { calendarCount: calendars.length }), userId);
 
     return NextResponse.json({ calendars });
   } catch (error) {

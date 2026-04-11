@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       );
     }
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_sync', userId, { eventsCreated: result.eventsCreated, eventsUpdated: result.eventsUpdated, eventsDeleted: result.eventsDeleted }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_sync', 'self', { eventsCreated: result.eventsCreated, eventsUpdated: result.eventsUpdated, eventsDeleted: result.eventsDeleted }), userId);
 
     return NextResponse.json({
       success: true,

@@ -49,7 +49,7 @@ export async function GET(request: Request) {
         )
       );
 
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_settings', userId), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_settings', 'self'), userId);
 
     return NextResponse.json({
       settings: {
@@ -116,7 +116,7 @@ export async function PATCH(request: Request) {
 
     loggers.api.info('Google Calendar settings updated', { userId, updates });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_settings', userId, { operation: 'update' }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_settings', 'self', { operation: 'update' }), userId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

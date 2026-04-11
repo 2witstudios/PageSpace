@@ -117,7 +117,7 @@ export async function POST(req: Request) {
       clientIP,
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_connection', userId, { operation: 'oauth_initiated' }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_connection', 'self', { operation: 'oauth_initiated' }), userId);
 
     return Response.json({ url: oauthUrl });
   } catch (error) {

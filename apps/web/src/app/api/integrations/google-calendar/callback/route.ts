@@ -197,7 +197,7 @@ export async function GET(req: Request) {
     });
 
     auditSafe(securityAudit.logTokenCreated(userId, 'google_calendar'), userId);
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_oauth_callback', userId, { email: maskEmail(googleEmail) }), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_oauth_callback', 'self', { email: maskEmail(googleEmail) }), userId);
 
     // Redirect back to settings with success
     const redirectPath = normalizeGoogleCalendarReturnPath(
