@@ -175,8 +175,8 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     // TerminalView accepts only pageId (new pattern)
     pageComponent = <TerminalView key={`terminal-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'CanvasPageView') {
-    // CanvasPageView should remount per page to isolate edit/undo state
-    pageComponent = <CanvasPageView key={`canvas-${page.id}`} page={page} />;
+    // CanvasPageView accepts only pageId (new pattern) — fetches content from API
+    pageComponent = <CanvasPageView key={`canvas-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'SheetView') {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
