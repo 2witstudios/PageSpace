@@ -199,5 +199,16 @@ describe('Portal API', () => {
         expect.any(Object)
       );
     });
+
+    it('should not include customerId in audit details (GDPR: details field is in hash chain)', async () => {
+      const request = new Request('https://example.com/api/stripe/portal', {
+        method: 'POST',
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      const details = vi.mocked(securityAudit.logDataAccess).mock.calls[0]?.[4];
+      expect(details).not.toHaveProperty('customerId');
+    });
   });
 });

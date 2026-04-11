@@ -97,4 +97,15 @@ describe('GET /api/subscriptions/usage', () => {
       expect.any(Object)
     );
   });
+
+  it('should not include userId in audit details (GDPR: details field is in hash chain)', async () => {
+    const request = new Request('https://example.com/api/subscriptions/usage', {
+      method: 'GET',
+    }) as unknown as import('next/server').NextRequest;
+
+    await GET(request);
+
+    const details = vi.mocked(securityAudit.logDataAccess).mock.calls[0]?.[4];
+    expect(details).not.toHaveProperty('userId');
+  });
 });
