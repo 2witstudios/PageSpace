@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -52,7 +52,7 @@ export async function GET(request: Request) {
         )
       );
 
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_status', 'self'), userId);
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'calendar_status', resourceId: 'self' });
 
     return NextResponse.json({
       connected: connection.status === 'active',

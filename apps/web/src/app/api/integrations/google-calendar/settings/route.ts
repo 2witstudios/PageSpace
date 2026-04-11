@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
         )
       );
 
-    auditSafe(securityAudit.logDataAccess(userId, 'read', 'calendar_settings', 'self'), userId);
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'calendar_settings', resourceId: 'self' });
 
     return NextResponse.json({
       settings: {
@@ -116,7 +116,7 @@ export async function PATCH(request: Request) {
 
     loggers.api.info('Google Calendar settings updated', { userId, updates });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_settings', 'self', { operation: 'update' }), userId);
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'calendar_settings', resourceId: 'self', details: { operation: 'update' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

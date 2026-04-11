@@ -14,7 +14,7 @@ import {
   isNull,
   asc,
 } from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, securityAudit } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -529,12 +529,7 @@ export async function POST(request: Request) {
       );
     });
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'event', event.id, { driveId: data.driveId }).catch((error) => {
-      loggers.security.warn('[CalendarEvent] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'event', resourceId: event.id, details: { driveId: data.driveId } });
 
     return NextResponse.json(completeEvent, { status: 201 });
   } catch (error) {

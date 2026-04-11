@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   getProviderById,
   updateProvider,
@@ -56,7 +56,7 @@ export async function GET(
       return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
     }
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', providerId), auth.userId);
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_provider', resourceId: providerId });
 
     return NextResponse.json({ provider });
   } catch (error) {
@@ -122,7 +122,7 @@ export async function PUT(
 
     const updated = await updateProvider(db, providerId, updateData);
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', providerId, { operation: 'update' }), auth.userId);
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'integration_provider', resourceId: providerId, details: { operation: 'update' } });
 
     return NextResponse.json({ provider: updated });
   } catch (error) {
@@ -174,7 +174,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Failed to delete provider' }, { status: 500 });
     }
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'delete', 'integration_provider', providerId), auth.userId);
+    auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'integration_provider', resourceId: providerId });
 
     return NextResponse.json({ success: true });
   } catch (error) {

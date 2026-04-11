@@ -65,10 +65,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
-  auditSafe: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('../../../../../../lib/auth', () => ({

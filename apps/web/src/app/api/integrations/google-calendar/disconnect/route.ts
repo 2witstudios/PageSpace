@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { decrypt } from '@pagespace/lib';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 import { unregisterWebhookChannels } from '@/lib/integrations/google-calendar/sync-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -75,9 +75,9 @@ export async function POST(request: Request) {
     loggers.auth.info('Google Calendar disconnected', { userId });
 
     if (connection.accessToken !== 'REVOKED') {
-      auditSafe(securityAudit.logTokenRevoked(userId, 'google_calendar', 'user_disconnect'), userId);
+      audit({ eventType: 'auth.token.revoked', userId, details: { tokenType: 'google_calendar', reason: 'user_disconnect' } });
     }
-    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_connection', connection.id, { operation: 'disconnect' }), userId);
+    audit({ eventType: 'data.delete', userId, resourceType: 'calendar_connection', resourceId: connection.id, details: { operation: 'disconnect' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {
