@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage, loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import {
   conversationRepository,
   extractPreviewText,
@@ -96,6 +96,10 @@ export async function GET(
     // Get total count for pagination
     const totalCount = await conversationRepository.countConversations(agentId);
 
+    logAuditEvent(request, auth.userId, 'read', 'page_agent_conversation', agentId, {
+      action: 'list_conversations',
+    });
+
     return NextResponse.json({
       conversations,
       pagination: {
@@ -162,11 +166,18 @@ export async function POST(
     // Generate new conversation ID using createId
     const conversationId = createId();
 
-    return NextResponse.json({
+    const response = {
       conversationId,
       title: customTitle || 'New conversation',
       createdAt: new Date(),
+    };
+
+    logAuditEvent(request, auth.userId, 'write', 'page_agent_conversation', conversationId, {
+      action: 'create_conversation',
+      agentId,
     });
+
+    return NextResponse.json(response);
 
   } catch (error) {
     loggers.ai.error('Error creating conversation:', error as Error);

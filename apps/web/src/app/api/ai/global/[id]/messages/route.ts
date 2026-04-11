@@ -40,6 +40,7 @@ import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pag
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -166,6 +167,10 @@ export async function GET(
     const prevCursor = orderedMessages.length > 0
       ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
       : null;
+
+    logAuditEvent(request, userId, 'read', 'global_chat_message', id, {
+      action: 'list_messages',
+    });
 
     return NextResponse.json({
       messages: uiMessages,
@@ -324,6 +329,10 @@ export async function POST(
           toolCalls: undefined,
           toolResults: undefined,
           uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+        });
+
+        logAuditEvent(request, userId, 'write', 'global_chat_message', conversationId, {
+          action: 'chat_message',
         });
 
         // Update conversation lastMessageAt and auto-generate title if needed

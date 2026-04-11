@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
@@ -110,6 +110,12 @@ export async function GET(
       messageId: maskIdentifier(messageId),
       messagesAffected: preview.messagesAffected,
       activitiesAffected: preview.activitiesAffected.length,
+    });
+
+    logAuditEvent(request, userId, 'read', 'ai_chat_undo', messageId, {
+      action: 'undo_preview',
+      source: preview.source,
+      messagesAffected: preview.messagesAffected,
     });
 
     return NextResponse.json(preview);
@@ -251,6 +257,13 @@ export async function POST(
         channelCount: broadcastedChannels.size,
       });
     }
+
+    logAuditEvent(request, userId, 'write', 'ai_chat_undo', messageId, {
+      action: 'undo_execute',
+      mode,
+      messagesDeleted: result.messagesDeleted,
+      activitiesRolledBack: result.activitiesRolledBack,
+    });
 
     return NextResponse.json({
       ...result,

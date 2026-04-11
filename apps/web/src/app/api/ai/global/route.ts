@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -41,6 +42,10 @@ export async function GET(request: Request) {
       ? directionParam
       : 'before';
 
+    logAuditEvent(request, userId, 'read', 'global_chat', 'list', {
+      action: 'list_conversations',
+    });
+
     if (usePagination) {
       // New paginated response format
       const result = await globalConversationRepository.listConversationsPaginated(userId, {
@@ -48,11 +53,13 @@ export async function GET(request: Request) {
         cursor,
         direction,
       });
+
       return NextResponse.json(result);
     } else {
       // Legacy response format (array of all conversations)
       // Still supported for backward compatibility
       const userConversations = await globalConversationRepository.listConversations(userId);
+
       return NextResponse.json(userConversations);
     }
   } catch (error) {
@@ -79,6 +86,10 @@ export async function POST(request: Request) {
       title,
       type,
       contextId,
+    });
+
+    logAuditEvent(request, userId, 'write', 'global_chat', newConversation.id, {
+      action: 'create_conversation',
     });
 
     return NextResponse.json(newConversation);

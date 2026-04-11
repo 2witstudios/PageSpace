@@ -6,6 +6,7 @@ import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
 
 /**
@@ -131,6 +132,11 @@ export async function POST(request: Request) {
       driveId,
       parentId,
       userId
+    });
+
+    logAuditEvent(request, userId, 'write', 'page_agent', newAgent.id, {
+      action: 'create_agent',
+      driveId,
     });
 
     return NextResponse.json({

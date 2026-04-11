@@ -17,6 +17,7 @@ import {
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 /**
  * Format tool execution results into human-readable text
@@ -455,6 +456,10 @@ export async function POST(request: Request) {
       questionLength: question.length,
       responseLength: responseText.length,
       userId
+    });
+
+    logAuditEvent(request, userId, 'write', 'page_agent', agentId, {
+      action: 'consult_agent',
     });
 
     return NextResponse.json({

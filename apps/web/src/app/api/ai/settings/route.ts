@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
@@ -121,6 +122,10 @@ export async function GET(request: Request) {
 
     // Check Azure OpenAI settings
     const azureOpenAISettings = await getUserAzureOpenAISettings(userId);
+
+    logAuditEvent(request, userId, 'read', 'ai_settings', userId, {
+      action: 'get_settings',
+    });
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
@@ -276,6 +281,11 @@ export async function POST(request: Request) {
         await createAzureOpenAISettings(userId, sanitizedApiKey, sanitizedBaseUrl);
       }
 
+      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
+        action: 'save_api_key',
+        provider,
+      });
+
       return NextResponse.json(
         {
           success: true,
@@ -361,8 +371,14 @@ export async function PATCH(request: Request) {
     try {
       await aiSettingsRepository.updateProviderSettings(userId, { provider, model });
 
+      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
+        action: 'update_model_selection',
+        provider,
+        model,
+      });
+
       return NextResponse.json(
-        { 
+        {
           success: true,
           provider,
           model,
@@ -429,6 +445,11 @@ export async function DELETE(request: Request) {
       } else if (provider === 'azure_openai') {
         await deleteAzureOpenAISettings(userId);
       }
+
+      logAuditEvent(request, userId, 'delete', 'ai_settings', provider, {
+        action: 'delete_api_key',
+        provider,
+      });
 
       // Return success with 204 No Content
       return new Response(null, { status: 204 });

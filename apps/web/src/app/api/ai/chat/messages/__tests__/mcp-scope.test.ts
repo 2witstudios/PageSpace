@@ -45,6 +45,11 @@ vi.mock('@/lib/ai/core', () => ({
   })),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';

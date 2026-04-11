@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -16,6 +17,11 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     const conversation = await globalConversationRepository.getActiveGlobalConversation(userId);
+
+    logAuditEvent(request, userId, 'read', 'global_chat', conversation?.id || 'none', {
+      action: 'get_active_conversation',
+    });
+
     return NextResponse.json(conversation);
   } catch (error) {
     loggers.api.error('Error fetching global conversation:', error as Error);

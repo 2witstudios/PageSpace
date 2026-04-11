@@ -61,6 +61,7 @@ import {
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, conversationCache, type CachedMessage } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -358,6 +359,11 @@ export async function POST(request: Request) {
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');
+
+        logAuditEvent(request, userId, 'write', 'ai_chat', chatId, {
+          action: 'chat_message',
+          conversationId,
+        });
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
@@ -1265,6 +1271,10 @@ export async function GET(request: Request) {
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
+    logAuditEvent(request, userId, 'read', 'ai_chat_settings', pageId || userId, {
+      action: 'get_provider_settings',
+    });
+
     return NextResponse.json({
       currentProvider,
       currentModel,
@@ -1504,6 +1514,12 @@ export async function PATCH(request: Request) {
       pageId: sanitizedPageId,
       provider: sanitizedProvider,
       model: sanitizedModel
+    });
+
+    logAuditEvent(request, auth.userId, 'write', 'ai_chat_settings', sanitizedPageId, {
+      action: 'update_page_settings',
+      provider: sanitizedProvider,
+      model: sanitizedModel,
     });
 
     return NextResponse.json({
