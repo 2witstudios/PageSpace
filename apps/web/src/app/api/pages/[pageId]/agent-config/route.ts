@@ -6,6 +6,7 @@ import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -65,6 +66,8 @@ export async function GET(
       loggers.api.error('Error fetching drive prompt:', error as Error);
       // Continue without drive prompt on error
     }
+
+    logAuditEvent(request, userId, 'read', 'agent_config', pageId, { action: 'get_agent_config' });
 
     return NextResponse.json({
       pageId,
@@ -252,6 +255,8 @@ export async function PATCH(
         updatedFields: Object.keys(updateData),
       });
     }
+
+    logAuditEvent(request, userId, 'write', 'agent_config', pageId, { action: 'update_agent_config', updatedFields: Object.keys(updateData) });
 
     return NextResponse.json({
       success: true,

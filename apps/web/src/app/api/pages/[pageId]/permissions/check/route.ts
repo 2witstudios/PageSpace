@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
@@ -18,7 +19,9 @@ export async function GET(
 
   try {
     const permissions = await getUserAccessLevel(auth.userId, pageId);
-    
+
+    logAuditEvent(req, auth.userId, 'read', 'page_permission', pageId, { action: 'check_permissions' });
+
     if (!permissions) {
       return NextResponse.json({
         canView: false,

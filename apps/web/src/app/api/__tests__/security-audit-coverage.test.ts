@@ -90,15 +90,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/search/regex', 'Regex search within drive — follow-up'],
   ['drives/[driveId]/trash', 'Trash list for drive — follow-up'],
 
-  // --- Page sub-routes (read-only data fetches, covered by parent page audit) ---
+  // --- Page sub-routes (remaining without direct audit coverage) ---
   // TODO: Add audit coverage in follow-up PR
-  ['pages/[pageId]/agent-config', 'Page agent config — follow-up'],
-  ['pages/[pageId]/ai-usage', 'AI usage stats — follow-up'],
-  ['pages/[pageId]/breadcrumbs', 'Breadcrumb navigation — follow-up'],
-  ['pages/[pageId]/children', 'Child page list — follow-up'],
-  ['pages/[pageId]/history', 'Page history view — follow-up'],
-  ['pages/[pageId]/permissions/check', 'Permission check — follow-up'],
-  ['pages/[pageId]/processing-status', 'Processing status poll — follow-up'],
   ['pages/[pageId]/reprocess', 'Reprocess trigger — follow-up'],
   ['pages/[pageId]/tasks/[taskId]', 'Individual task CRUD — follow-up'],
   ['pages/[pageId]/tasks/reorder', 'Task reorder — follow-up'],

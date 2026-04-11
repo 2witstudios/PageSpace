@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -44,6 +45,8 @@ export async function GET(
         { status: 404 }
       );
     }
+
+    logAuditEvent(request, userId, 'read', 'page_processing', pageId, { action: 'check_processing_status', status: page.processingStatus });
 
     // Return final status if processing is done
     if (page.processingStatus !== 'pending' && page.processingStatus !== 'processing') {
