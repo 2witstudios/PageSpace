@@ -74,7 +74,9 @@ export async function POST(request: Request) {
 
     loggers.auth.info('Google Calendar disconnected', { userId });
 
-    auditSafe(securityAudit.logTokenRevoked(userId, 'google_calendar', 'user_disconnect'), userId);
+    if (connection.accessToken !== 'REVOKED') {
+      auditSafe(securityAudit.logTokenRevoked(userId, 'google_calendar', 'user_disconnect'), userId);
+    }
     auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_connection', connection.id, { operation: 'disconnect' }), userId);
 
     return NextResponse.json({ success: true });
