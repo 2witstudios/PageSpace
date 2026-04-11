@@ -16,7 +16,8 @@ import type { DriveWithAccess } from '@pagespace/lib/server';
 vi.mock('@pagespace/lib/server', () => ({
   listAccessibleDrives: vi.fn(),
   createDrive: vi.fn(),
-  securityAudit: { logEvent: vi.fn().mockResolvedValue(undefined), logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getConnectionById, getConnectionWithProvider, deleteConnection } from '@pagespace/lib/integrations';
 
@@ -88,7 +88,7 @@ export async function DELETE(
       deletedBy: auth.userId,
     });
 
-    securityAudit.logDataAccess(auth.userId, 'delete', 'drive', driveId, { connectionId, connectionName: connection.name, operation: 'delete_integration' })?.catch(() => {});
+    auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { connectionId, connectionName: connection.name, operation: 'delete_integration' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

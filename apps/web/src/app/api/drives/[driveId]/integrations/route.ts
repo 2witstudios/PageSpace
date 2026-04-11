@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   listDriveConnections,
@@ -66,7 +65,7 @@ export async function GET(
       } : null,
     }));
 
-    logAuditEvent(request, auth.userId, 'read', 'drive_integration', driveId, { action: 'list_connections', count: safeConnections.length });
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_integration', resourceId: driveId, details: { action: 'list_connections', count: safeConnections.length } });
 
     return NextResponse.json({ connections: safeConnections });
   } catch (error) {
@@ -156,7 +155,7 @@ export async function POST(
         state,
       });
 
-      logAuditEvent(request, auth.userId, 'write', 'drive_integration', driveId, { action: 'create_connection', providerId });
+      auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_integration', resourceId: driveId, details: { action: 'create_connection', providerId } });
 
       return NextResponse.json({ url });
     }
@@ -179,7 +178,7 @@ export async function POST(
       connectedAt: new Date(),
     });
 
-    logAuditEvent(request, auth.userId, 'write', 'drive_integration', driveId, { action: 'create_connection', providerId });
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_integration', resourceId: driveId, details: { action: 'create_connection', providerId } });
 
     return NextResponse.json({
       connection: {

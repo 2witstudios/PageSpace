@@ -9,10 +9,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@pagespace/lib/server', () => ({
   getUserDriveAccess: vi.fn(),
   canUserViewPage: vi.fn(),
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => {

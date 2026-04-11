@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { auditRequest, getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 import { db, pages, driveMembers, userProfiles, users, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 
 /**
  * Unified assignee type for task assignment
@@ -160,7 +159,7 @@ export async function GET(
     // Count user assignees (members + owner if added separately)
     const userAssigneeCount = assignees.filter((a) => a.type === 'user').length;
 
-    logAuditEvent(request, userId, 'read', 'drive_member', driveId, { action: 'list_assignees', count: assignees.length });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_member', resourceId: driveId, details: { action: 'list_assignees', count: assignees.length } });
 
     return NextResponse.json({
       assignees,

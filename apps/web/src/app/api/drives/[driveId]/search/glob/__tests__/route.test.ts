@@ -15,6 +15,7 @@ type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/serve
 vi.mock('@pagespace/lib/server', () => ({
   checkDriveAccessForSearch: vi.fn(),
   globSearchPages: vi.fn(),
+  auditRequest: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),
@@ -29,10 +30,6 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/server';
