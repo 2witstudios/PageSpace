@@ -41,8 +41,6 @@ export async function GET(request: NextRequest) {
     // Get file count
     const fileCount = await getUserFileCount(user.id);
 
-    securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
-
     // Get user's drives
     const userDrives = await db.query.drives.findMany({
       where: eq(drives.ownerId, user.id),
@@ -50,6 +48,7 @@ export async function GET(request: NextRequest) {
     });
 
     if (userDrives.length === 0) {
+      securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
       return NextResponse.json({
         quota,
         tierInfo: STORAGE_TIERS[quota.tier],
@@ -119,6 +118,8 @@ export async function GET(request: NextRequest) {
         formattedSize: formatBytes(totalSize)
       };
     });
+
+    securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
 
     return NextResponse.json({
       quota: {

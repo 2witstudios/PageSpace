@@ -169,7 +169,7 @@ describe('GET /api/users/find', () => {
       await GET(request);
 
       expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'user_search', 'user_123', { query: 'te***@example.com' }
+        'user_123', 'read', 'user_search', 'user_456', { query: 'te***@example.com' }
       );
     });
 
