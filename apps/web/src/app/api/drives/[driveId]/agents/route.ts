@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from 
 import { db, pages, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 interface DriveAgentSummary {
   id: string;
@@ -134,6 +135,8 @@ export async function GET(
       accessibleAgents: accessibleAgents.length,
       userId
     });
+
+    logAuditEvent(request, userId, 'read', 'drive_agent', driveId, { action: 'list_agents', count: accessibleAgents.length });
 
     return NextResponse.json({
       success: true,

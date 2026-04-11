@@ -5,6 +5,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -109,6 +110,8 @@ export async function GET(
     total,
     retentionDays,
   });
+
+  logAuditEvent(request, userId, 'read', 'drive_history', driveId, { action: 'view_history', count: versionsWithRollback.length });
 
   return NextResponse.json({
     versions: versionsWithRollback,
