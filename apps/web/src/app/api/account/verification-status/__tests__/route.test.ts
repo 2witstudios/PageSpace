@@ -5,6 +5,21 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    auth: {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 vi.mock('@pagespace/db', () => ({
   db: {
     select: vi.fn(),
@@ -16,6 +31,7 @@ vi.mock('@pagespace/db', () => ({
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Test helpers
 const createRequest = () =>
@@ -84,6 +100,24 @@ describe('GET /api/account/verification-status', () => {
 
       expect(response.status).toBe(200);
       expect(body.emailVerified).toBe(verifiedDate.toISOString());
+    });
+
+    it('logs audit event on successful GET', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue({
+        id: 'user-1',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        authTransport: 'cookie',
+      });
+      mockSelectChain([{ emailVerified: new Date() }]);
+
+      await GET(createRequest());
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user-1', 'read', 'account_verification_status', 'user-1',
+        expect.objectContaining({ operation: 'verification_status_check' })
+      );
     });
 
     it('returns null emailVerified for unverified user', async () => {

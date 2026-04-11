@@ -1,5 +1,5 @@
 import { db, eq, and, sql, drives, driveMembers, users } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -90,6 +90,8 @@ export async function GET(req: Request) {
         });
       }
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'account_drives_status', userId, { operation: 'drives_status_check' }).catch(e => loggers.auth.warn('Audit log failed', e));
 
     return Response.json({
       soloDrives,

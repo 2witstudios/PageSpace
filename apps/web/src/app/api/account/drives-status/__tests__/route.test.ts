@@ -35,6 +35,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -43,7 +47,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Helper to create mock SessionAuthResult
@@ -285,6 +289,21 @@ describe('GET /api/account/drives-status', () => {
     // 0 members should be treated as solo (auto-delete)
     expect(body.soloDrives).toHaveLength(1);
     expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('logs audit event on successful GET', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([
+      mockDrive({ id: 'drive_solo', name: 'My Drive' }),
+    ]);
+    setupSelectMocks(1);
+
+    const request = new Request('https://example.com/api/account/drives-status');
+    await GET(request);
+
+    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+      mockUserId, 'read', 'account_drives_status', mockUserId,
+      expect.objectContaining({ operation: 'drives_status_check' })
+    );
   });
 
   it('should correctly count multiple admins in multi-member drive', async () => {
