@@ -3,6 +3,7 @@ import { pages, taskItems, db, and, eq, asc, isNotNull } from '@pagespace/db';
 import { canUserViewPage, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
@@ -40,6 +41,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       ...child,
       isTaskLinked: taskLinkedSet.has(child.id),
     }));
+
+    logAuditEvent(req, auth.userId, 'read', 'page_children', pageId, { action: 'list_children', count: childrenWithTaskInfo.length });
 
     return jsonResponse(childrenWithTaskInfo);
   } catch (error) {
