@@ -1,4 +1,13 @@
 import { securityAudit, loggers } from '@pagespace/lib/server';
+import type { SecurityEventType } from '@pagespace/db';
+
+const DATA_EVENT_MAP: Record<string, SecurityEventType> = {
+  read: 'data.read',
+  write: 'data.write',
+  delete: 'data.delete',
+  export: 'data.export',
+  share: 'data.share',
+};
 
 interface AuditMeta {
   ipAddress: string;
@@ -14,6 +23,14 @@ export function extractAuditMeta(request: Request): AuditMeta {
   return { ipAddress, userAgent };
 }
 
+/**
+ * Log a data-access audit event with request metadata.
+ *
+ * Uses logEvent() directly so ipAddress and userAgent are stored as
+ * top-level AuditEvent fields — which are excluded from the hash chain
+ * per GDPR compliance (#541). Putting them inside `details` would
+ * include them in the hash, breaking the right-to-erasure invariant.
+ */
 export function logAuditEvent(
   request: Request,
   userId: string,
@@ -24,10 +41,14 @@ export function logAuditEvent(
 ): void {
   const { ipAddress, userAgent } = extractAuditMeta(request);
   securityAudit
-    .logDataAccess(userId, operation, resourceType, resourceId, {
-      ...details,
+    .logEvent({
+      eventType: DATA_EVENT_MAP[operation],
+      userId,
+      resourceType,
+      resourceId,
       ipAddress,
       userAgent,
+      details,
     })
     .catch((err: Error) => {
       loggers.api.warn('Security audit log failed', {

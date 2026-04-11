@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/lib/server', () => ({
   securityAudit: {
-    logDataAccess: vi.fn(),
+    logEvent: vi.fn(),
   },
   loggers: {
     api: {
@@ -57,34 +57,53 @@ describe('extractAuditMeta', () => {
 describe('logAuditEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
   });
 
-  it('calls securityAudit.logDataAccess with the provided args', () => {
+  it('calls securityAudit.logEvent with top-level PII fields (not in details)', () => {
     const req = fakeRequest({ 'x-forwarded-for': '1.2.3.4', 'user-agent': 'TestAgent' });
     logAuditEvent(req, 'user-1', 'read', 'ai_chat', 'res-1', { action: 'test' });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user-1',
-      'read',
-      'ai_chat',
-      'res-1',
-      {
-        action: 'test',
-        ipAddress: '1.2.3.4',
-        userAgent: 'TestAgent',
-      }
-    );
+    expect(securityAudit.logEvent).toHaveBeenCalledWith({
+      eventType: 'data.read',
+      userId: 'user-1',
+      resourceType: 'ai_chat',
+      resourceId: 'res-1',
+      ipAddress: '1.2.3.4',
+      userAgent: 'TestAgent',
+      details: { action: 'test' },
+    });
+  });
+
+  it('keeps ipAddress and userAgent out of the details object', () => {
+    const req = fakeRequest({ 'x-forwarded-for': '1.2.3.4', 'user-agent': 'TestAgent' });
+    logAuditEvent(req, 'user-1', 'write', 'ai_chat', 'res-1', { action: 'test' });
+
+    const callArg = vi.mocked(securityAudit.logEvent).mock.calls[0][0];
+    expect(callArg.details).not.toHaveProperty('ipAddress');
+    expect(callArg.details).not.toHaveProperty('userAgent');
+  });
+
+  it('maps operation to correct event type', () => {
+    const req = fakeRequest();
+    const ops = ['read', 'write', 'delete', 'export', 'share'] as const;
+    const expected = ['data.read', 'data.write', 'data.delete', 'data.export', 'data.share'];
+
+    ops.forEach((op, i) => {
+      vi.clearAllMocks();
+      vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+      logAuditEvent(req, 'u', op, 'r', 'id');
+      expect(vi.mocked(securityAudit.logEvent).mock.calls[0][0].eventType).toBe(expected[i]);
+    });
   });
 
   it('logs a warning when securityAudit rejects', async () => {
     const error = new Error('DB connection lost');
-    vi.mocked(securityAudit.logDataAccess).mockRejectedValueOnce(error);
+    vi.mocked(securityAudit.logEvent).mockRejectedValueOnce(error);
 
     const req = fakeRequest();
     logAuditEvent(req, 'user-1', 'write', 'ai_chat', 'res-1', { action: 'test' });
 
-    // Let the microtask queue flush so the .catch handler runs
     await vi.waitFor(() => {
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Security audit log failed',
@@ -97,15 +116,13 @@ describe('logAuditEvent', () => {
   });
 
   it('does not throw when securityAudit rejects', async () => {
-    vi.mocked(securityAudit.logDataAccess).mockRejectedValueOnce(new Error('fail'));
+    vi.mocked(securityAudit.logEvent).mockRejectedValueOnce(new Error('fail'));
 
     const req = fakeRequest();
-    // Should not throw
     expect(() => {
       logAuditEvent(req, 'user-1', 'read', 'ai_chat', 'res-1', { action: 'test' });
     }).not.toThrow();
 
-    // Flush microtasks
     await new Promise(resolve => setTimeout(resolve, 0));
   });
 });
