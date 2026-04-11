@@ -8,13 +8,8 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Mock at the SERVICE SEAM level: auth and db.query.users.findFirst
 // ============================================================================
 
-const { mockSecurityAudit, mockMaskEmail } = vi.hoisted(() => ({
+const { mockSecurityAudit } = vi.hoisted(() => ({
   mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-  mockMaskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -27,7 +22,6 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   securityAudit: mockSecurityAudit,
-  maskEmail: mockMaskEmail,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -169,7 +163,7 @@ describe('GET /api/users/find', () => {
       await GET(request);
 
       expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'user_search', 'user_456', { query: 'te***@example.com' }
+        'user_123', 'read', 'user_search', 'user_456', { queryLength: 16, resultCount: 1 }
       );
     });
 
