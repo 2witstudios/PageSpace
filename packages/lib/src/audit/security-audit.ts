@@ -16,8 +16,9 @@
  */
 
 import { createHash } from 'crypto';
-import { db, securityAuditLog, desc, and, gte, lte, eq, sql } from '@pagespace/db';
+import { db, securityAuditLog, desc, sql } from '@pagespace/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
+import { queryAuditEvents } from './audit-query';
 
 /**
  * Audit event input structure
@@ -400,53 +401,10 @@ export class SecurityAuditService {
 
   /**
    * Query audit events with filtering options.
-   *
-   * @param options - Query filtering options
-   * @returns Array of matching audit events
+   * Delegates to the standalone queryAuditEvents() function.
    */
   async queryEvents(options: QueryEventsOptions): Promise<SelectSecurityAuditLog[]> {
-    const conditions = [];
-
-    if (options.userId) {
-      conditions.push(eq(securityAuditLog.userId, options.userId));
-    }
-
-    if (options.eventType) {
-      conditions.push(eq(securityAuditLog.eventType, options.eventType));
-    }
-
-    if (options.resourceType) {
-      conditions.push(eq(securityAuditLog.resourceType, options.resourceType));
-    }
-
-    if (options.resourceId) {
-      conditions.push(eq(securityAuditLog.resourceId, options.resourceId));
-    }
-
-    if (options.ipAddress) {
-      conditions.push(eq(securityAuditLog.ipAddress, options.ipAddress));
-    }
-
-    if (options.fromTimestamp) {
-      conditions.push(gte(securityAuditLog.timestamp, options.fromTimestamp));
-    }
-
-    if (options.toTimestamp) {
-      conditions.push(lte(securityAuditLog.timestamp, options.toTimestamp));
-    }
-
-    const baseQuery = db
-      .select()
-      .from(securityAuditLog)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(securityAuditLog.timestamp));
-
-    // Apply limit if specified
-    if (options.limit) {
-      return baseQuery.limit(options.limit);
-    }
-
-    return baseQuery;
+    return queryAuditEvents(options);
   }
 
   /**
