@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMC
 import { getActivityById, previewRollback } from '@/services/api';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -85,6 +86,10 @@ export async function GET(
       { status: 403 }
     );
   }
+
+  securityAudit.logDataAccess(userId, 'read', 'activity', activityId).catch((error) => {
+    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   // Get rollback preview to determine eligibility
   const preview = await previewRollback(activityId, userId, rollbackContext);

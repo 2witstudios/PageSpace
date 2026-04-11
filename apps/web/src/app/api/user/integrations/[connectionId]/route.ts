@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, integrationConnections, eq } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import {
   getConnectionById,
   deleteConnection,
@@ -136,6 +136,11 @@ export async function DELETE(
     }
 
     await deleteConnection(db, connectionId);
+
+    securityAudit.logTokenRevoked(auth.userId, 'integration', 'user_disconnect').catch((error) => {
+      loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting user integration:', error as Error);

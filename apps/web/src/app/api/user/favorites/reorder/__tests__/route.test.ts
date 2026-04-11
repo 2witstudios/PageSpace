@@ -1,0 +1,81 @@
+/**
+ * Security audit tests for /api/user/favorites/reorder
+ * Verifies securityAudit.logDataAccess is called for PATCH.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
+}));
+
+vi.mock('@pagespace/db', () => ({
+  db: {
+    query: {
+      favorites: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'fav-1' }, { id: 'fav-2' }]),
+      },
+    },
+    transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
+      await fn({
+        update: vi.fn().mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(undefined),
+          }),
+        }),
+      });
+    }),
+  },
+  favorites: { id: 'id', userId: 'userId', position: 'position' },
+  eq: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+import { PATCH } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
+
+const mockUserId = 'user_123';
+
+const mockAuth = () => {
+  vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+    userId: mockUserId,
+    tokenVersion: 0,
+    tokenType: 'session' as const,
+    sessionId: 'test-session',
+    role: 'user' as const,
+    adminRoleVersion: 0,
+  });
+};
+
+describe('PATCH /api/user/favorites/reorder audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  it('logs write audit event with reorder action', async () => {
+    const request = new Request('http://localhost/api/user/favorites/reorder', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderedIds: ['fav-1', 'fav-2'] }),
+    });
+
+    await PATCH(request);
+
+    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+      mockUserId, 'write', 'favorites', 'self', { action: 'reorder' }
+    );
+  });
+});

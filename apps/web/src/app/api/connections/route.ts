@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq, and, or, desc, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { createNotification, isEmailVerified } from '@pagespace/lib';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -13,6 +13,10 @@ export async function GET(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    securityAudit.logDataAccess(userId, 'read', 'connections', 'self').catch((error) => {
+      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || 'ACCEPTED';
@@ -95,6 +99,10 @@ export async function POST(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    securityAudit.logDataAccess(userId, 'write', 'connection', 'self').catch((error) => {
+      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Check email verification
     const emailVerified = await isEmailVerified(userId);

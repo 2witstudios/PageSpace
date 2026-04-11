@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, userPageViews, eq, desc } from '@pagespace/db';
 import { PageType } from '@pagespace/lib/client-safe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -44,6 +44,10 @@ export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  securityAudit.logDataAccess(userId, 'read', 'recents', 'self').catch((error) => {
+    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   const { searchParams } = new URL(req.url);
   const limitParam = searchParams.get('limit');

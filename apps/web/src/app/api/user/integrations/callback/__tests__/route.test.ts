@@ -52,6 +52,15 @@ const mockLoggers = vi.hoisted(() => ({
     warn: vi.fn(),
     debug: vi.fn(),
   },
+  security: {
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+const mockSecurityAudit = vi.hoisted(() => ({
+  logTokenCreated: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -60,6 +69,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -155,6 +165,7 @@ describe('GET /api/user/integrations/callback', () => {
     mockUpdateConnectionCredentials.mockResolvedValue(undefined);
     mockUpdateConnectionStatus.mockResolvedValue(undefined);
     mockGetDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true });
+    mockSecurityAudit.logTokenCreated.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -552,6 +563,39 @@ describe('GET /api/user/integrations/callback', () => {
 
       const url = getRedirectUrl(response);
       expect(url.pathname).toBe(DEFAULT_RETURN);
+    });
+  });
+
+  // ── Security audit ──────────────────────────────────────────────
+
+  describe('Security audit', () => {
+    it('logs logTokenCreated on successful user-scoped connection', async () => {
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      expect(mockSecurityAudit.logTokenCreated).toHaveBeenCalledWith(
+        'user-123', 'integration'
+      );
+    });
+
+    it('logs logTokenCreated on successful drive-scoped connection', async () => {
+      mockVerifySignedState.mockReturnValueOnce({ ...mockStateData, driveId: 'drive-456' });
+      mockGetDriveAccess.mockResolvedValueOnce({ isOwner: true, isAdmin: true });
+
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      expect(mockSecurityAudit.logTokenCreated).toHaveBeenCalledWith(
+        'user-123', 'integration'
+      );
+    });
+
+    it('does not log logTokenCreated when state verification fails', async () => {
+      mockVerifySignedState.mockReturnValueOnce(null);
+      const request = createCallbackRequest({ code: 'auth-code', state: 'invalid-state' });
+      await GET(request);
+
+      expect(mockSecurityAudit.logTokenCreated).not.toHaveBeenCalled();
     });
   });
 

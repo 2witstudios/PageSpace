@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -19,6 +19,10 @@ export async function PATCH(
     const { connectionId } = await context.params;
     const body = await request.json();
     const { action } = body;
+
+    securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, { action }).catch((error) => {
+      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     if (!['accept', 'reject', 'block', 'unblock'].includes(action)) {
       return NextResponse.json(
@@ -206,6 +210,10 @@ export async function DELETE(
     const userId = auth.userId;
 
     const { connectionId } = await context.params;
+
+    securityAudit.logDataAccess(userId, 'delete', 'connection', connectionId).catch((error) => {
+      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Get the connection
     const [connection] = await db

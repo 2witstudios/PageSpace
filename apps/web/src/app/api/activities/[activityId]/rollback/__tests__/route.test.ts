@@ -50,6 +50,12 @@ vi.mock('@pagespace/lib/server', () => ({
     api: {
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -70,6 +76,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -326,6 +333,25 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         mockUserId,
         'drive',
         { tx: {}, force: false }
+      );
+    });
+  });
+
+  // ── Security audit ────────────────────────────────────────────
+
+  describe('security audit', () => {
+    it('logs write audit event with rollback action', async () => {
+      vi.mocked(previewRollback).mockResolvedValue(createMockPreview());
+      vi.mocked(executeRollback).mockResolvedValue({
+        success: true,
+        message: 'OK',
+        warnings: [],
+      } as never);
+
+      await POST(createRequest({ context: 'page' }), { params: mockParams });
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'write', 'activity', mockActivityId, { action: 'rollback' }
       );
     });
   });
