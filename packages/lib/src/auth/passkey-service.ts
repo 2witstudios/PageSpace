@@ -371,12 +371,20 @@ export async function generateAuthenticationOptions(
     }
   }
 
-  const options = await simpleGenerateAuthenticationOptions({
+  const rawOptions = await simpleGenerateAuthenticationOptions({
     rpID: PASSKEY_CONFIG.rpId,
     userVerification: 'required',
     timeout: PASSKEY_CONFIG.timeout,
     allowCredentials,
   });
+
+  // WebAuthn Level 3: hint browser to prefer platform authenticator over QR/hybrid.
+  // SimpleWebAuthn v13 doesn't accept hints in generateAuthenticationOptions,
+  // so we add it manually. Progressive enhancement — Safari ignores it.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
 
   // Store challenge - use a system user ID if no specific user
   const challengeId = createId();

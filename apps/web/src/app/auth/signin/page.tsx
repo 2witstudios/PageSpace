@@ -13,8 +13,11 @@ import {
   GoogleOneTap,
   MagicLinkForm,
   PasskeyLoginButton,
+  useConditionalPasskeyUI,
   ExternalAuthWaiting,
 } from "@/components/auth";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
@@ -89,6 +92,16 @@ function SignInForm() {
     }
   }, [searchParams]);
 
+  // Conditional UI: passkey autofill on the email input
+  const { startConditionalUI } = useConditionalPasskeyUI(csrfToken ?? '', {
+    refreshToken,
+    onSuccess: (redirectUrl) => { window.location.href = redirectUrl; },
+  });
+
+  useEffect(() => {
+    if (csrfToken) startConditionalUI();
+  }, [csrfToken, startConditionalUI]);
+
   // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
     return (
@@ -147,6 +160,24 @@ function SignInForm() {
         </p>
       </motion.div>
 
+      {/* Email input — anchors conditional UI (passkey autofill) */}
+      <motion.div
+        className="mb-4"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15, duration: 0.3 }}
+      >
+        <div className="grid gap-1.5">
+          <Label htmlFor="signin-email">Email</Label>
+          <Input
+            id="signin-email"
+            type="email"
+            placeholder="you@example.com"
+            autoComplete="email webauthn"
+          />
+        </div>
+      </motion.div>
+
       {/* OAuth buttons */}
       {isWaitingForExternalAuth ? (
         <ExternalAuthWaiting provider={waitingProvider} onCancel={cancelExternalAuth} />
@@ -162,7 +193,7 @@ function SignInForm() {
 
       <AuthDivider delay={0.3} />
 
-      {/* Passkey login */}
+      {/* Passkey login — fallback for browsers without conditional mediation */}
       {csrfToken && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}

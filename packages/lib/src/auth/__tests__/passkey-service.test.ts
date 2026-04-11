@@ -331,7 +331,7 @@ describe('passkey-service', () => {
       if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED');
     });
 
-    it('should generate options without email (conditional UI)', async () => {
+    it('should generate options without email (conditional UI) with client-device hints', async () => {
       mockGenAuthOptions.mockResolvedValueOnce({ challenge: 'auth-challenge' });
       mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
       mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
@@ -340,11 +340,12 @@ describe('passkey-service', () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.data.options.challenge).toBe('auth-challenge');
+        expect(result.data.options.hints).toEqual(['client-device']);
         expect(result.data.challengeId).toBe('test-cuid');
       }
     });
 
-    it('should generate options with email when user exists', async () => {
+    it('should generate options with email when user exists, including hints', async () => {
       mockDb.query.users.findFirst.mockResolvedValueOnce({ id: 'user-1' });
       mockDb.query.passkeys.findMany.mockResolvedValueOnce([
         { credentialId: 'cred-1', transports: ['internal'] },
@@ -355,6 +356,9 @@ describe('passkey-service', () => {
 
       const result = await generateAuthenticationOptions({ email: 'test@example.com' });
       expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.options.hints).toEqual(['client-device']);
+      }
     });
   });
 
