@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
     securityAudit.logDataAccess(userId, 'read', 'subscription_status', 'self', { tier: subscriptionTier }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      loggers.security.warn('[Subscriptions] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({

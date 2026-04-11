@@ -70,6 +70,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
+      securityAudit.logDataAccess(userId, 'read', 'invoices', 'list', { count: 0, hasCustomer: false }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
       return NextResponse.json({ invoices: [], hasMore: false });
     }
 
