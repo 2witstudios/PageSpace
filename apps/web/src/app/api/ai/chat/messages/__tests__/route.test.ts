@@ -29,11 +29,10 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
   loggers: {
-    ai: {
-      info: vi.fn(),
-      error: vi.fn(),
-    },
+    ai: { info: vi.fn(), error: vi.fn() },
+    security: { warn: vi.fn() },
   },
+  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
 }));
 
 // Mock message converter (boundary)

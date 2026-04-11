@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { db, pages, eq, and } from '@pagespace/db';
 
 // GET /api/workflows/agents?driveId=xxx - List AI_CHAT pages in a drive
@@ -31,6 +32,15 @@ export async function GET(request: Request) {
       )
     )
     .orderBy(pages.title);
+
+  securityAudit.logDataAccess(auth.userId, 'read', 'agent', driveId, {
+    count: agents.length,
+  }).catch((error) => {
+    loggers.security.warn('[WorkflowAgents] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId: auth.userId,
+    });
+  });
 
   return NextResponse.json(agents);
 }

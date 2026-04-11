@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
 import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
 import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
@@ -233,6 +233,17 @@ export async function GET(request: Request) {
       resultCount: totalMatches,
       driveCount: results.length,
       userId
+    });
+
+    securityAudit.logDataAccess(userId, 'read', 'search', '*', {
+      searchType,
+      resultCount: totalMatches,
+      source: 'multi-drive',
+    }).catch((error) => {
+      loggers.security.warn('[MultiDriveSearch] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
     });
 
     return NextResponse.json({

@@ -106,8 +106,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     ? `${page[0].createdAt.toISOString()}|${page[0].id}`
     : null;
 
-  securityAudit.logDataAccess(userId, 'read', 'channel_message', pageId).catch((error) => {
-    loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  securityAudit.logDataAccess(auth.userId, 'read', 'channel', pageId, {
+    messageCount: page.length,
+  }).catch((error) => {
+    loggers.security.warn('[ChannelMessages] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId: auth.userId,
+    });
   });
 
   return NextResponse.json({ messages: page, nextCursor, hasMore });
@@ -161,10 +166,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
   }).returning();
-
-  securityAudit.logDataAccess(userId, 'write', 'channel_message', createdMessage.id).catch((error) => {
-    loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
 
   // Update sender's read status - sending a message means they've read the channel
   await db

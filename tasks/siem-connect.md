@@ -80,6 +80,74 @@ Wire the delivery worker into pg-boss scheduling via `queue-manager.ts` and upda
 
 ---
 
+## Fix: MCP-WS Audit Semantics
+
+**Requirements**:
+- Given a WebSocket connection in mcp-ws/route.ts, should log a connection event rather than a data-access 'read'
+- Given the SecurityAuditService API, should use `logEvent` with an appropriate event type (not `logDataAccess`)
+
+---
+
+## Fix: Admin Route Audit Coverage
+
+**Requirements**:
+- Given admin user listing (api/admin/users), should log a 'read' audit for user data access
+- Given admin user data access (api/admin/users/[userId]/data), should log a 'read' audit
+- Given admin user data export (api/admin/users/[userId]/export), should log an 'export' audit
+- Given admin audit-log reads (api/admin/audit-logs), should log a 'read' audit
+
+---
+
+## Fix: File Access Route Audit Coverage
+
+**Requirements**:
+- Given a file download (api/files/[id]/download), should log a 'read' audit with file metadata
+- Given a file view (api/files/[id]/view), should log a 'read' audit with file metadata
+
+---
+
+## Fix: Activity Route Audit Coverage
+
+**Requirements**:
+- Given activity listing (api/activities), should log a 'read' audit
+- Given activity export (api/activities/export), should log an 'export' audit
+- Given activity rollback (api/activities/[activityId]/rollback), should log a 'write' audit
+
+---
+
+## Fix: Medium-Priority Route Audit Coverage
+
+**Requirements**:
+- Given AI chat routes, should log appropriate audit events for message read/write
+- Given channel message routes, should log audit events for message access
+- Given DM/conversation routes, should log audit events for conversation access
+- Given integration/connection routes, should log audit events for connection management
+- Given calendar event routes, should log audit events for calendar access
+- Given agent integration routes, should log audit events for grant management
+- Given user preference routes, should log audit events for preference access
+
+---
+
+## Fix: Audit Wiring Tests
+
+**Requirements**:
+- Given each route group (search, workflow, trash, voice, mcp, admin, files, activities), should have at least one test verifying securityAudit.logDataAccess is called with correct arguments
+- Given a route with audit logging, the test should mock securityAudit and verify it was called after a successful operation
+
+---
+
+## Fix: GDPR — Remove PII from audit details
+
+The `details` field is included in the tamper-evident hash chain and cannot be erased under GDPR Article 17. User-typed search queries and filter user IDs must not appear in `details`.
+
+**Requirements**:
+- Given a search audit log, should not include the raw query text in details (could contain names/emails)
+- Given a mentions search audit log, should not include the raw query text in details
+- Given an admin audit-log read, should not include the filtered userId in details (PII of the queried user)
+- Given any audit log details field, should only contain non-PII operational metadata (counts, types, sources)
+
+---
+
 ## Health Check Enhancement
 
 Add SIEM delivery status to the `/health` endpoint in `apps/processor/src/server.ts`.

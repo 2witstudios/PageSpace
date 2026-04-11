@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray, SQL } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 interface SearchResult {
@@ -413,6 +413,15 @@ export async function GET(request: Request) {
         pages: finalResults.filter(r => r.type === 'page').length,
         users: finalResults.filter(r => r.type === 'user').length,
       }
+    });
+
+    securityAudit.logDataAccess(user.id, 'read', 'search', '*', {
+      resultCount: finalResults.length,
+    }).catch((error) => {
+      loggers.security.warn('[Search] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId: user.id,
+      });
     });
 
     return NextResponse.json({ results: finalResults });

@@ -33,7 +33,9 @@ vi.mock('@pagespace/lib/server', () => ({
   checkDriveAccess: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
   },
+  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -60,7 +62,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { GET, PATCH, DELETE } from '../route';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -134,6 +136,7 @@ describe('GET /api/workflows/[workflowId]', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     mockSelect.mockReturnValue({ from: mockSelectFrom });
@@ -196,6 +199,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     mockSelect.mockReturnValue({ from: mockSelectFrom });
@@ -309,6 +313,7 @@ describe('DELETE /api/workflows/[workflowId]', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     mockSelect.mockReturnValue({ from: mockSelectFrom });

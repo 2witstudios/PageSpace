@@ -1,5 +1,5 @@
 import { withAdminAuth } from '@/lib/auth/auth';
-import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { loggers, securityAudit, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -75,6 +75,16 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       await accountRepository.deleteUser(userId);
 
       loggers.api.info(`Admin DSAR deletion: admin=${adminUser.id} target=${userId} reason="${reason}"`);
+
+      securityAudit.logDataAccess(adminUser.id, 'delete', 'user', userId, {
+        source: 'admin',
+        operation: 'dsar-deletion',
+      }).catch((error) => {
+        loggers.security.warn('[AdminUserData] audit log failed', {
+          error: error instanceof Error ? error.message : String(error),
+          userId: adminUser.id,
+        });
+      });
 
       return Response.json({ message: 'User data deleted and anonymized' });
     } catch (error) {

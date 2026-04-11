@@ -26,6 +26,7 @@ import {
   isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections
@@ -149,6 +150,18 @@ export async function UPGRADE(
     ip: clientIp,
     severity: 'info',
     fingerprint: fingerprint.substring(0, 16) + '...',
+  });
+
+  securityAudit.logEvent({
+    eventType: 'auth.session.created',
+    userId,
+    sessionId: claims.sessionId,
+    resourceType: 'mcp_websocket',
+  }).catch((error) => {
+    loggers.security.warn('[MCP-WS] audit log failed', {
+      error: error instanceof Error ? error.message : String(error),
+      userId,
+    });
   });
 
   // Send welcome message (no challenge needed - session service did the auth)

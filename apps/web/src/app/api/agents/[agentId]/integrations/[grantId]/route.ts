@@ -82,8 +82,11 @@ export async function DELETE(
 
     await deleteGrant(db, grantId);
 
-    securityAudit.logDataAccess(auth.userId, 'delete', 'agent_grant', grantId).catch((error) => {
-      loggers.security.warn('[Agents] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
+    securityAudit.logDataAccess(auth.userId, 'delete', 'agent_grant', grantId, {}).catch((error) => {
+      loggers.security.warn('[AgentIntegration] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId: auth.userId,
+      });
     });
 
     return NextResponse.json({ success: true });

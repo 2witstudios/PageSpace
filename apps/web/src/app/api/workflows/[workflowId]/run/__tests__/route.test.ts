@@ -45,7 +45,9 @@ vi.mock('@pagespace/lib/server', () => ({
   checkDriveAccess: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
   },
+  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
@@ -58,7 +60,7 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
 
 import { POST } from '../../run/route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess, securityAudit } from '@pagespace/lib/server';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -133,6 +135,7 @@ const createContext = (workflowId: string) => ({
 describe('POST /api/workflows/[workflowId]/run', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('user_123'));
     vi.mocked(isAuthError).mockReturnValue(false);
     mockSelect.mockReturnValue({ from: mockSelectFrom });

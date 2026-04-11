@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserOpenAISettings } from '@/lib/ai/core/ai-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -124,6 +124,16 @@ export async function POST(request: Request) {
     }
 
     const result = await response.json();
+
+    securityAudit.logDataAccess(userId, 'read', 'voice', 'self', {
+      operation: 'transcribe',
+      audioSize: audioFile.size,
+    }).catch((error) => {
+      loggers.security.warn('[VoiceTranscribe] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
 
     return NextResponse.json({
       text: result.text,

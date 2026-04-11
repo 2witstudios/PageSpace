@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, conversationCache, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { canUserEditPage, conversationCache } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   chatMessageRepository,
@@ -121,9 +121,14 @@ export async function PATCH(
       pageId: maskIdentifier(message.pageId)
     });
 
-    logAuditEvent(request, userId, 'write', 'ai_chat_message', messageId, {
-      action: 'edit_message',
+    securityAudit.logDataAccess(userId, 'write', 'message', messageId, {
+      source: 'ai-chat',
       pageId: message.pageId,
+    }).catch((err) => {
+      loggers.security.warn('[AIChatMessage] audit log failed', {
+        error: err instanceof Error ? err.message : String(err),
+        userId,
+      });
     });
 
     return NextResponse.json({
@@ -216,9 +221,14 @@ export async function DELETE(
       pageId: maskIdentifier(message.pageId)
     });
 
-    logAuditEvent(request, userId, 'delete', 'ai_chat_message', messageId, {
-      action: 'delete_message',
+    securityAudit.logDataAccess(userId, 'delete', 'message', messageId, {
+      source: 'ai-chat',
       pageId: message.pageId,
+    }).catch((err) => {
+      loggers.security.warn('[AIChatMessage] audit log failed', {
+        error: err instanceof Error ? err.message : String(err),
+        userId,
+      });
     });
 
     return NextResponse.json({

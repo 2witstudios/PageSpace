@@ -60,7 +60,7 @@ import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { accountRepository, activityLogRepository, securityAudit } from '@pagespace/lib/server';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 
@@ -176,6 +176,35 @@ describe('/api/admin/users/[userId]/data', () => {
     const response = await DELETE(request, context);
 
     expect(response.status).toBe(403);
+  });
+
+  it('DELETE_successfulDeletion_logsSecurityAudit', async () => {
+    mockAdminAuth();
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'target@example.com',
+      image: null,
+    });
+
+    const request = new Request('http://localhost/api/admin/users/user-1/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'DSAR deletion request' }),
+    });
+
+    const context = { params: Promise.resolve({ userId: 'user-1' }) };
+    await DELETE(request, context);
+
+    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+      'admin-123',
+      'delete',
+      'user',
+      'user-1',
+      expect.objectContaining({
+        source: 'admin',
+        operation: 'dsar-deletion',
+      })
+    );
   });
 
   it('DELETE_withMultiMemberDrives_returns400', async () => {

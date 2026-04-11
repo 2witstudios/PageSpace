@@ -227,6 +227,13 @@ export async function POST(
     // Get updated storage quota
     const updatedQuota = await getUserStorageQuota(userId);
 
+    securityAudit.logDataAccess(userId, 'write', 'file', pageId, { source: 'channel-upload' }).catch((error) => {
+      loggers.security.warn('[ChannelUpload] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    });
+
     // Return file info for the client to include with the message
     return NextResponse.json({
       success: true,

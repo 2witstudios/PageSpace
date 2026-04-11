@@ -100,13 +100,25 @@ export async function GET(
           '5m'
         );
 
-        return await fetchAndServeFile(
+        const response = await fetchAndServeFile(
           contentHash,
           serviceToken,
           page.originalFileName || page.title,
           page.mimeType || 'application/octet-stream',
           page.fileSize ?? undefined
         );
+
+        securityAudit.logDataAccess(user.id, 'read', 'file', page.id, {
+          source: 'view',
+          mimeType: page.mimeType,
+        }).catch((error) => {
+          loggers.security.warn('[FileView] audit log failed', {
+            error: error instanceof Error ? error.message : String(error),
+            userId: user.id,
+          });
+        });
+
+        return response;
       } catch (fileError) {
         const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
         console.error('Error fetching file page from processor:', {
@@ -147,13 +159,25 @@ export async function GET(
         '5m'
       );
 
-      return await fetchAndServeFile(
+      const response = await fetchAndServeFile(
         contentHash,
         serviceToken,
         filenameParam || contentHash,
         file.mimeType || 'application/octet-stream',
         file.sizeBytes
       );
+
+      securityAudit.logDataAccess(user.id, 'read', 'file', file.id, {
+        source: 'view',
+        mimeType: file.mimeType,
+      }).catch((error) => {
+        loggers.security.warn('[FileView] audit log failed', {
+          error: error instanceof Error ? error.message : String(error),
+          userId: user.id,
+        });
+      });
+
+      return response;
     } catch (fileError) {
       const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
       console.error('Error fetching file from processor:', {

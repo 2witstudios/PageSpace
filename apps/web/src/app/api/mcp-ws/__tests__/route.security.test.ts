@@ -71,6 +71,17 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import {
   registerConnection,
   verifyConnectionFingerprint,
@@ -82,6 +93,7 @@ import {
   validateMessageSize,
 } from '@/lib/websocket';
 import { sessionService } from '@pagespace/lib';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Mock session expiry (1 hour from now)
 const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);
@@ -93,6 +105,9 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Re-apply mock resolved values after restoreAllMocks in afterEach
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
 
     // Create mock WebSocket client
     mockClient = {
@@ -345,6 +360,34 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
   });
 
   describe('A09 - Security Logging and Monitoring Failures', () => {
+    it('should log WebSocket connection as session event, not data access', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
+      });
+
+      const { UPGRADE } = await import('../route');
+      await UPGRADE(mockClient, mockServer, mockRequest);
+
+      // WebSocket connection is a session event, not a data read
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'auth.session.created',
+          userId: 'user_123',
+          sessionId: 'session_123',
+          resourceType: 'mcp_websocket',
+        })
+      );
+      // Should NOT use logDataAccess for connection events
+      expect(securityAudit.logDataAccess).not.toHaveBeenCalled();
+    });
+
     it('should log successful connections with user ID', async () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue({
         sessionId: 'session_123',

@@ -77,7 +77,9 @@ export async function GET(
     };
 
     securityAudit.logDataAccess(userId, 'read', 'conversation', conversationId).catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      loggers.security.warn('[Conversation] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     return NextResponse.json({ conversation });

@@ -142,6 +142,13 @@ export async function POST(
       rateLimitOverride,
     });
 
+    securityAudit.logDataAccess(auth.userId, 'write', 'agent_grant', agentId, {}).catch((error) => {
+      loggers.security.warn('[AgentIntegration] audit log failed', {
+        error: error instanceof Error ? error.message : String(error),
+        userId: auth.userId,
+      });
+    });
+
     return NextResponse.json({ grant }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating agent integration grant:', error as Error);
