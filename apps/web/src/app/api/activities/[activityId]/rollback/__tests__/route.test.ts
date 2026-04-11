@@ -355,7 +355,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       await POST(createRequest({ context: 'page' }), { params: mockParams });
 
       expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'write', 'activity', mockActivityId, { action: 'rollback' }
+        mockUserId, 'write', 'activity', mockActivityId, { operation: 'rollback', context: 'page', force: false }
       );
     });
   });
