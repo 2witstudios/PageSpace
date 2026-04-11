@@ -194,8 +194,13 @@ export async function POST(req: Request) {
         isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
-      securityAudit.logDataAccess('anonymous', 'write', 'magic_link', 'magic_link_request').catch((error) => {
-        loggers.security.warn('[MagicLinkSend] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error) });
+      securityAudit.logEvent({
+        eventType: 'data.write',
+        resourceType: 'magic_link',
+        resourceId: 'magic_link_request',
+        ipAddress: clientIP,
+      }).catch((error) => {
+        loggers.security.warn('[MagicLinkSend] audit logEvent failed', { error: error instanceof Error ? error.message : String(error) });
       });
     } catch (error) {
       // Log but don't expose email sending errors
