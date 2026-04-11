@@ -4,9 +4,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockCleanup, mockSecurityAudit } = vi.hoisted(() => ({
+const { mockCleanup, mockAudit } = vi.hoisted(() => ({
   mockCleanup: vi.fn(),
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  mockAudit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -18,7 +18,7 @@ vi.mock('@pagespace/lib', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -48,8 +48,8 @@ describe('/api/cron/cleanup-tokens', () => {
   it('logs audit event on successful token cleanup', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'cleanup_tokens', { cleaned: 5 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: 5 } })
     );
   });
 
@@ -59,7 +59,7 @@ describe('/api/cron/cleanup-tokens', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when cleanup throws', async () => {
@@ -67,6 +67,6 @@ describe('/api/cron/cleanup-tokens', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

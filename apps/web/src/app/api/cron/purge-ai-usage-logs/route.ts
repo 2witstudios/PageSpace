@@ -1,5 +1,5 @@
 import { anonymizeAiUsageContent, purgeAiUsageLogs } from '@pagespace/lib';
-import { securityAudit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
     console.log(`[Cron] AI usage logs: anonymized ${anonymized}, purged ${purged}`);
 
-    securityAudit.logDataAccess('system', 'delete', 'cron_job', 'purge_ai_usage', { anonymized, purged }).catch(() => {});
+    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { anonymized, purged } });
 
     return NextResponse.json({
       success: true,

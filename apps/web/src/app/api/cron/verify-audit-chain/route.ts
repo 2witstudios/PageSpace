@@ -1,5 +1,5 @@
 import { verifyAndAlert } from '@pagespace/lib';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
       );
     }
 
-    securityAudit.logDataAccess('system', 'read', 'cron_job', 'verify_audit_chain', { isValid: result.isValid, entriesVerified: result.entriesVerified }).catch(() => {});
+    audit({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: result.isValid, entriesVerified: result.entriesVerified } });
 
     return NextResponse.json({
       success: true,

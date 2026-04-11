@@ -37,9 +37,7 @@ vi.mock('@/lib/workflows/calendar-trigger-executor', () => ({
   executeCalendarTrigger: mockExecuteCalendarTrigger,
 }));
 
-const mockSecurityAudit = vi.hoisted(() => ({
-  logDataAccess: vi.fn().mockResolvedValue(undefined),
-}));
+const mockAudit = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -49,7 +47,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -108,7 +106,6 @@ describe('POST /api/cron/calendar-triggers', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockSecurityAudit.logDataAccess.mockResolvedValue(undefined);
 
     // Default: stuck trigger reset (update returns nothing special)
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
@@ -303,9 +300,8 @@ describe('POST /api/cron/calendar-triggers', () => {
     const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
     await POST(request);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'calendar_triggers',
-      { executed: 1, failed: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
     );
   });
 
@@ -313,9 +309,8 @@ describe('POST /api/cron/calendar-triggers', () => {
     const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
     await POST(request);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'calendar_triggers',
-      { executed: 0, failed: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } })
     );
   });
 

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, calendarTriggers, calendarEvents, eq, and, lte, inArray, asc } from '@pagespace/db';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 
 const STUCK_TRIGGER_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_TRIGGERS = 5;
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       .limit(MAX_DUE_TRIGGERS);
 
     if (dueTriggers.length === 0) {
-      securityAudit.logDataAccess('system', 'write', 'cron_job', 'calendar_triggers', { executed: 0, failed: 0 }).catch(() => {});
+      audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No calendar triggers due', executed: 0 });
     }
 
@@ -131,7 +131,7 @@ export async function POST(req: Request) {
 
     logger.info(`Calendar trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    securityAudit.logDataAccess('system', 'write', 'cron_job', 'calendar_triggers', { executed, failed: errors.length }).catch(() => {});
+    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Calendar trigger cron complete',

@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockAnonymize, mockPurge, mockSecurityAudit } = vi.hoisted(() => ({
+const { mockAnonymize, mockPurge, mockAudit } = vi.hoisted(() => ({
   mockAnonymize: vi.fn(),
   mockPurge: vi.fn(),
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  mockAudit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -51,8 +51,8 @@ describe('/api/cron/purge-ai-usage-logs', () => {
   it('logs audit event on successful purge', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'purge_ai_usage', { anonymized: 10, purged: 3 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { anonymized: 10, purged: 3 } })
     );
   });
 
@@ -62,7 +62,7 @@ describe('/api/cron/purge-ai-usage-logs', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when purge throws', async () => {
@@ -70,6 +70,6 @@ describe('/api/cron/purge-ai-usage-logs', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

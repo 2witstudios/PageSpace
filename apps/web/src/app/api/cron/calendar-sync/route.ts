@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, eq, and, or, lt, isNull, sql } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
 
     loggers.api.info('Calendar sync cron completed', { synced, failed });
 
-    securityAudit.logDataAccess('system', 'write', 'cron_job', 'calendar_sync', { synced, failed }).catch(() => {});
+    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced, failed } });
 
     return NextResponse.json({
       success: true,

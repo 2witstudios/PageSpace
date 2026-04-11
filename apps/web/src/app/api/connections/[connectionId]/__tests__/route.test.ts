@@ -45,9 +45,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -56,7 +55,7 @@ vi.mock('@pagespace/lib', () => ({
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockConnectionId = 'conn-1';
@@ -87,8 +86,9 @@ describe('PATCH /api/connections/[connectionId] audit', () => {
 
     await PATCH(request, { params: Promise.resolve({ connectionId: mockConnectionId }) });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'connection', mockConnectionId, { action: 'accept' }
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'connection', resourceId: mockConnectionId, details: { action: 'accept' } })
     );
   });
 });
@@ -104,8 +104,9 @@ describe('DELETE /api/connections/[connectionId] audit', () => {
 
     await DELETE(request, { params: Promise.resolve({ connectionId: mockConnectionId }) });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'delete', 'connection', mockConnectionId
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'connection', resourceId: mockConnectionId })
     );
   });
 });

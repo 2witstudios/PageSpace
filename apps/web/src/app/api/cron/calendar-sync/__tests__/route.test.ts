@@ -4,8 +4,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockSecurityAudit, mockLoggers } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+const { mockAudit, mockLoggers } = vi.hoisted(() => ({
+  mockAudit: vi.fn(),
   mockLoggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
@@ -40,7 +40,7 @@ vi.mock('@/lib/integrations/google-calendar/sync-service', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -71,9 +71,8 @@ describe('/api/cron/calendar-sync', () => {
   it('logs audit event after sync completes with no connections', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'calendar_sync',
-      { synced: 0, failed: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 0, failed: 0 } })
     );
   });
 
@@ -88,9 +87,8 @@ describe('/api/cron/calendar-sync', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'calendar_sync',
-      { synced: 1, failed: 1 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 1, failed: 1 } })
     );
   });
 
@@ -100,6 +98,6 @@ describe('/api/cron/calendar-sync', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockFindOrphans, mockDeleteRecords, mockSecurityAudit, mockCreateServiceToken } = vi.hoisted(() => ({
+const { mockFindOrphans, mockDeleteRecords, mockAudit, mockCreateServiceToken } = vi.hoisted(() => ({
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  mockAudit: vi.fn(),
   mockCreateServiceToken: vi.fn(),
 }));
 
@@ -29,7 +29,7 @@ vi.mock('@pagespace/lib', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -60,9 +60,8 @@ describe('/api/cron/cleanup-orphaned-files', () => {
   it('logs audit event when no orphans found', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'cleanup_orphaned_files',
-      { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 } })
     );
   });
 
@@ -76,9 +75,8 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'cleanup_orphaned_files',
-      { orphansFound: 2, filesDeleted: 2, physicalFilesDeleted: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 2, filesDeleted: 2, physicalFilesDeleted: 0 } })
     );
   });
 
@@ -88,7 +86,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when cleanup throws', async () => {
@@ -96,6 +94,6 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

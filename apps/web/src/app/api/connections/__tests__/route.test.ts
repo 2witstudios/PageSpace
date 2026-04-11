@@ -34,9 +34,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -46,7 +45,7 @@ vi.mock('@pagespace/lib', () => ({
 
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -70,8 +69,9 @@ describe('GET /api/connections audit', () => {
   it('logs read audit event on successful connections retrieval', async () => {
     await GET(new Request('http://localhost/api/connections'));
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'connections', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'connections', resourceId: 'self' })
     );
   });
 });
@@ -91,8 +91,9 @@ describe('POST /api/connections audit', () => {
 
     await POST(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'connection', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'connection', resourceId: 'self' })
     );
   });
 });

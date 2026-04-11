@@ -36,14 +36,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -56,8 +55,9 @@ describe('GET /api/connections/search audit', () => {
   it('logs read audit event on connection search', async () => {
     await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'connection_search', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'connection_search', resourceId: 'self' })
     );
   });
 });

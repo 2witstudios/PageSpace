@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, pages, files, filePages, eq } from '@pagespace/db';
-import { canUserEditPage, loggers, securityAudit } from '@pagespace/lib/server';
+import { canUserEditPage, loggers, auditRequest } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -205,9 +205,7 @@ export async function POST(
       eventType: 'upload'
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'channel_upload', contentHash).catch((error) => {
-      loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'channel_upload', resourceId: contentHash });
 
     // Log activity
     const actorInfo = await getActorInfo(userId);
@@ -227,12 +225,7 @@ export async function POST(
     // Get updated storage quota
     const updatedQuota = await getUserStorageQuota(userId);
 
-    securityAudit.logDataAccess(userId, 'write', 'file', pageId, { source: 'channel-upload' }).catch((error) => {
-      loggers.security.warn('[ChannelUpload] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'file', resourceId: pageId, details: { source: 'channel-upload' } });
 
     // Return file info for the client to include with the message
     return NextResponse.json({

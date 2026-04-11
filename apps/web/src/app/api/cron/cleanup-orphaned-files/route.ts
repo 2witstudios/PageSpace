@@ -1,7 +1,7 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { db } from '@pagespace/db';
 import { createDriveServiceToken } from '@pagespace/lib';
-import { securityAudit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import type { ServiceScope } from '@pagespace/lib';
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const orphans = await findOrphanedFileRecords(db as Parameters<typeof findOrphanedFileRecords>[0]);
 
     if (orphans.length === 0) {
-      securityAudit.logDataAccess('system', 'delete', 'cron_job', 'cleanup_orphaned_files', { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 }).catch(() => {});
+      audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 } });
       return NextResponse.json({
         success: true,
         orphansFound: 0,
@@ -104,7 +104,7 @@ export async function GET(request: Request) {
       `${physicalFilesDeleted} physical files deleted, ${dbDeleted} DB records deleted`
     );
 
-    securityAudit.logDataAccess('system', 'delete', 'cron_job', 'cleanup_orphaned_files', { orphansFound: orphans.length, filesDeleted: dbDeleted, physicalFilesDeleted }).catch(() => {});
+    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: orphans.length, filesDeleted: dbDeleted, physicalFilesDeleted } });
 
     return NextResponse.json({
       success: true,

@@ -35,15 +35,13 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-const mockSecurityAudit = vi.hoisted(() => ({
-  logDataAccess: vi.fn().mockResolvedValue(undefined),
-}));
+const mockAudit = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -107,7 +105,6 @@ describe('POST /api/cron/workflows', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockSecurityAudit.logDataAccess.mockResolvedValue(undefined);
 
     // db.select().from(workflows).where(...) — discovery query
     mockSelect.mockReturnValue({ from: mockSelectFrom });
@@ -202,9 +199,8 @@ describe('POST /api/cron/workflows', () => {
     const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
     await POST(request);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'workflows',
-      { executed: 1, failed: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
     );
   });
 
@@ -212,9 +208,8 @@ describe('POST /api/cron/workflows', () => {
     const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
     await POST(request);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'write', 'cron_job', 'workflows',
-      { executed: 0, failed: 0 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } })
     );
   });
 
