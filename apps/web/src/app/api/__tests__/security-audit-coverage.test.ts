@@ -76,37 +76,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 
-  // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
-  // TODO: Add audit coverage in follow-up PR
-  ['drives/[driveId]/access', 'Read-only access check — follow-up'],
-  ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
-  ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
-  ['drives/[driveId]/history', 'Drive history view — follow-up'],
-  ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],
-  ['drives/[driveId]/integrations/audit', 'Integration audit log — follow-up'],
-  ['drives/[driveId]/pages', 'Page list for drive — follow-up'],
-  ['drives/[driveId]/permissions-tree', 'Permissions tree view — follow-up'],
-  ['drives/[driveId]/search/glob', 'Glob search within drive — follow-up'],
-  ['drives/[driveId]/search/regex', 'Regex search within drive — follow-up'],
-  ['drives/[driveId]/trash', 'Trash list for drive — follow-up'],
-
-  // --- Page sub-routes (read-only data fetches, covered by parent page audit) ---
-  // TODO: Add audit coverage in follow-up PR
-  ['pages/[pageId]/agent-config', 'Page agent config — follow-up'],
-  ['pages/[pageId]/ai-usage', 'AI usage stats — follow-up'],
-  ['pages/[pageId]/breadcrumbs', 'Breadcrumb navigation — follow-up'],
-  ['pages/[pageId]/children', 'Child page list — follow-up'],
-  ['pages/[pageId]/history', 'Page history view — follow-up'],
-  ['pages/[pageId]/permissions/check', 'Permission check — follow-up'],
-  ['pages/[pageId]/processing-status', 'Processing status poll — follow-up'],
-
-  // --- Account sub-routes (status checks) ---
-  // TODO: Add audit coverage in follow-up PR
-  ['account/drives-status', 'Drive status check — follow-up'],
-  ['account/verification-status', 'Email verification status — follow-up'],
-
-  // --- Monitoring with admin auth (already audited via withAdminAuth wrapper) ---
-  ['monitoring/[metric]', 'Uses withAdminAuth which includes audit — verify after merge'],
 ]);
 
 function collectRouteFiles(dir: string): string[] {
