@@ -11,7 +11,7 @@ import {
   lte,
   ilike,
 } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -142,16 +142,11 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       .limit(limit)
       .offset(offset);
 
-    securityAudit.logDataAccess(_adminUser.id, 'read', 'audit_log', '*', {
+    auditRequest(request, { eventType: 'data.read', userId: _adminUser.id, resourceType: 'audit_log', resourceId: '*', details: {
       source: 'admin',
       resultCount: logs.length,
       hasFilters: !!(userId || operation || resourceType),
-    }).catch((error) => {
-      loggers.security.warn('[AdminAuditLogs] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId: _adminUser.id,
-      });
-    });
+    } });
 
     return Response.json({
       logs,

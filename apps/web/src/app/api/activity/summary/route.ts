@@ -17,7 +17,7 @@ import {
   sql,
   count,
 } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -193,7 +193,7 @@ export async function GET(req: Request) {
       },
     };
 
-    securityAudit.logDataAccess(userId, 'read', 'activity_summary', userId).catch(() => {});
+    auditRequest(req, { eventType: 'data.read', userId, resourceType: 'activity_summary', resourceId: userId });
 
     return NextResponse.json(summary);
   } catch (error) {

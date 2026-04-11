@@ -22,11 +22,7 @@ vi.mock('@pagespace/lib/server', () => ({
     security: { warn: vi.fn() },
   },
   logSecurityEvent: vi.fn(),
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logAccessDenied: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 const mockCollectAllUserData = vi.fn();

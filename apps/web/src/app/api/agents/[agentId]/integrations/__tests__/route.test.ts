@@ -18,9 +18,7 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions', () => ({
@@ -40,7 +38,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';
@@ -69,8 +67,9 @@ describe('GET /api/agents/[agentId]/integrations audit', () => {
       { params: Promise.resolve({ agentId: mockAgentId }) }
     );
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'agent_integrations', mockAgentId
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'agent_integrations', resourceId: mockAgentId })
     );
   });
 });
