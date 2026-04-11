@@ -6,6 +6,7 @@ import { createPageServiceToken } from '@pagespace/lib';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { canUserEditPage } from '@pagespace/lib/permissions';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -77,6 +78,8 @@ export async function POST(
     }
     const { jobId } = await resp.json();
     
+    logAuditEvent(request, userId, 'write', 'page_processing', pageId, { action: 'reprocess_file' });
+
     return NextResponse.json({
       success: true,
       jobId,

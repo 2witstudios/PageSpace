@@ -8,6 +8,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -395,6 +396,8 @@ export async function PATCH(
 
   await Promise.all(broadcasts);
 
+  logAuditEvent(req, userId, 'write', 'task', taskId, { action: 'update_task', pageId, updatedFields: Object.keys(updates) });
+
   return NextResponse.json(taskWithRelations);
 }
 
@@ -485,6 +488,8 @@ export async function DELETE(
       });
     }
 
+    logAuditEvent(req, userId, 'delete', 'task', taskId, { action: 'delete_task', pageId, hadLinkedPage: false });
+
     return NextResponse.json({ success: true });
   }
 
@@ -557,6 +562,8 @@ export async function DELETE(
   }
 
   await Promise.all(broadcasts);
+
+  logAuditEvent(req, userId, 'delete', 'task', taskId, { action: 'delete_task', pageId, hadLinkedPage: true });
 
   return NextResponse.json({ success: true });
 }

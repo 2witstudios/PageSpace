@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { canUserViewPage } from '@pagespace/lib/permissions';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -50,6 +51,8 @@ export async function POST(
           viewedAt: new Date(),
         },
       });
+
+    logAuditEvent(req, userId, 'write', 'page_view', pageId, { action: 'record_page_view' });
 
     return jsonResponse({ success: true });
   } catch (error) {

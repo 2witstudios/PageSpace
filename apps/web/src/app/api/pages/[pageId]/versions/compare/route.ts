@@ -12,6 +12,7 @@ import {
   type DiffOptions,
 } from '@pagespace/lib/content';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -267,6 +268,8 @@ export async function GET(
       },
     },
   };
+
+  logAuditEvent(request, userId, 'read', 'page_version', pageId, { action: 'compare_versions' });
 
   return NextResponse.json(response);
 }
