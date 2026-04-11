@@ -93,8 +93,7 @@ describe('GET /api/subscriptions/usage', () => {
     await GET(request);
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'subscription_usage', 'self',
-      expect.any(Object)
+      mockUserId, 'read', 'subscription_usage', 'self'
     );
   });
 
@@ -106,6 +105,6 @@ describe('GET /api/subscriptions/usage', () => {
     await GET(request);
 
     const details = vi.mocked(securityAudit.logDataAccess).mock.calls[0]?.[4];
-    expect(details).not.toHaveProperty('userId');
+    expect(details).toBeUndefined();
   });
 });
