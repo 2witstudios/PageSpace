@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -42,9 +42,7 @@ export async function GET(request: NextRequest) {
       type: 'card',
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'payment_method', 'list', { count: paymentMethods.data.length }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'payment_method', resourceId: 'list', details: { count: paymentMethods.data.length } });
 
     return NextResponse.json({
       paymentMethods: paymentMethods.data.map(pm => ({
@@ -114,9 +112,7 @@ export async function DELETE(request: NextRequest) {
     // Detach payment method
     await stripe.paymentMethods.detach(paymentMethodId);
 
-    securityAudit.logDataAccess(userId, 'delete', 'payment_method', paymentMethodId, { action: 'detach' }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'payment_method', resourceId: paymentMethodId, details: { action: 'detach' } });
 
     return NextResponse.json({ success: true });
 
@@ -188,9 +184,7 @@ export async function PATCH(request: NextRequest) {
       },
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'payment_method', paymentMethodId, { action: 'set_default' }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'payment_method', resourceId: paymentMethodId, details: { action: 'set_default' } });
 
     return NextResponse.json({ success: true, defaultPaymentMethodId: paymentMethodId });
 

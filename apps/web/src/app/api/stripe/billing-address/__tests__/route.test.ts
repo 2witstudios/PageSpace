@@ -75,15 +75,14 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Import after mocks
 import { GET, PUT } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -555,9 +554,9 @@ describe('Billing Address API', () => {
 
       await GET(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'billing_address', 'self',
-        expect.objectContaining({ hasCustomer: true })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: true }) })
       );
     });
 
@@ -570,9 +569,9 @@ describe('Billing Address API', () => {
 
       await GET(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'billing_address', 'self',
-        expect.objectContaining({ hasCustomer: false })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: false }) })
       );
     });
 
@@ -585,9 +584,9 @@ describe('Billing Address API', () => {
 
       await GET(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'billing_address', 'self',
-        expect.objectContaining({ hasCustomer: false })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_address', resourceId: 'self', details: expect.objectContaining({ hasCustomer: false }) })
       );
     });
 
@@ -608,9 +607,9 @@ describe('Billing Address API', () => {
 
       await PUT(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'write', 'billing_address', 'cus_123',
-        expect.objectContaining({ action: 'update' })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: 'user_123', resourceType: 'billing_address', resourceId: 'cus_123', details: expect.objectContaining({ action: 'update' }) })
       );
     });
   });

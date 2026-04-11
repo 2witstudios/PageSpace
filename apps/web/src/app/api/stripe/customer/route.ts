@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -39,9 +39,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ customer: null });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_customer', 'self', { hasCustomer: true }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_customer', resourceId: 'self', details: { hasCustomer: true } });
 
     return NextResponse.json({
       customer: {

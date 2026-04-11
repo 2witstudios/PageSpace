@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,9 +13,7 @@ export async function GET(request: NextRequest) {
     const { userId } = authResult;
     const usageSummary = await getUserUsageSummary(userId);
 
-    securityAudit.logDataAccess(userId, 'read', 'subscription_usage', 'self').catch((error: unknown) => {
-      loggers.security.warn('[Subscriptions] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'subscription_usage', resourceId: 'self' });
 
     return NextResponse.json(usageSummary);
 

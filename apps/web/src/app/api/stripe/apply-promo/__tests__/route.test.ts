@@ -72,15 +72,14 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -414,9 +413,9 @@ describe('POST /api/stripe/apply-promo', () => {
 
       await POST(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'write', 'promo_code', 'promo_123',
-        expect.objectContaining({ action: 'apply' })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: 'user_123', resourceType: 'promo_code', resourceId: 'promo_123', details: expect.objectContaining({ action: 'apply' }) })
       );
     });
   });

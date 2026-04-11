@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -34,9 +34,7 @@ export async function POST(request: NextRequest) {
       return_url: `${process.env.WEB_APP_URL}/settings/billing`,
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'billing_portal', 'portal_session', { hasCustomer: true }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'billing_portal', resourceId: 'portal_session', details: { hasCustomer: true } });
 
     return NextResponse.json({ url: session.url });
 

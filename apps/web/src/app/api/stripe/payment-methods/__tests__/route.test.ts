@@ -73,15 +73,14 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Import after mocks
 import { GET, DELETE, PATCH } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -466,9 +465,9 @@ describe('Payment Methods API', () => {
 
       await GET(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'payment_method', 'list',
-        expect.any(Object)
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'payment_method', resourceId: 'list' })
       );
     });
 
@@ -480,9 +479,9 @@ describe('Payment Methods API', () => {
 
       await DELETE(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'delete', 'payment_method', 'pm_123',
-        expect.any(Object)
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.delete', userId: 'user_123', resourceType: 'payment_method', resourceId: 'pm_123' })
       );
     });
 
@@ -496,9 +495,9 @@ describe('Payment Methods API', () => {
 
       await PATCH(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'write', 'payment_method', 'pm_456',
-        expect.objectContaining({ action: 'set_default' })
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.write', userId: 'user_123', resourceType: 'payment_method', resourceId: 'pm_456', details: expect.objectContaining({ action: 'set_default' }) })
       );
     });
   });

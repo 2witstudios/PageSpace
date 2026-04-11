@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -78,9 +78,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'create', priceId }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription', resourceId: subscription.id, details: { action: 'create', priceId } });
 
     return NextResponse.json({
       subscriptionId: subscription.id,

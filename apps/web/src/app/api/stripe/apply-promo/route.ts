@@ -3,7 +3,7 @@ import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -133,9 +133,7 @@ export async function POST(request: NextRequest) {
     // In Stripe v20, coupon is nested under source.coupon
     const coupon = discount?.source?.coupon;
 
-    securityAudit.logDataAccess(userId, 'write', 'promo_code', promotionCodeId, { action: 'apply', oldSubscriptionId: subscriptionId, newSubscriptionId: newSubscription.id }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'promo_code', resourceId: promotionCodeId, details: { action: 'apply', oldSubscriptionId: subscriptionId, newSubscriptionId: newSubscription.id } });
 
     return NextResponse.json({
       success: true,

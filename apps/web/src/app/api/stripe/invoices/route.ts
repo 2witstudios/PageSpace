@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import { PLANS } from '@/lib/subscription/plans';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -70,9 +70,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
-      securityAudit.logDataAccess(userId, 'read', 'invoices', 'list', { count: 0, hasCustomer: false }).catch((error: unknown) => {
-        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-      });
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: 0, hasCustomer: false } });
       return NextResponse.json({ invoices: [], hasMore: false });
     }
 
@@ -83,9 +81,7 @@ export async function GET(request: NextRequest) {
       starting_after: startingAfter,
     });
 
-    securityAudit.logDataAccess(userId, 'read', 'invoices', 'list', { count: invoices.data.length }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'invoices', resourceId: 'list', details: { count: invoices.data.length } });
 
     return NextResponse.json({
       invoices: invoices.data.map(invoice => ({

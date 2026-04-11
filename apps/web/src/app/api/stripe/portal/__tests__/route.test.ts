@@ -50,15 +50,14 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -194,9 +193,9 @@ describe('Portal API', () => {
 
       await POST(request);
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'billing_portal', 'portal_session',
-        expect.any(Object)
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'data.read', userId: 'user_123', resourceType: 'billing_portal', resourceId: 'portal_session' })
       );
     });
 
@@ -207,8 +206,8 @@ describe('Portal API', () => {
 
       await POST(request);
 
-      const details = vi.mocked(securityAudit.logDataAccess).mock.calls[0]?.[4];
-      expect(details).not.toHaveProperty('customerId');
+      const eventArg = vi.mocked(auditRequest).mock.calls[0]?.[1];
+      expect(eventArg?.details).not.toHaveProperty('customerId');
     });
   });
 });

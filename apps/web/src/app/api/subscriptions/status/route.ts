@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { db, eq, and, inArray, desc, subscriptions, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,9 +43,7 @@ export async function GET(request: NextRequest) {
     const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
     const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-    securityAudit.logDataAccess(userId, 'read', 'subscription_status', 'self', { tier: subscriptionTier }).catch((error: unknown) => {
-      loggers.security.warn('[Subscriptions] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'subscription_status', resourceId: 'self', details: { tier: subscriptionTier } });
 
     return NextResponse.json({
       subscriptionTier: user.subscriptionTier,
