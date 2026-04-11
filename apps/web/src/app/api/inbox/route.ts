@@ -16,10 +16,6 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    securityAudit.logDataAccess(userId, 'read', 'inbox', 'self').catch((error) => {
-      loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
-
     const { searchParams } = new URL(request.url);
     const limit = parseBoundedIntParam(searchParams.get('limit'), {
       defaultValue: 20,
@@ -130,6 +126,10 @@ export async function GET(request: Request) {
       const nextCursor = lastItem
         ? lastItem.lastMessageAt || `id:${lastItem.id}`
         : null;
+
+      securityAudit.logDataAccess(userId, 'read', 'inbox', 'self').catch((error) => {
+        loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
 
       return NextResponse.json({
         items: paginatedItems,
@@ -304,6 +304,10 @@ export async function GET(request: Request) {
     const nextCursor = lastItem
       ? lastItem.lastMessageAt || `id:${lastItem.id}`
       : null;
+
+    securityAudit.logDataAccess(userId, 'read', 'inbox', 'self').catch((error) => {
+      loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json({
       items: paginatedItems,

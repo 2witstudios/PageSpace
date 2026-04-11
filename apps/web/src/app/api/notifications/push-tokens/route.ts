@@ -99,6 +99,10 @@ export async function DELETE(req: Request) {
 
     await unregisterPushToken(userId, token);
 
+    securityAudit.logTokenRevoked(userId, 'push_token', 'user_request').catch((error) => {
+      loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error unregistering push token:', error as Error);
