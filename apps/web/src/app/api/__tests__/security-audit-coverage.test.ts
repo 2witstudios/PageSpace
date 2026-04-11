@@ -99,6 +99,13 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/history', 'Page history view — follow-up'],
   ['pages/[pageId]/permissions/check', 'Permission check — follow-up'],
   ['pages/[pageId]/processing-status', 'Processing status poll — follow-up'],
+  ['pages/[pageId]/reprocess', 'Reprocess trigger — follow-up'],
+  ['pages/[pageId]/tasks/[taskId]', 'Individual task CRUD — follow-up'],
+  ['pages/[pageId]/tasks/reorder', 'Task reorder — follow-up'],
+  ['pages/[pageId]/tasks/statuses', 'Task status list — follow-up'],
+  ['pages/[pageId]/versions/compare', 'Version comparison — follow-up'],
+  ['pages/[pageId]/view', 'Page view endpoint — follow-up'],
+  ['pages/tree', 'Page tree navigation — follow-up'],
 
   // --- Account sub-routes (status checks) ---
   // TODO: Add audit coverage in follow-up PR
