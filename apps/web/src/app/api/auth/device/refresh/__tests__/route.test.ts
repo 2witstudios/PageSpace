@@ -108,7 +108,7 @@ import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers, securityAudit } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -172,6 +172,15 @@ describe('POST /api/auth/device/refresh', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
+
+    // Re-setup securityAudit mocks after resetAllMocks
+    vi.mocked(securityAudit.logAuthSuccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logAuthFailure).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenCreated).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenRevoked).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logLogout).mockResolvedValue(undefined);
   });
 
   describe('input validation', () => {

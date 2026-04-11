@@ -22,6 +22,10 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
     createSocketToken: vi.fn().mockResolvedValue(undefined),

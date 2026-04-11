@@ -17,6 +17,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({

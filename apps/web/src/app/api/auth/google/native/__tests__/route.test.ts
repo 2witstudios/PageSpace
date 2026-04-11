@@ -130,7 +130,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, logAuthEvent } from '@pagespace/lib/server';
+import { validateOrCreateDeviceToken, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -242,6 +242,15 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
+
+    // Re-setup securityAudit mocks after resetAllMocks
+    vi.mocked(securityAudit.logAuthSuccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logAuthFailure).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenCreated).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenRevoked).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logLogout).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
