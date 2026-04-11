@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
@@ -162,26 +162,35 @@ export function PasskeyLoginButton({
 
 /**
  * Hook for conditional UI support (passkey autofill).
- * Call this on page load to start conditional UI in the background.
+ * Call startConditionalUI() after render so the input with
+ * autocomplete="email webauthn" is already in the DOM (per spec).
  */
 export function useConditionalPasskeyUI(
   csrfToken: string,
-  onSuccess?: (redirectUrl: string) => void
+  options?: {
+    refreshToken?: () => Promise<string | null>;
+    onSuccess?: (redirectUrl: string) => void;
+  }
 ) {
   const [isAvailable, setIsAvailable] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     const checkAvailability = async () => {
       if (typeof window === 'undefined') return;
 
-      // Check if conditional mediation is available
       const available = await (
         window.PublicKeyCredential?.isConditionalMediationAvailable?.() ??
         Promise.resolve(false)
       );
 
-      setIsAvailable(available);
+      if (mountedRef.current) setIsAvailable(available);
     };
 
     checkAvailability();
@@ -201,16 +210,23 @@ export function useConditionalPasskeyUI(
         body: JSON.stringify({ csrfToken }),
       });
 
-      if (!optionsRes.ok) return;
+      if (!optionsRes.ok || !mountedRef.current) return;
 
-      const { options } = await optionsRes.json();
+      const { options: authOptions } = await optionsRes.json();
 
-      setIsAuthenticating(true);
+      if (mountedRef.current) setIsAuthenticating(true);
 
       const authResponse = await startAuthentication({
-        optionsJSON: options,
+        optionsJSON: authOptions,
         useBrowserAutofill: true,
       });
+
+      if (!mountedRef.current) return;
+
+      // Refresh CSRF token before verify — user may have idled on the page
+      const freshToken = options?.refreshToken
+        ? (await options.refreshToken() ?? csrfToken)
+        : csrfToken;
 
       const verifyRes = await fetch('/api/auth/passkey/authenticate', {
         method: 'POST',
@@ -219,11 +235,13 @@ export function useConditionalPasskeyUI(
         },
         body: JSON.stringify({
           response: authResponse,
-          expectedChallenge: options.challenge,
-          csrfToken,
+          expectedChallenge: authOptions.challenge,
+          csrfToken: freshToken,
           ...platformFields,
         }),
       });
+
+      if (!mountedRef.current) return;
 
       if (!verifyRes.ok) {
         const error = await verifyRes.json();
@@ -240,21 +258,21 @@ export function useConditionalPasskeyUI(
 
       if (await handleDesktopAuthResponse(verifyData)) return;
 
-      if (onSuccess) {
-        onSuccess(verifyData.redirectUrl);
+      if (options?.onSuccess) {
+        options.onSuccess(verifyData.redirectUrl);
       } else {
         window.location.href = verifyData.redirectUrl;
       }
     } catch (err) {
-      // Conditional UI was cancelled or failed - this is expected behavior
-      // Don't show error toast for AbortError (user cancelled)
+      // Conditional UI cancelled or aborted — expected when user clicks
+      // the explicit passkey button or navigates away
       if (err instanceof Error && err.name !== 'AbortError') {
         console.debug('Conditional UI authentication failed:', err.message);
       }
     } finally {
-      setIsAuthenticating(false);
+      if (mountedRef.current) setIsAuthenticating(false);
     }
-  }, [isAvailable, csrfToken, onSuccess]);
+  }, [isAvailable, csrfToken, options?.refreshToken, options?.onSuccess]);
 
   return {
     isAvailable,
