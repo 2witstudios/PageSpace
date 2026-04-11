@@ -21,7 +21,7 @@ const API_DIR = join(__dirname, '..');
  * adapter, logSecurityEvent adapter, and withAdminAuth wrapper.
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.

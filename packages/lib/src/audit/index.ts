@@ -19,6 +19,10 @@ export {
 
 export { auditSafe } from './audit-safe';
 
+export { audit, auditRequest } from './audit-log';
+
+export { queryAuditEvents } from './audit-query';
+
 export {
   verifyAndAlert,
   setChainAlertHandler,
