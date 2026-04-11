@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, securityAudit, maskEmail } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { users, db, eq } from '@pagespace/db';
 
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'user_search', auth.userId, { query: email }).catch(() => {});
+    securityAudit.logDataAccess(auth.userId, 'read', 'user_search', auth.userId, { query: maskEmail(email) }).catch(() => {});
 
     return NextResponse.json(user);
   } catch (error) {

@@ -347,7 +347,7 @@ describe('GET /api/users/search', () => {
       await GET(request);
 
       expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'user_search', 'user_123', { query: 'test' }
+        'user_123', 'read', 'user_search', 'user_123', { queryLength: 4, resultCount: 0 }
       );
     });
 

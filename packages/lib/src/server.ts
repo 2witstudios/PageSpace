@@ -44,7 +44,7 @@ export * from './auth/oauth-types';
 export * from './logging';
 
 // Security audit adapter (server-only)
-export { auditAuthEvent, auditSecurityEvent, securityAudit } from './audit';
+export { auditAuthEvent, auditSecurityEvent, securityAudit, maskEmail } from './audit';
 
 // Monitoring (activity logging, AI monitoring)
 export * from './monitoring';

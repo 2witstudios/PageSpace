@@ -108,7 +108,7 @@ export async function GET(request: Request) {
 
     const userResults = Array.from(userMap.values());
 
-    securityAudit.logDataAccess(user.id, 'read', 'user_search', user.id, { query }).catch(() => {});
+    securityAudit.logDataAccess(user.id, 'read', 'user_search', user.id, { queryLength: query.length, resultCount: userResults.length }).catch(() => {});
 
     return NextResponse.json({ users: userResults });
   } catch (error) {
