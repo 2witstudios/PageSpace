@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -122,16 +122,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    securityAudit.logDataAccess(userId, 'read', 'permissions', '*', {
-      source: 'batch',
-      pageCount: pageIds.length,
-      accessibleCount: permissionsMap.size,
-    }).catch((error) => {
-      loggers.security.warn('[PermissionsBatch] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'permissions', resourceId: '*', details: { source: 'batch', pageCount: pageIds.length, accessibleCount: permissionsMap.size } });
 
     return NextResponse.json({
       success: true,

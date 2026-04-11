@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, getBatchPagePermissions, securityAudit } from '@pagespace/lib/server';
+import { loggers, getBatchPagePermissions, auditRequest } from '@pagespace/lib/server';
 import type { InboxItem, InboxResponse } from '@pagespace/lib';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -127,9 +127,7 @@ export async function GET(request: Request) {
         ? lastItem.lastMessageAt || `id:${lastItem.id}`
         : null;
 
-      securityAudit.logDataAccess(userId, 'read', 'inbox', 'self').catch((error) => {
-        loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-      });
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
 
       return NextResponse.json({
         items: paginatedItems,
@@ -305,9 +303,7 @@ export async function GET(request: Request) {
       ? lastItem.lastMessageAt || `id:${lastItem.id}`
       : null;
 
-    securityAudit.logDataAccess(userId, 'read', 'inbox', 'self').catch((error) => {
-      loggers.security.warn('[Inbox] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
 
     return NextResponse.json({
       items: paginatedItems,

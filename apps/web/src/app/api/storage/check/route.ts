@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
   getUserStorageQuota,
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
     const semaphoreStatus = uploadSemaphore.getStatus();
     const userActiveUploads = semaphoreStatus.userUploads.get(userId) || 0;
 
-    securityAudit.logDataAccess(userId, 'read', 'storage', userId).catch(() => {});
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'storage', resourceId: userId });
 
     return NextResponse.json({
       quota,

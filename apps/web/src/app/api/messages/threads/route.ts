@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -19,9 +19,7 @@ export async function GET(request: Request) {
       fetchChannelsWithLastMessage(userId),
     ]);
 
-    securityAudit.logDataAccess(userId, 'read', 'message_threads', 'self').catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message_threads', resourceId: 'self' });
 
     return NextResponse.json({
       dms: dmResults,

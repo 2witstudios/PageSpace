@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getUserNotifications, getUnreadNotificationCount } from '@pagespace/lib';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -30,9 +30,7 @@ export async function GET(req: Request) {
     const notifications = await getUserNotifications(userId, limit);
     const unreadCount = await getUnreadNotificationCount(userId);
 
-    securityAudit.logDataAccess(userId, 'read', 'notification', 'self').catch((error) => {
-      loggers.security.warn('[Notifications] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(req, { eventType: 'data.read', userId, resourceType: 'notification', resourceId: 'self' });
 
     return NextResponse.json({
       notifications,

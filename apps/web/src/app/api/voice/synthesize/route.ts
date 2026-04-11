@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserOpenAISettings } from '@/lib/ai/core/ai-utils';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -149,17 +149,7 @@ export async function POST(request: Request) {
     // Stream the audio response
     const audioData = await response.arrayBuffer();
 
-    securityAudit.logDataAccess(userId, 'read', 'voice', 'self', {
-      operation: 'synthesize',
-      voice,
-      model,
-      textLength: text.length,
-    }).catch((error) => {
-      loggers.security.warn('[VoiceSynthesize] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'voice', resourceId: 'self', details: { operation: 'synthesize', voice, model, textLength: text.length } });
 
     return new Response(audioData, {
       status: 200,

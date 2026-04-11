@@ -4,7 +4,7 @@ import { db, pages, files, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
 import { canUserAccessFile } from '@pagespace/lib/permissions';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 interface RouteParams {
   params: Promise<{
@@ -63,9 +63,7 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    securityAudit.logDataAccess(user.id, 'read', 'file', id, { action: 'download' }).catch((error) => {
-      loggers.security.warn('[Files] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
-    });
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: id, details: { action: 'download' } });
 
     // First, try to find as a FILE-type page (existing behavior)
     const page = await db.query.pages.findFirst({
@@ -101,15 +99,7 @@ export async function GET(
           page.fileSize ?? undefined
         );
 
-        securityAudit.logDataAccess(user.id, 'read', 'file', page.id, {
-          source: 'download',
-          mimeType: page.mimeType,
-        }).catch((error) => {
-          loggers.security.warn('[FileDownload] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId: user.id,
-          });
-        });
+        auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'download', mimeType: page.mimeType } });
 
         return response;
       } catch (fileError) {
@@ -159,15 +149,7 @@ export async function GET(
         file.sizeBytes
       );
 
-      securityAudit.logDataAccess(user.id, 'read', 'file', file.id, {
-        source: 'download',
-        mimeType: file.mimeType,
-      }).catch((error) => {
-        loggers.security.warn('[FileDownload] audit log failed', {
-          error: error instanceof Error ? error.message : String(error),
-          userId: user.id,
-        });
-      });
+      auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'download', mimeType: file.mimeType } });
 
       return response;
     } catch (fileError) {

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess, loggers, securityAudit } from '@pagespace/lib/server';
+import { checkDriveAccess, loggers, auditRequest } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -56,12 +56,7 @@ export async function GET(
   const result = await getWorkflowWithAuth(workflowId, auth.userId);
   if ('error' in result) return result.error;
 
-  securityAudit.logDataAccess(auth.userId, 'read', 'workflow', workflowId).catch((error) => {
-    loggers.security.warn('[Workflow] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId: auth.userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId });
 
   return NextResponse.json(result.workflow);
 }
@@ -154,14 +149,7 @@ export async function PATCH(
     .where(eq(workflows.id, workflowId))
     .returning();
 
-  securityAudit.logDataAccess(auth.userId, 'write', 'workflow', workflowId, {
-    updatedFields: Object.keys(data),
-  }).catch((error) => {
-    loggers.security.warn('[Workflow] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId: auth.userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { updatedFields: Object.keys(data) } });
 
   return NextResponse.json(updated);
 }
@@ -180,12 +168,7 @@ export async function DELETE(
 
   await db.delete(workflows).where(eq(workflows.id, workflowId));
 
-  securityAudit.logDataAccess(auth.userId, 'delete', 'workflow', workflowId).catch((error) => {
-    loggers.security.warn('[Workflow] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId: auth.userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId });
 
   return NextResponse.json({ success: true });
 }

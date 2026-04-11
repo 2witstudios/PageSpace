@@ -18,9 +18,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -35,7 +34,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -58,10 +57,12 @@ describe('GET /api/user/integrations audit', () => {
   });
 
   it('logs read audit event on successful integrations retrieval', async () => {
-    await GET(new Request('http://localhost/api/user/integrations'));
+    const req = new Request('http://localhost/api/user/integrations');
+    await GET(req);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'user_integrations', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      req,
+      { eventType: 'data.read', userId: mockUserId, resourceType: 'user_integrations', resourceId: 'self' }
     );
   });
 });

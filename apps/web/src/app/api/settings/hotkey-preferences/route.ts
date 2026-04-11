@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, userHotkeyPreferences, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 import { getHotkeyDefinition } from '@/lib/hotkeys/registry';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -79,7 +79,7 @@ export async function PATCH(request: Request) {
         ))
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
       return NextResponse.json({ preference: updated });
     } else {
       const [created] = await db
@@ -91,7 +91,7 @@ export async function PATCH(request: Request) {
         })
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'hotkey_preference' });
       return NextResponse.json({ preference: created });
     }
   } catch (error) {

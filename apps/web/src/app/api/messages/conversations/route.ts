@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { isEmailVerified } from '@pagespace/lib';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -120,14 +120,7 @@ export async function GET(request: Request) {
       ? conversations[conversations.length - 1].lastMessageAt
       : null;
 
-    securityAudit.logDataAccess(userId, 'read', 'conversation', 'self', {
-      count: conversations.length,
-    }).catch((error) => {
-      loggers.security.warn('[Conversations] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'conversation', resourceId: 'self', details: { count: conversations.length } });
 
     return NextResponse.json({
       conversations,

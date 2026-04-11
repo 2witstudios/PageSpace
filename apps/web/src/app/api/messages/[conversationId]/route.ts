@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
@@ -105,9 +105,7 @@ export async function GET(
     // Reverse messages to show oldest first
     messages.reverse();
 
-    securityAudit.logDataAccess(userId, 'read', 'message', conversationId).catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
 
     return NextResponse.json({ messages });
   } catch (error) {
@@ -184,9 +182,7 @@ export async function POST(
       })
       .returning();
 
-    securityAudit.logDataAccess(userId, 'write', 'message', newMessage.id).catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: newMessage.id });
 
     // Update conversation's last message info
     const messagePreview = content.length > 100
@@ -241,12 +237,7 @@ export async function POST(
       lastMessagePreview: messagePreview,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'conversation', conversationId, {}).catch((error) => {
-      loggers.security.warn('[DirectMessage] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'conversation', resourceId: conversationId });
 
     return NextResponse.json({ message: newMessage });
   } catch (error) {
@@ -321,9 +312,7 @@ export async function PATCH(
       .set(updateField)
       .where(eq(dmConversations.id, conversationId));
 
-    securityAudit.logDataAccess(userId, 'write', 'message', conversationId, { operation: 'mark_read' }).catch((error) => {
-      loggers.security.warn('[Messages] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

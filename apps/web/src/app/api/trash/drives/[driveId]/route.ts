@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { drives, db, eq, and } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
@@ -55,14 +55,7 @@ export async function DELETE(
       recipientUserIds
     );
 
-    securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, {
-      source: 'trash',
-    }).catch((error) => {
-      loggers.security.warn('[TrashDrive] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'drive', resourceId: driveId, details: { source: 'trash' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

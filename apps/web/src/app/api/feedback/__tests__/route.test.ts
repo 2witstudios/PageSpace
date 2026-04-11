@@ -34,10 +34,6 @@ vi.mock('@pagespace/db', () => ({
   feedbackSubmissions: {},
 }));
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -47,7 +43,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -67,7 +64,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
@@ -404,9 +401,9 @@ describe('/api/feedback', () => {
       const request = createRequest({ message: 'Feedback message' });
       await POST(request);
 
-      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user-123', 'write', 'feedback', 'user-123',
-        { hasAttachments: false }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.write', userId: 'user-123', resourceType: 'feedback', resourceId: 'user-123', details: { hasAttachments: false } }
       );
     });
 
@@ -417,7 +414,7 @@ describe('/api/feedback', () => {
       const request = createRequest({ message: 'Feedback' });
       await POST(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser, loggers, securityAudit } from '@pagespace/lib/server';
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser, loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, users, db, and, eq, ilike, drives, inArray, desc, SQL } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
@@ -362,15 +362,7 @@ export async function GET(request: Request) {
     const finalSuggestions = suggestions.slice(0, 10);
     loggers.api.debug('[API] Returning suggestions', { count: finalSuggestions.length, suggestions: finalSuggestions });
 
-    securityAudit.logDataAccess(userId, 'read', 'search', driveId ?? '*', {
-      source: 'mentions',
-      resultCount: finalSuggestions.length,
-    }).catch((error) => {
-      loggers.security.warn('[MentionsSearch] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: { source: 'mentions', resultCount: finalSuggestions.length } });
 
     return NextResponse.json(finalSuggestions);
   } catch (error) {

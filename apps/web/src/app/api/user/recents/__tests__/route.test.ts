@@ -41,14 +41,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -70,10 +69,12 @@ describe('GET /api/user/recents audit', () => {
   });
 
   it('logs read audit event on successful recents retrieval', async () => {
-    await GET(new Request('http://localhost/api/user/recents'));
+    const req = new Request('http://localhost/api/user/recents');
+    await GET(req);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'recents', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      req,
+      { eventType: 'data.read', userId: mockUserId, resourceType: 'recents', resourceId: 'self' }
     );
   });
 });

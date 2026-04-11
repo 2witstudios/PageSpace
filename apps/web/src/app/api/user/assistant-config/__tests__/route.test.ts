@@ -19,9 +19,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -31,7 +30,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { GET, PUT } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -62,10 +61,12 @@ describe('GET /api/user/assistant-config audit', () => {
   });
 
   it('logs read audit event on successful config retrieval', async () => {
-    await GET(new Request('http://localhost/api/user/assistant-config'));
+    const request = new Request('http://localhost/api/user/assistant-config');
+    await GET(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'assistant_config', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.read', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
     );
   });
 });
@@ -86,8 +87,9 @@ describe('PUT /api/user/assistant-config audit', () => {
 
     await PUT(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'assistant_config', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.write', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
     );
   });
 });

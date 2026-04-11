@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, emailNotificationPreferences, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -102,7 +102,7 @@ export async function PATCH(request: Request) {
         ))
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' });
       return NextResponse.json({ preference: updated });
     } else {
       // Create new preference
@@ -115,7 +115,7 @@ export async function PATCH(request: Request) {
         })
         .returning();
 
-      securityAudit.logEvent({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' }).catch(e => loggers.api.warn('Audit log failed', e));
+      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'notification_preference' });
       return NextResponse.json({ preference: created });
     }
   } catch (error) {

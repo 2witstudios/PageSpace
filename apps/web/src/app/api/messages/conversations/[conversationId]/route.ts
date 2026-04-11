@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import type { ConversationDetailRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -76,11 +76,7 @@ export async function GET(
       },
     };
 
-    securityAudit.logDataAccess(userId, 'read', 'conversation', conversationId).catch((error) => {
-      loggers.security.warn('[Conversation] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'conversation', resourceId: conversationId });
 
     return NextResponse.json({ conversation });
   } catch (error) {

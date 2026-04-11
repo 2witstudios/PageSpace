@@ -18,9 +18,8 @@
  */
 
 import { consumeExchangeCode } from '@pagespace/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, audit } from '@pagespace/lib/server';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
-import { getClientIP } from '@/lib/auth';
 import { z } from 'zod/v4';
 
 const exchangeRequestSchema = z.object({
@@ -58,9 +57,7 @@ export async function POST(req: Request) {
       userId: data.userId,
       provider: data.provider,
     });
-    securityAudit.logTokenCreated(data.userId, 'desktop', getClientIP(req)).catch((error) => {
-      loggers.security.warn('[DesktopExchange] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: data.userId });
-    });
+    audit({ eventType: 'auth.token.created', userId: data.userId, details: { tokenType: 'desktop' } });
 
     // Return tokens in response body (secure - not logged by proxies)
     // Set session cookie so Next.js middleware allows page route requests

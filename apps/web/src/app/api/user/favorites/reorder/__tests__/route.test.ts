@@ -37,14 +37,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { PATCH } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 
@@ -74,8 +73,9 @@ describe('PATCH /api/user/favorites/reorder audit', () => {
 
     await PATCH(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'favorites', 'self', { action: 'reorder' }
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.write', userId: mockUserId, resourceType: 'favorites', resourceId: 'self', details: { action: 'reorder' } }
     );
   });
 });

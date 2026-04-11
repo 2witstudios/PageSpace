@@ -53,10 +53,6 @@ vi.mock('@/lib/task-status-config', () => ({
   } as Record<string, { label: string; color: string; group: string }>,
 }));
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -66,7 +62,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -82,7 +79,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -488,8 +485,9 @@ describe('GET /api/tasks', () => {
       const request = new Request('https://example.com/api/tasks?context=user');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'tasks', 'user_123', { context: 'user' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.read', userId: 'user_123', resourceType: 'tasks', resourceId: 'user_123', details: { context: 'user' } }
       );
     });
 
@@ -499,7 +497,7 @@ describe('GET /api/tasks', () => {
       const request = new Request('https://example.com/api/tasks?context=user');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
 
     it('should not log audit event when auth fails', async () => {
@@ -509,7 +507,7 @@ describe('GET /api/tasks', () => {
       const request = new Request('https://example.com/api/tasks?context=user');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
   });
 

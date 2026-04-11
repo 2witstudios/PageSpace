@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessages, db, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -58,15 +58,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       driveId,
     }, actorInfo);
 
-    securityAudit.logDataAccess(userId, 'delete', 'page', pageId, {
-      driveId,
-      source: 'trash',
-    }).catch((error) => {
-      loggers.security.warn('[Trash] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'page', resourceId: pageId, details: { driveId, source: 'trash' } });
 
     return NextResponse.json({ message: 'Page permanently deleted.' });
   } catch (error) {

@@ -36,6 +36,15 @@ vi.mock('@pagespace/lib/security', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+
 import { verifyAuth, getClientIP } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';

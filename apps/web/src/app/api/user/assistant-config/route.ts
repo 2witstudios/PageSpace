@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getOrCreateConfig, updateConfig } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -25,9 +25,7 @@ export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
-  securityAudit.logDataAccess(auth.userId, 'read', 'assistant_config', 'self').catch((error) => {
-    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
-  });
+  auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'assistant_config', resourceId: 'self' });
 
   try {
     const config = await getOrCreateConfig(db, auth.userId);
@@ -55,9 +53,7 @@ export async function PUT(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  securityAudit.logDataAccess(auth.userId, 'write', 'assistant_config', 'self').catch((error) => {
-    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
-  });
+  auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'assistant_config', resourceId: 'self' });
 
   try {
     const body = await request.json();
@@ -91,12 +87,7 @@ export async function PUT(request: Request) {
 
     const config = await updateConfig(db, auth.userId, updateData);
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'config', 'self').catch((error) => {
-      loggers.security.warn('[AssistantConfig] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId: auth.userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'config', resourceId: 'self' });
 
     return NextResponse.json({
       config: {
