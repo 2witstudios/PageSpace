@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/files/[id]/download
- * Verifies securityAudit.logDataAccess is called for GET (read, download).
+ * Verifies auditRequest is called for GET (read, download).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

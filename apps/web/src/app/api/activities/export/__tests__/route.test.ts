@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/activities/export
- * Verifies securityAudit.logDataAccess is called for GET (export).
+ * Verifies auditRequest is called for GET (export).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

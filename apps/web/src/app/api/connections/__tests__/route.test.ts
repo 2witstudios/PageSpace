@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/connections
- * Verifies securityAudit.logDataAccess is called for GET (read) and POST (write).
+ * Verifies auditRequest is called for GET (read) and POST (write).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

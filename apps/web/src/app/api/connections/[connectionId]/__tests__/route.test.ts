@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/connections/[connectionId]
- * Verifies securityAudit.logDataAccess is called for PATCH (write) and DELETE.
+ * Verifies auditRequest is called for PATCH (write) and DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

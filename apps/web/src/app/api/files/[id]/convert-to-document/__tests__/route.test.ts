@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/files/[id]/convert-to-document
- * Verifies securityAudit.logDataAccess is called for POST (write, convert).
+ * Verifies auditRequest is called for POST (write, convert).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

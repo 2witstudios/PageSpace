@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/assistant-config
- * Verifies securityAudit.logDataAccess is called for GET and PUT.
+ * Verifies auditRequest is called for GET and PUT.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

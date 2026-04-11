@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/activities/[activityId]/rollback-to-point
- * Verifies securityAudit.logDataAccess is called for POST (write, rollback_to_point).
+ * Verifies auditRequest is called for POST (write, rollback_to_point).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

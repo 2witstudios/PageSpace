@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/favorites/reorder
- * Verifies securityAudit.logDataAccess is called for PATCH.
+ * Verifies auditRequest is called for PATCH.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

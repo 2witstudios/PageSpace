@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/favorites
- * Verifies securityAudit.logDataAccess is called for GET and POST.
+ * Verifies auditRequest is called for GET and POST.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/favorites/[id]
- * Verifies securityAudit.logDataAccess is called for DELETE.
+ * Verifies auditRequest is called for DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 

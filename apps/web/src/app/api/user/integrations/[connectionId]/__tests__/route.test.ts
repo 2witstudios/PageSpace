@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/integrations/[connectionId]
- * Verifies securityAudit.logTokenRevoked is called for DELETE.
+ * Verifies audit is called for DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
