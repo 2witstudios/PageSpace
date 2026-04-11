@@ -22,9 +22,8 @@ vi.mock('@pagespace/lib', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Mock global fetch
@@ -34,7 +33,7 @@ vi.stubGlobal('fetch', mockFetch);
 import { POST, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Test helpers
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
@@ -512,8 +511,9 @@ describe('DELETE /api/account/avatar', () => {
 
       await DELETE(createDeleteRequest());
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user-1', 'delete', 'avatar', 'user-1', { operation: 'delete' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'DELETE' }),
+        { eventType: 'data.delete', userId: 'user-1', resourceType: 'avatar', resourceId: 'user-1', details: { operation: 'delete' } }
       );
     });
   });

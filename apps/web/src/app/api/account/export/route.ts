@@ -2,7 +2,7 @@ import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -51,7 +51,7 @@ export async function GET(request: Request) {
       return Response.json({ error: 'User not found' }, { status: 404 });
     }
 
-    securityAudit.logDataAccess(userId, 'export', 'account', userId, { operation: 'gdpr_export' }).catch(e => loggers.auth.warn('Audit log failed', e));
+    auditRequest(request, { eventType: 'data.export', userId, resourceType: 'account', resourceId: userId, details: { operation: 'gdpr_export' } });
 
     // Build ZIP archive
     const archive = archiver('zip', { zlib: { level: 6 } });

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from './index';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
-import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { logSecurityEvent, audit, auditRequest } from '@pagespace/lib/server';
 
 export interface VerifiedUser {
   id: string;
@@ -90,16 +90,15 @@ export function withAdminAuth<T extends AdminRouteContext>(
 ) {
   return async (request: Request, context?: T): Promise<Response> => {
     const endpoint = new URL(request.url).pathname;
-    const ipAddress = getRequestIp(request);
     const authenticatedUser = await verifyAuth(request);
     const result = await verifyAdminAuth(request);
 
     if (isAdminAuthError(result)) {
-      emitAdminAuditDenied(request, endpoint, ipAddress, authenticatedUser?.id);
+      emitAdminAuditDenied(request, endpoint, authenticatedUser?.id);
       return result;
     }
 
-    emitAdminAuditAccess(result, request, endpoint, ipAddress);
+    emitAdminAuditAccess(result, request, endpoint);
     return handler(result, request, context);
   };
 }
@@ -130,9 +129,7 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
         authType: 'session',
         action: 'deny_access',
       });
-      securityAudit.logAccessDenied(user.id, 'admin_route', method, 'csrf_validation_failed').catch((error) => {
-        loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error: error instanceof Error ? error.message : String(error), userId: user.id, reason: 'csrf_validation_failed' });
-      });
+      auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: method, details: { reason: 'csrf_validation_failed' }, riskScore: 0.5 });
       // Return the CSRF error response directly to preserve error codes
       return csrfError;
     }
@@ -154,14 +151,7 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
       authType: 'session',
       action: 'deny_access',
     });
-    securityAudit.logAccessDenied(
-      user.id,
-      'admin_route',
-      'admin_access',
-      validationResult.reason ?? 'admin_role_version_validation_failed'
-    ).catch((error) => {
-      loggers.security.warn('[AdminAuth] audit logAccessDenied failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
-    });
+    auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: 'admin_access', details: { reason: validationResult.reason ?? 'admin_role_version_validation_failed' }, riskScore: 0.5 });
     return NextResponse.json(
       { error: 'Forbidden: Admin access required' },
       { status: 403 }
@@ -171,12 +161,6 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
   return user;
 }
 
-function getRequestIp(request: Request): string | undefined {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    ?? request.headers.get('x-real-ip')
-    ?? undefined;
-}
-
 function getAuditOperation(method: string): 'read' | 'write' | 'delete' {
   const map: Record<string, 'read' | 'write' | 'delete'> = {
     GET: 'read', POST: 'write', PUT: 'write', PATCH: 'write', DELETE: 'delete',
@@ -184,34 +168,28 @@ function getAuditOperation(method: string): 'read' | 'write' | 'delete' {
   return map[method.toUpperCase()] ?? 'read';
 }
 
-function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: string, ipAddress?: string): void {
+function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: string): void {
   const eventTypeMap: Record<string, 'data.read' | 'data.write' | 'data.delete'> = {
     read: 'data.read', write: 'data.write', delete: 'data.delete',
   };
   const operation = getAuditOperation(request.method);
 
-  securityAudit.logEvent({
+  auditRequest(request, {
     eventType: eventTypeMap[operation],
     userId: user.id,
     resourceType: 'admin-endpoint',
     resourceId: endpoint,
-    ipAddress,
     details: { method: request.method },
-  }).catch((error) => {
-    loggers.security.warn('[AdminAuth] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id, endpoint });
   });
 }
 
-function emitAdminAuditDenied(request: Request, endpoint: string, ipAddress?: string, userId?: string): void {
-  securityAudit.logEvent({
+function emitAdminAuditDenied(request: Request, endpoint: string, userId?: string): void {
+  auditRequest(request, {
     eventType: 'authz.access.denied',
     userId,
     resourceType: 'admin-endpoint',
     resourceId: endpoint,
-    ipAddress,
     details: { method: request.method, reason: 'admin_auth_denied' },
     riskScore: 0.5,
-  }).catch((error) => {
-    loggers.security.warn('[AdminAuth] audit logEvent failed', { error: error instanceof Error ? error.message : String(error), userId, endpoint });
   });
 }

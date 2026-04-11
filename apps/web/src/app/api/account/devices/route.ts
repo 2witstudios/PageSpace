@@ -1,5 +1,5 @@
 import { users, db, eq, deviceTokens, sql, and, isNull, gt } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { hashToken } from '@pagespace/lib/auth';
 import { secureCompare } from '@pagespace/lib/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -192,7 +192,7 @@ export async function DELETE(req: Request) {
 
     loggers.auth.info(`User ${userId} revoked all other devices`);
 
-    securityAudit.logEvent({ eventType: 'auth.device.revoked', userId, resourceType: 'device', details: { operation: 'revoke_all_other_devices' } }).catch(e => loggers.auth.warn('Audit log failed', e));
+    auditRequest(req, { eventType: 'auth.device.revoked', userId, resourceType: 'device', details: { operation: 'revoke_all_other_devices' } });
 
     return Response.json({
       message: 'All other devices have been logged out',
