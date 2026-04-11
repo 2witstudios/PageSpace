@@ -80,7 +80,7 @@ describe('POST /api/user/favorites audit', () => {
     vi.clearAllMocks();
     mockAuth();
     vi.mocked(db.query.favorites.findFirst).mockResolvedValue(undefined);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: 'page-1' });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: 'page-1' } as never);
   });
 
   it('logs write audit event on successful favorite creation', async () => {

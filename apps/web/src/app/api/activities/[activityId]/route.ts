@@ -30,10 +30,6 @@ export async function GET(
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
-  securityAudit.logDataAccess(userId, 'read', 'activity', activityId).catch((error) => {
-    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
-
   // Parse query params
   const parseResult = querySchema.safeParse({
     context: searchParams.get('context') ?? undefined,
@@ -90,6 +86,10 @@ export async function GET(
       { status: 403 }
     );
   }
+
+  securityAudit.logDataAccess(userId, 'read', 'activity', activityId).catch((error) => {
+    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+  });
 
   // Get rollback preview to determine eligibility
   const preview = await previewRollback(activityId, userId, rollbackContext);

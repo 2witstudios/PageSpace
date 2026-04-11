@@ -50,7 +50,7 @@ const mockUserId = 'user_123';
 describe('GET /api/connections/search audit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'current@test.com' } as ReturnType<typeof verifyAuth> extends Promise<infer T> ? T : never);
+    vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'current@test.com' } as unknown as Awaited<ReturnType<typeof verifyAuth>>);
   });
 
   it('logs read audit event on connection search', async () => {

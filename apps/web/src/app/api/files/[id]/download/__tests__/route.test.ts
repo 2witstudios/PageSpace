@@ -57,7 +57,7 @@ const mockFileId = 'file-1';
 describe('GET /api/files/[id]/download audit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'test@test.com' } as ReturnType<typeof verifyAuth> extends Promise<infer T> ? T : never);
+    vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'test@test.com' } as unknown as Awaited<ReturnType<typeof verifyAuth>>);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({
       id: mockFileId,
       title: 'test.pdf',
@@ -66,7 +66,7 @@ describe('GET /api/files/[id]/download audit', () => {
       mimeType: 'application/pdf',
       originalFileName: 'test.pdf',
       fileSize: 1024,
-    });
+    } as never);
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(10)),

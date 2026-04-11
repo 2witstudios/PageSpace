@@ -47,10 +47,6 @@ export async function POST(
   const { activityId } = await context.params;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, { action: 'rollback' }).catch((error) => {
-    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
-
   loggers.api.debug('[Rollback:Route] POST request received', {
     activityId: maskIdentifier(activityId),
     userId: maskIdentifier(userId),
@@ -119,6 +115,10 @@ export async function POST(
 
   loggers.api.debug('[Rollback:Route] Rollback succeeded', {
     rollbackActivityId: result.rollbackActivityId,
+  });
+
+  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, { action: 'rollback' }).catch((error) => {
+    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
   });
 
   // Broadcast real-time updates for affected resources

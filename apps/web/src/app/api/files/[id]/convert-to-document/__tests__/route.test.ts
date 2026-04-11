@@ -92,8 +92,7 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
       driveId: 'drive-1',
       parentId: null,
       originalFileName: 'test.docx',
-      drive: { id: 'drive-1', name: 'Test Drive' },
-    });
+    } as never);
     // Mock fetch for processor
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -108,7 +107,7 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
       body: JSON.stringify({ title: 'Converted Document' }),
     });
 
-    await POST(request, { params: Promise.resolve({ id: mockFileId }) });
+    await POST(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
       mockUserId, 'write', 'file', mockFileId, { action: 'convert' }
