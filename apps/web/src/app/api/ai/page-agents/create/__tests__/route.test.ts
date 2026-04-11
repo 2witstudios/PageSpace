@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcast (boundary)
@@ -61,11 +62,6 @@ vi.mock('@/lib/ai/core', () => ({
     update_page: {},
     delete_page: {},
   },
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';

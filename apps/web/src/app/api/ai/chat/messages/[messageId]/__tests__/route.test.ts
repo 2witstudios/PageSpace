@@ -40,9 +40,8 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
-    security: { warn: vi.fn() },
   },
-  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  auditRequest: vi.fn(),
 }));
 
 // Mock logging mask (boundary)
@@ -67,11 +66,6 @@ vi.mock('@pagespace/db', () => ({
   },
   pages: {},
   eq: vi.fn(),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';

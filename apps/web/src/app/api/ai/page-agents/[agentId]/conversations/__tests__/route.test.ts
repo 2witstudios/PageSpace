@@ -51,16 +51,12 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock ID generation
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'generated_conv_id'),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';

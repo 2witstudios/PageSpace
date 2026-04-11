@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers, securityAudit } from '@pagespace/lib/server';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { loggers, auditRequest, canUserViewPage } from '@pagespace/lib/server';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // Auth options: GET is read-only operation
@@ -46,15 +45,10 @@ export async function GET(request: Request) {
     // Convert to UIMessage format with tool calls and results
     const messages = dbMessages.map(convertDbMessageToUIMessage);
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'message', pageId, {
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: {
       source: 'ai-chat',
       messageCount: messages.length,
-    }).catch((error) => {
-      loggers.security.warn('[AIChatMessages] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId: auth.userId,
-      });
-    });
+    } });
 
     return NextResponse.json(messages);
 

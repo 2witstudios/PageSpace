@@ -35,16 +35,12 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock AI monitoring (boundary)
 vi.mock('@pagespace/lib/ai-monitoring', () => ({
   getContextWindow: vi.fn(() => 200000),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import {

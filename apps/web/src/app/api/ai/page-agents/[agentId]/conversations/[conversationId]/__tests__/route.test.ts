@@ -41,11 +41,7 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     },
   },
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';

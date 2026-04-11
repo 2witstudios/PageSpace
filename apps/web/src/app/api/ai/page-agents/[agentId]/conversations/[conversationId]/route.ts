@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, conversationCache, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { canUserEditPage, conversationCache, loggers, auditRequest } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
@@ -82,10 +81,10 @@ export async function PATCH(
       title
     );
 
-    logAuditEvent(request, auth.userId, 'write', 'page_agent_conversation', conversationId, {
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: {
       action: 'update_conversation',
       agentId,
-    });
+    } });
 
     return NextResponse.json({
       success: true,
@@ -173,10 +172,10 @@ export async function DELETE(
       messageCount: metadata?.messageCount || 0,
     });
 
-    logAuditEvent(request, auth.userId, 'delete', 'page_agent_conversation', conversationId, {
+    auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: {
       action: 'delete_conversation',
       agentId,
-    });
+    } });
 
     return NextResponse.json({
       success: true,

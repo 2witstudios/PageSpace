@@ -5,8 +5,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
 
 /**
@@ -134,10 +133,10 @@ export async function POST(request: Request) {
       userId
     });
 
-    logAuditEvent(request, userId, 'write', 'page_agent', newAgent.id, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page_agent', resourceId: newAgent.id, details: {
       action: 'create_agent',
       driveId,
-    });
+    } });
 
     return NextResponse.json({
       success: true,

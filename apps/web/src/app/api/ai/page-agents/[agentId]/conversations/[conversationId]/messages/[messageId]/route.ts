@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { canUserEditPage, loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   chatMessageRepository,
@@ -100,11 +99,11 @@ export async function PATCH(
       conversationId: maskIdentifier(conversationId),
     });
 
-    logAuditEvent(request, userId, 'write', 'page_agent_message', messageId, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page_agent_message', resourceId: messageId, details: {
       action: 'edit_message',
       agentId,
       conversationId,
-    });
+    } });
 
     return NextResponse.json({
       success: true,
@@ -195,11 +194,11 @@ export async function DELETE(
       conversationId: maskIdentifier(conversationId),
     });
 
-    logAuditEvent(request, userId, 'delete', 'page_agent_message', messageId, {
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'page_agent_message', resourceId: messageId, details: {
       action: 'delete_message',
       agentId,
       conversationId,
-    });
+    } });
 
     return NextResponse.json({
       success: true,

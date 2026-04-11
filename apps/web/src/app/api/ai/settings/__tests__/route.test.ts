@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock AI provider settings functions (boundary)
@@ -74,11 +75,6 @@ vi.mock('@/lib/ai/core', () => ({
 // Mock subscription middleware (boundary)
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn(),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
