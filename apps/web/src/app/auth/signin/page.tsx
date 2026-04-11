@@ -92,15 +92,18 @@ function SignInForm() {
     }
   }, [searchParams]);
 
-  // Conditional UI: passkey autofill on the email input
-  const { startConditionalUI } = useConditionalPasskeyUI(csrfToken ?? '', {
-    refreshToken,
-    onSuccess: (redirectUrl) => { window.location.href = redirectUrl; },
-  });
+  // Conditional UI: passkey autofill on the email input (cloud only)
+  const { isAvailable: conditionalUIAvailable, startConditionalUI } = useConditionalPasskeyUI(
+    onPrem ? '' : (csrfToken ?? ''),
+    {
+      refreshToken,
+      onSuccess: (redirectUrl) => { window.location.href = redirectUrl; },
+    }
+  );
 
   useEffect(() => {
-    if (csrfToken) startConditionalUI();
-  }, [csrfToken, startConditionalUI]);
+    if (csrfToken && !onPrem) startConditionalUI();
+  }, [csrfToken, startConditionalUI, onPrem]);
 
   // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
@@ -160,23 +163,27 @@ function SignInForm() {
         </p>
       </motion.div>
 
-      {/* Email input — anchors conditional UI (passkey autofill) */}
-      <motion.div
-        className="mb-4"
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15, duration: 0.3 }}
-      >
-        <div className="grid gap-1.5">
-          <Label htmlFor="signin-email">Email</Label>
-          <Input
-            id="signin-email"
-            type="email"
-            placeholder="you@example.com"
-            autoComplete="email webauthn"
-          />
-        </div>
-      </motion.div>
+      {/* Email input — anchors conditional UI (passkey autofill).
+          Only rendered when the browser supports conditional mediation,
+          otherwise it's a non-functional dead-end. */}
+      {conditionalUIAvailable && (
+        <motion.div
+          className="mb-4"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, duration: 0.3 }}
+        >
+          <div className="grid gap-1.5">
+            <Label htmlFor="signin-email">Email</Label>
+            <Input
+              id="signin-email"
+              type="email"
+              placeholder="you@example.com"
+              autoComplete="email webauthn"
+            />
+          </div>
+        </motion.div>
+      )}
 
       {/* OAuth buttons */}
       {isWaitingForExternalAuth ? (

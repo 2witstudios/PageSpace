@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
@@ -160,123 +160,6 @@ export function PasskeyLoginButton({
   );
 }
 
-/**
- * Hook for conditional UI support (passkey autofill).
- * Call startConditionalUI() after render so the input with
- * autocomplete="email webauthn" is already in the DOM (per spec).
- */
-export function useConditionalPasskeyUI(
-  csrfToken: string,
-  options?: {
-    refreshToken?: () => Promise<string | null>;
-    onSuccess?: (redirectUrl: string) => void;
-  }
-) {
-  const [isAvailable, setIsAvailable] = useState(false);
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  useEffect(() => {
-    const checkAvailability = async () => {
-      if (typeof window === 'undefined') return;
-
-      const available = await (
-        window.PublicKeyCredential?.isConditionalMediationAvailable?.() ??
-        Promise.resolve(false)
-      );
-
-      if (mountedRef.current) setIsAvailable(available);
-    };
-
-    checkAvailability();
-  }, []);
-
-  const startConditionalUI = useCallback(async () => {
-    if (!isAvailable || !csrfToken) return;
-
-    try {
-      const platformFields = await getDevicePlatformFields();
-
-      const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ csrfToken }),
-      });
-
-      if (!optionsRes.ok || !mountedRef.current) return;
-
-      const { options: authOptions } = await optionsRes.json();
-
-      if (mountedRef.current) setIsAuthenticating(true);
-
-      const authResponse = await startAuthentication({
-        optionsJSON: authOptions,
-        useBrowserAutofill: true,
-      });
-
-      if (!mountedRef.current) return;
-
-      // Refresh CSRF token before verify — user may have idled on the page
-      const freshToken = options?.refreshToken
-        ? (await options.refreshToken() ?? csrfToken)
-        : csrfToken;
-
-      const verifyRes = await fetch('/api/auth/passkey/authenticate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          response: authResponse,
-          expectedChallenge: authOptions.challenge,
-          csrfToken: freshToken,
-          ...platformFields,
-        }),
-      });
-
-      if (!mountedRef.current) return;
-
-      if (!verifyRes.ok) {
-        const error = await verifyRes.json();
-        toast.error(error.error || 'Authentication failed');
-        return;
-      }
-
-      const verifyData = await verifyRes.json();
-
-      persistCsrfToken();
-      useAuthStore.getState().setAuthFailedPermanently(false);
-
-      toast.success('Signed in successfully');
-
-      if (await handleDesktopAuthResponse(verifyData)) return;
-
-      if (options?.onSuccess) {
-        options.onSuccess(verifyData.redirectUrl);
-      } else {
-        window.location.href = verifyData.redirectUrl;
-      }
-    } catch (err) {
-      // Conditional UI cancelled or aborted — expected when user clicks
-      // the explicit passkey button or navigates away
-      if (err instanceof Error && err.name !== 'AbortError') {
-        console.debug('Conditional UI authentication failed:', err.message);
-      }
-    } finally {
-      if (mountedRef.current) setIsAuthenticating(false);
-    }
-  }, [isAvailable, csrfToken, options?.refreshToken, options?.onSuccess]);
-
-  return {
-    isAvailable,
-    isAuthenticating,
-    startConditionalUI,
-  };
-}
+// Re-export hook from its own module (separated for testability)
+export { useConditionalPasskeyUI } from './useConditionalPasskeyUI';
+export type { ConditionalPasskeyOptions } from './useConditionalPasskeyUI';

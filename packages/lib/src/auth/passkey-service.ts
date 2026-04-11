@@ -110,8 +110,13 @@ export type VerifyRegistrationResult =
   | { ok: true; data: { passkeyId: string } }
   | { ok: false; error: PasskeyError };
 
+export type AuthenticationOptionsWithHints =
+  Awaited<ReturnType<typeof simpleGenerateAuthenticationOptions>> & {
+    hints?: readonly string[];
+  };
+
 export type GenerateAuthOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateAuthenticationOptions>>; challengeId: string } }
+  | { ok: true; data: { options: AuthenticationOptionsWithHints; challengeId: string } }
   | { ok: false; error: PasskeyError };
 
 export type VerifyAuthResult =
