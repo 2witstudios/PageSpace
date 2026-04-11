@@ -6,7 +6,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -102,6 +102,9 @@ export async function POST(req: Request) {
         error: result.error.code,
         ip: clientIP,
       });
+      securityAudit.logAuthFailure('unknown', clientIP, `passkey_auth_${result.error.code.toLowerCase()}`).catch((error) => {
+        loggers.security.warn('[PasskeyAuth] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      });
 
       return NextResponse.json(
         { error: errorInfo.message, code: result.error.code },
@@ -152,6 +155,9 @@ export async function POST(req: Request) {
     loggers.auth.info('Passkey login successful', {
       userId,
       ip: clientIP,
+    });
+    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[PasskeyAuth] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     let deviceTokenValue: string | undefined;

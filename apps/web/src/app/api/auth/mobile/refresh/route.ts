@@ -13,7 +13,7 @@ import {
 } from '@pagespace/lib/security';
 import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const refreshSchema = z.object({
@@ -147,6 +147,9 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+    securityAudit.logTokenCreated(user.id, 'mobile_refresh', normalizedIP ?? 'unknown').catch((error) => {
+      loggers.security.warn('[MobileRefresh] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     // Reset rate limit on successful refresh
     try {

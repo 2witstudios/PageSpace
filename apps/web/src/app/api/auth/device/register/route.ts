@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP, createWebDeviceToken } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -69,6 +69,9 @@ export async function POST(req: Request) {
     loggers.auth.info('Device token registered via lazy registration', {
       userId: auth.userId,
       deviceId,
+    });
+    securityAudit.logTokenCreated(auth.userId, 'device', clientIP).catch((error) => {
+      loggers.security.warn('[DeviceRegister] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
     });
 
     return Response.json({ deviceToken });

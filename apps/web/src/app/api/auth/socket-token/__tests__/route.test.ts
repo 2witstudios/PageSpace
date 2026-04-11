@@ -22,9 +22,36 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
     createSocketToken: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    auth: {
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+    security: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
+    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logLogout: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

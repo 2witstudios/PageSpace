@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth, getClientIP } from '@/lib/auth';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
@@ -41,13 +42,17 @@ export async function POST(request: Request) {
     );
   }
 
+  const clientIP = getClientIP(request);
   const token = await sessionService.createSession({
     userId: user.id,
     type: 'service',
     scopes: ['mcp:*'],
     expiresInMs: WS_TOKEN_EXPIRY_MS,
     createdByService: 'desktop',
-    createdByIp: getClientIP(request),
+    createdByIp: clientIP,
+  });
+  securityAudit.logTokenCreated(user.id, 'websocket', clientIP).catch((error) => {
+    loggers.security.warn('[WsToken] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
   });
 
   return NextResponse.json({ token });

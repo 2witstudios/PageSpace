@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken, markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 export async function GET(request: NextRequest) {
@@ -27,6 +27,9 @@ export async function GET(request: NextRequest) {
     // Log verification
     loggers.auth.info('Email verified', { userId });
     trackAuthEvent(userId, 'email_verified', {});
+    securityAudit.logDataAccess(userId, 'write', 'email_verification', userId).catch((error) => {
+      loggers.security.warn('[VerifyEmail] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     // Redirect to dashboard - triggers auth refresh via ?auth=success
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

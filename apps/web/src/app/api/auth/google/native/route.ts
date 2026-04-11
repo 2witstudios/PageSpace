@@ -1,7 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -86,6 +86,9 @@ export async function POST(req: Request) {
     const payload = ticket.getPayload();
     if (!payload?.email) {
       loggers.auth.warn('Invalid Google ID token - missing email', { platform });
+      securityAudit.logAuthFailure('unknown', clientIP, 'google_native_invalid_token').catch((error) => {
+        loggers.security.warn('[GoogleNative] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      });
       return Response.json({ error: 'Invalid token' }, { status: 401 });
     }
 
@@ -224,6 +227,9 @@ export async function POST(req: Request) {
       platform,
       isNewUser,
     });
+    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
+      loggers.security.warn('[GoogleNative] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    });
 
     // Set session cookie so middleware recognizes the authenticated session
     const headers = new Headers();
@@ -250,6 +256,9 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     loggers.auth.error('Native Google auth error', error as Error, { clientIP });
+    securityAudit.logAuthFailure('unknown', clientIP, 'google_native_error').catch((auditError) => {
+      loggers.security.warn('[GoogleNative] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    });
 
     // Check if it's a Google token verification error
     if (error instanceof Error && error.message.includes('Token used too late')) {

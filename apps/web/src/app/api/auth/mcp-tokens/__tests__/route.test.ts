@@ -35,6 +35,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -44,6 +45,18 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       warn: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
+    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logLogout: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -67,7 +80,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth';
@@ -112,6 +125,15 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       isMember: true,
       role: 'OWNER',
     } as never);
+
+    // Re-setup securityAudit mocks after resetAllMocks
+    vi.mocked(securityAudit.logAuthSuccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logAuthFailure).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenCreated).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logTokenRevoked).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logLogout).mockResolvedValue(undefined);
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
