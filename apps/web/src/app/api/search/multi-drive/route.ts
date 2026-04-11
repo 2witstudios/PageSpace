@@ -236,7 +236,6 @@ export async function GET(request: Request) {
     });
 
     securityAudit.logDataAccess(userId, 'read', 'search', '*', {
-      query: searchQuery,
       searchType,
       resultCount: totalMatches,
       source: 'multi-drive',

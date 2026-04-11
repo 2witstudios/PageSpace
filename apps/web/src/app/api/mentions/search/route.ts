@@ -364,7 +364,6 @@ export async function GET(request: Request) {
 
     securityAudit.logDataAccess(userId, 'read', 'search', driveId ?? '*', {
       source: 'mentions',
-      query,
       resultCount: finalSuggestions.length,
     }).catch((error) => {
       loggers.security.warn('[MentionsSearch] audit log failed', {

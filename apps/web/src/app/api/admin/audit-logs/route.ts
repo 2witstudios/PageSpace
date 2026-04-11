@@ -145,7 +145,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     securityAudit.logDataAccess(_adminUser.id, 'read', 'audit_log', '*', {
       source: 'admin',
       resultCount: logs.length,
-      filters: { userId, operation, resourceType },
+      hasFilters: !!(userId || operation || resourceType),
     }).catch((error) => {
       loggers.security.warn('[AdminAuditLogs] audit log failed', {
         error: error instanceof Error ? error.message : String(error),

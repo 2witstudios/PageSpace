@@ -416,7 +416,6 @@ export async function GET(request: Request) {
     });
 
     securityAudit.logDataAccess(user.id, 'read', 'search', '*', {
-      query: trimmedQuery,
       resultCount: finalResults.length,
     }).catch((error) => {
       loggers.security.warn('[Search] audit log failed', {
