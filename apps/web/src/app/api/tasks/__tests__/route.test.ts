@@ -53,6 +53,10 @@ vi.mock('@/lib/task-status-config', () => ({
   } as Record<string, { label: string; color: string; group: string }>,
 }));
 
+const { mockSecurityAudit } = vi.hoisted(() => ({
+  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -62,6 +66,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -465,6 +470,46 @@ describe('GET /api/tasks', () => {
 
       // The query should be called with trashed page exclusion filter
       expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log audit event on successful task fetch', async () => {
+      vi.mocked(getDriveIdsForUser).mockResolvedValue(['drive_1']);
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
+        createTaskListFixture({ id: 'tl_1', pageId: 'page_tasklist' }),
+      ]);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([]);
+
+      const request = new Request('https://example.com/api/tasks?context=user');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'tasks', 'user_123', { context: 'user' }
+      );
+    });
+
+    it('should not log audit event when query throws', async () => {
+      vi.mocked(getDriveIdsForUser).mockRejectedValue(new Error('DB error'));
+
+      const request = new Request('https://example.com/api/tasks?context=user');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    });
+
+    it('should not log audit event when auth fails', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError());
+      vi.mocked(isAuthError).mockReturnValue(true);
+
+      const request = new Request('https://example.com/api/tasks?context=user');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
     });
   });
 

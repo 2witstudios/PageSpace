@@ -8,6 +8,10 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Mock at the SERVICE SEAM level: auth and db.query.users.findFirst
 // ============================================================================
 
+const { mockSecurityAudit } = vi.hoisted(() => ({
+  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -17,6 +21,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -145,6 +150,40 @@ describe('GET /api/users/find', () => {
 
       expect(response.status).toBe(200);
       expect(body).toEqual(userData);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log audit event on successful user lookup', async () => {
+      mockFindFirst.mockResolvedValue({
+        id: 'user_456', name: 'Test', email: 'test@example.com', image: null,
+      });
+
+      const request = new Request('https://example.com/api/users/find?email=test@example.com');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'user_search', 'user_456', { queryLength: 16, resultCount: 1 }
+      );
+    });
+
+    it('should not log audit event when user is not found', async () => {
+      mockFindFirst.mockResolvedValue(null);
+
+      const request = new Request('https://example.com/api/users/find?email=missing@example.com');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    });
+
+    it('should not log audit event when auth fails', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError());
+      vi.mocked(isAuthError).mockReturnValue(true);
+
+      const request = new Request('https://example.com/api/users/find?email=test@example.com');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
     });
   });
 

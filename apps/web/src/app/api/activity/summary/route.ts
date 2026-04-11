@@ -17,7 +17,7 @@ import {
   sql,
   count,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -192,6 +192,8 @@ export async function GET(req: Request) {
         updatedThisWeek: pagesUpdatedThisWeek,
       },
     };
+
+    securityAudit.logDataAccess(userId, 'read', 'activity_summary', userId).catch(() => {});
 
     return NextResponse.json(summary);
   } catch (error) {

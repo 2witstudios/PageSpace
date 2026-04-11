@@ -1,7 +1,7 @@
 import { db, feedbackSubmissions } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { FeedbackNotificationEmail } from '@pagespace/lib/email-templates/FeedbackNotificationEmail';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -134,6 +134,8 @@ export async function POST(request: Request) {
       hasAttachments: !!attachments?.length,
       pageUrl: context?.pageUrl,
     });
+
+    securityAudit.logDataAccess(userId, 'write', 'feedback', userId, { hasAttachments: !!attachments?.length }).catch(() => {});
 
     // Send email notification (non-blocking — DB write is the priority)
     try {

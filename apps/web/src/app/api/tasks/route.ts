@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 
@@ -399,6 +399,8 @@ export async function GET(request: Request) {
         slug: c.slug, color: c.color, group: c.group, position: c.position,
       }));
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'tasks', userId, { context: params.context }).catch(() => {});
 
     return NextResponse.json({
       tasks: enrichedTasks,

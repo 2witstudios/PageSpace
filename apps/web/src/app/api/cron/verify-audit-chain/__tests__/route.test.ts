@@ -23,8 +23,13 @@ vi.mock('@pagespace/lib', () => ({
   verifyAndAlert: mockVerifyAndAlert,
 }));
 
+const mockSecurityAudit = vi.hoisted(() => ({
+  logDataAccess: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -164,6 +169,34 @@ describe('/api/cron/verify-audit-chain', () => {
     await GET(makeRequest());
 
     expect(mockVerifyAndAlert).toHaveBeenCalledWith('periodic', { stopOnFirstBreak: true });
+  });
+
+  it('logs audit event on successful chain verification', async () => {
+    await GET(makeRequest());
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'read', 'cron_job', 'verify_audit_chain',
+      { isValid: true, entriesVerified: 100 }
+    );
+  });
+
+  it('logs audit event on failed chain verification', async () => {
+    mockVerifyAndAlert.mockResolvedValue(BROKEN_CHAIN_RESULT);
+
+    await GET(makeRequest());
+
+    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+      'system', 'read', 'cron_job', 'verify_audit_chain',
+      { isValid: false, entriesVerified: 100 }
+    );
+  });
+
+  it('does not log audit event when verification throws', async () => {
+    mockVerifyAndAlert.mockRejectedValue(new Error('DB connection lost'));
+
+    await GET(makeRequest());
+
+    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
   });
 
   it('POST delegates to GET', async () => {

@@ -3,7 +3,7 @@ import { db, workflows, taskItems, eq, and, lte, ne, inArray } from '@pagespace/
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_WORKFLOWS = 5;
@@ -59,6 +59,7 @@ export async function POST(req: Request) {
       );
 
     if (dueWorkflows.length === 0) {
+      securityAudit.logDataAccess('system', 'write', 'cron_job', 'workflows', { executed: 0, failed: 0 }).catch(() => {});
       return NextResponse.json({ message: 'No workflows due', executed: 0 });
     }
 
@@ -190,6 +191,8 @@ export async function POST(req: Request) {
     }
 
     loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalClaimed}`);
+
+    securityAudit.logDataAccess('system', 'write', 'cron_job', 'workflows', { executed, failed: errors.length }).catch(() => {});
 
     return NextResponse.json({
       message: 'Workflow cron complete',

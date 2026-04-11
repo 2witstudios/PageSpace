@@ -6,6 +6,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Mock at the SERVICE SEAM level: auth, db queries, and query-params utility
 // ============================================================================
 
+const { mockSecurityAudit } = vi.hoisted(() => ({
+  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -15,6 +19,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  securityAudit: mockSecurityAudit,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -333,6 +338,33 @@ describe('GET /api/users/search', () => {
 
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(2);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log audit event on successful search', async () => {
+      const request = new Request('https://example.com/api/users/search?q=test');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'user_search', 'user_123', { queryLength: 4, resultCount: 0 }
+      );
+    });
+
+    it('should not log audit event when query too short', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    });
+
+    it('should not log audit event when auth fails', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue(null);
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      await GET(request);
+
+      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
     });
   });
 
