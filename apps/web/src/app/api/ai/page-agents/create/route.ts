@@ -137,7 +137,6 @@ export async function POST(request: Request) {
     logAuditEvent(request, userId, 'write', 'page_agent', newAgent.id, {
       action: 'create_agent',
       driveId,
-      title,
     });
 
     return NextResponse.json({
