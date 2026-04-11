@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, pages, eq } from '@pagespace/db';
 import { canUserEditPage, createPageVersion } from '@pagespace/lib/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -111,7 +111,7 @@ export async function POST(
       where: eq(pages.id, pageId),
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'page', pageId, { operation: 'convert_content_mode' }).catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'convert_content_mode' } });
 
     return NextResponse.json({
       success: true,

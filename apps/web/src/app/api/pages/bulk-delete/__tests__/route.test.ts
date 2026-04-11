@@ -41,9 +41,7 @@ vi.mock('@pagespace/lib/server', () => ({
   agentAwarenessCache: {
     invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
   canUserDeletePage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -88,7 +86,7 @@ vi.mock('@pagespace/db', () => {
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { pageTreeCache, agentAwarenessCache, canUserDeletePage, securityAudit } from '@pagespace/lib/server';
+import { pageTreeCache, agentAwarenessCache, canUserDeletePage, auditRequest } from '@pagespace/lib/server';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
@@ -481,8 +479,9 @@ describe('DELETE /api/pages/bulk-delete', () => {
     it('logs delete audit event with count only (no pageIds array)', async () => {
       await DELETE(createRequest(validBody));
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'delete', 'page', 'bulk', { count: 1 }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'page', resourceId: 'bulk' })
       );
     });
 

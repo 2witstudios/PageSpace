@@ -12,6 +12,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -20,10 +21,6 @@ vi.mock('@pagespace/lib', () => ({
   logger: {
     child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
   },
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 // Transaction mock factory for flexible configuration

@@ -40,9 +40,7 @@ vi.mock('@pagespace/lib/server', () => ({
   pageTreeCache: {
     invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 

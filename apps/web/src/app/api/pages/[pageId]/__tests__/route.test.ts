@@ -56,9 +56,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
@@ -77,7 +75,7 @@ vi.mock('@pagespace/lib/api-utils', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache, loggers, securityAudit } from '@pagespace/lib/server';
+import { agentAwarenessCache, pageTreeCache, loggers, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
@@ -146,7 +144,7 @@ describe('GET /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.getPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -210,8 +208,9 @@ describe('GET /api/pages/[pageId]', () => {
     it('logs read audit event on successful page retrieval', async () => {
       await GET(createRequest(), { params: mockParams });
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'read', 'page', mockPageId, { operation: 'read' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
       );
     });
 
@@ -224,7 +223,7 @@ describe('GET /api/pages/[pageId]', () => {
 
       await GET(createRequest(), { params: mockParams });
 
-      expect(securityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
   });
 
@@ -280,7 +279,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -593,8 +592,9 @@ describe('PATCH /api/pages/[pageId]', () => {
     it('logs write audit event on successful page update', async () => {
       await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'write', 'page', mockPageId, { operation: 'update' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
       );
     });
 
@@ -692,7 +692,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
@@ -883,8 +883,9 @@ describe('DELETE /api/pages/[pageId]', () => {
     it('logs delete audit event on successful page trash', async () => {
       await DELETE(createRequest({}), { params: mockParams });
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'delete', 'page', mockPageId, { operation: 'trash' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'page', resourceId: mockPageId })
       );
     });
 

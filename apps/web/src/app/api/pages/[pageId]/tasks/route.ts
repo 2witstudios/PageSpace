@@ -3,7 +3,7 @@ import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, 
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage, securityAudit } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -483,7 +483,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     },
   });
 
-  securityAudit.logDataAccess(userId, 'write', 'task', result.task.id, { pageId }).catch(() => {});
+  auditRequest(req, { eventType: 'data.write', userId, resourceType: 'task', resourceId: result.task.id, details: { pageId } });
 
   return NextResponse.json({
     ...taskWithRelations,
