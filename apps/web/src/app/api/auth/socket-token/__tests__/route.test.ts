@@ -28,6 +28,29 @@ vi.mock('@/lib/repositories/session-repository', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    auth: {
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    },
+    security: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
+    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logLogout: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { GET } from '../route';

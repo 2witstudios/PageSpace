@@ -73,8 +73,20 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
   },
   logAuthEvent: vi.fn(),
+  securityAudit: {
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
+    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logLogout: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
