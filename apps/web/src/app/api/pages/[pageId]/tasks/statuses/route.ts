@@ -4,6 +4,7 @@ import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -45,6 +46,8 @@ export async function GET(
 
   if (!taskList) {
     // Return default statuses if no task list exists yet
+    logAuditEvent(req, userId, 'read', 'task_status_config', pageId, { action: 'list_status_configs' });
+
     return NextResponse.json({
       statusConfigs: DEFAULT_TASK_STATUSES.map((s, i) => ({
         id: `default-${s.slug}`,
@@ -61,6 +64,8 @@ export async function GET(
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
   });
+
+  logAuditEvent(req, userId, 'read', 'task_status_config', pageId, { action: 'list_status_configs' });
 
   return NextResponse.json({ statusConfigs });
 }
@@ -175,6 +180,8 @@ export async function POST(
     data: { statusConfigAdded: newConfig },
   });
 
+  logAuditEvent(req, userId, 'write', 'task_status_config', newConfig.id, { action: 'create_status_config', pageId, group });
+
   return NextResponse.json(newConfig, { status: 201 });
 }
 
@@ -261,6 +268,8 @@ export async function PUT(
     pageId,
     data: { statusConfigsUpdated: updatedConfigs },
   });
+
+  logAuditEvent(req, userId, 'write', 'task_status_config', pageId, { action: 'bulk_update_status_configs', count: statuses.length });
 
   return NextResponse.json({ statusConfigs: updatedConfigs });
 }
@@ -387,6 +396,8 @@ export async function DELETE(
       migratedCount: tasksWithStatus.length,
     },
   });
+
+  logAuditEvent(req, userId, 'delete', 'task_status_config', statusId, { action: 'delete_status_config', pageId });
 
   return NextResponse.json({ success: true });
 }

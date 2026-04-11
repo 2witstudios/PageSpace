@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -102,6 +103,8 @@ export async function PATCH(
       },
     });
   }
+
+  logAuditEvent(req, userId, 'write', 'task', pageId, { action: 'reorder_tasks', taskCount: tasks.length });
 
   return NextResponse.json({ success: true });
 }
