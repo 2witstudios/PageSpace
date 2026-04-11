@@ -9,6 +9,11 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -40,7 +45,7 @@ vi.mock('@/lib/audit/route-audit', () => ({
 }));
 
 import { GET, POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   listDriveConnections,
@@ -203,6 +208,23 @@ describe('GET /api/drives/[driveId]/integrations', () => {
       const body = await response.json();
 
       expect(body.connections[0].provider).toBe(null);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(getDriveAccess).mockResolvedValue({
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+      });
+      vi.mocked(listDriveConnections).mockResolvedValue([]);
+
+      const request = new Request('https://example.com/api/drives/d/integrations');
+      await GET(request, createContext(MOCK_DRIVE_ID));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        MOCK_USER_ID, 'read', 'drive_integrations', MOCK_DRIVE_ID,
+        expect.objectContaining({ operation: 'list_integrations' })
+      );
     });
   });
 
@@ -717,6 +739,40 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       expect(createConnection).toHaveBeenCalledWith('mock-db', expect.objectContaining({
         baseUrlOverride: null,
       }));
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful non-OAuth POST', async () => {
+      vi.mocked(getDriveAccess).mockResolvedValue({
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+      });
+      // @ts-expect-error - partial mock data
+      vi.mocked(getProviderById).mockResolvedValue({
+        id: 'prov-api', slug: 'linear', name: 'Linear', enabled: true, driveId: null,
+        config: { authMethod: { type: 'api_key', config: {} }, baseUrl: 'http://test', tools: [] },
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      vi.mocked(findDriveConnection).mockResolvedValue(null);
+      vi.mocked(encryptCredentials).mockResolvedValue({ key: 'enc' });
+      // @ts-expect-error - partial mock data
+      vi.mocked(createConnection).mockResolvedValue({
+        id: 'conn-new', providerId: 'prov-api', name: 'Linear', status: 'active',
+        createdAt: new Date(), driveId: MOCK_DRIVE_ID, credentials: {},
+        connectedBy: MOCK_USER_ID, connectedAt: new Date(), updatedAt: new Date(),
+        statusMessage: null, accountMetadata: null, baseUrlOverride: null, lastUsedAt: null,
+      });
+
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { key: 'val' } }),
+      });
+      await POST(request, createContext(MOCK_DRIVE_ID));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        MOCK_USER_ID, 'write', 'drive_integrations', MOCK_DRIVE_ID,
+        expect.objectContaining({ operation: 'create_integration' })
+      );
     });
   });
 

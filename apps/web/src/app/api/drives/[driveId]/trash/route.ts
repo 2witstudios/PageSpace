@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { drives, pages, driveMembers, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 
@@ -73,6 +73,7 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     const tree = buildTree(trashedPages);
 
     logAuditEvent(request, auth.userId, 'read', 'drive_trash', driveId, { action: 'list_trashed_pages', count: trashedPages.length });
+    securityAudit.logDataAccess(auth.userId, 'read', 'drive_trash', driveId, { operation: 'list_trash' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json(tree);
   } catch (error) {

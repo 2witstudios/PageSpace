@@ -9,6 +9,11 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -64,7 +69,7 @@ vi.mock('../audit-filters', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseAuditListParams, buildAuditLogWhereClause } from '../audit-filters';
@@ -300,6 +305,31 @@ describe('GET /api/drives/[driveId]/integrations/audit', () => {
           dateTo: null,
           toolName: null,
         }
+      );
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(getDriveAccess).mockResolvedValue({
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+      });
+      vi.mocked(parseAuditListParams).mockReturnValue({
+        ok: true,
+        data: {
+          limit: 50, offset: 0,
+          connectionId: null, success: null, agentId: null,
+          dateFrom: null, dateTo: null, toolName: null,
+        },
+      });
+      setupDbMocks([{ count: 0 }], []);
+
+      const request = new Request('https://example.com/api/drives/d/integrations/audit');
+      await GET(request, createContext(MOCK_DRIVE_ID));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        MOCK_USER_ID, 'read', 'drive_integration_audit', MOCK_DRIVE_ID,
+        expect.objectContaining({ operation: 'view_integration_audit' })
       );
     });
   });

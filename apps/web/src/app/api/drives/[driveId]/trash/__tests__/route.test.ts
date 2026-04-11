@@ -41,6 +41,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    auth: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -52,7 +59,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { db } from '@pagespace/db';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { buildTree, loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
@@ -246,6 +253,24 @@ describe('GET /api/drives/[driveId]/trash', () => {
 
       expect(response.status).toBe(200);
       expect(body).toEqual([]);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, ownerId: mockUserId })
+      );
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
+      vi.mocked(buildTree).mockReturnValue([]);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_trash', mockDriveId,
+        expect.objectContaining({ operation: 'list_trash' })
+      );
     });
   });
 

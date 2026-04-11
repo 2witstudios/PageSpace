@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
@@ -67,6 +67,7 @@ export async function GET(
     }));
 
     logAuditEvent(request, auth.userId, 'read', 'drive_integration', driveId, { action: 'list_connections', count: safeConnections.length });
+    securityAudit.logDataAccess(auth.userId, 'read', 'drive_integrations', driveId, { operation: 'list_integrations' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json({ connections: safeConnections });
   } catch (error) {
@@ -157,6 +158,7 @@ export async function POST(
       });
 
       logAuditEvent(request, auth.userId, 'write', 'drive_integration', driveId, { action: 'create_connection', providerId });
+      securityAudit.logDataAccess(auth.userId, 'write', 'drive_integrations', driveId, { operation: 'create_integration_oauth', providerId })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
       return NextResponse.json({ url });
     }
@@ -180,6 +182,7 @@ export async function POST(
     });
 
     logAuditEvent(request, auth.userId, 'write', 'drive_integration', driveId, { action: 'create_connection', providerId });
+    securityAudit.logDataAccess(auth.userId, 'write', 'drive_integrations', driveId, { operation: 'create_integration', providerId })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json({
       connection: {

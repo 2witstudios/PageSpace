@@ -22,6 +22,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    auth: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -35,7 +42,7 @@ vi.mock('@/lib/audit/route-audit', () => ({
   logAuditEvent: vi.fn(),
 }));
 
-import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/server';
+import { checkDriveAccessForSearch, globSearchPages, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
@@ -361,6 +368,21 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       expect(response.status).toBe(200);
       expect(body.results).toHaveLength(0);
       expect(body.totalResults).toBe(0);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_search', mockDriveId,
+        expect.objectContaining({ operation: 'glob_search' })
+      );
     });
   });
 

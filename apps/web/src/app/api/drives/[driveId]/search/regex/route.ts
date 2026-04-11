@@ -5,6 +5,7 @@ import {
   checkDriveAccessForSearch,
   regexSearchPages,
   loggers,
+  securityAudit,
 } from '@pagespace/lib/server';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 
@@ -83,6 +84,7 @@ export async function GET(
     });
 
     logAuditEvent(request, userId, 'read', 'drive_search', driveId, { action: 'regex_search', resultCount: searchResults.results.length });
+    securityAudit.logDataAccess(userId, 'read', 'drive_search', driveId, { operation: 'regex_search' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json({
       success: true,

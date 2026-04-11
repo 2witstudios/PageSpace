@@ -16,6 +16,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    auth: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -34,7 +41,7 @@ vi.mock('@/lib/audit/route-audit', () => ({
 }));
 
 import { POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
@@ -152,6 +159,20 @@ describe('POST /api/drives/[driveId]/access', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful POST', async () => {
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/access`, {
+        method: 'POST',
+      });
+      await POST(request, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'write', 'drive_access', mockDriveId,
+        expect.objectContaining({ operation: 'update_last_accessed' })
+      );
     });
   });
 

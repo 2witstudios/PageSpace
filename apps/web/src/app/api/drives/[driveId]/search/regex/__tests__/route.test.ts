@@ -22,6 +22,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    auth: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -35,7 +42,7 @@ vi.mock('@/lib/audit/route-audit', () => ({
   logAuditEvent: vi.fn(),
 }));
 
-import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/server';
+import { checkDriveAccessForSearch, regexSearchPages, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
@@ -432,6 +439,21 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
         pattern,
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
+      );
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(regexSearchPages).mockResolvedValue(createRegexSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_search', mockDriveId,
+        expect.objectContaining({ operation: 'regex_search' })
       );
     });
   });

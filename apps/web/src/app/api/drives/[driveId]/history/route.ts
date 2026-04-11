@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -112,6 +112,7 @@ export async function GET(
   });
 
   logAuditEvent(request, userId, 'read', 'drive_history', driveId, { action: 'view_history', count: versionsWithRollback.length });
+  securityAudit.logDataAccess(userId, 'read', 'drive_history', driveId, { operation: 'view_history' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
   return NextResponse.json({
     versions: versionsWithRollback,

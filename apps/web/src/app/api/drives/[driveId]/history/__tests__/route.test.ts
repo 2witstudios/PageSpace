@@ -16,6 +16,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    auth: {
+      warn: vi.fn(),
+    },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -46,7 +53,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
@@ -370,6 +377,20 @@ describe('GET /api/drives/[driveId]/history', () => {
       expect(body.versions).toEqual([]);
       expect(body.pagination.total).toBe(0);
       expect(body.pagination.hasMore).toBe(false);
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities: [], total: 0 });
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_history', mockDriveId,
+        expect.objectContaining({ operation: 'view_history' })
+      );
     });
   });
 

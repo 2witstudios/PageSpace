@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { db, pages, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 
 interface DriveAgentSummary {
@@ -137,6 +137,7 @@ export async function GET(
     });
 
     logAuditEvent(request, userId, 'read', 'drive_agent', driveId, { action: 'list_agents', count: accessibleAgents.length });
+    securityAudit.logDataAccess(userId, 'read', 'drive_agents', driveId, { operation: 'list_agents' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json({
       success: true,

@@ -84,6 +84,11 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -91,7 +96,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 // ---------- helpers ----------
 
@@ -369,6 +374,22 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
         canEdit: false,
         canShare: true,
       });
+    });
+  });
+
+  // ---------- Security audit ----------
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      mockPagesResults.value = [];
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_permissions_tree', mockDriveId,
+        expect.objectContaining({ operation: 'view_permissions_tree' })
+      );
     });
   });
 

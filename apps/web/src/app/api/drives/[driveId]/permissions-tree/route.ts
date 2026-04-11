@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, and } from '@pagespace/db';
 import { drives, pages, pagePermissions, driveMembers } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { logAuditEvent } from '@/lib/audit/route-audit';
 
 interface PageNode {
@@ -125,6 +125,7 @@ export async function GET(
     };
 
     logAuditEvent(request, user.id, 'read', 'drive_permissions', driveId, { action: 'view_permissions_tree', pageCount: allPages.length });
+    securityAudit.logDataAccess(user.id, 'read', 'drive_permissions_tree', driveId, { operation: 'view_permissions_tree' })?.catch(e => loggers.auth.warn('Audit log failed', e));
 
     return NextResponse.json({
       drive: driveInfo,

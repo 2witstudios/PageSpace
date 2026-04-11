@@ -11,6 +11,11 @@ vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -56,7 +61,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers, getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
+import { loggers, getUserDriveAccess, canUserViewPage, securityAudit } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
@@ -625,6 +630,41 @@ describe('GET /api/drives/[driveId]/agents', () => {
           accessibleAgents: 0,
           userId: MOCK_USER_ID,
         }
+      );
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+
+      let selectCallCount = 0;
+      vi.mocked(db.select).mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn(() => ({
+              where: vi.fn().mockResolvedValue([
+                { id: MOCK_DRIVE_ID, name: 'Drive', slug: 'drive' },
+              ]),
+            })),
+          } as never;
+        }
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              orderBy: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        } as never;
+      });
+
+      const request = new Request('https://example.com/api/drives/d/agents');
+      await GET(request, createContext(MOCK_DRIVE_ID));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        MOCK_USER_ID, 'read', 'drive_agents', MOCK_DRIVE_ID,
+        expect.objectContaining({ operation: 'list_agents' })
       );
     });
   });

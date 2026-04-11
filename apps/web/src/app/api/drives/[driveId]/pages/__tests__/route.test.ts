@@ -86,6 +86,11 @@ vi.mock('@pagespace/lib/server', () => ({
   buildTree: vi.fn((items: unknown[]) => items),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -103,7 +108,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { buildTree, loggers, securityAudit } from '@pagespace/lib/server';
 
 // ---------- helpers ----------
 
@@ -392,6 +397,23 @@ describe('GET /api/drives/[driveId]/pages', () => {
       expect(buildTree).toHaveBeenCalledWith([
         { id: 'page_1', parentId: null, position: 0, isTaskLinked: false, hasChanges: false },
       ]);
+    });
+  });
+
+  // ---------- Security audit ----------
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      const pageData = [{ id: 'page_1', parentId: null, position: 0 }];
+      mockFindMany.mockResolvedValue(pageData);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+
+      await GET(createRequest() as never, createContext(mockDriveId));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId, 'read', 'drive_pages', mockDriveId,
+        expect.objectContaining({ operation: 'list_pages' })
+      );
     });
   });
 

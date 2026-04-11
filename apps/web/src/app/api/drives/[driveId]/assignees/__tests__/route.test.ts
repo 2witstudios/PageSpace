@@ -9,6 +9,13 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@pagespace/lib/server', () => ({
   getUserDriveAccess: vi.fn(),
   canUserViewPage: vi.fn(),
+  loggers: {
+    auth: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@/lib/audit/route-audit', () => ({
@@ -61,7 +68,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
+import { getUserDriveAccess, canUserViewPage, securityAudit } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -646,6 +653,47 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
       expect(body.assignees[0].name).toBe('Owner Name');
       expect(body.assignees[0].image).toBe('/user.png');
+    });
+  });
+
+  describe('security audit', () => {
+    it('should log security audit event on successful GET', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' } as never);
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+
+      let selectCallCount = 0;
+      vi.mocked(db.select).mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          const mockLeftJoin2 = vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([
+              {
+                userId: 'member-1',
+                role: 'OWNER',
+                user: { id: 'member-1', email: 'x@test.com', name: 'X', image: null },
+                profile: null,
+              },
+            ]),
+          }));
+          const mockLeftJoin1 = vi.fn(() => ({ leftJoin: mockLeftJoin2 }));
+          return { from: vi.fn(() => ({ leftJoin: mockLeftJoin1 })) } as never;
+        }
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              orderBy: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        } as never;
+      });
+
+      const request = new Request('https://example.com/api/drives/d/assignees');
+      await GET(request, createContext(MOCK_DRIVE_ID));
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        MOCK_USER_ID, 'read', 'drive_assignees', MOCK_DRIVE_ID,
+        expect.objectContaining({ operation: 'list_assignees' })
+      );
     });
   });
 

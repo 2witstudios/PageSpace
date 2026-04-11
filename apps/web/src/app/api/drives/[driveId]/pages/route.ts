@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { logAuditEvent } from '@/lib/audit/route-audit';
@@ -192,6 +192,7 @@ export async function GET(
 
     const pageTree = buildTree(pagesWithFlags);
     logAuditEvent(request, userId, 'read', 'drive_page_tree', driveId, { action: 'list_pages', count: pageResults.length });
+    securityAudit.logDataAccess(userId, 'read', 'drive_pages', driveId, { operation: 'list_pages' })?.catch(e => loggers.auth.warn('Audit log failed', e));
     return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);
