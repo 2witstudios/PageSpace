@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
@@ -44,6 +44,8 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_sync', 'self', { eventsCreated: result.eventsCreated, eventsUpdated: result.eventsUpdated, eventsDeleted: result.eventsDeleted }), userId);
 
     return NextResponse.json({
       success: true,

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
@@ -195,6 +195,9 @@ export async function GET(req: Request) {
     loggers.auth.info('Google Calendar connected successfully', {
       userId,
     });
+
+    auditSafe(securityAudit.logTokenCreated(userId, 'google_calendar'), userId);
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_oauth_callback', 'self', { operation: 'oauth_complete' }), userId);
 
     // Redirect back to settings with success
     const redirectPath = normalizeGoogleCalendarReturnPath(

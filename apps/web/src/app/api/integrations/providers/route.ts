@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -74,6 +74,8 @@ export async function GET(request: Request) {
       createdAt: p.createdAt,
     }));
 
+    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', 'list', { providerCount: safeProviders.length }), auth.userId);
+
     return NextResponse.json({ providers: safeProviders });
   } catch (error) {
     loggers.api.error('Error listing providers:', error as Error);
@@ -121,6 +123,8 @@ export async function POST(request: Request) {
       driveId: driveId ?? null,
       enabled: true,
     });
+
+    auditSafe(securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', provider.id, { slug, providerType, operation: 'create' }), auth.userId);
 
     return NextResponse.json({ provider }, { status: 201 });
   } catch (error) {

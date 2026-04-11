@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { db, users, eq } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import crypto from 'crypto';
@@ -116,6 +116,8 @@ export async function POST(req: Request) {
       userId,
       clientIP,
     });
+
+    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_connection', 'self', { operation: 'oauth_initiated' }), userId);
 
     return Response.json({ url: oauthUrl });
   } catch (error) {

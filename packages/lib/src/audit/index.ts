@@ -17,6 +17,8 @@ export {
   auditSecurityEvent,
 } from './security-audit-adapter';
 
+export { auditSafe } from './audit-safe';
+
 export {
   verifyAndAlert,
   setChainAlertHandler,

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
 import {
   getBuiltinProvider,
   getProviderBySlug,
@@ -59,6 +59,8 @@ export async function POST(request: Request) {
       driveId: null,
       enabled: true,
     });
+
+    auditSafe(securityAudit.logDataAccess(adminUser.id, 'write', 'integration_install', provider.id, { builtinId, operation: 'install' }), adminUser.id);
 
     return NextResponse.json({ provider: { id: provider.id, slug: provider.slug, name: provider.name } }, { status: 201 });
   } catch (error) {
