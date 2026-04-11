@@ -31,9 +31,21 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -285,6 +297,23 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.stripeCustomerId).toBeNull();
       // mockSelectLimit should NOT have been called for subscription lookup
       expect(mockSelectLimit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Audit logging', () => {
+    it('should log audit event on GET subscription status', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+
+      const request = new Request('https://example.com/api/subscriptions/status', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'subscription_status', 'self',
+        expect.any(Object)
+      );
     });
   });
 

@@ -67,9 +67,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { GET, DELETE, PATCH } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -443,6 +455,51 @@ describe('Payment Methods API', () => {
       const response = await PATCH(request);
 
       expect(response.status).toBe(401);
+    });
+  });
+
+  describe('Audit logging', () => {
+    it('should log audit event on GET payment methods', async () => {
+      const request = new Request('https://example.com/api/stripe/payment-methods', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      await GET(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'payment_method', 'list',
+        expect.any(Object)
+      );
+    });
+
+    it('should log audit event on DELETE payment method', async () => {
+      const request = new Request('https://example.com/api/stripe/payment-methods', {
+        method: 'DELETE',
+        body: JSON.stringify({ paymentMethodId: 'pm_123' }),
+      }) as unknown as import('next/server').NextRequest;
+
+      await DELETE(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'delete', 'payment_method', 'pm_123',
+        expect.any(Object)
+      );
+    });
+
+    it('should log audit event on PATCH set default payment method', async () => {
+      mockStripePaymentMethodsRetrieve.mockResolvedValue(mockPaymentMethod({ id: 'pm_456' }));
+
+      const request = new Request('https://example.com/api/stripe/payment-methods', {
+        method: 'PATCH',
+        body: JSON.stringify({ paymentMethodId: 'pm_456' }),
+      }) as unknown as import('next/server').NextRequest;
+
+      await PATCH(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'write', 'payment_method', 'pm_456',
+        expect.objectContaining({ action: 'set_default' })
+      );
     });
   });
 

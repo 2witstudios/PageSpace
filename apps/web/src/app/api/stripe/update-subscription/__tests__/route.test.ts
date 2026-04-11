@@ -107,9 +107,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -283,6 +295,42 @@ describe('POST /api/stripe/update-subscription', () => {
 
       expect(mockStripeSubscriptionSchedulesRetrieve).toHaveBeenCalledWith('sch_existing');
       expect(mockStripeSubscriptionSchedulesCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Audit logging', () => {
+    it('should log audit event on successful upgrade', async () => {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ priceId: mockPriceId, isDowngrade: false }),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId,
+        'write',
+        'subscription',
+        'sub_123',
+        expect.objectContaining({ action: 'update', priceId: mockPriceId })
+      );
+    });
+
+    it('should log audit event on successful downgrade schedule', async () => {
+      const request = createMockRequest('https://example.com/api/stripe/update-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ priceId: mockPriceId, isDowngrade: true }),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        mockUserId,
+        'write',
+        'subscription',
+        'sub_123',
+        expect.objectContaining({ action: 'update', priceId: mockPriceId })
+      );
     });
   });
 

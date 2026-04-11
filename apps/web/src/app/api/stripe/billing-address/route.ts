@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -25,14 +25,24 @@ export async function GET(request: NextRequest) {
     }
 
     if (!user.stripeCustomerId) {
+      securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: false }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
 
     // Get customer
     const customer = await stripe.customers.retrieve(user.stripeCustomerId);
     if (customer.deleted) {
+      securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: false }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
       return NextResponse.json({ address: null, name: user.name, email: user.email });
     }
+
+    securityAudit.logDataAccess(userId, 'read', 'billing_address', 'self', { hasCustomer: true }).catch((error: unknown) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+    });
 
     return NextResponse.json({
       address: customer.address,
@@ -106,6 +116,10 @@ export async function PUT(request: NextRequest) {
         throw dbError;
       }
 
+      securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error: unknown) => {
+        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
+      });
+
       return NextResponse.json({
         success: true,
         address: customer.address,
@@ -124,6 +138,10 @@ export async function PUT(request: NextRequest) {
         postal_code: address.postal_code || undefined,
         country: address.country,
       },
+    });
+
+    securityAudit.logDataAccess(userId, 'write', 'billing_address', customerId, { action: 'update' }).catch((error: unknown) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({

@@ -44,9 +44,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+// Mock @pagespace/lib/server
+vi.mock('@pagespace/lib/server', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -173,6 +185,30 @@ describe('Portal API', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to create portal session');
+    });
+
+    it('should log audit event on POST portal session', async () => {
+      const request = new Request('https://example.com/api/stripe/portal', {
+        method: 'POST',
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123', 'read', 'billing_portal', 'portal_session',
+        expect.any(Object)
+      );
+    });
+
+    it('should not include customerId in audit details (GDPR: details field is in hash chain)', async () => {
+      const request = new Request('https://example.com/api/stripe/portal', {
+        method: 'POST',
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      const details = vi.mocked(securityAudit.logDataAccess).mock.calls[0]?.[4];
+      expect(details).not.toHaveProperty('customerId');
     });
   });
 });

@@ -65,20 +65,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-// Mock loggers
+// Mock @pagespace/lib/server
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
-    api: {
-      info: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-    },
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  securityAudit: {
+    logDataAccess: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { securityAudit } from '@pagespace/lib/server';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -179,6 +180,26 @@ describe('POST /api/stripe/cancel-checkout', () => {
       expect(mockStripePaymentIntentsCancel).toHaveBeenCalledWith('pi_123');
       // Then cancel subscription
       expect(mockStripeSubscriptionsCancel).toHaveBeenCalledWith('sub_123');
+    });
+
+    it('should log audit event on successful checkout cancellation', async () => {
+      const request = createMockRequest(
+        'https://example.com/api/stripe/cancel-checkout',
+        {
+          method: 'POST',
+          body: JSON.stringify({ subscriptionId: 'sub_123' }),
+        }
+      );
+
+      await POST(request);
+
+      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
+        'user_123',
+        'write',
+        'checkout',
+        'sub_123',
+        expect.objectContaining({ action: 'cancel' })
+      );
     });
 
     it('should handle case where payment intent is already canceled', async () => {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -82,6 +82,10 @@ export async function POST(request: NextRequest) {
     loggers.api.info('Canceled incomplete subscription for abandoned checkout', {
       subscriptionId,
       userId,
+    });
+
+    securityAudit.logDataAccess(userId, 'write', 'checkout', subscriptionId, { action: 'cancel' }).catch((error: unknown) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({

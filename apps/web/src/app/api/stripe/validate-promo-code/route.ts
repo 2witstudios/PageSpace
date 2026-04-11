@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, securityAudit } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
 
     const body = await request.json() as ValidatePromoCodeRequest;
     const { code, priceId } = body;
@@ -144,6 +145,10 @@ export async function POST(request: NextRequest) {
       couponId: coupon.id,
       percentOff: coupon.percent_off,
       amountOff: coupon.amount_off,
+    });
+
+    securityAudit.logDataAccess(userId, 'read', 'promo_code', normalizedCode, { promoId: promoCode.id }).catch((error: unknown) => {
+      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     return NextResponse.json({
