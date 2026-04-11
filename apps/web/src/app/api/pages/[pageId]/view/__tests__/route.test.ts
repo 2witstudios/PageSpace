@@ -30,6 +30,10 @@ vi.mock('@pagespace/lib/permissions', () => ({
   canUserViewPage: vi.fn(),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/db', () => {
   const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
   const values = vi.fn().mockReturnValue({ onConflictDoUpdate });

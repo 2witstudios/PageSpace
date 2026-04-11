@@ -94,6 +94,10 @@ vi.mock('@pagespace/lib/server', async () => {
   };
 });
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { logSecurityEvent } from '@pagespace/lib/server';
 
 describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {

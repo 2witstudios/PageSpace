@@ -28,6 +28,10 @@ vi.mock('@pagespace/db', () => ({
   asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   buildTree: vi.fn(),
   loggers: {

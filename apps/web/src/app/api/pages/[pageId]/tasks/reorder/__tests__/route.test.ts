@@ -21,6 +21,10 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@test.com',

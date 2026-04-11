@@ -54,6 +54,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('../audit-filters', () => ({
   parseAuditListParams: vi.fn(),
   buildAuditLogWhereClause: vi.fn(() => 'mock-where-clause'),

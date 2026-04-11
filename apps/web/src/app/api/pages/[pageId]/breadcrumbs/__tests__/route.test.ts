@@ -33,6 +33,10 @@ vi.mock('@pagespace/db', () => ({
   sql: vi.fn(),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';

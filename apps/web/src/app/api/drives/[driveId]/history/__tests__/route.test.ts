@@ -24,6 +24,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
 }));

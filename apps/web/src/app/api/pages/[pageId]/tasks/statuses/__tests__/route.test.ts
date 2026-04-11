@@ -22,6 +22,10 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 // Transaction mock factory for flexible configuration
 const createTxMock = () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);

@@ -21,6 +21,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserAccessLevel } from '@pagespace/lib/server';
 

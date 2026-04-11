@@ -44,6 +44,10 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn(),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 // Mock loggers
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {

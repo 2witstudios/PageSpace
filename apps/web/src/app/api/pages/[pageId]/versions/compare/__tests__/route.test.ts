@@ -73,6 +73,10 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: (...args: unknown[]) => mockMaskIdentifier(...args),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { GET } from '../../compare/route';

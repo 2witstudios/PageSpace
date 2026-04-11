@@ -28,6 +28,10 @@ vi.mock('@pagespace/lib/permissions', () => ({
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/integrations', () => ({
   getGrantById: mockGetGrantById,
   updateGrant: vi.fn(),
@@ -68,7 +72,7 @@ describe('DELETE /api/agents/[agentId]/integrations/[grantId] audit', () => {
     );
 
     expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'delete', 'agent_grant', mockGrantId
+      mockUserId, 'delete', 'agent_grant', mockGrantId, {}
     );
   });
 });

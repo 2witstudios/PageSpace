@@ -16,6 +16,10 @@ vi.mock('@pagespace/lib/auth', async () => {
   };
 });
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 // Import the mocked module after vi.mock declaration
 import { sessionService } from '@pagespace/lib/auth';
 

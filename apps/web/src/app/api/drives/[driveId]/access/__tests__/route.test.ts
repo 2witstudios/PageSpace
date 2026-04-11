@@ -29,6 +29,10 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { POST } from '../route';
 import { loggers } from '@pagespace/lib/server';
 import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
