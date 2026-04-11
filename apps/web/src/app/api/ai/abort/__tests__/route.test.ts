@@ -41,6 +41,11 @@ vi.mock('@pagespace/lib/auth', async () => {
   };
 });
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/server';

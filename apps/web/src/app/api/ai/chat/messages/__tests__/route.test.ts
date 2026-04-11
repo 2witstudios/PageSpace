@@ -45,6 +45,11 @@ vi.mock('@/lib/ai/core', () => ({
   })),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, loggers } from '@pagespace/lib/server';

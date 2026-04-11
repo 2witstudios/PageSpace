@@ -76,6 +76,11 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn(),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';

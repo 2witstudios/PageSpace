@@ -71,6 +71,11 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';

@@ -58,6 +58,11 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'generated_conv_id'),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, loggers } from '@pagespace/lib/server';

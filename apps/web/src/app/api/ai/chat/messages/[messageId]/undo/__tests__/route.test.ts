@@ -62,6 +62,11 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id.slice(-4)}`),
 }));
 
+// Mock audit helper (boundary)
+vi.mock('@/lib/audit/route-audit', () => ({
+  logAuditEvent: vi.fn(),
+}));
+
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
