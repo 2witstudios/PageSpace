@@ -105,6 +105,9 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Re-apply mock resolved values after restoreAllMocks in afterEach
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
 
     // Create mock WebSocket client
     mockClient = {
