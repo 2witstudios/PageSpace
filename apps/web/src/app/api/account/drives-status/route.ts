@@ -1,7 +1,6 @@
 import { db, eq, and, sql, drives, driveMembers, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -23,7 +22,6 @@ export async function GET(req: Request) {
     });
 
     if (ownedDrives.length === 0) {
-      logAuditEvent(req, userId, 'read', 'account_drives', userId, { action: 'view_drives_status', soloCount: 0, multiMemberCount: 0 });
       return Response.json({
         soloDrives: [],
         multiMemberDrives: [],
@@ -92,8 +90,6 @@ export async function GET(req: Request) {
         });
       }
     }
-
-    logAuditEvent(req, userId, 'read', 'account_drives', userId, { action: 'view_drives_status', soloCount: soloDrives.length, multiMemberCount: multiMemberDrives.length });
 
     return Response.json({
       soloDrives,

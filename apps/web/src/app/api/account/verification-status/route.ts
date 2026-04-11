@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 export async function GET(request: Request) {
   try {
@@ -20,8 +19,6 @@ export async function GET(request: Request) {
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
-
-    logAuditEvent(request, authUser.id, 'read', 'account_verification', authUser.id, { action: 'check_verification_status' });
 
     return NextResponse.json({ emailVerified: user.emailVerified });
   } catch (error) {
