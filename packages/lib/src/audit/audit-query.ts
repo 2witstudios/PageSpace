@@ -52,7 +52,10 @@ export async function queryAuditEvents(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(securityAuditLog.timestamp));
 
-  if (options.limit) {
+  if (options.limit !== undefined) {
+    if (!Number.isInteger(options.limit) || options.limit < 0) {
+      throw new Error('limit must be a non-negative integer');
+    }
     return baseQuery.limit(options.limit);
   }
 

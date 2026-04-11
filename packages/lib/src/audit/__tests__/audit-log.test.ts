@@ -277,6 +277,67 @@ describe('auditRequest()', () => {
     );
   });
 
+  it('given empty x-forwarded-for header, should fall back to x-real-ip', () => {
+    const req = new Request('http://localhost/api/test', {
+      headers: {
+        'x-forwarded-for': '',
+        'x-real-ip': '192.168.1.1',
+        'user-agent': 'TestAgent/1.0',
+      },
+    });
+
+    auditRequest(req, {
+      eventType: 'data.read',
+      userId: 'user-1',
+    });
+
+    expect(mockSecurityAudit.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ipAddress: '192.168.1.1',
+      })
+    );
+  });
+
+  it('given whitespace-only x-forwarded-for, should fall back to x-real-ip', () => {
+    const req = new Request('http://localhost/api/test', {
+      headers: {
+        'x-forwarded-for': '  ',
+        'x-real-ip': '172.16.0.1',
+        'user-agent': 'TestAgent/1.0',
+      },
+    });
+
+    auditRequest(req, {
+      eventType: 'data.read',
+      userId: 'user-1',
+    });
+
+    expect(mockSecurityAudit.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ipAddress: '172.16.0.1',
+      })
+    );
+  });
+
+  it('given empty user-agent header, should use "unknown"', () => {
+    const req = new Request('http://localhost/api/test', {
+      headers: {
+        'user-agent': '',
+      },
+    });
+
+    auditRequest(req, {
+      eventType: 'data.read',
+      userId: 'user-1',
+    });
+
+    expect(mockSecurityAudit.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userAgent: 'unknown',
+      })
+    );
+  });
+
   it('given a Request and event, should delegate to audit() for dual-write', () => {
     const req = new Request('http://localhost/api/test', {
       headers: { 'user-agent': 'TestAgent/1.0' },

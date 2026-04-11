@@ -31,15 +31,19 @@ export function audit(event: AuditEvent): void {
  * already provided on the event.
  */
 export function auditRequest(request: Request, event: AuditEvent): void {
+  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  const realIp = request.headers.get('x-real-ip')?.trim();
+  const headerUserAgent = request.headers.get('user-agent')?.trim();
+
   const ipAddress =
     event.ipAddress ??
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    request.headers.get('x-real-ip') ??
+    (forwardedFor || undefined) ??
+    (realIp || undefined) ??
     'unknown';
 
   const userAgent =
     event.userAgent ??
-    request.headers.get('user-agent') ??
+    (headerUserAgent || undefined) ??
     'unknown';
 
   audit({ ...event, ipAddress, userAgent });

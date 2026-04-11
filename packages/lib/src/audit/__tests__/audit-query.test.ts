@@ -107,4 +107,26 @@ describe('queryAuditEvents()', () => {
 
     expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
   });
+
+  it('given limit: 0, should apply limit(0) to query', async () => {
+    mockDb._chain.orderBy.mockReturnValue({ limit: mockDb._chain.limit });
+    mockDb._chain.limit.mockResolvedValue([]);
+
+    const result = await queryAuditEvents({ limit: 0 });
+
+    expect(mockDb._chain.limit).toHaveBeenCalledWith(0);
+    expect(result).toEqual([]);
+  });
+
+  it('given negative limit, should throw an error', async () => {
+    await expect(queryAuditEvents({ limit: -1 })).rejects.toThrow(
+      'limit must be a non-negative integer'
+    );
+  });
+
+  it('given non-integer limit, should throw an error', async () => {
+    await expect(queryAuditEvents({ limit: 1.5 })).rejects.toThrow(
+      'limit must be a non-negative integer'
+    );
+  });
 });
