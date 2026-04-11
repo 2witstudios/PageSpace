@@ -165,6 +165,14 @@ echo "---------------------------------"
 run_test_suite "Auth Transactions (Race Conditions)" "@pagespace/db" "src/transactions/__tests__/auth-transactions.test.ts"
 
 # =============================================================================
+# Security Audit Coverage Gate
+# =============================================================================
+echo "📋 Security Audit Coverage"
+echo "--------------------------"
+
+run_test_suite "Security Audit Route Coverage" "web" "src/app/api/__tests__/security-audit-coverage.test.ts"
+
+# =============================================================================
 # Summary
 # =============================================================================
 echo ""
