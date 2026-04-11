@@ -10,7 +10,6 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
