@@ -44,7 +44,7 @@ auditRequest(req, {
 | Login failure (invalid token) | `auth.login.failure` | 0.3 |
 | Login failure (user cancel) | `auth.login.failure` | 0.1 |
 | Rate limit exceeded | `security.rate.limited` | 0.5 |
-| CSRF validation failure | `security.csrf.invalid` | 0.6 |
+| CSRF validation failure | `security.suspicious.activity` | 0.6 |
 | Token refresh | `auth.token.refreshed` | — |
 | Token created | `auth.token.created` | — |
 | Token revoked | `auth.token.revoked` | — |
@@ -72,7 +72,7 @@ OAuth callbacks, passkey operations, token exchanges, magic links, device auth, 
 - [x] `/auth/device/refresh` — `auth.token.refreshed`
 - [x] `/auth/magic-link/verify` — `auth.login.success`/`auth.login.failure`
 - [x] `/auth/logout` — `auth.logout`/`auth.token.revoked`
-- [x] `/auth/signup-passkey` — `auth.login.success`/`auth.token.created`/`security.rate.limited`/`security.csrf.invalid`
+- [x] `/auth/signup-passkey` — `auth.login.success`/`auth.token.created`/`security.rate.limited`/`security.suspicious.activity`
 - [ ] `/auth/signup-passkey/options` — pending
 - [ ] `/auth/passkey/*` (6 routes) — pending
 - [ ] `/auth/magic-link/send` — pending

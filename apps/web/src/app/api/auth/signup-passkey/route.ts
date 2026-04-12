@@ -62,7 +62,7 @@ export async function POST(req: Request) {
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
-        eventType: 'security.csrf.invalid',
+        eventType: 'security.suspicious.activity',
         riskScore: 0.6,
         details: { reason: 'passkey_csrf_invalid', flow: 'signup' },
       });

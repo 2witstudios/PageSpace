@@ -382,7 +382,7 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.csrf.invalid',
+          eventType: 'security.suspicious.activity',
           riskScore: 0.6,
           details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup' }),
         })
