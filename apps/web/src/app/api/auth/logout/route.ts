@@ -21,8 +21,10 @@ export async function POST(req: Request) {
   const userId = sessionClaims?.userId;
 
   // Revoke the session
+  let revokeSucceeded = false;
   try {
     await sessionService.revokeSession(sessionToken, 'logout');
+    revokeSucceeded = true;
     loggers.auth.debug('Session revoked on logout', { userId });
   } catch (error) {
     loggers.auth.error('Failed to revoke session on logout', {
@@ -31,8 +33,8 @@ export async function POST(req: Request) {
     });
   }
 
-  // Log the logout event
-  if (userId) {
+  // Only emit audit/track events after a successful revoke
+  if (userId && revokeSucceeded) {
     auditRequest(req, {
       eventType: 'auth.logout',
       userId,
