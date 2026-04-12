@@ -1,6 +1,6 @@
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, securityAudit, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -81,8 +81,10 @@ export async function POST(req: Request) {
         platform,
         error: verificationResult.error
       });
-      securityAudit.logAuthFailure('unknown', clientIP, 'apple_native_invalid_token').catch((error) => {
-        loggers.security.warn('[AppleNative] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'apple_native_invalid_token' },
       });
       return Response.json({ error: verificationResult.error || 'Invalid token' }, { status: 401 });
     }
@@ -189,7 +191,12 @@ export async function POST(req: Request) {
     });
 
     // Log auth events
-    logAuthEvent('login', user.id, email, clientIP, `Apple OAuth Native (${platform})`);
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: `Apple OAuth Native (${platform})` },
+    });
     trackAuthEvent(user.id, 'login', {
       email,
       ip: clientIP,
@@ -202,9 +209,6 @@ export async function POST(req: Request) {
       userId: user.id,
       platform,
       isNewUser,
-    });
-    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[AppleNative] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
     });
 
     // Set session cookie so middleware recognizes the authenticated session
@@ -231,8 +235,10 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     loggers.auth.error('Native Apple auth error', error as Error, { clientIP });
-    securityAudit.logAuthFailure('unknown', clientIP, 'apple_native_error').catch((auditError) => {
-      loggers.security.warn('[AppleNative] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'apple_native_error' },
     });
 
     // Check if it's an Apple token verification error

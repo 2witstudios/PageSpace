@@ -44,17 +44,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
-  logSecurityEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -89,7 +79,7 @@ import {
   sessionService,
   generateCSRFToken,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
@@ -190,7 +180,14 @@ describe('POST /api/auth/signup-passkey', () => {
     it('logs auth events', async () => {
       await POST(createRequest());
 
-      expect(logAuthEvent).toHaveBeenCalledWith('signup', 'new-user-1', 'user@example.com', '127.0.0.1');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-1',
+          details: expect.objectContaining({ signup: true, method: 'passkey' }),
+        })
+      );
     });
 
     it('resets rate limits on successful signup', async () => {
@@ -382,10 +379,13 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'signup',
-        email: 'use***',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup' }),
+        })
+      );
     });
   });
 
@@ -400,9 +400,13 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many requests from this IP');
       expect(body.retryAfter).toBe(3600);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_signup_ip', expect.objectContaining({
-        retryAfter: 3600,
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'rate_limit_signup_ip' }),
+        })
+      );
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
@@ -416,9 +420,13 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many signup attempts for this email');
       expect(body.retryAfter).toBe(3600);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_signup_email', expect.objectContaining({
-        email: 'use***',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'rate_limit_signup_email' }),
+        })
+      );
     });
   });
 

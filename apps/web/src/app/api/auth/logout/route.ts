@@ -1,5 +1,5 @@
 import { sessionService } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
@@ -33,16 +33,19 @@ export async function POST(req: Request) {
 
   // Log the logout event
   if (userId) {
-    logAuthEvent('logout', userId, undefined, clientIP);
+    auditRequest(req, {
+      eventType: 'auth.logout',
+      userId,
+      sessionId: sessionClaims?.sessionId ?? 'unknown',
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.revoked',
+      userId,
+      details: { tokenType: 'session', reason: 'user_logout' },
+    });
     trackAuthEvent(userId, 'logout', {
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
-    });
-    securityAudit.logLogout(userId, sessionClaims?.sessionId ?? 'unknown', clientIP).catch((error) => {
-      loggers.security.warn('[Logout] audit logLogout failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
-    securityAudit.logTokenRevoked(userId, 'session', 'user_logout').catch((error) => {
-      loggers.security.warn('[Logout] audit logTokenRevoked failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
   }
 

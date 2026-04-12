@@ -55,11 +55,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
-  securityAudit: {
-    logLogout: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -69,7 +65,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 import { sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
-import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/logout', () => {
@@ -138,7 +134,7 @@ describe('/api/auth/logout', () => {
       expect(vi.mocked(appendClearCookies).mock.calls[0][0]).toBeInstanceOf(Headers);
     });
 
-    it('logs logout event', async () => {
+    it('logs logout event via auditRequest', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = new Request('http://localhost/api/auth/logout', {
@@ -152,11 +148,21 @@ describe('/api/auth/logout', () => {
 
       await POST(request);
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'logout',
-        'test-user-id',
-        undefined,
-        '192.168.1.1'
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.logout',
+          userId: 'test-user-id',
+          sessionId: 'test-session-id',
+        })
+      );
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.token.revoked',
+          userId: 'test-user-id',
+          details: { tokenType: 'session', reason: 'user_logout' },
+        })
       );
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'test-user-id',
@@ -256,19 +262,13 @@ describe('/api/auth/logout', () => {
       await POST(request);
 
       // Should not log when no user ID
-      expect(logAuthEvent).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
       expect(trackAuthEvent).not.toHaveBeenCalled();
     });
   });
 
-  describe('audit persistence failure logging', () => {
-    const mockSecurityWarn = vi.mocked(loggers.security.warn);
-    const mockLogLogout = vi.mocked(securityAudit.logLogout);
-    const mockLogTokenRevoked = vi.mocked(securityAudit.logTokenRevoked);
-
-    it('logs warning when logLogout rejects and still returns 200', async () => {
-      mockLogLogout.mockRejectedValueOnce(new Error('Audit DB down'));
-
+  describe('audit event types', () => {
+    it('emits both auth.logout and auth.token.revoked events', async () => {
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
@@ -277,35 +277,12 @@ describe('/api/auth/logout', () => {
         },
       });
 
-      const response = await POST(request);
-      await new Promise(process.nextTick);
+      await POST(request);
 
-      expect(response.status).toBe(200);
-      expect(mockSecurityWarn).toHaveBeenCalledWith(
-        '[Logout] audit logLogout failed',
-        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
-      );
-    });
-
-    it('logs warning when logTokenRevoked rejects and still returns 200', async () => {
-      mockLogTokenRevoked.mockRejectedValueOnce(new Error('Write failed'));
-
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token',
-        },
-      });
-
-      const response = await POST(request);
-      await new Promise(process.nextTick);
-
-      expect(response.status).toBe(200);
-      expect(mockSecurityWarn).toHaveBeenCalledWith(
-        '[Logout] audit logTokenRevoked failed',
-        expect.objectContaining({ error: expect.any(String), userId: 'test-user-id' })
-      );
+      const calls = vi.mocked(auditRequest).mock.calls;
+      const eventTypes = calls.map(([, event]) => event.eventType);
+      expect(eventTypes).toContain('auth.logout');
+      expect(eventTypes).toContain('auth.token.revoked');
     });
   });
 });

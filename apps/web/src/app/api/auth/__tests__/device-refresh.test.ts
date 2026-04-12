@@ -34,16 +34,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -86,7 +77,7 @@ import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-trans
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,
-  logAuthEvent,
+  auditRequest,
   loggers,
 } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -231,12 +222,13 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'login',
-        mockUser.id,
-        mockUser.email,
-        '192.168.1.1',
-        'Device token refresh'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.token.refreshed',
+          userId: mockUser.id,
+          details: { method: 'Device token refresh' },
+        })
       );
       const trackArgs = vi.mocked(trackAuthEvent).mock.calls[0];
       expect(trackArgs[0]).toBe(mockUser.id);
