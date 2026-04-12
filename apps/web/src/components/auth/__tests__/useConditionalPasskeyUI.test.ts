@@ -4,6 +4,8 @@ import { useConditionalPasskeyUI } from '../useConditionalPasskeyUI';
 
 vi.mock('@simplewebauthn/browser', () => ({
   startAuthentication: vi.fn(),
+  WebAuthnAbortService: { cancelCeremony: vi.fn() },
+  WebAuthnError: class WebAuthnError extends Error { code: string; constructor(opts: { code: string; message: string }) { super(opts.message); this.code = opts.code; } },
 }));
 vi.mock('@/lib/utils/persist-csrf-token', () => ({ persistCsrfToken: vi.fn() }));
 vi.mock('@/stores/useAuthStore', () => ({

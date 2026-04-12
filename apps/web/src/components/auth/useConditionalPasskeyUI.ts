@@ -1,7 +1,11 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { startAuthentication } from '@simplewebauthn/browser';
+import {
+  startAuthentication,
+  WebAuthnAbortService,
+  WebAuthnError,
+} from '@simplewebauthn/browser';
 import { toast } from 'sonner';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -35,7 +39,10 @@ export function useConditionalPasskeyUI(
   onSuccessRef.current = options?.onSuccess;
 
   useEffect(() => {
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      WebAuthnAbortService.cancelCeremony();
+    };
   }, []);
 
   useEffect(() => {
@@ -121,8 +128,12 @@ export function useConditionalPasskeyUI(
         window.location.href = verifyData.redirectUrl;
       }
     } catch (err) {
-      // Conditional UI cancelled or aborted — expected when user clicks
-      // the explicit passkey button or navigates away
+      // SimpleWebAuthn throws WebAuthnError with ERROR_CEREMONY_ABORTED when
+      // cancelCeremony() is called (unmount, new ceremony). Also ignore DOM
+      // AbortError for the same reason.
+      if (err instanceof WebAuthnError && err.code === 'ERROR_CEREMONY_ABORTED') {
+        return;
+      }
       if (err instanceof Error && err.name !== 'AbortError') {
         console.debug('Conditional UI authentication failed:', err.message);
       }
