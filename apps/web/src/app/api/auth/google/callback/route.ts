@@ -53,7 +53,7 @@ export async function GET(req: Request) {
       const errorType = errorHint === 'access_denied' ? 'access_denied' : 'oauth_error';
       auditRequest(req, {
         eventType: 'auth.login.failure',
-        riskScore: 0.3,
+        riskScore: 0.1,
         details: { reason: 'google_oauth_rejected' },
       });
 

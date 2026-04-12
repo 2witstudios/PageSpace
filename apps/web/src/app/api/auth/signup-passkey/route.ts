@@ -62,8 +62,8 @@ export async function POST(req: Request) {
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
-        eventType: 'auth.login.failure',
-        riskScore: 0.3,
+        eventType: 'security.csrf.invalid',
+        riskScore: 0.6,
         details: { reason: 'passkey_csrf_invalid', flow: 'signup' },
       });
       return NextResponse.json(
@@ -81,8 +81,8 @@ export async function POST(req: Request) {
 
     if (!ipRateLimitResult.allowed) {
       auditRequest(req, {
-        eventType: 'auth.login.failure',
-        riskScore: 0.3,
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
         details: { reason: 'rate_limit_signup_ip' },
       });
       return NextResponse.json(
@@ -100,8 +100,8 @@ export async function POST(req: Request) {
 
     if (!emailRateLimitResult.allowed) {
       auditRequest(req, {
-        eventType: 'auth.login.failure',
-        riskScore: 0.3,
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
         details: { reason: 'rate_limit_signup_email' },
       });
       return NextResponse.json(

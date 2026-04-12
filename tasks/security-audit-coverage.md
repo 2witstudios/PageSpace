@@ -21,33 +21,40 @@ SecurityAuditService (`packages/lib/src/audit/security-audit.ts`) provides tampe
 
 ## Implementation Pattern
 
+Use `auditRequest(req, event)` — it automatically extracts IP/user-agent from headers and dual-writes to both the structured logger and tamper-evident audit DB. Fire-and-forget with centralized `.catch()`.
+
 ```typescript
 // Import
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
-// After successful operation, before response (fire-and-forget)
-securityAudit.logDataAccess(userId, 'read', 'resource_type', resourceId, { details }).catch((error) => {
-  logger.security.warn('[RouteName] audit log failed', { error: error.message, userId });
+// After successful operation, before response
+auditRequest(req, {
+  eventType: 'auth.login.success',
+  userId: user.id,
+  sessionId: sessionClaims.sessionId,
+  details: { method: 'Google OAuth' },
 });
 ```
 
-### Method Selection Guide
+### Event Type Guide
 
-| Operation | Method |
-|-----------|--------|
-| Login success | `logAuthSuccess(userId, sessionId, ip, userAgent)` |
-| Login failure | `logAuthFailure(attemptedUser, ip, reason)` |
-| OAuth callback/token exchange | `logAuthSuccess` or `logAuthFailure` |
-| Token create (API key, MCP, passkey) | `logTokenCreated(userId, tokenType, ip)` |
-| Token revoke/delete | `logTokenRevoked(userId, tokenType, reason)` |
-| Password change | `logPasswordChanged(userId, ip)` |
-| Access denied | `logAccessDenied(userId, resourceType, resourceId, reason)` |
-| Data read | `logDataAccess(userId, 'read', resourceType, resourceId)` |
-| Data write/create/update | `logDataAccess(userId, 'write', resourceType, resourceId, { details })` |
-| Data delete | `logDataAccess(userId, 'delete', resourceType, resourceId)` |
-| Data export | `logDataAccess(userId, 'export', resourceType, resourceId, { format })` |
-| Data share/invite | `logDataAccess(userId, 'share', resourceType, resourceId, { details })` |
-| Logout | `logLogout(userId, sessionId, ip)` |
+| Operation | eventType | riskScore |
+|-----------|-----------|-----------|
+| Login success | `auth.login.success` | — |
+| Login failure (invalid token) | `auth.login.failure` | 0.3 |
+| Login failure (user cancel) | `auth.login.failure` | 0.1 |
+| Rate limit exceeded | `security.rate.limited` | 0.5 |
+| CSRF validation failure | `security.csrf.invalid` | 0.6 |
+| Token refresh | `auth.token.refreshed` | — |
+| Token created | `auth.token.created` | — |
+| Token revoked | `auth.token.revoked` | — |
+| Logout | `auth.logout` | — |
+| Data read | `data.read` | — |
+| Data write/create/update | `data.write` | — |
+| Data delete | `data.delete` | — |
+| Data export | `data.export` | — |
+| Data share/invite | `data.share` | — |
+| Access denied | `security.access.denied` | 0.5 |
 
 ## PR Plan (9 branches, 5 priority tiers)
 
@@ -55,28 +62,33 @@ securityAudit.logDataAccess(userId, 'read', 'resource_type', resourceId, { detai
 
 OAuth callbacks, passkey operations, token exchanges, magic links, device auth, email verification. These are the highest-risk routes for security — authentication events are the #1 audit requirement.
 
-**Routes:**
-- `/auth/apple/*` (callback, native, signin) — `logAuthSuccess`/`logAuthFailure`
-- `/auth/google/*` (callback, native, one-tap, signin) — `logAuthSuccess`/`logAuthFailure`
-- `/auth/mobile/oauth/google/exchange` — `logAuthSuccess`/`logAuthFailure`
-- `/auth/mobile/refresh`, `/auth/device/refresh` — `logTokenCreated`
-- `/auth/device/register` — `logTokenCreated`
-- `/auth/desktop/exchange` — `logTokenCreated`
-- `/auth/magic-link/send`, `/auth/magic-link/verify` — `logAuthSuccess`/`logAuthFailure`
-- `/auth/passkey/*` (6 routes) — `logAuthSuccess`/`logTokenCreated`
-- `/auth/signup-passkey/*` (2 routes) — `logAuthSuccess`/`logTokenCreated`
-- `/auth/mcp-tokens`, `/auth/mcp-tokens/[tokenId]` — `logTokenCreated`/`logTokenRevoked`
-- `/auth/me` — `logDataAccess(read)` (sensitive user data)
-- `/auth/resend-verification`, `/auth/verify-email` — `logDataAccess(write)`
-- `/auth/socket-token`, `/auth/ws-token` — `logTokenCreated`
+**Routes (using `auditRequest` pattern):**
+- [x] `/auth/apple/callback` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/apple/native` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/google/callback` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/google/native` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/google/one-tap` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/mobile/oauth/google/exchange` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/device/refresh` — `auth.token.refreshed`
+- [x] `/auth/magic-link/verify` — `auth.login.success`/`auth.login.failure`
+- [x] `/auth/logout` — `auth.logout`/`auth.token.revoked`
+- [x] `/auth/signup-passkey` — `auth.login.success`/`auth.token.created`/`security.rate.limited`/`security.csrf.invalid`
+- [ ] `/auth/signup-passkey/options` — pending
+- [ ] `/auth/passkey/*` (6 routes) — pending
+- [ ] `/auth/magic-link/send` — pending
+- [ ] `/auth/mobile/refresh`, `/auth/device/register` — pending
+- [ ] `/auth/desktop/exchange` — pending
+- [ ] `/auth/mcp-tokens`, `/auth/mcp-tokens/[tokenId]` — pending
+- [ ] `/auth/me` — pending
+- [ ] `/auth/resend-verification`, `/auth/verify-email` — pending
+- [ ] `/auth/socket-token`, `/auth/ws-token` — pending
 - `/auth/csrf`, `/auth/login-csrf` — skip (stateless, no user context)
 
 **Acceptance criteria:**
-- [ ] All auth routes have appropriate audit calls
-- [ ] OAuth success/failure correctly distinguished
-- [ ] Token creation events logged with token type
-- [ ] Fire-and-forget pattern with `.catch()` error handling
-- [ ] No functional behavior changes to any route
+- [x] OAuth success/failure correctly distinguished with graduated riskScores
+- [x] Fire-and-forget via centralized `audit()` with `.catch()`
+- [x] No functional behavior changes to any route
+- [ ] All auth routes have appropriate audit calls (10/31 done)
 - [ ] `pnpm typecheck` passes
 - [ ] No new `any` types
 

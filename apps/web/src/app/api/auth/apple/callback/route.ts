@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       const errorType = errorHint === 'user_cancelled_authorize' ? 'access_denied' : 'oauth_error';
       auditRequest(req, {
         eventType: 'auth.login.failure',
-        riskScore: 0.3,
+        riskScore: 0.1,
         details: { reason: 'apple_oauth_rejected' },
       });
 

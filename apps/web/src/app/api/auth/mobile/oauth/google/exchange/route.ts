@@ -292,8 +292,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Log successful OAuth login (via auditRequest below after CSRF generation)
-
     // Track successful OAuth login
     trackAuthEvent(user.id, 'login', {
       email: user.email,

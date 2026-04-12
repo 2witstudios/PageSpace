@@ -382,7 +382,8 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'auth.login.failure',
+          eventType: 'security.csrf.invalid',
+          riskScore: 0.6,
           details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup' }),
         })
       );
@@ -403,7 +404,8 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'auth.login.failure',
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
           details: expect.objectContaining({ reason: 'rate_limit_signup_ip' }),
         })
       );
@@ -423,7 +425,8 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'auth.login.failure',
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
           details: expect.objectContaining({ reason: 'rate_limit_signup_email' }),
         })
       );
