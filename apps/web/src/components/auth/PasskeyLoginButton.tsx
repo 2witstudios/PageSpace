@@ -160,6 +160,3 @@ export function PasskeyLoginButton({
   );
 }
 
-// Re-export hook from its own module (separated for testability)
-export { useConditionalPasskeyUI } from './useConditionalPasskeyUI';
-export type { ConditionalPasskeyOptions } from './useConditionalPasskeyUI';
