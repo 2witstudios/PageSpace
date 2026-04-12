@@ -99,7 +99,7 @@ import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers, auditRequest } from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
