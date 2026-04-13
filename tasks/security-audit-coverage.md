@@ -77,18 +77,18 @@ OAuth callbacks, passkey operations, token exchanges, magic links, device auth, 
 - [ ] `/auth/passkey/*` (6 routes) — pending
 - [ ] `/auth/magic-link/send` — pending
 - [ ] `/auth/mobile/refresh`, `/auth/device/register` — pending
-- [ ] `/auth/desktop/exchange` — pending
-- [ ] `/auth/mcp-tokens`, `/auth/mcp-tokens/[tokenId]` — pending
-- [ ] `/auth/me` — pending
-- [ ] `/auth/resend-verification`, `/auth/verify-email` — pending
-- [ ] `/auth/socket-token`, `/auth/ws-token` — pending
+- [x] `/auth/desktop/exchange` — `auth.token.created`
+- [x] `/auth/mcp-tokens`, `/auth/mcp-tokens/[tokenId]` — `auth.token.created`/`auth.token.revoked`
+- [x] `/auth/me` — `data.read`
+- [x] `/auth/resend-verification`, `/auth/verify-email` — `auth.token.created`/`auth.email.verified`
+- [x] `/auth/socket-token`, `/auth/ws-token` — `auth.token.created`
 - `/auth/csrf`, `/auth/login-csrf` — skip (stateless, no user context)
 
 **Acceptance criteria:**
 - [x] OAuth success/failure correctly distinguished with graduated riskScores
 - [x] Fire-and-forget via centralized `audit()` with `.catch()`
 - [x] No functional behavior changes to any route
-- [ ] All auth routes have appropriate audit calls (10/31 done)
+- [ ] All auth routes have appropriate audit calls (~17/31 done; passkey/* + magic-link/send + mobile/refresh + device/register still pending)
 - [ ] `pnpm typecheck` passes
 - [ ] No new `any` types
 
