@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from './index';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
-import { logSecurityEvent, audit, auditRequest } from '@pagespace/lib/server';
+import { logSecurityEvent, auditRequest } from '@pagespace/lib/server';
 
 export interface VerifiedUser {
   id: string;
