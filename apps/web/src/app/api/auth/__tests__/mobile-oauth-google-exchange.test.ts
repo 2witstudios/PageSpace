@@ -19,29 +19,29 @@ vi.mock('@pagespace/lib/server', async () => {
     '@pagespace/lib/audit/mask-email'
   );
   return {
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-  }),
-  verifyOAuthIdToken: vi.fn(),
-  createOrLinkOAuthUser: vi.fn(),
-  OAuthProvider: {
-    GOOGLE: 'google',
-    APPLE: 'apple',
-  },
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+      deviceToken: 'mock-device-token',
+    }),
+    verifyOAuthIdToken: vi.fn(),
+    createOrLinkOAuthUser: vi.fn(),
+    OAuthProvider: {
+      GOOGLE: 'google',
+      APPLE: 'apple',
     },
-    security: {
-      warn: vi.fn(),
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-  },
-  auditRequest: vi.fn(),
-  maskEmail,
+    auditRequest: vi.fn(),
+    maskEmail,
   };
 });
 

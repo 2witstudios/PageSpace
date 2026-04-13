@@ -92,20 +92,20 @@ vi.mock('@pagespace/lib/server', async () => {
     '@pagespace/lib/audit/mask-email'
   );
   return {
-  loggers: {
-    api: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+    loggers: {
+      api: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
     },
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-    },
-  },
-  maskEmail,
+    maskEmail,
   };
 });
 
