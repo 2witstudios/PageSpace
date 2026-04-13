@@ -82,11 +82,15 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
     };
 
   } catch (error) {
-    loggers.processor.error('OCR processing failed', {
-      contentHash,
-      provider,
-      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-    });
+    loggers.processor.error(
+      'OCR processing failed',
+      error instanceof Error ? error : undefined,
+      {
+        contentHash,
+        provider,
+        ...(error instanceof Error ? {} : { rawError: String(error) }),
+      },
+    );
     throw error;
   }
 }

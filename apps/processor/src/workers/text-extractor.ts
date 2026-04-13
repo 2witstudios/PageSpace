@@ -10,7 +10,7 @@ import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
   const { contentHash, mimeType } = data;
 
-  loggers.processor.info('text extraction started', { contentHash, mimeType });
+  loggers.processor.info('Text extraction started', { contentHash, mimeType });
 
   // Get original file
   const fileBuffer = await contentStore.getOriginal(contentHash);
@@ -46,7 +46,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
         break;
 
       default:
-        loggers.processor.warn('unsupported mime type for text extraction', { contentHash, mimeType });
+        loggers.processor.warn('Unsupported mime type for text extraction', { contentHash, mimeType });
         return {
           success: false,
           error: `Unsupported file type: ${mimeType}`
@@ -63,7 +63,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
       extractedText
     );
 
-    loggers.processor.info('text extraction succeeded', {
+    loggers.processor.info('Text extraction succeeded', {
       contentHash,
       mimeType,
       textLength: extractedText.length,
@@ -78,11 +78,15 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     };
 
   } catch (error) {
-    loggers.processor.error('text extraction failed', {
-      contentHash,
-      mimeType,
-      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-    });
+    loggers.processor.error(
+      'Text extraction failed',
+      error instanceof Error ? error : undefined,
+      {
+        contentHash,
+        mimeType,
+        ...(error instanceof Error ? {} : { rawError: String(error) }),
+      },
+    );
     throw error;
   }
 }
