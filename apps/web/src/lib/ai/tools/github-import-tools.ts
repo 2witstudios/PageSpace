@@ -16,7 +16,9 @@ import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,
+  listGrantsByAgent,
   listUserConnections,
   listDriveConnections,
   getConfig,
@@ -106,77 +108,101 @@ async function githubFetch(
   return response.json();
 }
 
-async function resolveGitHubToken(
-  connectionId: string,
-  userId: string,
-  driveId: string
-): Promise<string> {
+async function loadGitHubToken(connectionId: string): Promise<string> {
   const connection = await getConnectionWithProvider(db, connectionId);
   if (!connection) {
-    throw new Error(
-      'GitHub connection not found. Connect your GitHub account in Settings > Integrations.'
-    );
+    throw new Error('GitHub connection not found. Connect your GitHub account in Settings > Integrations.');
   }
-
-  // Verify the connection belongs to the caller (user-scoped) or their drive (drive-scoped)
-  if (connection.userId && connection.userId !== userId) {
-    throw new Error('GitHub connection does not belong to this user.');
-  }
-  if (connection.driveId && connection.driveId !== driveId) {
-    throw new Error('GitHub connection does not belong to this drive.');
-  }
-
   if (connection.status !== 'active') {
-    throw new Error(
-      `GitHub connection is ${connection.status}. Please reconnect in Settings > Integrations.`
-    );
+    throw new Error(`GitHub connection is ${connection.status}. Please reconnect in Settings > Integrations.`);
   }
 
   const credentials = (await decryptCredentials(
     connection.credentials as Record<string, string>
   )) as { accessToken?: string; token?: string };
 
-  const token = credentials.accessToken || credentials.token;
+  const token = credentials.accessToken ?? credentials.token;
   if (!token) {
     throw new Error('GitHub access token not found in connection credentials.');
   }
-
   return token;
 }
 
-async function findGitHubConnectionId(
-  userId: string,
-  driveId: string
-): Promise<string> {
-  // Resolve connections through the same path the global assistant uses,
-  // applying visibility, assistant-config, and drive-scoping filters.
-  const driveAccess = await getDriveAccess(driveId, userId);
-  const userDriveRole: DriveRole | null = driveAccess.isMember
-    ? (driveAccess.role as DriveRole)
-    : null;
-
-  const deps: ResolutionDependencies = {
-    listGrantsByAgent: async () => [] as GrantWithConnectionAndProvider[],
+function buildResolutionDeps(): ResolutionDependencies {
+  return {
+    listGrantsByAgent: (agentId) =>
+      listGrantsByAgent(db, agentId) as Promise<GrantWithConnectionAndProvider[]>,
     listUserConnections: (uid) => listUserConnections(db, uid),
     listDriveConnections: (did) => listDriveConnections(db, did),
-    getAssistantConfig: (uid) => getConfig(db, uid) as Promise<GlobalAssistantConfigData | null>,
+    getAssistantConfig: (uid) =>
+      getConfig(db, uid) as Promise<GlobalAssistantConfigData | null>,
   };
+}
 
-  const grants = await resolveGlobalAssistantIntegrations(
-    deps, userId, driveId, userDriveRole
-  );
+interface AllowedConnections {
+  ids: readonly string[];
+  noneFoundMessage: string;
+  notAllowedMessage: string;
+}
 
-  const githubGrant = grants.find(
-    (g) => g.connection?.provider?.slug === 'github'
-  );
+async function resolveChatContextDrive(
+  ctx: ToolExecutionContext
+): Promise<{ driveId: string | null; role: DriveRole | null }> {
+  const chatDriveId = ctx.locationContext?.currentDrive?.id ?? null;
+  if (!chatDriveId) return { driveId: null, role: null };
+  const access = await getDriveAccess(chatDriveId, ctx.userId);
+  if (!access.isMember) return { driveId: null, role: null };
+  return { driveId: chatDriveId, role: access.role as DriveRole };
+}
 
-  if (!githubGrant) {
-    throw new Error(
-      'No active GitHub connection found for this drive. Connect your GitHub account in Settings > Integrations.'
-    );
+const githubGrantIds = (grants: readonly GrantWithConnectionAndProvider[]): readonly string[] =>
+  grants.filter((g) => g.connection?.provider?.slug === 'github').map((g) => g.connectionId);
+
+async function listAllowedGitHubConnections(
+  ctx: ToolExecutionContext
+): Promise<AllowedConnections> {
+  const deps = buildResolutionDeps();
+  const chatSource = ctx.chatSource;
+
+  if (chatSource?.type === 'page' && chatSource.agentPageId) {
+    const grants = await resolveAgentIntegrations(deps, chatSource.agentPageId);
+    return {
+      ids: githubGrantIds(grants),
+      noneFoundMessage:
+        "This page agent does not have a GitHub integration grant. Add it from the agent's Integrations panel.",
+      notAllowedMessage:
+        'The supplied connectionId is not granted to this agent. Pass an id from the agent\'s GitHub grants, or omit it for auto-detection.',
+    };
   }
 
-  return githubGrant.connectionId;
+  const { driveId, role } = await resolveChatContextDrive(ctx);
+  const grants = await resolveGlobalAssistantIntegrations(deps, ctx.userId, driveId, role);
+  const inDriveContext = driveId !== null;
+  return {
+    ids: githubGrantIds(grants),
+    noneFoundMessage: inDriveContext
+      ? 'No active GitHub connection found for this drive. Connect your GitHub account in Settings > Integrations.'
+      : 'No active GitHub connection found. Connect your GitHub account in Settings > Integrations.',
+    notAllowedMessage:
+      'The supplied connectionId is not available in this chat. Omit it for auto-detection.',
+  };
+}
+
+async function findGitHubConnectionId(
+  ctx: ToolExecutionContext,
+  explicitConnectionId?: string
+): Promise<string> {
+  const allowed = await listAllowedGitHubConnections(ctx);
+  if (allowed.ids.length === 0) {
+    throw new Error(allowed.noneFoundMessage);
+  }
+  if (explicitConnectionId !== undefined) {
+    if (!allowed.ids.includes(explicitConnectionId)) {
+      throw new Error(allowed.notAllowedMessage);
+    }
+    return explicitConnectionId;
+  }
+  return allowed.ids[0];
 }
 
 async function createCodePage(params: {
@@ -435,10 +461,11 @@ export const githubImportTools = {
         .describe(`Maximum files to import (default ${DEFAULT_MAX_FILES}, max ${MAX_FILES_LIMIT})`),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
+      const ctx = context as ToolExecutionContext | undefined;
+      if (!ctx?.userId) {
         throw new Error('User authentication required');
       }
+      const userId = ctx.userId;
 
       const {
         connectionId: explicitConnectionId,
@@ -476,11 +503,8 @@ export const githubImportTools = {
         throw new Error('Only drive owners can create pages at the root level');
       }
 
-      // Resolve GitHub connection (after drive/permission validation)
-      const connectionId = explicitConnectionId ?? await findGitHubConnectionId(userId, driveId);
-
-      // Resolve GitHub credentials (scoped to calling user + drive)
-      const token = await resolveGitHubToken(connectionId, userId, driveId);
+      const connectionId = await findGitHubConnectionId(ctx, explicitConnectionId);
+      const token = await loadGitHubToken(connectionId);
 
       try {
         switch (mode) {

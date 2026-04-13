@@ -644,6 +644,14 @@ export function calculateBackoffDelay(attempt: number, baseDelay: number = 1000)
 
 /**
  * Deliver with retry logic
+ *
+ * Retries the *undelivered tail*, not the full batch. Transports that support
+ * partial delivery (syslog TCP/UDP mid-batch failure, webhook batched sub-batch
+ * failure) return `entriesDelivered` as a contiguous prefix count; on a
+ * retryable failure we slice past that prefix so the receiver never sees the
+ * already-delivered rows twice. The returned `entriesDelivered` is the
+ * cumulative total across all attempts, which keeps the caller's cursor walk
+ * (`merged.slice(0, entriesDelivered)`) correct.
  */
 export async function deliverToSiemWithRetry(
   config: SiemConfig,
@@ -651,16 +659,27 @@ export async function deliverToSiemWithRetry(
   maxRetries?: number
 ): Promise<SiemDeliveryResult> {
   const retries = maxRetries ?? config.webhook?.retryAttempts ?? 3;
+  let cumulativeDelivered = 0;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const result = await deliverToSiemBatched(config, entries);
+    const remaining = entries.slice(cumulativeDelivered);
+    const result = await deliverToSiemBatched(config, remaining);
+    cumulativeDelivered += result.entriesDelivered;
 
     if (result.success) {
-      return result;
+      return {
+        success: true,
+        entriesDelivered: cumulativeDelivered,
+      };
     }
 
     if (!result.retryable || attempt === retries) {
-      return result;
+      return {
+        success: false,
+        entriesDelivered: cumulativeDelivered,
+        error: result.error,
+        retryable: result.retryable,
+      };
     }
 
     // Wait before retry
@@ -670,7 +689,7 @@ export async function deliverToSiemWithRetry(
 
   return {
     success: false,
-    entriesDelivered: 0,
+    entriesDelivered: cumulativeDelivered,
     error: 'Max retries exceeded',
     retryable: false,
   };
