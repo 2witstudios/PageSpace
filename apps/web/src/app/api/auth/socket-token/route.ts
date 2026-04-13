@@ -1,5 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { loggers, audit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { randomBytes, createHash } from 'crypto';
 
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     expiresAt,
   });
 
-  audit({ eventType: 'auth.token.created', userId: auth.userId, details: { tokenType: 'socket' } });
+  auditRequest(request, { eventType: 'auth.token.created', userId: auth.userId, details: { tokenType: 'socket' } });
 
   // Return with no-cache headers to prevent token reuse across sessions
   return Response.json({

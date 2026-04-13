@@ -18,7 +18,7 @@
  */
 
 import { consumeExchangeCode } from '@pagespace/lib/auth';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { z } from 'zod/v4';
 
@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       userId: data.userId,
       provider: data.provider,
     });
-    audit({ eventType: 'auth.token.created', userId: data.userId, details: { tokenType: 'desktop' } });
+    auditRequest(req, { eventType: 'auth.token.created', userId: data.userId, details: { tokenType: 'desktop' } });
 
     // Return tokens in response body (secure - not logged by proxies)
     // Set session cookie so Next.js middleware allows page route requests

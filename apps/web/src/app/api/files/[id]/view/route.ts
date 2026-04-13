@@ -4,7 +4,7 @@ import { db, pages, files, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
 import { canUserAccessFile } from '@pagespace/lib/permissions';
 import { sanitizeFilenameForHeader, isDangerousMimeType, getCSPHeaderForFile } from '@pagespace/lib/utils/file-security';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 interface RouteParams {
   params: Promise<{

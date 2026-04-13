@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -35,7 +35,7 @@ export async function DELETE(
       tokenType: 'mcp',
       tokenName: existingToken.name,
     }, actorInfo);
-    audit({ eventType: 'auth.token.revoked', userId, details: { tokenType: 'mcp', reason: 'user_revoked' } });
+    auditRequest(req, { eventType: 'auth.token.revoked', userId, details: { tokenType: 'mcp', reason: 'user_revoked' } });
 
     return NextResponse.json({ message: 'Token revoked successfully' });
   } catch (error) {

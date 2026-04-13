@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
-import { loggers, audit, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       tokenType: 'mcp',
       tokenName: newToken.name,
     }, actorInfo);
-    audit({ eventType: 'auth.token.created', userId, details: { tokenType: 'mcp' } });
+    auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'mcp' } });
 
     // Return the raw token ONCE to the user - this is the only time they'll see it
     // Response format matches GET for consistency

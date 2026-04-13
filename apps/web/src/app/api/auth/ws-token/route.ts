@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth, getClientIP } from '@/lib/auth';
-import { loggers, audit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     createdByService: 'desktop',
     createdByIp: clientIP,
   });
-  audit({ eventType: 'auth.token.created', userId: user.id, details: { tokenType: 'websocket' } });
+  auditRequest(request, { eventType: 'auth.token.created', userId: user.id, details: { tokenType: 'websocket' } });
 
   return NextResponse.json({ token });
 }

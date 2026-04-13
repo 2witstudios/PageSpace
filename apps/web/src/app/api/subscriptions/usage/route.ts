@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 export async function GET(request: NextRequest) {
   try {

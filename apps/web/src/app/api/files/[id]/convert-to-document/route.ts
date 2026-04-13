@@ -6,7 +6,7 @@ import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

@@ -1,5 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 

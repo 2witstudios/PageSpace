@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   verifySignedState,
   exchangeOAuthCode,
@@ -177,7 +177,7 @@ export async function GET(request: Request) {
       loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
     }
 
-    audit({ eventType: 'auth.token.created', userId, details: { tokenType: 'integration' } });
+    auditRequest(request, { eventType: 'auth.token.created', userId, details: { tokenType: 'integration' } });
 
     const redirectPath = returnUrl && isSafeReturnUrl(returnUrl) ? returnUrl : defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);

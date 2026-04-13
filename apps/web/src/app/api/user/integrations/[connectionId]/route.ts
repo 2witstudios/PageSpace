@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, integrationConnections, eq } from '@pagespace/db';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   getConnectionById,
   deleteConnection,
@@ -137,7 +137,7 @@ export async function DELETE(
 
     await deleteConnection(db, connectionId);
 
-    audit({ eventType: 'auth.token.revoked', userId: auth.userId, details: { tokenType: 'integration', reason: 'user_disconnect' } });
+    auditRequest(request, { eventType: 'auth.token.revoked', userId: auth.userId, details: { tokenType: 'integration', reason: 'user_disconnect' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMC
 import { getActivityById, previewRollback } from '@/services/api';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

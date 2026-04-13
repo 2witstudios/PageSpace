@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess, loggers, auditRequest } from '@pagespace/lib/server';
+import { checkDriveAccess, auditRequest } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
