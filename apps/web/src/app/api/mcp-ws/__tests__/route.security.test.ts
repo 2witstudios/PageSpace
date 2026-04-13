@@ -75,7 +75,7 @@ vi.mock('@pagespace/lib/server', () => ({
     security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   },
-  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import {
@@ -88,7 +88,7 @@ import {
   validateMessageSize,
 } from '@/lib/websocket';
 import { sessionService } from '@pagespace/lib';
-import { audit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Mock session expiry (1 hour from now)
 const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);
@@ -188,12 +188,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       await UPGRADE(mockClient, mockServer, mockRequest);
 
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Insufficient permissions');
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'authz.access.denied',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
-          userAgent: 'Mozilla/5.0 Test',
           resourceType: 'mcp_websocket',
           riskScore: 0.5,
           details: expect.objectContaining({
@@ -228,7 +227,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       }
     });
 
-    it('should not leak sensitive data in logs', async () => {
+    it('should not leak sensitive data into audit events or console', async () => {
       const consoleSpy = vi.spyOn(console, 'log');
       const errorSpy = vi.spyOn(console, 'error');
 
@@ -246,13 +245,22 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      const allLogs = [
+      const sensitivePattern = /password|secret|api[_-]?key|bearer|svc_mock_opaque_token|token(?!Version)/i;
+
+      // Assert audit payloads do not carry raw token/secret values (these now
+      // flow through auditRequest(), which is mocked — spying on console alone
+      // would miss any regression that pipes raw credentials into audit details).
+      const auditSerialized = vi
+        .mocked(auditRequest)
+        .mock.calls.map((call) => JSON.stringify(call[1]))
+        .join(' ');
+      expect(auditSerialized).not.toMatch(sensitivePattern);
+
+      const allConsoleLogs = [
         ...consoleSpy.mock.calls.flat(),
         ...errorSpy.mock.calls.flat(),
       ].join(' ');
-
-      // Should not contain tokens, API keys, passwords
-      expect(allLogs).not.toMatch(/password|secret|key|token(?!Version)/i);
+      expect(allConsoleLogs).not.toMatch(sensitivePattern);
 
       consoleSpy.mockRestore();
       errorSpy.mockRestore();
@@ -305,11 +313,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const pingMessage = JSON.stringify({ type: 'ping' });
       messageHandler!.call(mockClient, Buffer.from(pingMessage));
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.7,
           details: expect.objectContaining({
             originalEvent: 'ws_fingerprint_mismatch',
@@ -329,10 +338,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'auth.login.failure',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_authentication_failed',
@@ -350,10 +360,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'auth.login.failure',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_session_validation_error',
@@ -382,13 +393,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'auth.session.created',
           userId: 'user_123',
           sessionId: 'session_123',
-          ipAddress: '192.168.1.1',
-          userAgent: 'Mozilla/5.0 Test',
           resourceType: 'mcp_websocket',
           riskScore: 0,
           details: expect.objectContaining({
@@ -396,9 +406,17 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           }),
         })
       );
+
+      // Fingerprint must NOT be persisted in audit details (privacy: client-linkable
+      // pseudonym that would resist GDPR erasure in the tamper-evident hash chain).
+      const sessionAuditCall = vi.mocked(auditRequest).mock.calls.find(
+        ([, event]) => event.eventType === 'auth.session.created'
+      );
+      expect(sessionAuditCall).toBeDefined();
+      expect((sessionAuditCall![1].details ?? {}) as Record<string, unknown>).not.toHaveProperty('fingerprint');
     });
 
-    it('should NOT audit normal disconnections (code 1000/1001)', async () => {
+    it.each([1000, 1001])('should NOT audit normal disconnection (code %i)', async (closeCode) => {
       vi.mocked(sessionService.validateSession).mockResolvedValue({
         sessionId: 'session_123',
         userId: 'user_123',
@@ -413,7 +431,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      vi.mocked(audit).mockClear();
+      vi.mocked(auditRequest).mockClear();
 
       const closeHandler = vi.mocked(mockClient.on).mock.calls.find(
         (call) => call[0] === 'close'
@@ -421,10 +439,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(typeof closeHandler).toBe('function');
 
-      closeHandler!.call(mockClient, 1000, Buffer.from('Normal closure'));
+      closeHandler!.call(mockClient, closeCode, Buffer.from('Normal closure'));
 
-      const closeAuditCalls = vi.mocked(audit).mock.calls.filter((call) =>
-        (call[0] as { details?: { originalEvent?: string } })?.details?.originalEvent === 'ws_connection_closed'
+      const closeAuditCalls = vi.mocked(auditRequest).mock.calls.filter(
+        ([, event]) =>
+          (event as { details?: { originalEvent?: string } })?.details?.originalEvent ===
+          'ws_connection_closed'
       );
       expect(closeAuditCalls).toHaveLength(0);
     });
@@ -452,11 +472,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       closeHandler!.call(mockClient, 1006, Buffer.from('Abnormal closure'));
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_connection_closed',
@@ -537,11 +558,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const largeMessage = JSON.stringify({ type: 'ping' });
       messageHandler!.call(mockClient, Buffer.from(largeMessage));
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_message_too_large',
@@ -581,11 +603,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       messageHandler!.call(mockClient, Buffer.from('{ invalid json'));
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_message_json_parse_error',
@@ -621,11 +644,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       errorHandler!.call(mockClient, new Error('Test error'));
 
-      expect(audit).toHaveBeenCalledWith(
+      expect(auditRequest).toHaveBeenCalledWith(
+        mockRequest,
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           userId: 'user_123',
-          ipAddress: '192.168.1.1',
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_error',
