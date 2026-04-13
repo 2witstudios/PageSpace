@@ -163,7 +163,7 @@ const fetchAuthenticationOptions: Step = async (ctx) => {
 const startAssertionWithRefreshTimer: Step = async (ctx) => {
   if (!ctx.authOptions) return { status: 'abort', reason: 'ceremony-error' };
 
-  let refreshTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+  const refreshTimer = setTimeout(() => {
     if (ctx.isMounted()) ctx.cancelCeremony();
   }, ctx.refreshIntervalMs);
 
@@ -177,8 +177,7 @@ const startAssertionWithRefreshTimer: Step = async (ctx) => {
   } catch (err) {
     return classifyCeremonyError({ err, mounted: ctx.isMounted() });
   } finally {
-    if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = undefined;
+    clearTimeout(refreshTimer);
   }
 };
 
