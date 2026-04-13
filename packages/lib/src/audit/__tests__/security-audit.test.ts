@@ -282,7 +282,7 @@ describe('Security Audit Service', () => {
       expect(selectSql).toBeDefined();
       const joinedSql = selectSql!.strings.join('');
       expect(joinedSql).toContain('SELECT');
-      expect(joinedSql).toContain('eventHash');
+      expect(joinedSql).toContain('event_hash');
       expect(joinedSql).not.toContain('FOR UPDATE');
     });
   });

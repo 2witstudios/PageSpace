@@ -167,13 +167,13 @@ export class SecurityAuditService {
 
       // Read the latest hash — safe from races under the advisory lock
       const lastRecord = await tx.execute(sql`
-        SELECT "eventHash"
+        SELECT event_hash
         FROM security_audit_log
         ORDER BY timestamp DESC
         LIMIT 1
       `);
 
-      const previousHash = (lastRecord.rows[0] as { eventHash: string } | undefined)?.eventHash ?? 'genesis';
+      const previousHash = (lastRecord.rows[0] as { event_hash: string } | undefined)?.event_hash ?? 'genesis';
 
       const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
 
