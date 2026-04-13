@@ -3,9 +3,14 @@ import * as net from 'net';
 import * as dgram from 'dgram';
 import { validateExternalURL } from '@pagespace/lib/security';
 
+// Sources the SIEM worker can read from. Each source has its own cursor row
+// in siem_delivery_cursors and its own pure-function row mapper.
+export type AuditLogSource = 'activity_logs' | 'security_audit_log';
+
 // Types for audit log entries
 export interface AuditLogEntry {
   id: string;
+  source: AuditLogSource;
   timestamp: Date;
   userId: string | null;
   actorEmail: string;
@@ -161,12 +166,13 @@ export function computeHmacSignature(payload: string, secret: string): string {
  */
 export function formatWebhookPayload(entries: AuditLogEntry[]): string {
   const payload = {
-    version: '1.0',
+    version: '1.1',
     source: 'pagespace-audit',
     timestamp: new Date().toISOString(),
     count: entries.length,
     entries: entries.map(entry => ({
       id: entry.id,
+      source: entry.source,
       timestamp: entry.timestamp.toISOString(),
       actor: {
         userId: entry.userId,
@@ -291,6 +297,7 @@ export function formatSyslogMessage(
   // PageSpace audit data
   const auditData = [
     `id="${escapeSDParam(entry.id)}"`,
+    `source="${escapeSDParam(entry.source)}"`,
     `userId="${escapeSDParam(entry.userId || '-')}"`,
     `email="${escapeSDParam(entry.actorEmail)}"`,
     `operation="${escapeSDParam(entry.operation)}"`,
