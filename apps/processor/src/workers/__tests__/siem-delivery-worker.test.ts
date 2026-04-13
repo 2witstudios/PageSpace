@@ -1488,11 +1488,13 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'a tampered activity_logs row',
-      should: 'include the break index and reason in the error message',
+      should: 'include the break index, reason, expected and actual hashes in the error message',
       actual:
         typeof (errorCalls[0][1] as unknown[])[1] === 'string' &&
         ((errorCalls[0][1] as string[])[1] as string).includes('hash_mismatch') &&
-        ((errorCalls[0][1] as string[])[1] as string).includes('log_tampered'),
+        ((errorCalls[0][1] as string[])[1] as string).includes('log_tampered') &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('expected=expected') &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('actual=tampered'),
       expected: true,
     });
   });
@@ -1579,6 +1581,15 @@ describe('processSiemDelivery', () => {
       should: 'pass the break reason to the alert',
       actual: (mockNotifyChainPreflightFailure.mock.calls[0][0] as { breakReason: string }).breakReason,
       expected: 'hash_mismatch',
+    });
+
+    assert({
+      given: 'a single tampered activity_logs row in the merged batch',
+      should: 'pass the real source batch total (1), not a prefix count',
+      actual: (mockNotifyChainPreflightFailure.mock.calls[0][0] as {
+        sourceBatchTotalEntries: number;
+      }).sourceBatchTotalEntries,
+      expected: 1,
     });
   });
 

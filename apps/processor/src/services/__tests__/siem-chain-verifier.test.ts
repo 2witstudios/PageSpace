@@ -128,7 +128,7 @@ describe('verifyChainForSource', () => {
         verifiedCount: 0,
         breakAtIndex: 0,
         breakReason: 'missing_hash',
-        expectedHash: 'hash(e1|ANCHOR)',
+        expectedHash: null,
         actualHash: null,
       },
     });
@@ -206,6 +206,59 @@ describe('verifyChainForSource', () => {
       should: 'return valid and skip the anchor check on entry 0',
       actual: result,
       expected: { valid: true, verifiedCount: 2 },
+    });
+  });
+
+  it('fresh init (anchorHash null) with entry 0 logHash null is missing_hash', () => {
+    // Defensive: a fresh-init single-entry batch whose entry 0 has no
+    // stored logHash would previously fall back to an empty-string anchor
+    // and trivially validate. That's unsafe — treat it as missing_hash.
+    const e1 = entry('e1', null, null);
+
+    const result = verifyChainForSource({
+      anchorHash: null,
+      entries: [e1],
+      recomputeHash: fakeHasher,
+    });
+
+    assert({
+      given: 'a fresh init (anchorHash null) and entry 0 with null logHash',
+      should: 'return invalid at index 0 with missing_hash and null hashes',
+      actual: result,
+      expected: {
+        valid: false,
+        verifiedCount: 0,
+        breakAtIndex: 0,
+        breakReason: 'missing_hash',
+        expectedHash: null,
+        actualHash: null,
+      },
+    });
+  });
+
+  it('missing_hash loop path does not invoke recomputeHash', () => {
+    // The missing_hash branch must never call the injected strategy —
+    // a strategy that throws on malformed data would otherwise break the
+    // verifier's non-throw domain contract.
+    const e1 = entry('e1', 'hash(e1|ANCHOR)', 'ANCHOR');
+    const e2 = entry('e2', null, 'hash(e1|ANCHOR)');
+    let strategyCalls = 0;
+    const countingHasher = (ent: ChainVerifiableEntry, prev: string): string => {
+      strategyCalls++;
+      return `hash(${ent.id}|${prev})`;
+    };
+
+    verifyChainForSource({
+      anchorHash: 'ANCHOR',
+      entries: [e1, e2],
+      recomputeHash: countingHasher,
+    });
+
+    assert({
+      given: 'a mid-batch entry with null logHash',
+      should: 'not call recomputeHash for that entry',
+      actual: strategyCalls,
+      expected: 1, // only e1 (the valid one)
     });
   });
 

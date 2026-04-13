@@ -370,17 +370,31 @@ export async function processSiemDelivery(): Promise<void> {
         return;
       }
 
-      await recordError(
-        client,
-        preflightResult.source,
-        `Hash chain broken at index ${preflightResult.breakAtIndex}: ${preflightResult.breakReason} (entry=${preflightResult.entryId})`
-      );
+      // Include expected/actual hashes when present so /health can
+      // distinguish hash_mismatch from chain_break from missing_hash
+      // without re-reading the cursor row. missing_hash leaves both null.
+      const hashDetail = [
+        preflightResult.expectedHash !== null
+          ? `expected=${preflightResult.expectedHash}`
+          : null,
+        preflightResult.actualHash !== null
+          ? `actual=${preflightResult.actualHash}`
+          : null,
+      ]
+        .filter((s): s is string => s !== null)
+        .join(' ');
+      const errorMessage = `Hash chain broken at index ${preflightResult.breakAtIndex}: ${preflightResult.breakReason} (entry=${preflightResult.entryId})${hashDetail ? ` ${hashDetail}` : ''}`;
+
+      await recordError(client, preflightResult.source, errorMessage);
 
       // Fire the existing chain verification webhook. notifyChainPreflightFailure
       // swallows alert-handler errors internally, but we still wrap the call
       // defensively — a broken alert surface must NEVER mask tamper detection
       // or drop the lock-release in the finally. The tamper-error write has
       // already been made above, so /health already shows the failure.
+      const sourceBatchTotalEntries = merged.filter(
+        (e) => e.source === preflightResult.source
+      ).length;
       try {
         await notifyChainPreflightFailure({
           auditSource: preflightResult.source,
@@ -389,6 +403,7 @@ export async function processSiemDelivery(): Promise<void> {
           breakReason: preflightResult.breakReason,
           expectedHash: preflightResult.expectedHash,
           actualHash: preflightResult.actualHash,
+          sourceBatchTotalEntries,
         });
       } catch (alertError) {
         const msg = alertError instanceof Error ? alertError.message : String(alertError);

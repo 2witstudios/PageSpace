@@ -100,7 +100,13 @@ export function verifyChainForSource<T extends ChainVerifiableEntry>(
   let startIndex = 0;
   let previousHash: string;
   if (anchorHash === null) {
-    previousHash = entries[0].logHash ?? '';
+    // Entry 0 is implicitly trusted, but it still must HAVE a logHash —
+    // otherwise entry 1 has nothing to chain to and a single-entry batch
+    // would falsely validate against an empty-string anchor.
+    if (entries[0].logHash === null) {
+      return fail(0, 0, 'missing_hash', null, null);
+    }
+    previousHash = entries[0].logHash;
     startIndex = 1;
   } else {
     previousHash = anchorHash;
@@ -111,15 +117,12 @@ export function verifyChainForSource<T extends ChainVerifiableEntry>(
 
     // Missing-hash check applies universally to verified entries. A null
     // logHash means the write-side never computed one (legacy data? bug?)
-    // and we cannot recompute; treat as tamper for safety.
+    // and we cannot recompute; treat as tamper for safety. Do not call
+    // recomputeHash here — a strategy that throws on malformed data would
+    // break the function's non-throw domain contract. Report null for
+    // expectedHash; the stored hash is null by definition.
     if (entry.logHash === null) {
-      return fail(
-        i,
-        i,
-        'missing_hash',
-        recomputeHash(entry, previousHash),
-        null
-      );
+      return fail(i, i, 'missing_hash', null, null);
     }
 
     // Chain-link check: does the entry point at the expected previous hash?

@@ -130,12 +130,21 @@ export async function runChainPreflight(
 
       const anchorHash = await loadAnchorHash(client, source, lastDeliveredId);
       if (anchorHash === null) {
-        // loadAnchorHash logs its own warn when the anchor row is missing.
-        // Treating a missing anchor as "skip" (rather than halt) keeps
-        // delivery unblocked after operational churn (pruning, erasure)
-        // — the next run will pick up a real anchor from the entries we're
-        // about to deliver.
-        continue;
+        // Fail closed: the anchor row pointed at by the cursor is gone.
+        // This could be operational churn (pruning, GDPR erasure) OR
+        // tampering — the two are indistinguishable from here, and letting
+        // delivery proceed would re-anchor the cursor on newly delivered
+        // rows and permanently hide any historical break. Surface as a
+        // db_error so the worker halts delivery and records a cursor
+        // error without firing the tamper webhook (anchor loss isn't
+        // distinctively tamper, and false-paging erodes the alert's
+        // credibility). Operators see the halt in /health and must
+        // investigate before delivery can resume.
+        return {
+          kind: 'db_error',
+          source,
+          message: `Anchor hash missing for cursor anchor entry ${lastDeliveredId} — halting delivery fail-closed`,
+        };
       }
 
       if (source === 'activity_logs') {

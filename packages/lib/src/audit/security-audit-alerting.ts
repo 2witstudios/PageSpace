@@ -48,6 +48,12 @@ export interface PreflightChainBreakDetails {
   breakReason: 'hash_mismatch' | 'chain_break' | 'missing_hash';
   expectedHash: string | null;
   actualHash: string | null;
+  /**
+   * Total number of entries for this source in the run's merged batch.
+   * Required so alert metrics reflect the real batch size rather than a
+   * prefix derived from breakAtIndex.
+   */
+  sourceBatchTotalEntries: number;
 }
 
 /**
@@ -128,9 +134,14 @@ export async function notifyChainPreflightFailure(
         ? 'Chain link broken - previousHash does not match the expected anchor'
         : 'Missing hash - entry has no stored logHash';
 
+  // totalEntries reflects the full source-scoped batch; entriesVerified is
+  // the prefix the verifier walked up to and including the break; validEntries
+  // is the prefix that passed before the break. These three together give
+  // operators an accurate "how much did we see" signal without conflating
+  // prefix-to-break counts with batch size.
   const syntheticResult: SecurityChainVerificationResult = {
     isValid: false,
-    totalEntries: details.breakAtIndex + 1,
+    totalEntries: details.sourceBatchTotalEntries,
     entriesVerified: details.breakAtIndex + 1,
     validEntries: details.breakAtIndex,
     invalidEntries: 1,
