@@ -1,15 +1,17 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  startAuthentication,
-  WebAuthnAbortService,
-  WebAuthnError,
-} from '@simplewebauthn/browser';
+import { WebAuthnAbortService } from '@simplewebauthn/browser';
 import { toast } from 'sonner';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
+import {
+  deriveRefreshIntervalMs,
+  driveCeremony,
+  handleCeremonyResult,
+  runCeremony,
+} from './conditionalPasskeyCeremony';
 
 export interface ConditionalPasskeyOptions {
   refreshToken?: () => Promise<string | null>;
@@ -63,83 +65,41 @@ export function useConditionalPasskeyUI(
   const startConditionalUI = useCallback(async () => {
     if (!isAvailable || !csrfToken) return;
 
-    try {
-      const platformFields = await getDevicePlatformFields();
+    if (mountedRef.current) setIsAuthenticating(true);
 
-      const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ csrfToken }),
-      });
-
-      if (!optionsRes.ok || !mountedRef.current) return;
-
-      const { options: authOptions } = await optionsRes.json();
-
-      if (mountedRef.current) setIsAuthenticating(true);
-
-      const authResponse = await startAuthentication({
-        optionsJSON: authOptions,
-        useBrowserAutofill: true,
-      });
-
-      if (!mountedRef.current) return;
-
-      // Refresh CSRF token before verify — user may have idled on the page
-      const freshToken = refreshTokenRef.current
-        ? (await refreshTokenRef.current() ?? csrfToken)
-        : csrfToken;
-
-      const verifyRes = await fetch('/api/auth/passkey/authenticate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          response: authResponse,
-          expectedChallenge: authOptions.challenge,
-          csrfToken: freshToken,
-          ...platformFields,
+    const result = await driveCeremony({
+      isMounted: () => mountedRef.current,
+      runOnce: () =>
+        runCeremony({
+          csrfToken,
+          refreshIntervalMs: deriveRefreshIntervalMs(),
+          refreshToken: refreshTokenRef.current,
+          getDevicePlatformFields,
+          isMounted: () => mountedRef.current,
         }),
-      });
+    });
 
-      if (!mountedRef.current) return;
+    if (mountedRef.current) setIsAuthenticating(false);
 
-      if (!verifyRes.ok) {
-        const error = await verifyRes.json();
-        toast.error(error.error || 'Authentication failed');
-        return;
-      }
-
-      const verifyData = await verifyRes.json();
-
-      persistCsrfToken();
-      useAuthStore.getState().setAuthFailedPermanently(false);
-
-      toast.success('Signed in successfully');
-
-      if (await handleDesktopAuthResponse(verifyData)) return;
-
-      if (onSuccessRef.current) {
-        onSuccessRef.current(verifyData.redirectUrl);
-      } else {
-        window.location.href = verifyData.redirectUrl;
-      }
-    } catch (err) {
-      // SimpleWebAuthn throws WebAuthnError with ERROR_CEREMONY_ABORTED when
-      // cancelCeremony() is called (unmount, new ceremony). Also ignore DOM
-      // AbortError for the same reason.
-      if (err instanceof WebAuthnError && err.code === 'ERROR_CEREMONY_ABORTED') {
-        return;
-      }
-      if (err instanceof Error && err.name !== 'AbortError') {
-        console.debug('Conditional UI authentication failed:', err.message);
-      }
-    } finally {
-      if (mountedRef.current) setIsAuthenticating(false);
-    }
+    await handleCeremonyResult({
+      result,
+      handleDesktopAuthResponse,
+      onFailure: (message) => {
+        toast.error(message);
+      },
+      onAuthenticated: () => {
+        persistCsrfToken();
+        useAuthStore.getState().setAuthFailedPermanently(false);
+        toast.success('Signed in successfully');
+      },
+      onRedirect: (redirectUrl) => {
+        if (onSuccessRef.current) {
+          onSuccessRef.current(redirectUrl);
+        } else {
+          window.location.href = redirectUrl;
+        }
+      },
+    });
   }, [isAvailable, csrfToken]);
 
   return {

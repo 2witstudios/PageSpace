@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { db, users, passkeys, verificationTokens, eq, and, isNull, sql } from '@pagespace/db';
+import { db, users, passkeys, verificationTokens, eq, and, isNull, lt, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import {
   generateRegistrationOptions as simpleGenerateRegistrationOptions,
@@ -20,13 +20,14 @@ import {
   type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { hashToken, generateToken } from './token-utils';
+import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from './passkey-client-constants';
 
 // Configuration
 export const PASSKEY_CONFIG = {
   rpName: process.env.WEBAUTHN_RP_NAME || 'PageSpace',
   rpId: process.env.WEBAUTHN_RP_ID || 'localhost',
   origin: process.env.WEBAUTHN_ORIGIN || 'http://localhost:3000',
-  challengeExpiryMinutes: 5,
+  challengeExpiryMinutes: PASSKEY_CHALLENGE_EXPIRY_MINUTES,
   maxPasskeysPerUser: 10,
   timeout: 60000,
   maxNameLength: 255,
@@ -396,18 +397,40 @@ export async function generateAuthenticationOptions(
   const challengeHash = hashToken(options.challenge);
   const expiresAt = new Date(Date.now() + PASSKEY_CONFIG.challengeExpiryMinutes * 60 * 1000);
 
-  // Clean up old unused auth challenges for this user (or system user)
-  // This prevents unbounded accumulation of stale challenges
-  const cleanupUserId = challengeUserId ?? PASSKEY_CONFIG.systemUserId;
-  await db
-    .delete(verificationTokens)
-    .where(
-      and(
-        eq(verificationTokens.userId, cleanupUserId),
-        eq(verificationTokens.type, 'webauthn_auth'),
-        isNull(verificationTokens.usedAt)
-      )
-    );
+  // Clean up old unused auth challenges.
+  //
+  // For a user-keyed flow (challengeUserId set) we can safely delete all
+  // unused challenges for that user because there is only one active flow
+  // per user at a time.
+  //
+  // For the shared system user (conditional UI, no email) we must only
+  // delete EXPIRED challenges. The system user is shared across every
+  // anonymous visitor, so deleting unexpired "unused" rows would clobber
+  // other concurrent sessions' in-flight challenges and cause
+  // CHALLENGE_NOT_FOUND at verify time. Expired rows are always safe to
+  // evict.
+  if (challengeUserId) {
+    await db
+      .delete(verificationTokens)
+      .where(
+        and(
+          eq(verificationTokens.userId, challengeUserId),
+          eq(verificationTokens.type, 'webauthn_auth'),
+          isNull(verificationTokens.usedAt)
+        )
+      );
+  } else {
+    await db
+      .delete(verificationTokens)
+      .where(
+        and(
+          eq(verificationTokens.userId, PASSKEY_CONFIG.systemUserId),
+          eq(verificationTokens.type, 'webauthn_auth'),
+          isNull(verificationTokens.usedAt),
+          lt(verificationTokens.expiresAt, new Date())
+        )
+      );
+  }
 
   // For authentication challenges without a specific user, we need a special approach
   // Store with a placeholder user ID or use a different table

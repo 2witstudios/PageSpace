@@ -58,5 +58,8 @@ export function parseBytes(size: string): number {
 export * from './notifications/types';
 export * from './notifications/guards';
 
+// Passkey constants (numeric; no server deps)
+export * from './auth/passkey-client-constants';
+
 // Note: Server-side modules like permissions, auth-utils, logger-config, etc.
 // are NOT exported here to prevent Node.js dependencies in browser bundles.
