@@ -400,3 +400,89 @@ describe('GET /files/:contentHash/metadata', () => {
     expect(response.body.error).toContain('Invalid content hash');
   });
 });
+
+describe('GET /files/:contentHash/original — content-type lockdown', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsValidContentHash.mockReturnValue(true);
+    mockAuthorizeFileAccess.mockResolvedValue({ allowed: true, context: { pageId: 'page-1' } });
+    mockAssertFileAccess.mockResolvedValue({ allowed: true });
+    mockGetOriginal.mockResolvedValue(Buffer.from('file-data'));
+    mockSanitizeFilename.mockImplementation((f: string) => f || 'file');
+    mockIsDangerousMimeType.mockImplementation((mime: string) => {
+      if (typeof mime !== 'string') return false;
+      return [
+        'text/html',
+        'application/xhtml+xml',
+        'image/svg+xml',
+        'application/xml',
+        'text/xml',
+      ].includes(mime.toLowerCase().split(';')[0].trim());
+    });
+  });
+
+  it('serves the stored mimeType inline for safe, well-formed types', async () => {
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 256, mimeType: 'image/png' });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'pic.png', mimeType: 'image/png' });
+
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^image\/png/);
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['content-disposition']).toMatch(/^inline/);
+  });
+
+  it('forces attachment for script-active stored mimeTypes', async () => {
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 256, mimeType: 'text/html' });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'index.html', mimeType: 'text/html' });
+
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^text\/html/);
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['content-disposition']).toMatch(/^attachment/);
+  });
+
+  it('forces attachment and falls back to octet-stream when stored mimeType is missing', async () => {
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 256, mimeType: null });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'mystery', mimeType: null });
+
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^application\/octet-stream/);
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['content-disposition']).toMatch(/^attachment/);
+  });
+
+  it('treats whitespace-only stored mimeType as missing and forces attachment', async () => {
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 256, mimeType: '   ' });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'mystery', mimeType: '   ' });
+
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^application\/octet-stream/);
+    expect(response.headers['content-disposition']).toMatch(/^attachment/);
+  });
+
+  it('ignores caller-supplied query-param hints and trusts the stored mimeType', async () => {
+    mockFilesQuery.mockResolvedValue({ sizeBytes: 256, mimeType: 'image/png' });
+    mockPagesQuery.mockResolvedValue({ originalFileName: 'pic.png', mimeType: 'image/png' });
+
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app)
+      .get(`/files/${VALID_HASH}/original`)
+      .query({ type: 'text/html', contentType: 'application/javascript' });
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/^image\/png/);
+    expect(response.headers['content-disposition']).toMatch(/^inline/);
+  });
+});

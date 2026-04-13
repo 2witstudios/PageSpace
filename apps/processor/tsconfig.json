@@ -10,7 +10,8 @@
       "@pagespace/lib/permissions": ["../../packages/lib/dist/permissions/index"],
       "@pagespace/lib/*": ["../../packages/lib/dist/*"],
       "@pagespace/db": ["../../packages/db/dist/index"],
-      "@pagespace/db/*": ["../../packages/db/dist/*"]
+      "@pagespace/db/*": ["../../packages/db/dist/*"],
+      "magika/node": ["./node_modules/magika/dist/cjs/magika-node"]
     },
     "composite": false,
     "declaration": true,

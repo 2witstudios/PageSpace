@@ -267,6 +267,7 @@ function makeReqRes(overrides: {
   params?: Record<string, string>;
   body?: any;
   headers?: Record<string, string>;
+  query?: Record<string, string>;
 } = {}) {
   const statusCode = { value: 200 };
   const jsonMock = vi.fn();
@@ -281,6 +282,7 @@ function makeReqRes(overrides: {
     params: overrides.params ?? {},
     body: overrides.body ?? {},
     headers: overrides.headers ?? {},
+    query: overrides.query ?? {},
     path: '/',
     method: 'GET',
     ip: '127.0.0.1',
@@ -756,42 +758,73 @@ describe('GET /health', () => {
     expect(Number.isInteger(memory.rss)).toBe(true);
   });
 
-  it('should include siem.enabled and siem.type when SIEM is disabled', async () => {
-    const { req, res, jsonMock } = makeReqRes();
+  it('given SIEM disabled in config, should report enabled=false and empty sources without querying the DB', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const mockConnect = vi.fn();
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({ connect: mockConnect });
 
+    const { refreshSiemCursorCache } = await import('../server');
+    await refreshSiemCursorCache();
+
+    const { req, res, jsonMock } = makeReqRes();
     await getHealthHandler()(req, res);
 
     const { siem } = jsonMock.mock.calls[0][0];
     expect(siem.enabled).toBe(false);
-    expect(siem.type).toBe('webhook');
-    expect(siem.cursor).toBeUndefined();
+    expect(siem.type).toBeNull();
+    expect(siem.sources).toEqual({});
+    expect(mockConnect).not.toHaveBeenCalled();
   });
 
-  it('should include siem.cursor when SIEM is enabled and cache is pre-warmed', async () => {
+  it('given SIEM enabled and both cursors exist, should return per-source status in the health body', async () => {
     const { loadSiemConfig } = await import('../services/siem-adapter');
     const { getPoolForWorker } = await import('../db');
     const { refreshSiemCursorCache } = await import('../server');
 
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
     const mockRelease = vi.fn();
-    const mockQuery = vi.fn().mockResolvedValue({
-      rows: [{ lastDeliveredAt: new Date('2026-04-10T12:00:00Z'), lastError: null, deliveryCount: 42 }],
-      rowCount: 1,
+    const mockQuery = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('siem_delivery_cursors')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'activity_logs',
+              lastDeliveredId: 'log_001',
+              lastDeliveredAt: new Date('2026-04-10T12:00:00Z'),
+              lastError: null,
+              lastErrorAt: null,
+              deliveryCount: 42,
+              updatedAt: new Date('2026-04-10T12:00:05Z'),
+            },
+            {
+              id: 'security_audit_log',
+              lastDeliveredId: 'sec_001',
+              lastDeliveredAt: new Date('2026-04-10T12:01:00Z'),
+              lastError: null,
+              lastErrorAt: null,
+              deliveryCount: 7,
+              updatedAt: new Date('2026-04-10T12:01:05Z'),
+            },
+          ],
+          rowCount: 2,
+        });
+      }
+      if (sql.includes('siem_delivery_receipts')) {
+        const err: Error & { code?: string } = Object.assign(
+          new Error('relation "siem_delivery_receipts" does not exist'),
+          { code: '42P01' },
+        );
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
     });
-    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
       connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
     });
 
-    // Pre-warm the cache (health endpoint serves cached data, never blocks on DB)
     await refreshSiemCursorCache();
-
-    expect(mockQuery).toHaveBeenCalledWith(
-      expect.stringContaining('FROM siem_delivery_cursors'),
-      ['activity_logs'],
-    );
     expect(mockRelease).toHaveBeenCalled();
-
-    // Now call health with SIEM enabled — should serve from cache
-    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({ enabled: true, type: 'webhook' });
 
     const { req, res, jsonMock } = makeReqRes();
     await getHealthHandler()(req, res);
@@ -799,9 +832,157 @@ describe('GET /health', () => {
     const { siem } = jsonMock.mock.calls[0][0];
     expect(siem.enabled).toBe(true);
     expect(siem.type).toBe('webhook');
-    expect(siem.cursor).toBeDefined();
-    expect(siem.cursor.deliveryCount).toBe(42);
-    expect(siem.cursor.lastError).toBeNull();
+    expect(siem.sources.activity_logs.status).toBe('delivering');
+    expect(siem.sources.activity_logs.deliveryCount).toBe(42);
+    expect(siem.sources.activity_logs.lastDeliveredAt).toBe('2026-04-10T12:00:00.000Z');
+    expect(siem.sources.security_audit_log.status).toBe('delivering');
+    expect(siem.sources.security_audit_log.deliveryCount).toBe(7);
+    // Receipts table missing — lastReceipt must be omitted
+    expect(siem.sources.activity_logs.lastReceipt).toBeUndefined();
+    expect(siem.sources.security_audit_log.lastReceipt).toBeUndefined();
+  });
+
+  it('given a SIEM section DB error, should return 200 with a siem.error field instead of 500', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockRejectedValue(new Error('connection refused'));
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
+      connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    });
+
+    await refreshSiemCursorCache();
+    expect(mockRelease).toHaveBeenCalled();
+
+    const { req, res, statusCode, jsonMock } = makeReqRes();
+    await getHealthHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const { siem } = jsonMock.mock.calls[0][0];
+    expect(siem.enabled).toBe(true);
+    expect(siem.error).toBe('health check db error');
+    expect(siem.sources).toEqual({});
+  });
+
+  it('given the same request within the cache TTL, should not query the DB twice', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const mockConnect = vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({ connect: mockConnect });
+
+    const { refreshSiemCursorCache } = await import('../server');
+    await refreshSiemCursorCache();
+    const firstConnectCount = mockConnect.mock.calls.length;
+
+    // Two successive health calls inside the TTL window
+    const { req: r1, res: s1 } = makeReqRes();
+    await getHealthHandler()(r1, s1);
+    const { req: r2, res: s2 } = makeReqRes();
+    await getHealthHandler()(r2, s2);
+
+    // Flush any fire-and-forget background refresh queued by the handlers
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockConnect.mock.calls.length).toBe(firstConnectCount);
+  });
+
+  it('given N concurrent refreshes while one is in flight, should collapse to a single DB round trip', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    // Gate the query so the first refresh stays in-flight while we fire more
+    let releaseQuery: (() => void) | undefined;
+    const queryGate = new Promise<void>((resolve) => {
+      releaseQuery = resolve;
+    });
+    const mockQuery = vi
+      .fn()
+      .mockImplementation(async () => {
+        await queryGate;
+        return { rows: [], rowCount: 0 };
+      });
+    const mockConnect = vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({ connect: mockConnect });
+
+    const { refreshSiemCursorCache } = await import('../server');
+
+    // Fire five overlapping refreshes before any completes
+    const flights = [
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+    ];
+
+    // Now let the single in-flight query complete and await all callers
+    releaseQuery!();
+    await Promise.all(flights);
+
+    // Exactly one pool.connect → one DB round trip despite 5 concurrent callers
+    expect(mockConnect.mock.calls.length).toBe(1);
+  });
+
+  it('given cursors succeed but receipts read rejects, should preserve per-source status and omit lastReceipt without marking the whole section errored', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('siem_delivery_cursors')) {
+        return {
+          rows: [
+            {
+              id: 'activity_logs',
+              lastDeliveredId: 'log_42',
+              lastDeliveredAt: new Date('2026-04-10T12:00:00Z'),
+              lastError: null,
+              lastErrorAt: null,
+              deliveryCount: 42,
+              updatedAt: new Date('2026-04-10T12:00:05Z'),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('siem_delivery_receipts')) {
+        // Simulate a transient receipts failure that is NOT 42P01
+        throw Object.assign(new Error('connection reset'), { code: '08006' });
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
+      connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    });
+
+    await refreshSiemCursorCache();
+    expect(mockRelease).toHaveBeenCalled();
+
+    const { req, res, statusCode, jsonMock } = makeReqRes();
+    await getHealthHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const { siem } = jsonMock.mock.calls[0][0];
+    expect(siem.enabled).toBe(true);
+    expect(siem.error).toBeUndefined();
+    expect(siem.sources.activity_logs.status).toBe('delivering');
+    expect(siem.sources.activity_logs.deliveryCount).toBe(42);
+    expect(siem.sources.activity_logs.lastReceipt).toBeUndefined();
   });
 });
 
@@ -1248,5 +1429,204 @@ describe('Exported instances', () => {
     const server = await import('../server');
 
     expect(typeof server.queueManager.getQueueStatus).toBe('function');
+  });
+});
+
+// ===========================================================================
+// GET /siem/receipts endpoint (wave 3b)
+// ===========================================================================
+
+describe('GET /siem/receipts', () => {
+  beforeEach(async () => {
+    await import('../server');
+  });
+
+  function getReceiptsHandler() {
+    const handlers = capturedGet['GET:/siem/receipts'];
+    expect(handlers).toBeDefined();
+    return handlers[handlers.length - 1];
+  }
+
+  function stubPool(queryImpl: ReturnType<typeof vi.fn>) {
+    return async () => ({
+      connect: vi.fn().mockResolvedValue({
+        query: queryImpl,
+        release: vi.fn(),
+      }),
+    });
+  }
+
+  it('given a known delivered entry, should return matching receipts', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ ts: new Date('2026-04-10T12:00:30Z') }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          deliveryId: 'delivery-xyz',
+          source: 'activity_logs',
+          deliveredAt: new Date('2026-04-10T12:05:00Z'),
+          webhookStatus: 200,
+          ackReceivedAt: new Date('2026-04-10T12:05:01Z'),
+          entryCount: 3,
+        }],
+        rowCount: 1,
+      });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res, jsonMock, statusCode } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const body = jsonMock.mock.calls[0][0];
+    expect(body.entryId).toBe('log_1');
+    expect(body.source).toBe('activity_logs');
+    expect(body.receipts).toHaveLength(1);
+    expect(body.receipts[0].deliveryId).toBe('delivery-xyz');
+    expect(body.receipts[0].deliveredAt).toBe('2026-04-10T12:05:00.000Z');
+    expect(body.receipts[0].ackReceivedAt).toBe('2026-04-10T12:05:01.000Z');
+  });
+
+  it('given an entry that has never been delivered, should return 200 with empty receipts', async () => {
+    const { getPoolForWorker } = await import('../db');
+    // Entry not found in source table → zero rows → 200 empty.
+    const query = vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res, jsonMock, statusCode } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_unknown' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const body = jsonMock.mock.calls[0][0];
+    expect(body.receipts).toEqual([]);
+  });
+
+  it('given a source not in the whitelist, should return 400', async () => {
+    const { req, res, statusCode, jsonMock } = makeReqRes({
+      query: { source: 'integration_audit_log', entryId: 'abc' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(400);
+    expect(jsonMock.mock.calls[0][0].error).toContain('source');
+  });
+
+  it('given a request missing entryId, should return 400', async () => {
+    const { req, res, statusCode, jsonMock } = makeReqRes({
+      query: { source: 'activity_logs' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(400);
+    expect(jsonMock.mock.calls[0][0].error).toContain('entryId');
+  });
+
+  it('should register the endpoint', () => {
+    expect(capturedGet['GET:/siem/receipts']).toBeDefined();
+  });
+
+  it('given the registered route chain, should include authenticateService middleware', async () => {
+    const { authenticateService } = await import('../middleware/auth');
+    const handlers = capturedGet['GET:/siem/receipts'];
+
+    expect(handlers).toContain(authenticateService);
+  });
+
+  it('given the registered route chain, should be guarded by requireScope("siem:read")', async () => {
+    const { requireScope } = await import('../middleware/auth');
+    const calls = (requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+
+    expect(calls).toContain('siem:read');
+  });
+
+  it('given a security_audit_log entry, should issue a literal SELECT against security_audit_log (no table-name interpolation)', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ ts: new Date('2026-04-10T12:00:30Z') }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res } = makeReqRes({
+      query: { source: 'security_audit_log', entryId: 'sec_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    const entrySql = query.mock.calls[0][0] as string;
+    expect(entrySql).toContain('FROM security_audit_log');
+    expect(entrySql).not.toContain('${');
+  });
+
+  it('given an activity_logs entry, should issue a literal SELECT against activity_logs (no table-name interpolation)', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ ts: new Date('2026-04-10T12:00:30Z') }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    const entrySql = query.mock.calls[0][0] as string;
+    expect(entrySql).toContain('FROM activity_logs');
+    expect(entrySql).not.toContain('${');
+  });
+
+  it('given the SIEM_SOURCES canonical list, should accept every member as a valid source param', async () => {
+    // Locks in the rule that the endpoint's source whitelist is derived from
+    // the single canonical SIEM_SOURCES list in services/siem-sources.ts —
+    // adding a new source there must not silently fail at the endpoint.
+    const { SIEM_SOURCES } = await import('../services/siem-sources');
+    const { getPoolForWorker } = await import('../db');
+
+    for (const source of SIEM_SOURCES) {
+      const query = vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+        await stubPool(query)()
+      );
+
+      const { req, res, statusCode } = makeReqRes({
+        query: { source, entryId: 'any' },
+      });
+      await getReceiptsHandler()(req, res);
+
+      expect(statusCode.value).toBe(200);
+    }
+  });
+
+  it('given a request to an unregistered /siem path, should respond 404 via a default-deny catch-all', () => {
+    // Mirrors the /api and /cache catch-all assertions: the catch-all is the
+    // app.use('/siem', ...) mount whose final arg is a 2-parameter (req, res)
+    // function (not a router or middleware factory).
+    const siemCatchAll = capturedUse.find(
+      (args) =>
+        args[0] === '/siem' &&
+        typeof args[args.length - 1] === 'function' &&
+        (args[args.length - 1] as Function).length === 2,
+    );
+    expect(siemCatchAll).toBeDefined();
+
+    const handler = siemCatchAll![siemCatchAll!.length - 1];
+    const { req, res, statusCode, jsonMock } = makeReqRes();
+
+    handler(req, res);
+
+    expect(statusCode.value).toBe(404);
+    expect(jsonMock).toHaveBeenCalledWith({ error: 'Endpoint not found' });
   });
 });
