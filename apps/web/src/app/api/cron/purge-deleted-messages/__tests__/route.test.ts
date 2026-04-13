@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockChatRepo, mockGlobalRepo, mockSecurityAudit } = vi.hoisted(() => ({
+const { mockChatRepo, mockGlobalRepo, mockAudit } = vi.hoisted(() => ({
   mockChatRepo: { purgeInactiveMessages: vi.fn() },
   mockGlobalRepo: { purgeInactiveMessages: vi.fn(), purgeInactiveConversations: vi.fn() },
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  mockAudit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -23,7 +23,7 @@ vi.mock('@/lib/repositories/global-conversation-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -55,9 +55,8 @@ describe('/api/cron/purge-deleted-messages', () => {
   it('logs audit event on successful purge', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'purge_deleted_messages',
-      { chatMessagesPurged: 5, globalMessagesPurged: 3, conversationsPurged: 2 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged: 5, globalMessagesPurged: 3, conversationsPurged: 2 } })
     );
   });
 
@@ -67,7 +66,7 @@ describe('/api/cron/purge-deleted-messages', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when purge throws', async () => {
@@ -75,6 +74,6 @@ describe('/api/cron/purge-deleted-messages', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

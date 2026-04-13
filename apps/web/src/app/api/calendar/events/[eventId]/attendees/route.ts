@@ -7,7 +7,7 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds, auditRequest } from '@pagespace/lib/server';
 import { isUserDriveMember } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -278,7 +278,7 @@ export async function POST(
       attendeeIds: newUserIds,
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'write', 'calendar_attendees', eventId, { operation: 'add_attendees', addedCount: newUserIds.length }), userId);
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'calendar_attendees', resourceId: eventId, details: { operation: 'add_attendees', addedCount: newUserIds.length } });
 
     return NextResponse.json({ attendees });
   } catch (error) {
@@ -481,7 +481,7 @@ export async function DELETE(
       attendeeIds: [targetUserId],
     });
 
-    auditSafe(securityAudit.logDataAccess(userId, 'delete', 'calendar_attendees', eventId, { operation: 'remove_attendee' }), userId);
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'calendar_attendees', resourceId: eventId, details: { operation: 'remove_attendee' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

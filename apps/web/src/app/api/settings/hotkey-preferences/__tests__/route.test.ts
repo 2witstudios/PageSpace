@@ -38,10 +38,8 @@ vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   },
-  securityAudit: {
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/hotkeys/registry', () => ({

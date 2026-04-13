@@ -7,6 +7,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 
 vi.mock('@pagespace/lib/server', () => ({
+  auditRequest: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
@@ -52,10 +53,6 @@ vi.mock('@pagespace/db', () => {
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 vi.mock('../audit-filters', () => ({

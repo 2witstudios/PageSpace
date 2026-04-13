@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/activities/[activityId]/rollback-to-point
- * Verifies securityAudit.logDataAccess is called for POST (write, rollback_to_point).
+ * Verifies auditRequest is called for POST (write, rollback_to_point).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -22,9 +22,7 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -44,7 +42,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockActivityId = 'activity-1';
@@ -81,8 +79,9 @@ describe('POST /api/activities/[activityId]/rollback-to-point audit', () => {
 
     await POST(request, { params: Promise.resolve({ activityId: mockActivityId }) });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'activity', mockActivityId, { action: 'rollback_to_point' }
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'activity', resourceId: mockActivityId, details: { action: 'rollback_to_point' } })
     );
   });
 });

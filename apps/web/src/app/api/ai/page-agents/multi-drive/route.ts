@@ -3,8 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from 
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { getUserDriveAccess, canUserViewPage, loggers, auditRequest } from '@pagespace/lib/server';
 
 interface AgentSummary {
   id: string;
@@ -179,11 +178,11 @@ export async function GET(request: Request) {
       ]
     };
 
-    logAuditEvent(request, userId, 'read', 'page_agent', 'list', {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'page_agent', resourceId: 'list', details: {
       action: 'list_agents_multi_drive',
       driveCount: scopedDrives.length,
       agentCount: totalAgentCount,
-    });
+    } });
 
     if (groupByDrive) {
       return NextResponse.json({ ...baseResult, agentsByDrive });

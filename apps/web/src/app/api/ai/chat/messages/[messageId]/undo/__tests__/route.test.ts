@@ -44,6 +44,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcasts
@@ -60,11 +61,6 @@ vi.mock('@/lib/websocket', () => ({
 // Mock logging mask
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id.slice(-4)}`),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';

@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, asc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -74,7 +73,7 @@ export async function POST(request: Request) {
 
     const pageTree = buildTree(pageResults);
 
-    logAuditEvent(request, userId, 'read', 'drive_page_tree', driveId, { action: 'build_page_tree', pageCount: pageResults.length });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'build_page_tree', pageCount: pageResults.length } });
 
     return NextResponse.json({ tree: pageTree });
   } catch (error) {

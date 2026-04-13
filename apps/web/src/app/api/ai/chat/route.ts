@@ -60,8 +60,7 @@ import {
 } from '@/lib/ai/core';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, conversationCache, type CachedMessage } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, conversationCache, auditRequest, type CachedMessage } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -360,10 +359,10 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: User message saved to database');
 
-        logAuditEvent(request, userId, 'write', 'ai_chat', chatId, {
+        auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat', resourceId: chatId, details: {
           action: 'chat_message',
           conversationId,
-        });
+        } });
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
@@ -1271,9 +1270,9 @@ export async function GET(request: Request) {
     // Check GLM settings
     const glmSettings = await getUserGLMSettings(userId);
 
-    logAuditEvent(request, userId, 'read', 'ai_chat_settings', pageId || userId, {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_chat_settings', resourceId: pageId || userId, details: {
       action: 'get_provider_settings',
-    });
+    } });
 
     return NextResponse.json({
       currentProvider,
@@ -1516,11 +1515,11 @@ export async function PATCH(request: Request) {
       model: sanitizedModel
     });
 
-    logAuditEvent(request, auth.userId, 'write', 'ai_chat_settings', sanitizedPageId, {
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'ai_chat_settings', resourceId: sanitizedPageId, details: {
       action: 'update_page_settings',
       provider: sanitizedProvider,
       model: sanitizedModel,
-    });
+    } });
 
     return NextResponse.json({
       success: true,

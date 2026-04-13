@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -42,9 +41,9 @@ export async function GET(request: Request) {
       ? directionParam
       : 'before';
 
-    logAuditEvent(request, userId, 'read', 'global_chat', 'list', {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat', resourceId: 'list', details: {
       action: 'list_conversations',
-    });
+    } });
 
     if (usePagination) {
       // New paginated response format
@@ -88,9 +87,9 @@ export async function POST(request: Request) {
       contextId,
     });
 
-    logAuditEvent(request, userId, 'write', 'global_chat', newConversation.id, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat', resourceId: newConversation.id, details: {
       action: 'create_conversation',
-    });
+    } });
 
     return NextResponse.json(newConversation);
   } catch (error) {

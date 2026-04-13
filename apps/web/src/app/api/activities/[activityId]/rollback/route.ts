@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { executeRollback, previewRollback, getActivityById } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   broadcastPageEvent,
@@ -117,15 +117,11 @@ export async function POST(
     rollbackActivityId: result.rollbackActivityId,
   });
 
-  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, {
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'activity', resourceId: activityId, details: {
     operation: 'rollback',
     context: rollbackContext,
     force,
-  }).catch((error) => {
-    loggers.security.warn('[ActivityRollback] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
+  } });
 
   // Broadcast real-time updates for affected resources
   const activity = await getActivityById(activityId);

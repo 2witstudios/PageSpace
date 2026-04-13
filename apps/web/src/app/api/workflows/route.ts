@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess, loggers, securityAudit } from '@pagespace/lib/server';
+import { checkDriveAccess, auditRequest } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -58,14 +58,7 @@ export async function GET(request: Request) {
     .where(eq(workflows.driveId, driveId))
     .orderBy(workflows.createdAt);
 
-  securityAudit.logDataAccess(userId, 'read', 'workflow', driveId, {
-    count: results.length,
-  }).catch((error) => {
-    loggers.security.warn('[Workflows] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.read', userId, resourceType: 'workflow', resourceId: driveId, details: { count: results.length } });
 
   return NextResponse.json(results);
 }
@@ -141,15 +134,7 @@ export async function POST(request: Request) {
     updatedAt: new Date(),
   }).returning();
 
-  securityAudit.logDataAccess(userId, 'write', 'workflow', workflow.id, {
-    driveId: data.driveId,
-    triggerType: data.triggerType,
-  }).catch((error) => {
-    loggers.security.warn('[Workflows] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'workflow', resourceId: workflow.id, details: { driveId: data.driveId, triggerType: data.triggerType } });
 
   return NextResponse.json(workflow, { status: 201 });
 }

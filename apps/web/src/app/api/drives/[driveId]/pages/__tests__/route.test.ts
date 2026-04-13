@@ -29,10 +29,6 @@ const {
 
 // ---------- vi.mock declarations ----------
 
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
-
 vi.mock('@pagespace/db', () => {
   const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
   const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
@@ -84,6 +80,7 @@ vi.mock('@pagespace/db', () => {
 
 vi.mock('@pagespace/lib/server', () => ({
   buildTree: vi.fn((items: unknown[]) => items),
+  auditRequest: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },

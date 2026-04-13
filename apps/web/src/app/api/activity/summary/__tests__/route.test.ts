@@ -5,15 +5,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+const { mockAuditRequest } = vi.hoisted(() => ({
+  mockAuditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: mockSecurityAudit,
+  auditRequest: mockAuditRequest,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -71,8 +71,9 @@ describe('GET /api/activity/summary', () => {
     const request = new Request('https://example.com/api/activity/summary');
     await GET(request);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user_1', 'read', 'activity_summary', 'user_1'
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.read', userId: 'user_1', resourceType: 'activity_summary', resourceId: 'user_1' })
     );
   });
 
@@ -87,7 +88,7 @@ describe('GET /api/activity/summary', () => {
     const request = new Request('https://example.com/api/activity/summary');
     await GET(request);
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when auth fails', async () => {
@@ -97,6 +98,6 @@ describe('GET /api/activity/summary', () => {
     const request = new Request('https://example.com/api/activity/summary');
     await GET(request);
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 });

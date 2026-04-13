@@ -30,9 +30,8 @@ vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
   loggers: {
     ai: { info: vi.fn(), error: vi.fn() },
-    security: { warn: vi.fn() },
   },
-  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  auditRequest: vi.fn(),
 }));
 
 // Mock message converter (boundary)
@@ -42,11 +41,6 @@ vi.mock('@/lib/ai/core', () => ({
     role: msg.role,
     content: msg.content,
   })),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';

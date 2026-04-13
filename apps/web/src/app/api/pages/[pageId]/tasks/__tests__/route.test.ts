@@ -15,9 +15,7 @@ vi.mock('@pagespace/lib/server', async (importOriginal) => {
     ...actual,
     canUserViewPage: vi.fn(),
     canUserEditPage: vi.fn(),
-    securityAudit: {
-      logDataAccess: vi.fn().mockResolvedValue(undefined),
-    },
+    auditRequest: vi.fn(),
   };
 });
 
@@ -117,7 +115,7 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage, securityAudit } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
@@ -132,7 +130,7 @@ describe('Task API Routes', () => {
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
     vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
     // Re-set up db.insert to default chain
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({

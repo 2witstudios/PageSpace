@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/integrations/[connectionId]
- * Verifies securityAudit.logTokenRevoked is called for DELETE.
+ * Verifies audit is called for DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -31,9 +31,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -43,7 +42,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockConnectionId = 'conn-1';
@@ -68,13 +67,15 @@ describe('DELETE /api/user/integrations/[connectionId] audit', () => {
   });
 
   it('logs token revoked audit event on successful integration deletion', async () => {
+    const request = new Request('http://localhost/api/user/integrations/conn-1', { method: 'DELETE' });
     await DELETE(
-      new Request('http://localhost/api/user/integrations/conn-1', { method: 'DELETE' }),
+      request,
       { params: Promise.resolve({ connectionId: mockConnectionId }) }
     );
 
-    expect(securityAudit.logTokenRevoked).toHaveBeenCalledWith(
-      mockUserId, 'integration', 'user_disconnect'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'auth.token.revoked', userId: mockUserId, details: { tokenType: 'integration', reason: 'user_disconnect' } }
     );
   });
 });

@@ -16,8 +16,7 @@ import {
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 /**
  * Format tool execution results into human-readable text
@@ -458,9 +457,9 @@ export async function POST(request: Request) {
       userId
     });
 
-    logAuditEvent(request, userId, 'write', 'page_agent', agentId, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page_agent', resourceId: agentId, details: {
       action: 'consult_agent',
-    });
+    } });
 
     return NextResponse.json({
       success: true,

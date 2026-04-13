@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { channelMessages, channelMessageReactions, db, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { canUserViewPage, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -55,9 +55,7 @@ export async function POST(req: Request, { params }: RouteParams) {
       emoji,
     }).returning();
 
-    securityAudit.logDataAccess(userId, 'write', 'reaction', messageId).catch((error) => {
-      loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'reaction', resourceId: messageId });
 
     // Fetch with user info for broadcast
     const reactionWithUser = await db.query.channelMessageReactions.findFirst({
@@ -94,12 +92,7 @@ export async function POST(req: Request, { params }: RouteParams) {
       }
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'reaction', messageId, {}).catch((error) => {
-      loggers.security.warn('[Reaction] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'reaction', resourceId: messageId });
 
     return NextResponse.json(reactionWithUser, { status: 201 });
   } catch (error) {
@@ -161,9 +154,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'Reaction not found' }, { status: 404 });
   }
 
-  securityAudit.logDataAccess(userId, 'delete', 'reaction', messageId).catch((error) => {
-    loggers.security.warn('[Channels] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
+  auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'reaction', resourceId: messageId });
 
   // Broadcast reaction removal to channel
   if (process.env.INTERNAL_REALTIME_URL) {

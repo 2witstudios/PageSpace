@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
@@ -70,7 +70,7 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       pageTitle: page.title,
     });
 
-    securityAudit.logDataAccess(userId, 'export', 'page', pageId, { format: 'csv' }).catch(() => {});
+    auditRequest(req, { eventType: 'data.export', userId, resourceType: 'page', resourceId: pageId, details: { format: 'csv' } });
 
     // Return the CSV as a downloadable file
     return new NextResponse(csvContent, {

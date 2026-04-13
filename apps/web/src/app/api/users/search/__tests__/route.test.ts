@@ -6,10 +6,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Mock at the SERVICE SEAM level: auth, db queries, and query-params utility
 // ============================================================================
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -19,7 +15,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -90,7 +87,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
 
@@ -346,8 +343,9 @@ describe('GET /api/users/search', () => {
       const request = new Request('https://example.com/api/users/search?q=test');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'user_search', 'user_123', { queryLength: 4, resultCount: 0 }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.read', userId: 'user_123', resourceType: 'user_search', resourceId: 'user_123', details: { queryLength: 4, resultCount: 0 } }
       );
     });
 
@@ -355,7 +353,7 @@ describe('GET /api/users/search', () => {
       const request = new Request('https://example.com/api/users/search?q=a');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
 
     it('should not log audit event when auth fails', async () => {
@@ -364,7 +362,7 @@ describe('GET /api/users/search', () => {
       const request = new Request('https://example.com/api/users/search?q=test');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
   });
 

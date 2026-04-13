@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache, getCreatablePageTypes, securityAudit } from '@pagespace/lib/server';
+import { loggers, agentAwarenessCache, pageTreeCache, getCreatablePageTypes, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
       parentId: result.page.parentId,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'page', result.page.id, { title: result.page.title, type: result.page.type, driveId: result.driveId }).catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: result.page.id, details: { title: result.page.title, type: result.page.type, driveId: result.driveId } });
 
     return NextResponse.json(result.page, { status: 201 });
   } catch (error) {

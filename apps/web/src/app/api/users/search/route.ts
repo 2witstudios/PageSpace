@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, userProfiles, users } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {
@@ -108,7 +108,7 @@ export async function GET(request: Request) {
 
     const userResults = Array.from(userMap.values());
 
-    securityAudit.logDataAccess(user.id, 'read', 'user_search', user.id, { queryLength: query.length, resultCount: userResults.length }).catch(() => {});
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'user_search', resourceId: user.id, details: { queryLength: query.length, resultCount: userResults.length } });
 
     return NextResponse.json({ users: userResults });
   } catch (error) {

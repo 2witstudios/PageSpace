@@ -7,7 +7,7 @@ import {
   updateDrive,
   trashDrive,
 } from '@pagespace/lib/server';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
@@ -157,7 +157,7 @@ export async function PATCH(
       newValues: Object.keys(newValues).length > 0 ? newValues : undefined,
     });
 
-    securityAudit.logDataAccess(userId, 'write', 'drive', driveId, { operation: 'update' })?.catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
 
     return NextResponse.json(updatedDrive);
   } catch (error) {
@@ -241,7 +241,7 @@ export async function DELETE(
       newValues: { isTrashed: true },
     });
 
-    securityAudit.logDataAccess(userId, 'delete', 'drive', driveId, { operation: 'trash' })?.catch(() => {});
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'trash' } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

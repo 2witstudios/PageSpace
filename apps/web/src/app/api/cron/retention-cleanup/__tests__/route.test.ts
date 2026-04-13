@@ -4,9 +4,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockRunRetentionCleanup, mockSecurityAudit } = vi.hoisted(() => ({
+const { mockRunRetentionCleanup, mockAudit } = vi.hoisted(() => ({
   mockRunRetentionCleanup: vi.fn(),
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  mockAudit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -22,7 +22,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -57,9 +57,8 @@ describe('/api/cron/retention-cleanup', () => {
   it('logs audit event on successful retention cleanup', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'delete', 'cron_job', 'retention_cleanup',
-      { totalDeleted: 15, tables: MOCK_RESULTS }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted: 15, tables: MOCK_RESULTS } })
     );
   });
 
@@ -69,7 +68,7 @@ describe('/api/cron/retention-cleanup', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('does not log audit event when cleanup throws', async () => {
@@ -77,6 +76,6 @@ describe('/api/cron/retention-cleanup', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/favorites/[id]
- * Verifies securityAudit.logDataAccess is called for DELETE.
+ * Verifies auditRequest is called for DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -30,14 +30,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockFavoriteId = 'fav-1';
@@ -60,13 +59,15 @@ describe('DELETE /api/user/favorites/[id] audit', () => {
   });
 
   it('logs delete audit event on successful favorite deletion', async () => {
+    const request = new Request('http://localhost/api/user/favorites/fav-1', { method: 'DELETE' });
     await DELETE(
-      new Request('http://localhost/api/user/favorites/fav-1', { method: 'DELETE' }),
+      request,
       { params: Promise.resolve({ id: mockFavoriteId }) }
     );
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'delete', 'favorite', mockFavoriteId
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.delete', userId: mockUserId, resourceType: 'favorite', resourceId: mockFavoriteId }
     );
   });
 });

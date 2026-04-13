@@ -41,15 +41,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -60,7 +53,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 import { DELETE } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 
 const createContext = (tokenId = 'token-123') => ({
@@ -92,14 +85,6 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
 
     vi.mocked(sessionRepository.revokeMcpToken).mockResolvedValue(undefined);
 
-    // Re-setup securityAudit mocks after resetAllMocks
-    vi.mocked(securityAudit.logAuthSuccess).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logAuthFailure).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logTokenCreated).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logTokenRevoked).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logLogout).mockResolvedValue(undefined);
   });
 
   it('returns auth error when not authenticated', async () => {

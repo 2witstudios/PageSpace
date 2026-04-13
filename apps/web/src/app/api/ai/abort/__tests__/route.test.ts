@@ -30,6 +30,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock rate limit (boundary) - note: checkRateLimit is exported from @pagespace/lib/auth
@@ -40,11 +41,6 @@ vi.mock('@pagespace/lib/auth', async () => {
     checkRateLimit: vi.fn(),
   };
 });
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';

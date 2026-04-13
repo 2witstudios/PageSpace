@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { canUserEditPage, loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
@@ -112,11 +111,11 @@ export async function GET(
       activitiesAffected: preview.activitiesAffected.length,
     });
 
-    logAuditEvent(request, userId, 'read', 'ai_chat_undo', messageId, {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: {
       action: 'undo_preview',
       source: preview.source,
       messagesAffected: preview.messagesAffected,
-    });
+    } });
 
     return NextResponse.json(preview);
   } catch (error) {
@@ -258,12 +257,12 @@ export async function POST(
       });
     }
 
-    logAuditEvent(request, userId, 'write', 'ai_chat_undo', messageId, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: {
       action: 'undo_execute',
       mode,
       messagesDeleted: result.messagesDeleted,
       activitiesRolledBack: result.activitiesRolledBack,
-    });
+    } });
 
     return NextResponse.json({
       ...result,

@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
 import { getActivityById } from '@/services/api';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { readPageContent } from '@pagespace/lib/server';
 import {
   diffContent,
@@ -12,7 +12,6 @@ import {
   type DiffOptions,
 } from '@pagespace/lib/content';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -269,7 +268,7 @@ export async function GET(
     },
   };
 
-  logAuditEvent(request, userId, 'read', 'page_version', pageId, { action: 'compare_versions' });
+  auditRequest(request, { eventType: 'data.read', userId, resourceType: 'page_version', resourceId: pageId, details: { action: 'compare_versions' } });
 
   return NextResponse.json(response);
 }

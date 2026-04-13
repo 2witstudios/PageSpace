@@ -44,10 +44,6 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn(),
 }));
 
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
-
 // Mock loggers
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -58,9 +54,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcasts
@@ -80,7 +74,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -354,8 +348,9 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
       await POST(createRequest({ context: 'page' }), { params: mockParams });
 
-      expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-        mockUserId, 'write', 'activity', mockActivityId, { operation: 'rollback', context: 'page', force: false }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({ eventType: 'data.write', userId: mockUserId, resourceType: 'activity', resourceId: mockActivityId, details: { operation: 'rollback', context: 'page', force: false } })
       );
     });
   });

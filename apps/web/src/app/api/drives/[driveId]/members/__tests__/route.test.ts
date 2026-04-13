@@ -17,7 +17,8 @@ vi.mock('@pagespace/lib/server', () => ({
   listDriveMembers: vi.fn(),
   isMemberOfDrive: vi.fn(),
   addDriveMember: vi.fn(),
-  securityAudit: { logEvent: vi.fn().mockResolvedValue(undefined), logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
   loggers: {
     api: {
       info: vi.fn(),

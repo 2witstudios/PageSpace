@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, securityAudit } from '@pagespace/lib/server';
+import { loggers, pageTreeCache, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { pageReorderService } from '@/services/api';
 
@@ -65,7 +65,7 @@ export async function PATCH(request: Request) {
       });
     });
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'page', pageId, { operation: 'reorder' }).catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'page', resourceId: pageId, details: { operation: 'reorder' } });
 
     return NextResponse.json({ message: 'Page reordered successfully' });
   } catch (error) {

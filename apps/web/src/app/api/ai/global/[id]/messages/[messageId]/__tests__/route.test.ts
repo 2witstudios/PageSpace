@@ -40,6 +40,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock logging mask (boundary)
@@ -53,10 +54,6 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logMessageActivity: vi.fn(),
 }));
 
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';

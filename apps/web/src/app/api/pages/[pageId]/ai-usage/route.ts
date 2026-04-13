@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
-import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
+import { getUserAccessLevel, loggers, auditRequest } from '@pagespace/lib/server';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -97,7 +96,7 @@ export async function GET(
       ? Math.round((currentContextSize / contextWindowSize) * 100)
       : 0;
 
-    logAuditEvent(request, userId, 'read', 'ai_usage', pageId, { action: 'view_ai_usage', logCount: logs.length });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_usage', resourceId: pageId, details: { action: 'view_ai_usage', logCount: logs.length } });
 
     return NextResponse.json({
       logs,

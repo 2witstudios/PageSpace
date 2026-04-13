@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess, loggers, securityAudit } from '@pagespace/lib/server';
+import { checkDriveAccess, auditRequest } from '@pagespace/lib/server';
 import { db, workflows, eq, and, ne } from '@pagespace/db';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
@@ -74,15 +74,7 @@ export async function POST(
     })
     .where(eq(workflows.id, workflowId));
 
-  securityAudit.logDataAccess(auth.userId, 'write', 'workflow', workflowId, {
-    action: 'run',
-    trigger: 'manual',
-  }).catch((error) => {
-    loggers.security.warn('[WorkflowRun] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId: auth.userId,
-    });
-  });
+  auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { action: 'run', trigger: 'manual' } });
 
   return NextResponse.json({
     success: result.success,

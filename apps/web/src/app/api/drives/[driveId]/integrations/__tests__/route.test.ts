@@ -7,6 +7,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 
 vi.mock('@pagespace/lib/server', () => ({
+  auditRequest: vi.fn(),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
@@ -35,9 +36,6 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
 
 import { GET, POST } from '../route';
 import { loggers } from '@pagespace/lib/server';

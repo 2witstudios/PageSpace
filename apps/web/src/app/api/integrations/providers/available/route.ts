@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { builtinProviderList, listEnabledProviders } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
         documentationUrl: b.documentationUrl ?? null,
       }));
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'available_providers', 'list', { availableCount: available.length }), auth.userId);
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'available_providers', resourceId: 'list', details: { availableCount: available.length } });
 
     return NextResponse.json({ providers: available });
   } catch (error) {

@@ -1,6 +1,6 @@
 import { runRetentionCleanup } from '@pagespace/lib/compliance/retention/retention-engine';
 import { db } from '@pagespace/db';
-import { securityAudit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
       }
     }
 
-    securityAudit.logDataAccess('system', 'delete', 'cron_job', 'retention_cleanup', { totalDeleted, tables: results }).catch(() => {});
+    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted, tables: results } });
 
     return NextResponse.json({
       success: true,

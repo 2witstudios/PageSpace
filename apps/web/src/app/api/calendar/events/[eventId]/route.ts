@@ -7,7 +7,7 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -372,12 +372,7 @@ export async function DELETE(
       attendeeIds: attendees.map(a => a.userId),
     });
 
-    securityAudit.logDataAccess(auth.userId, 'delete', 'event', eventId, {}).catch((error) => {
-      loggers.security.warn('[CalendarEvent] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'event', resourceId: eventId });
 
     return NextResponse.json({ success: true });
   } catch (error) {

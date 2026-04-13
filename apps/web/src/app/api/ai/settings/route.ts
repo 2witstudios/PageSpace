@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
@@ -123,9 +122,9 @@ export async function GET(request: Request) {
     // Check Azure OpenAI settings
     const azureOpenAISettings = await getUserAzureOpenAISettings(userId);
 
-    logAuditEvent(request, userId, 'read', 'ai_settings', userId, {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
-    });
+    } });
 
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
@@ -281,10 +280,10 @@ export async function POST(request: Request) {
         await createAzureOpenAISettings(userId, sanitizedApiKey, sanitizedBaseUrl);
       }
 
-      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_settings', resourceId: provider, details: {
         action: 'save_api_key',
         provider,
-      });
+      } });
 
       return NextResponse.json(
         {
@@ -371,11 +370,11 @@ export async function PATCH(request: Request) {
     try {
       await aiSettingsRepository.updateProviderSettings(userId, { provider, model });
 
-      logAuditEvent(request, userId, 'write', 'ai_settings', provider, {
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_settings', resourceId: provider, details: {
         action: 'update_model_selection',
         provider,
         model,
-      });
+      } });
 
       return NextResponse.json(
         {
@@ -446,10 +445,10 @@ export async function DELETE(request: Request) {
         await deleteAzureOpenAISettings(userId);
       }
 
-      logAuditEvent(request, userId, 'delete', 'ai_settings', provider, {
+      auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'ai_settings', resourceId: provider, details: {
         action: 'delete_api_key',
         provider,
-      });
+      } });
 
       // Return success with 204 No Content
       return new Response(null, { status: 204 });

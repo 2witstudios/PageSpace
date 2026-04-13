@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/user/favorites
- * Verifies securityAudit.logDataAccess is called for GET and POST.
+ * Verifies auditRequest is called for GET and POST.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -36,14 +36,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 
 const mockUserId = 'user_123';
@@ -67,10 +66,12 @@ describe('GET /api/user/favorites audit', () => {
   });
 
   it('logs read audit event on successful favorites retrieval', async () => {
-    await GET(new Request('http://localhost/api/user/favorites'));
+    const request = new Request('http://localhost/api/user/favorites');
+    await GET(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'favorites', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.read', userId: mockUserId, resourceType: 'favorites', resourceId: 'self' }
     );
   });
 });
@@ -92,8 +93,9 @@ describe('POST /api/user/favorites audit', () => {
 
     await POST(request);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'favorites', 'self'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.write', userId: mockUserId, resourceType: 'favorites', resourceId: 'self' }
     );
   });
 });

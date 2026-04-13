@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, securityAudit } from '@pagespace/lib/server';
+import { loggers, pageTreeCache, auditRequest } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
@@ -209,9 +209,7 @@ export async function POST(request: Request) {
       );
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'page', 'bulk', { operation: 'bulk_move', count: pageIds.length }).catch(err => {
-      loggers.api.warn('Security audit logging failed', { error: err instanceof Error ? err.message : String(err), operation: 'bulk_move' });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: 'bulk', details: { operation: 'bulk_move', count: pageIds.length } });
 
     return NextResponse.json({
       success: true,

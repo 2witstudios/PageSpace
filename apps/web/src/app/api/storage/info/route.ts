@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import {
   getUserStorageQuota,
   getUserFileCount,
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     });
 
     if (userDrives.length === 0) {
-      securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
+      auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'storage', resourceId: user.id });
       return NextResponse.json({
         quota,
         tierInfo: STORAGE_TIERS[quota.tier],
@@ -119,7 +119,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    securityAudit.logDataAccess(user.id, 'read', 'storage', user.id).catch(() => {});
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'storage', resourceId: user.id });
 
     return NextResponse.json({
       quota: {

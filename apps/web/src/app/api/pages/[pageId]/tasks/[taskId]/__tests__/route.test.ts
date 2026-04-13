@@ -15,6 +15,7 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
     ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
   },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
@@ -30,10 +31,6 @@ vi.mock('@pagespace/lib', () => ({
   logger: {
     child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
   },
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

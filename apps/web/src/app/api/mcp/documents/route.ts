@@ -4,7 +4,7 @@ import { getUserAccessLevel, PageType, isSheetType, parseSheetContent, serialize
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -171,15 +171,7 @@ export async function POST(req: NextRequest) {
       case 'read': {
         const numberedLines = getNumberedLines(currentContent);
 
-        securityAudit.logDataAccess(userId, 'read', 'page', pageId, {
-          source: 'mcp',
-          operation: 'read',
-        }).catch((error) => {
-          loggers.security.warn('[MCPDocuments] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId,
-          });
-        });
+        auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'read' } });
 
         return NextResponse.json({
           pageId,
@@ -240,15 +232,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        securityAudit.logDataAccess(userId, 'write', 'page', pageId, {
-          source: 'mcp',
-          operation: 'replace',
-        }).catch((error) => {
-          loggers.security.warn('[MCPDocuments] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId,
-          });
-        });
+        auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'replace' } });
 
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
@@ -307,15 +291,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        securityAudit.logDataAccess(userId, 'write', 'page', pageId, {
-          source: 'mcp',
-          operation: 'insert',
-        }).catch((error) => {
-          loggers.security.warn('[MCPDocuments] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId,
-          });
-        });
+        auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'insert' } });
 
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
@@ -377,15 +353,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        securityAudit.logDataAccess(userId, 'delete', 'page', pageId, {
-          source: 'mcp',
-          operation: 'delete',
-        }).catch((error) => {
-          loggers.security.warn('[MCPDocuments] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId,
-          });
-        });
+        auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'delete' } });
 
         const numberedLines = getNumberedLines(newContent);
         return NextResponse.json({
@@ -468,16 +436,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        securityAudit.logDataAccess(userId, 'write', 'page', pageId, {
-          source: 'mcp',
-          operation: 'edit-cells',
-          cellsUpdated: cells.length,
-        }).catch((error) => {
-          loggers.security.warn('[MCPDocuments] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-            userId,
-          });
-        });
+        auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'edit-cells', cellsUpdated: cells.length } });
 
         return NextResponse.json({
           pageId,

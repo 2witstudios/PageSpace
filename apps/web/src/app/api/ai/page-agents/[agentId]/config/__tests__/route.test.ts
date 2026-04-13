@@ -37,6 +37,7 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcast (boundary)
@@ -84,10 +85,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
+;
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';

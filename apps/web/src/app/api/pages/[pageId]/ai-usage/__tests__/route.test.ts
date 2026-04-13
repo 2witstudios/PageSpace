@@ -39,10 +39,6 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
 }));
 
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
-
 vi.mock('@pagespace/db', () => ({
   db: {
     select: (...args: unknown[]) => mockDbSelect(...args),
@@ -75,6 +71,7 @@ vi.mock('@pagespace/db', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   loggers: mockLoggers,
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/ai-monitoring', () => ({

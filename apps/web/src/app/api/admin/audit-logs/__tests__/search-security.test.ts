@@ -54,6 +54,7 @@ vi.mock('@pagespace/lib/server', () => ({
     },
     security: { warn: vi.fn() },
   },
+  auditRequest: vi.fn(),
 }));
 
 // Mock the database module

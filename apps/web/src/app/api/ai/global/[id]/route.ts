@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -29,9 +28,9 @@ export async function GET(
       }, { status: 404 });
     }
 
-    logAuditEvent(request, userId, 'read', 'global_chat', id, {
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat', resourceId: id, details: {
       action: 'get_conversation',
-    });
+    } });
 
     return NextResponse.json(conversation);
   } catch (error) {
@@ -70,9 +69,9 @@ export async function PATCH(
       }, { status: 404 });
     }
 
-    logAuditEvent(request, userId, 'write', 'global_chat', id, {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat', resourceId: id, details: {
       action: 'update_conversation',
-    });
+    } });
 
     return NextResponse.json(updatedConversation);
   } catch (error) {
@@ -108,9 +107,9 @@ export async function DELETE(
       }, { status: 404 });
     }
 
-    logAuditEvent(request, userId, 'delete', 'global_chat', id, {
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'global_chat', resourceId: id, details: {
       action: 'delete_conversation',
-    });
+    } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

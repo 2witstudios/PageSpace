@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -62,9 +62,7 @@ export async function POST(request: NextRequest) {
       })
       .where(eq(subscriptions.id, currentSubscription.id));
 
-    securityAudit.logDataAccess(userId, 'write', 'subscription_schedule', currentSubscription.stripeScheduleId, { action: 'cancel' }).catch((error: unknown) => {
-      loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription_schedule', resourceId: currentSubscription.stripeScheduleId, details: { action: 'cancel' } });
 
     return NextResponse.json({
       success: true,

@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -175,11 +176,6 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   hasVisionCapability: vi.fn().mockReturnValue(true),
-}));
-
-// Mock audit helper (boundary)
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';

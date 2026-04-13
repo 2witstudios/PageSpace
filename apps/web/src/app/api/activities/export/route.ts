@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, activityLogs, eq, and, desc, gte, lt, inArray } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { generateCSV } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
@@ -38,9 +38,7 @@ export async function GET(request: Request) {
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
-  securityAudit.logDataAccess(userId, 'export', 'activities', 'self').catch((error) => {
-    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
+  auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activities', resourceId: 'self' });
 
   try {
     const parseResult = querySchema.safeParse({
@@ -244,16 +242,11 @@ export async function GET(request: Request) {
     // Check if results were truncated
     const isTruncated = activities.length === 10000;
 
-    securityAudit.logDataAccess(userId, 'export', 'activity', params.driveId ?? params.pageId ?? '*', {
+    auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activity', resourceId: params.driveId ?? params.pageId ?? '*', details: {
       context: params.context,
       exportedCount: activities.length,
       isTruncated,
-    }).catch((error) => {
-      loggers.security.warn('[ActivitiesExport] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    } });
 
     return new Response(csvContent, {
       headers: {

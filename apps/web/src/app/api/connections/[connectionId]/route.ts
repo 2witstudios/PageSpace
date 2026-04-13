@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -20,9 +20,7 @@ export async function PATCH(
     const body = await request.json();
     const { action } = body;
 
-    securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, { action }).catch((error) => {
-      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action } });
 
     if (!['accept', 'reject', 'block', 'unblock'].includes(action)) {
       return NextResponse.json(
@@ -122,13 +120,7 @@ export async function PATCH(
           triggeredByUserId: userId,
         });
 
-        securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
-          action: 'reject',
-        }).catch((error) => {
-          loggers.security.warn('[Connection] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+        auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action: 'reject' } });
 
         return NextResponse.json({ success: true });
 
@@ -156,13 +148,7 @@ export async function PATCH(
         // Reset to pending or delete based on your preference
         await db.delete(connections).where(eq(connections.id, connectionId));
 
-        securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
-          action: 'unblock',
-        }).catch((error) => {
-          loggers.security.warn('[Connection] audit log failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+        auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action: 'unblock' } });
 
         return NextResponse.json({ success: true });
     }
@@ -206,14 +192,7 @@ export async function PATCH(
       });
     }
 
-    securityAudit.logDataAccess(userId, 'write', 'connection', connectionId, {
-      action,
-    }).catch((error) => {
-      loggers.security.warn('[Connection] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action } });
 
     return NextResponse.json({ connection: updatedConnection });
   } catch (error) {
@@ -237,9 +216,7 @@ export async function DELETE(
 
     const { connectionId } = await context.params;
 
-    securityAudit.logDataAccess(userId, 'delete', 'connection', connectionId).catch((error) => {
-      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'connection', resourceId: connectionId });
 
     // Get the connection
     const [connection] = await db
@@ -266,12 +243,7 @@ export async function DELETE(
     // Delete the connection
     await db.delete(connections).where(eq(connections.id, connectionId));
 
-    securityAudit.logDataAccess(userId, 'delete', 'connection', connectionId).catch((error) => {
-      loggers.security.warn('[Connection] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    });
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'connection', resourceId: connectionId });
 
     return NextResponse.json({ success: true });
   } catch (error) {

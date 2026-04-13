@@ -3,12 +3,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -46,6 +43,7 @@ vi.mock('@pagespace/db', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/server';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {
@@ -57,8 +55,9 @@ describe('GET /api/storage/info', () => {
     const request = new Request('https://example.com/api/storage/info');
     await GET(request as never);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user_1', 'read', 'storage', 'user_1'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.read', userId: 'user_1', resourceType: 'storage', resourceId: 'user_1' }
     );
   });
 
@@ -68,6 +67,6 @@ describe('GET /api/storage/info', () => {
     const request = new Request('https://example.com/api/storage/info');
     await GET(request as never);
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalled();
   });
 });

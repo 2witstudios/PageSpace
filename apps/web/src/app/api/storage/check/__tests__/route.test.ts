@@ -5,12 +5,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -41,6 +38,7 @@ vi.mock('@/lib/validation/parse-body', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -66,8 +64,9 @@ describe('GET /api/storage/check', () => {
     const request = new Request('https://example.com/api/storage/check');
     await GET(request as never);
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'user_1', 'read', 'storage', 'user_1'
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.read', userId: 'user_1', resourceType: 'storage', resourceId: 'user_1' }
     );
   });
 
@@ -78,6 +77,6 @@ describe('GET /api/storage/check', () => {
     const request = new Request('https://example.com/api/storage/check');
     await GET(request as never);
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalled();
   });
 });

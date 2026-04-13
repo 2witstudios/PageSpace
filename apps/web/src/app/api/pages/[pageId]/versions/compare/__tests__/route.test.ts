@@ -61,6 +61,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   readPageContent: (...args: unknown[]) => mockReadPageContent(...args),
   loggers: mockLoggers,
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/content', () => ({
@@ -71,10 +72,6 @@ vi.mock('@pagespace/lib/content', () => ({
 vi.mock('@/lib/logging/mask', () => ({
   // @ts-expect-error - test mock spread
   maskIdentifier: (...args: unknown[]) => mockMaskIdentifier(...args),
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 // ── Imports (after mocks) ──────────────────────────────────────────────────

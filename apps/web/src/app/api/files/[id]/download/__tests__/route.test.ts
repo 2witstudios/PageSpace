@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/files/[id]/download
- * Verifies securityAudit.logDataAccess is called for GET (read, download).
+ * Verifies auditRequest is called for GET (read, download).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -41,14 +41,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 
 const mockUserId = 'user_123';
@@ -78,8 +77,9 @@ describe('GET /api/files/[id]/download audit', () => {
 
     await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'file', mockFileId, { action: 'download' }
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.read', userId: mockUserId, resourceType: 'file', resourceId: mockFileId, details: { action: 'download' } }
     );
   });
 });

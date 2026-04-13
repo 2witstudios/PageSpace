@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/files/[id]/convert-to-document
- * Verifies securityAudit.logDataAccess is called for POST (write, convert).
+ * Verifies auditRequest is called for POST (write, convert).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -54,14 +54,13 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 
 const mockUserId = 'user_123';
@@ -109,8 +108,9 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
 
     await POST(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'write', 'file', mockFileId, { action: 'convert' }
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
+      { eventType: 'data.write', userId: mockUserId, resourceType: 'file', resourceId: mockFileId, details: { action: 'convert' } }
     );
   });
 });

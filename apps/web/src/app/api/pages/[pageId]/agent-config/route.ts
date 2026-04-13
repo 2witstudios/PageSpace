@@ -3,10 +3,9 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -67,7 +66,7 @@ export async function GET(
       // Continue without drive prompt on error
     }
 
-    logAuditEvent(request, userId, 'read', 'agent_config', pageId, { action: 'get_agent_config' });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'get_agent_config' } });
 
     return NextResponse.json({
       pageId,
@@ -256,7 +255,7 @@ export async function PATCH(
       });
     }
 
-    logAuditEvent(request, userId, 'write', 'agent_config', pageId, { action: 'update_agent_config', updatedFields: Object.keys(updateData) });
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'update_agent_config', updatedFields: Object.keys(updateData) } });
 
     return NextResponse.json({
       success: true,

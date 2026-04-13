@@ -1,6 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { getClientIP } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { randomBytes, createHash } from 'crypto';
 
@@ -34,9 +33,7 @@ export async function GET(request: Request) {
     expiresAt,
   });
 
-  securityAudit.logTokenCreated(auth.userId, 'socket', getClientIP(request)).catch((error) => {
-    loggers.security.warn('[SocketToken] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
-  });
+  auditRequest(request, { eventType: 'auth.token.created', userId: auth.userId, details: { tokenType: 'socket' } });
 
   // Return with no-cache headers to prevent token reuse across sessions
   return Response.json({

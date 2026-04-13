@@ -53,9 +53,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
   getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
 }));
@@ -71,7 +69,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPCreateScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { agentAwarenessCache, pageTreeCache, loggers, securityAudit } from '@pagespace/lib/server';
+import { agentAwarenessCache, pageTreeCache, loggers, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 
 // Test helpers
@@ -139,7 +137,7 @@ describe('POST /api/pages', () => {
     vi.mocked(pageService.createPage).mockResolvedValue(successResult);
     vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockResolvedValue(undefined);
     vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
+    vi.mocked(auditRequest).mockReturnValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,

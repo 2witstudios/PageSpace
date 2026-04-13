@@ -5,8 +5,8 @@ import {
   checkDriveAccessForSearch,
   regexSearchPages,
   loggers,
+  auditRequest,
 } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -82,7 +82,7 @@ export async function GET(
       userId,
     });
 
-    logAuditEvent(request, userId, 'read', 'drive_search', driveId, { action: 'regex_search', resultCount: searchResults.results.length });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_search', resourceId: driveId, details: { action: 'regex_search', resultCount: searchResults.results.length } });
 
     return NextResponse.json({
       success: true,

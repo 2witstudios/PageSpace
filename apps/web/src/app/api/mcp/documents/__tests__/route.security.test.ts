@@ -40,7 +40,8 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  securityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({

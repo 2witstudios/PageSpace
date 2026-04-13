@@ -23,13 +23,11 @@ vi.mock('@pagespace/lib', () => ({
   verifyAndAlert: mockVerifyAndAlert,
 }));
 
-const mockSecurityAudit = vi.hoisted(() => ({
-  logDataAccess: vi.fn().mockResolvedValue(undefined),
-}));
+const mockAudit = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
-  securityAudit: mockSecurityAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({
@@ -174,9 +172,8 @@ describe('/api/cron/verify-audit-chain', () => {
   it('logs audit event on successful chain verification', async () => {
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'read', 'cron_job', 'verify_audit_chain',
-      { isValid: true, entriesVerified: 100 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: true, entriesVerified: 100 } })
     );
   });
 
@@ -185,9 +182,8 @@ describe('/api/cron/verify-audit-chain', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-      'system', 'read', 'cron_job', 'verify_audit_chain',
-      { isValid: false, entriesVerified: 100 }
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: false, entriesVerified: 100 } })
     );
   });
 
@@ -196,7 +192,7 @@ describe('/api/cron/verify-audit-chain', () => {
 
     await GET(makeRequest());
 
-    expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('POST delegates to GET', async () => {

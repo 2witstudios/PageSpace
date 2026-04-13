@@ -88,16 +88,13 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   agentAwarenessCache: {
     invalidateDriveAgents: (...args: unknown[]) => mockAgentAwarenessCacheInvalidate(...args),
   },
   loggers: mockLoggers,
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

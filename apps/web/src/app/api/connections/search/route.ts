@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, users, userProfiles, connections, eq, and, or } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 // GET /api/connections/search - Search for users by email to connect with
 export async function GET(request: Request) {
@@ -11,9 +11,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    securityAudit.logDataAccess(user.id, 'read', 'connection_search', 'self').catch((error) => {
-      loggers.security.warn('[Connections] audit log failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
-    });
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'connection_search', resourceId: 'self' });
 
     const { searchParams } = new URL(request.url);
     const email = searchParams.get('email');

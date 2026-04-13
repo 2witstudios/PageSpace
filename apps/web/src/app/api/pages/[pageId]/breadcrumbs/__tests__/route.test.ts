@@ -22,6 +22,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -31,10 +32,6 @@ vi.mock('@pagespace/db', () => ({
   pages: 'pages_table',
   drives: 'drives_table',
   sql: vi.fn(),
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 import { GET } from '../route';

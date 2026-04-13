@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/activities/[activityId]
- * Verifies securityAudit.logDataAccess is called for GET (read).
+ * Verifies auditRequest is called for GET (read).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -29,14 +29,12 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockActivityId = 'activity-1';
@@ -66,8 +64,9 @@ describe('GET /api/activities/[activityId] audit', () => {
       { params: Promise.resolve({ activityId: mockActivityId }) }
     );
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'read', 'activity', mockActivityId
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'activity', resourceId: mockActivityId })
     );
   });
 });

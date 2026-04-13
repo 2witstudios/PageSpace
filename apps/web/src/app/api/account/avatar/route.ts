@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
       .set({ image: avatarUrl })
       .where(eq(users.id, userId));
 
-    securityAudit.logDataAccess(userId, 'write', 'avatar', userId, { operation: 'upload' }).catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'avatar', resourceId: userId, details: { operation: 'upload' } });
 
     return NextResponse.json({
       success: true,
@@ -179,7 +179,7 @@ export async function DELETE(request: NextRequest) {
       .set({ image: null })
       .where(eq(users.id, userId));
 
-    securityAudit.logDataAccess(userId, 'delete', 'avatar', userId, { operation: 'delete' }).catch(() => {});
+    auditRequest(request, { eventType: 'data.delete', userId, resourceType: 'avatar', resourceId: userId, details: { operation: 'delete' } });
 
     return NextResponse.json({
       success: true,

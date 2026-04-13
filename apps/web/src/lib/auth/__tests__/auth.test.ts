@@ -25,9 +25,8 @@ vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     security: { warn: vi.fn() },
   },
-  securityAudit: {
-    logAccessDenied: vi.fn().mockResolvedValue(undefined),
-  },
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { authenticateSessionRequest } from '../index';

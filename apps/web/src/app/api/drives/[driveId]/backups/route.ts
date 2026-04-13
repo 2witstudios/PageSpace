@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { createDriveBackup, listDriveBackups } from '@/services/api/drive-backup-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -68,7 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ dri
       return NextResponse.json({ error: result.error }, { status: 403 });
     }
 
-    securityAudit.logDataAccess(auth.userId, 'write', 'drive', driveId, { operation: 'create_backup' })?.catch(() => {});
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'create_backup' } });
 
     return NextResponse.json({
       backupId: result.backupId,

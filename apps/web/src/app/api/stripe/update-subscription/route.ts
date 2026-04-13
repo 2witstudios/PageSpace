@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -131,9 +131,7 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
-      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: true }).catch((error: unknown) => {
-        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-      });
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription', resourceId: subscription.id, details: { action: 'update', priceId, isDowngrade: true } });
 
       return NextResponse.json({
         subscriptionId: subscription.id,
@@ -178,9 +176,7 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
-      securityAudit.logDataAccess(userId, 'write', 'subscription', subscription.id, { action: 'update', priceId, isDowngrade: false }).catch((error: unknown) => {
-        loggers.security.warn('[Stripe] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-      });
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'subscription', resourceId: subscription.id, details: { action: 'update', priceId, isDowngrade: false } });
 
       return NextResponse.json({
         subscriptionId: updatedSubscription.id,

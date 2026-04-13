@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, favorites, pages, drives, eq, and, desc, asc } from '@pagespace/db';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -29,9 +29,7 @@ export async function GET(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'read', 'favorites', 'self').catch((error) => {
-    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
+  auditRequest(req, { eventType: 'data.read', userId, resourceType: 'favorites', resourceId: 'self' });
 
   try {
     const userFavorites = await db.query.favorites.findMany({
@@ -96,12 +94,7 @@ export async function GET(req: Request) {
           : {}),
       }));
 
-    securityAudit.logDataAccess(auth.userId, 'read', 'favorite', 'self').catch((error) => {
-      loggers.security.warn('[Favorites] audit log failed', {
-        error: error instanceof Error ? error.message : String(error),
-        userId: auth.userId,
-      });
-    });
+    auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'favorite', resourceId: 'self' });
 
     return NextResponse.json({ favorites: items });
   } catch (error) {
@@ -115,9 +108,7 @@ export async function POST(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'write', 'favorites', 'self').catch((error) => {
-    loggers.security.warn('[User] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
+  auditRequest(req, { eventType: 'data.write', userId, resourceType: 'favorites', resourceId: 'self' });
 
   try {
     const body = await req.json();

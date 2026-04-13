@@ -8,10 +8,6 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Mock at the SERVICE SEAM level: auth and db.query.users.findFirst
 // ============================================================================
 
-const { mockSecurityAudit } = vi.hoisted(() => ({
-  mockSecurityAudit: { logDataAccess: vi.fn().mockResolvedValue(undefined) },
-}));
-
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
@@ -21,7 +17,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  securityAudit: mockSecurityAudit,
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -44,7 +41,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
@@ -162,8 +159,9 @@ describe('GET /api/users/find', () => {
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).toHaveBeenCalledWith(
-        'user_123', 'read', 'user_search', 'user_456', { queryLength: 16, resultCount: 1 }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        { eventType: 'data.read', userId: 'user_123', resourceType: 'user_search', resourceId: 'user_456', details: { queryLength: 16, resultCount: 1 } }
       );
     });
 
@@ -173,7 +171,7 @@ describe('GET /api/users/find', () => {
       const request = new Request('https://example.com/api/users/find?email=missing@example.com');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
 
     it('should not log audit event when auth fails', async () => {
@@ -183,7 +181,7 @@ describe('GET /api/users/find', () => {
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       await GET(request);
 
-      expect(mockSecurityAudit.logDataAccess).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
     });
   });
 

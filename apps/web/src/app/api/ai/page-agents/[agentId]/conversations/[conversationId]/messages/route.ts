@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
-import { canUserViewPage, loggers } from '@pagespace/lib/server';
-import { logAuditEvent } from '@/lib/audit/route-audit';
+import { canUserViewPage, loggers, auditRequest } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -162,10 +161,10 @@ export async function GET(
       ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
       : null;
 
-    logAuditEvent(request, auth.userId, 'read', 'page_agent_message', conversationId, {
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: {
       action: 'list_messages',
       agentId,
-    });
+    } });
 
     return NextResponse.json({
       messages,

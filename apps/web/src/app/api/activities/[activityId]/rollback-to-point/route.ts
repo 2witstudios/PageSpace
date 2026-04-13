@@ -6,7 +6,7 @@ import {
   executeRollbackToPoint,
   type RollbackToPointContext,
 } from '@/services/api';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   broadcastPageEvent,
@@ -101,9 +101,7 @@ export async function POST(
   const { activityId } = await context.params;
   const userId = auth.userId;
 
-  securityAudit.logDataAccess(userId, 'write', 'activity', activityId, { action: 'rollback_to_point' }).catch((error) => {
-    loggers.security.warn('[Activities] audit log failed', { error: error instanceof Error ? error.message : String(error), userId });
-  });
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'activity', resourceId: activityId, details: { action: 'rollback_to_point' } });
 
   loggers.api.debug('[RollbackToPoint:Route] POST request received', {
     activityId: maskIdentifier(activityId),

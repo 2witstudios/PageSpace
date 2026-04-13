@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, securityAudit, auditSafe } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
       createdAt: p.createdAt,
     }));
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'read', 'integration_provider', 'list', { providerCount: safeProviders.length }), auth.userId);
+    auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_provider', resourceId: 'list', details: { providerCount: safeProviders.length } });
 
     return NextResponse.json({ providers: safeProviders });
   } catch (error) {
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
       enabled: true,
     });
 
-    auditSafe(securityAudit.logDataAccess(auth.userId, 'write', 'integration_provider', provider.id, { slug, providerType, operation: 'create' }), auth.userId);
+    auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'integration_provider', resourceId: provider.id, details: { slug, providerType, operation: 'create' } });
 
     return NextResponse.json({ provider }, { status: 201 });
   } catch (error) {

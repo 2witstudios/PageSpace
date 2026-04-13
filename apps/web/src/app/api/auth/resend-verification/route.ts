@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import React from 'react';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -72,9 +72,7 @@ export async function POST(request: Request) {
       });
 
       loggers.auth.info('Verification email resent', { userId: user.id, email: user.email });
-      securityAudit.logDataAccess(auth.userId, 'write', 'email_verification', auth.userId).catch((error) => {
-        loggers.security.warn('[ResendVerification] audit logDataAccess failed', { error: error instanceof Error ? error.message : String(error), userId: auth.userId });
-      });
+      auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'email_verification', resourceId: auth.userId });
 
       return NextResponse.json({
         message: 'Verification email sent successfully. Please check your inbox.'

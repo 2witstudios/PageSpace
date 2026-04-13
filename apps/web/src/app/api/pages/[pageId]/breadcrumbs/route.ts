@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, db, drives, sql } from '@pagespace/db';
-import { logAuditEvent } from '@/lib/audit/route-audit';
 
 interface BreadcrumbPage {
   id: string;
@@ -108,7 +107,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const breadcrumbs = await getBreadcrumbs(pageId);
 
-  logAuditEvent(req, auth.userId, 'read', 'page_breadcrumb', pageId, { action: 'get_breadcrumbs', depth: breadcrumbs.length });
+  auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_breadcrumb', resourceId: pageId, details: { action: 'get_breadcrumbs', depth: breadcrumbs.length } });
 
   return NextResponse.json(breadcrumbs);
 }

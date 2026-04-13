@@ -1,6 +1,6 @@
 /**
  * Security audit tests for /api/agents/[agentId]/integrations/[grantId]
- * Verifies securityAudit.logDataAccess is called for DELETE.
+ * Verifies auditRequest is called for DELETE.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -19,17 +19,11 @@ vi.mock('@pagespace/lib/server', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions', () => ({
   canUserEditPage: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock('@/lib/audit/route-audit', () => ({
-  logAuditEvent: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -40,7 +34,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';
@@ -71,8 +65,9 @@ describe('DELETE /api/agents/[agentId]/integrations/[grantId] audit', () => {
       { params: Promise.resolve({ agentId: mockAgentId, grantId: mockGrantId }) }
     );
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      mockUserId, 'delete', 'agent_grant', mockGrantId, {}
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ eventType: 'data.delete', userId: mockUserId, resourceType: 'agent_grant', resourceId: mockGrantId })
     );
   });
 });

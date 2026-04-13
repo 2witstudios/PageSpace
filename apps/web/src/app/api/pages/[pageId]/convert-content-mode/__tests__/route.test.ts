@@ -78,9 +78,7 @@ vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   createPageVersion: (...args: unknown[]) => mockCreatePageVersion(...args),
   loggers: mockLoggers,
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('turndown', () => ({

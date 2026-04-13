@@ -24,11 +24,7 @@ vi.mock('@pagespace/lib/server', () => ({
     auth: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
   },
   logSecurityEvent: vi.fn(),
-  securityAudit: {
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logAccessDenied: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
@@ -60,7 +56,7 @@ import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository, securityAudit } from '@pagespace/lib/server';
+import { accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 
@@ -195,14 +191,17 @@ describe('/api/admin/users/[userId]/data', () => {
     const context = { params: Promise.resolve({ userId: 'user-1' }) };
     await DELETE(request, context);
 
-    expect(securityAudit.logDataAccess).toHaveBeenCalledWith(
-      'admin-123',
-      'delete',
-      'user',
-      'user-1',
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
       expect.objectContaining({
-        source: 'admin',
-        operation: 'dsar-deletion',
+        eventType: 'data.delete',
+        userId: 'admin-123',
+        resourceType: 'user',
+        resourceId: 'user-1',
+        details: expect.objectContaining({
+          source: 'admin',
+          operation: 'dsar-deletion',
+        }),
       })
     );
   });

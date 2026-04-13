@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   loggers,
-  securityAudit,
+  auditRequest,
   checkDriveAccess,
   getDriveMemberDetails,
   getMemberPermissions,
@@ -154,7 +154,7 @@ export async function PATCH(
         previousRole: oldRole as string,
       }, actorInfo);
 
-      securityAudit.logEvent({ eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } })?.catch(() => {});
+      auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } });
     }
 
     // Update permissions
@@ -166,7 +166,7 @@ export async function PATCH(
     );
 
     if (permissions.length > 0) {
-      securityAudit.logEvent({ eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } })?.catch(() => {});
+      auditRequest(request, { eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } });
     }
 
     // Invalidate permission caches so changes take effect immediately
@@ -321,7 +321,7 @@ export async function DELETE(
       acceptedAt: memberData.acceptedAt,
     }, actorInfo);
 
-    securityAudit.logEvent({ eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } })?.catch(() => {});
+    auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
 
     // Broadcast member removal event
     await broadcastDriveMemberEvent(
