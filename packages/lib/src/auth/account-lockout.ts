@@ -13,7 +13,7 @@
 import { db, users } from '@pagespace/db';
 import { eq, sql } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
-import { maskEmail } from '../audit';
+import { maskEmail } from '../audit/mask-email';
 
 // Lockout thresholds
 const MAX_FAILED_ATTEMPTS = 10;
