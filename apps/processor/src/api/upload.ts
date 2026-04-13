@@ -10,7 +10,7 @@ import { processorLogger } from '../logger';
 import { rateLimitUpload } from '../middleware/rate-limit';
 import { hasAuthScope } from '../middleware/auth';
 import { resolvePathWithin, sanitizeExtension } from '../utils/security';
-import { detectContentType } from '../services/content-detector';
+import { detectContentType, type DetectedContentType } from '../services/content-detector';
 
 const DENIED_LABELS: ReadonlySet<string> = new Set([
   'pebin',
@@ -22,6 +22,15 @@ const DENIED_LABELS: ReadonlySet<string> = new Set([
   'xhtml',
   'javascript',
 ]);
+
+// Fail closed on unverified content: when Magika can't initialize or falls back
+// to the `unknown` label, we treat the upload as unsafe rather than letting it
+// bypass the denylist. Without this, a broken model / native binding would
+// accept renamed executables because `detected.label` defaults to 'unknown'
+// and escapes DENIED_LABELS.
+function isUnverifiedDetection(detected: DetectedContentType): boolean {
+  return detected.source === 'fallback' || detected.label === 'unknown';
+}
 
 const router = Router();
 
@@ -166,7 +175,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
     });
 
     const detected = await detectContentType(tempPath);
-    if (DENIED_LABELS.has(detected.label)) {
+    if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
       try {
         await fs.unlink(tempPath);
       } catch (cleanupError) {
@@ -176,8 +185,17 @@ router.post('/single', upload.single('file'), async (req, res) => {
         });
       }
       tempFilePath = undefined;
+      const unverified = isUnverifiedDetection(detected);
+      if (unverified) {
+        processorLogger.warn('Rejecting upload with unverified content type', {
+          tempPath,
+          originalname,
+          source: detected.source,
+          label: detected.label,
+        });
+      }
       return res.status(415).json({
-        error: 'Unsupported file type',
+        error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
         detectedLabel: detected.label
       });
     }
@@ -365,7 +383,7 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
 
       try {
         const detected = await detectContentType(tempPath);
-        if (DENIED_LABELS.has(detected.label)) {
+        if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
           try {
             await fs.unlink(tempPath);
           } catch (cleanupError) {
@@ -376,9 +394,18 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
           }
           const idx = tempFilePaths.indexOf(tempPath);
           if (idx >= 0) tempFilePaths.splice(idx, 1);
+          const unverified = isUnverifiedDetection(detected);
+          if (unverified) {
+            processorLogger.warn('Rejecting upload with unverified content type', {
+              tempPath,
+              originalname,
+              source: detected.source,
+              label: detected.label,
+            });
+          }
           results.push({
             originalname,
-            error: 'Unsupported file type',
+            error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
             detectedLabel: detected.label,
             success: false
           });

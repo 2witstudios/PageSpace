@@ -169,6 +169,18 @@ describe('detectContentType', () => {
     expect(py.label).toBe('python');
     expect(pdf.label).toBe('pdf');
     expect(elf.label).toBe('elf');
+
+    // magika/node's JS API does not expose mime_type on prediction.output, so
+    // DetectedContentType.mimeType is derived from our own label→MIME table.
+    // These assertions are load-bearing: the ingest worker branches on MIME
+    // (image/*, application/pdf, etc.) to decide thumbnail vs text extraction,
+    // so a regression here silently kills downstream processing for the most
+    // common upload types.
+    expect(png.mimeType).toBe('image/png');
+    expect(pdf.mimeType).toBe('application/pdf');
+    // Python source has no MIME mapping — stays octet-stream and will fall to
+    // the "unsupported → visual" branch, which is fine for source code.
+    expect(py.mimeType).toBe('application/octet-stream');
   }, 15000);
 
   it('given a missing file path, returns the fallback shape without throwing', async () => {

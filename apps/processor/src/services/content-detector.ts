@@ -8,7 +8,6 @@ export type DetectionSource = 'magika' | 'fallback';
 export interface DetectedContentType {
   label: string;
   mimeType: string;
-  group: string;
   score: number;
   source: DetectionSource;
 }
@@ -20,10 +19,35 @@ const MODEL_DIR = path.resolve(__dirname, '../../assets/magika/standard_v3_3');
 const MODEL_PATH = path.join(MODEL_DIR, 'model.json');
 const MODEL_CONFIG_PATH = path.join(MODEL_DIR, 'config.min.json');
 
+// magika/node's JS API only exposes { label, is_text } on prediction.output —
+// no mime_type, no group. We map the labels the downstream ingest worker
+// actually branches on (image/*, PDF, Office docs, plain text) to the MIME
+// types its router expects. Labels not in this table fall through to
+// application/octet-stream and get the "unsupported → visual" path.
+const LABEL_TO_MIME: Readonly<Record<string, string>> = Object.freeze({
+  // images — keep in sync with queue-manager's `mimeType.startsWith('image/')` branch
+  png: 'image/png',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  avif: 'image/avif',
+  heif: 'image/heif',
+  ico: 'image/vnd.microsoft.icon',
+  // text-extractable — keep in sync with workers/text-extractor.ts#needsTextExtraction
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  markdown: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+});
+
 export const FALLBACK_DETECTION: DetectedContentType = Object.freeze({
   label: 'unknown',
   mimeType: 'application/octet-stream',
-  group: 'unknown',
   score: 0,
   source: 'fallback',
 });
@@ -70,8 +94,6 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 
 interface MagikaOutput {
   label?: string;
-  mime_type?: string;
-  group?: string;
 }
 
 interface MagikaPrediction {
@@ -90,8 +112,7 @@ function mapResult(raw: MagikaResultShape | null | undefined): DetectedContentTy
   }
   return {
     label: output.label,
-    mimeType: output.mime_type || 'application/octet-stream',
-    group: output.group || 'unknown',
+    mimeType: LABEL_TO_MIME[output.label] || 'application/octet-stream',
     score: typeof raw?.prediction?.score === 'number' ? raw.prediction.score : 0,
     source: 'magika',
   };

@@ -1054,11 +1054,10 @@ describe('upload router - magika content-type detection', () => {
     }));
   });
 
-  it('accepts uploads when magika falls back to application/octet-stream', async () => {
+  it('rejects single-upload with HTTP 415 when magika falls back (fail-closed on unverified content)', async () => {
     mockDetectContentType.mockResolvedValue({
       label: 'unknown',
       mimeType: 'application/octet-stream',
-      group: 'unknown',
       score: 0,
       source: 'fallback',
     });
@@ -1076,11 +1075,38 @@ describe('upload router - magika content-type detection', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    expect(response.status).toBe(200);
-    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+    expect(response.status).toBe(415);
+    expect(response.body.error).toBe('Unable to verify file type');
+    expect(response.body.detectedLabel).toBe('unknown');
+    expect(mockAddJob).not.toHaveBeenCalled();
+    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+  });
+
+  it('rejects single-upload with HTTP 415 when magika returns an `unknown` label from a real classification', async () => {
+    mockDetectContentType.mockResolvedValue({
+      label: 'unknown',
       mimeType: 'application/octet-stream',
-      detectedLabel: 'unknown',
-    }));
+      score: 0.42,
+      source: 'magika',
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(415);
+    expect(response.body.error).toBe('Unable to verify file type');
+    expect(mockAddJob).not.toHaveBeenCalled();
   });
 
   it('rejects denylisted entries inside multi-upload while still processing siblings', async () => {
