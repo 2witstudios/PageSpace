@@ -46,8 +46,6 @@ function toDate(value: unknown): Date {
 
 function isRelationNotFoundError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
-  const e = err as { code?: unknown; message?: unknown };
-  if (e.code === '42P01') return true;
-  if (typeof e.message === 'string' && e.message.includes('does not exist')) return true;
-  return false;
+  const e = err as { code?: unknown };
+  return e.code === '42P01';
 }

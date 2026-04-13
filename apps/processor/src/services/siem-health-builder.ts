@@ -109,10 +109,6 @@ function missingPerSource(): SiemHealthPerSource {
 }
 
 function deriveStatus(cursor: CursorSnapshot, cursorInitSentinel: string): SourceStatus {
-  if (cursor.lastDeliveredId === cursorInitSentinel) {
-    return 'initialized';
-  }
-
   if (cursor.lastError !== null) {
     if (cursor.lastDeliveredAt === null) {
       return 'error';
@@ -120,6 +116,10 @@ function deriveStatus(cursor: CursorSnapshot, cursorInitSentinel: string): Sourc
     if (cursor.lastErrorAt !== null && cursor.lastErrorAt > cursor.lastDeliveredAt) {
       return 'error';
     }
+  }
+
+  if (cursor.lastDeliveredId === cursorInitSentinel) {
+    return 'initialized';
   }
 
   return 'delivering';

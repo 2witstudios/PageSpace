@@ -85,4 +85,26 @@ describe('readRecentReceipts', () => {
       expected: 'connection reset',
     });
   });
+
+  it('given a non-42P01 error whose message contains "does not exist", should throw (not silently swallow)', async () => {
+    const undefinedColumn: Error & { code?: string } = Object.assign(
+      new Error('column "entryCount" does not exist'),
+      { code: '42703' },
+    );
+    const client = { query: vi.fn().mockRejectedValue(undefinedColumn) };
+
+    let thrown: unknown = null;
+    try {
+      await readRecentReceipts(client);
+    } catch (err) {
+      thrown = err;
+    }
+
+    assert({
+      given: 'a schema error that is not relation-not-found',
+      should: 'propagate the error so /health surfaces the real failure',
+      actual: thrown instanceof Error && thrown.message,
+      expected: 'column "entryCount" does not exist',
+    });
+  });
 });

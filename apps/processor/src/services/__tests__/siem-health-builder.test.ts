@@ -172,6 +172,35 @@ describe('buildSiemHealth', () => {
     });
   });
 
+  it('given a cursor still at the init sentinel but with an error after it, should return error status (error beats initialized)', () => {
+    const cursors: CursorSnapshot[] = [
+      makeCursor({
+        id: 'activity_logs',
+        lastDeliveredId: SENTINEL,
+        lastDeliveredAt: null,
+        lastError: 'HTTP 500 from SIEM endpoint',
+        lastErrorAt: new Date('2026-04-10T12:05:00Z'),
+        deliveryCount: 0,
+      }),
+    ];
+
+    const result = buildSiemHealth({
+      enabled: true,
+      type: 'webhook',
+      sources: SOURCES,
+      cursors,
+      recentReceipts: null,
+      cursorInitSentinel: SENTINEL,
+    });
+
+    assert({
+      given: 'a cursor at the init sentinel that has started failing',
+      should: 'report error so /health surfaces the failure instead of initialized',
+      actual: result.sources.activity_logs!.status,
+      expected: 'error',
+    });
+  });
+
   it('given no cursor row for a source in SOURCES, should return missing status for that source', () => {
     const cursors: CursorSnapshot[] = [makeCursor({ id: 'activity_logs' })];
 
