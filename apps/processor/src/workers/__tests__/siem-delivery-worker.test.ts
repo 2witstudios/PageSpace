@@ -1656,7 +1656,7 @@ describe('processSiemDelivery', () => {
     });
   });
 
-  it('preflight halt on anchor-load DB error is recorded and delivery halts', async () => {
+  it('preflight db_error halts delivery, records cursor error, and does NOT fire the chain verification webhook', async () => {
     mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
@@ -1666,16 +1666,15 @@ describe('processSiemDelivery', () => {
     stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
     stubSourceRows([]);
 
-    // Simulate the real preflight's defensive behavior when an anchor-load
-    // DB query fails: it returns a synthesized halt (missing_hash + error in
-    // actualHash) for the affected source rather than throwing.
+    // Real preflight returns a distinct `db_error` variant when an
+    // anchor-load or hashable-field SELECT throws. The worker must halt
+    // delivery and record a cursor error, but MUST NOT fire the chain
+    // verification webhook — a transient DB blip is not tamper, and
+    // signalling it as such erodes the alert's credibility.
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'db_error',
       source: 'activity_logs',
-      entryId: 'log_1',
-      breakAtIndex: 0,
-      breakReason: 'missing_hash',
-      expectedHash: null,
-      actualHash: 'connection refused',
+      message: 'connection refused',
     });
 
     stubErrorUpsert();
@@ -1684,7 +1683,7 @@ describe('processSiemDelivery', () => {
     await processSiemDelivery();
 
     assert({
-      given: 'an anchor-load DB error surfaced as a preflight halt',
+      given: 'a preflight db_error for activity_logs',
       should: 'NOT call deliverToSiemWithRetry',
       actual: mockDeliverToSiemWithRetry.mock.calls.length,
       expected: 0,
@@ -1694,10 +1693,17 @@ describe('processSiemDelivery', () => {
       (call) => typeof call[0] === 'string' && (call[0] as string).includes('"lastError" = $2')
     );
     assert({
-      given: 'an anchor-load DB error',
+      given: 'a preflight db_error for activity_logs',
       should: 'record the error on the activity_logs cursor',
       actual: errorCalls.length === 1 && (errorCalls[0][1] as unknown[])[0] === 'activity_logs',
       expected: true,
+    });
+
+    assert({
+      given: 'a preflight db_error (not tamper)',
+      should: 'NOT fire notifyChainPreflightFailure',
+      actual: mockNotifyChainPreflightFailure.mock.calls.length,
+      expected: 0,
     });
   });
 });

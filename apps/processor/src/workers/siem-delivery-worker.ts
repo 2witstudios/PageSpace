@@ -351,12 +351,29 @@ export async function processSiemDelivery(): Promise<void> {
     // metadata and substitutes defaults for null resourceType/resourceId,
     // which would corrupt recomputation. Loading the raw DB subset keeps
     // both mappers untouched.
-    const preflightHalt = await runChainPreflight(client, merged);
-    if (preflightHalt !== null) {
+    const preflightResult = await runChainPreflight(client, merged);
+    if (preflightResult !== null) {
+      if (preflightResult.kind === 'db_error') {
+        // Preflight couldn't even load the data needed to verify. Halt
+        // delivery and surface the error on the affected source's cursor,
+        // but do NOT fire the chain verification webhook — a transient DB
+        // failure is not tamper, and a false tamper page erodes the
+        // alert's credibility. The next poll cycle will retry naturally.
+        await recordError(
+          client,
+          preflightResult.source,
+          `Chain preflight data unavailable: ${preflightResult.message}`
+        );
+        console.warn(
+          `[siem-delivery] Chain preflight data unavailable source=${preflightResult.source}: ${preflightResult.message}`
+        );
+        return;
+      }
+
       await recordError(
         client,
-        preflightHalt.source,
-        `Hash chain broken at index ${preflightHalt.breakAtIndex}: ${preflightHalt.breakReason} (entry=${preflightHalt.entryId})`
+        preflightResult.source,
+        `Hash chain broken at index ${preflightResult.breakAtIndex}: ${preflightResult.breakReason} (entry=${preflightResult.entryId})`
       );
 
       // Fire the existing chain verification webhook. notifyChainPreflightFailure
@@ -366,12 +383,12 @@ export async function processSiemDelivery(): Promise<void> {
       // already been made above, so /health already shows the failure.
       try {
         await notifyChainPreflightFailure({
-          auditSource: preflightHalt.source,
-          entryId: preflightHalt.entryId,
-          breakAtIndex: preflightHalt.breakAtIndex,
-          breakReason: preflightHalt.breakReason,
-          expectedHash: preflightHalt.expectedHash,
-          actualHash: preflightHalt.actualHash,
+          auditSource: preflightResult.source,
+          entryId: preflightResult.entryId,
+          breakAtIndex: preflightResult.breakAtIndex,
+          breakReason: preflightResult.breakReason,
+          expectedHash: preflightResult.expectedHash,
+          actualHash: preflightResult.actualHash,
         });
       } catch (alertError) {
         const msg = alertError instanceof Error ? alertError.message : String(alertError);
@@ -379,7 +396,7 @@ export async function processSiemDelivery(): Promise<void> {
       }
 
       console.error(
-        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightHalt.source} index=${preflightHalt.breakAtIndex} reason=${preflightHalt.breakReason} entry=${preflightHalt.entryId}`
+        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightResult.source} index=${preflightResult.breakAtIndex} reason=${preflightResult.breakReason} entry=${preflightResult.entryId}`
       );
       return;
     }

@@ -45,6 +45,7 @@ interface PgClient {
 }
 
 export interface PreflightHalt {
+  kind: 'tamper';
   source: AuditLogSource;
   entryId: string;
   breakAtIndex: number;
@@ -52,6 +53,22 @@ export interface PreflightHalt {
   expectedHash: string | null;
   actualHash: string | null;
 }
+
+/**
+ * Distinct variant returned when preflight cannot verify the chain because a
+ * DB-side dependency (cursor read, anchor load, bulk hashable load) failed.
+ * Kept separate from PreflightHalt so the worker can halt delivery AND record
+ * a cursor error WITHOUT firing the chain verification webhook or emitting a
+ * CHAIN TAMPER DETECTED log line — a transient DB blip is not tamper, and
+ * signalling it as such erodes the alert's credibility.
+ */
+export interface PreflightDbError {
+  kind: 'db_error';
+  source: AuditLogSource;
+  message: string;
+}
+
+export type PreflightResult = PreflightHalt | PreflightDbError;
 
 const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log'] as const;
 
@@ -76,7 +93,7 @@ const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log
 export async function runChainPreflight(
   client: PgClient,
   merged: readonly AuditLogEntry[]
-): Promise<PreflightHalt | null> {
+): Promise<PreflightResult | null> {
   const bySource = new Map<AuditLogSource, AuditLogEntry[]>();
   for (const source of SOURCES) {
     bySource.set(source, []);
@@ -167,18 +184,12 @@ export async function runChainPreflight(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return {
-        source,
-        entryId: entries[0]?.id ?? 'unknown',
-        breakAtIndex: 0,
-        breakReason: 'missing_hash',
-        expectedHash: null,
-        actualHash: message,
-      };
+      return { kind: 'db_error', source, message };
     }
 
     if (!verificationResult.valid) {
       return {
+        kind: 'tamper',
         source,
         entryId: entries[verificationResult.breakAtIndex].id,
         breakAtIndex: verificationResult.breakAtIndex,
