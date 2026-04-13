@@ -97,15 +97,22 @@ async function initCursor(client: PgClient, source: AuditLogSource): Promise<Cur
 async function queryActivityLogs(
   client: PgClient,
   afterTimestamp: Date,
+  afterId: string,
   batchSize: number
 ): Promise<AuditLogEntry[]> {
+  // Tuple cursor: (timestamp, id) > (lastDeliveredAt, lastDeliveredId).
+  // Strict timestamp > would silently drop rows that share a microsecond with
+  // the last delivered row — possible under load when multiple transactions
+  // commit in the same microsecond. CUID2 ids sort lexicographically, which is
+  // sufficient as a tie-breaker (we don't need them to be time-ordered, only
+  // to give same-timestamp rows a stable order).
   const result = await client.query(
     `SELECT ${ACTIVITY_LOG_COLUMNS}
      FROM activity_logs
-     WHERE timestamp > $1
-     ORDER BY timestamp ASC
-     LIMIT $2`,
-    [afterTimestamp, batchSize]
+     WHERE (timestamp, id) > ($1, $2)
+     ORDER BY timestamp ASC, id ASC
+     LIMIT $3`,
+    [afterTimestamp, afterId, batchSize]
   );
   return mapActivityLogsToSiemEntries(result.rows as unknown as ActivityLogSiemRow[]);
 }
@@ -113,15 +120,16 @@ async function queryActivityLogs(
 async function querySecurityAuditLog(
   client: PgClient,
   afterTimestamp: Date,
+  afterId: string,
   batchSize: number
 ): Promise<AuditLogEntry[]> {
   const result = await client.query(
     `SELECT ${SECURITY_AUDIT_COLUMNS}
      FROM security_audit_log
-     WHERE timestamp > $1
-     ORDER BY timestamp ASC
-     LIMIT $2`,
-    [afterTimestamp, batchSize]
+     WHERE (timestamp, id) > ($1, $2)
+     ORDER BY timestamp ASC, id ASC
+     LIMIT $3`,
+    [afterTimestamp, afterId, batchSize]
   );
   return mapSecurityAuditEventsToSiemEntries(result.rows as unknown as SecurityAuditSiemRow[]);
 }
@@ -130,12 +138,13 @@ async function queryRowsForSource(
   client: PgClient,
   source: AuditLogSource,
   afterTimestamp: Date,
+  afterId: string,
   batchSize: number
 ): Promise<AuditLogEntry[]> {
   if (source === 'activity_logs') {
-    return queryActivityLogs(client, afterTimestamp, batchSize);
+    return queryActivityLogs(client, afterTimestamp, afterId, batchSize);
   }
-  return querySecurityAuditLog(client, afterTimestamp, batchSize);
+  return querySecurityAuditLog(client, afterTimestamp, afterId, batchSize);
 }
 
 async function recordError(
@@ -216,37 +225,41 @@ export async function processSiemDelivery(): Promise<void> {
     const batchSize = config.webhook?.batchSize ?? DEFAULT_BATCH_SIZE;
 
     // Phase 1: load (or initialize) each source's cursor and query its new rows.
-    // Cursor queries use timestamp-only comparison because both tables have
-    // microsecond-precision timestamps and each event comes from a separate
-    // transaction, making same-timestamp collisions effectively impossible.
-    // CUID2 ids are non-monotonic so cannot be used for reliable cursor ordering.
+    // Cursor queries use a (timestamp, id) tuple so that rows sharing a
+    // microsecond with the last delivered row are still picked up. CUID ids
+    // are not time-monotonic, but they sort lexicographically and that is all
+    // we need from them as a tie-breaker — same-timestamp rows just need
+    // *some* stable order so neither side gets dropped.
     const states: SourceState[] = [];
     for (const source of SOURCES) {
       let cursor = await loadCursor(client, source);
 
-      if (!cursor) {
-        // Phase 7: new source — plant cursor at NOW() and deliver zero historical
-        // rows. Backfilling would break temporal audit semantics (customers would
-        // see events from months ago appearing today). If historical events are
-        // needed they must be exported out-of-band.
+      // Treat a null-timestamp row as uninitialized. The schema CHECK constraint
+      // permits (lastDeliveredId, lastDeliveredAt) = (null, null), and the
+      // recordError() insert path can create exactly that state if an error
+      // fires before the cursor was ever initialized. Without this branch the
+      // worker would skip the source forever on the next run. Re-initializing
+      // is safe — we lose at most a handful of seconds' worth of events that
+      // arrived during the failure window, which is the same exposure as a
+      // brand-new source per Phase 7's no-backfill rule.
+      if (!cursor || !cursor.lastDeliveredAt || !cursor.lastDeliveredId) {
+        // Phase 7: plant cursor at NOW() and deliver zero historical rows.
+        // Backfilling would break temporal audit semantics (customers would
+        // see events from months ago appearing today).
         cursor = await initCursor(client, source);
         states.push({ source, cursor, entries: [] });
         continue;
       }
 
-      if (!cursor.lastDeliveredAt) {
-        // Defensive: the CHECK constraint on siem_delivery_cursors makes this
-        // impossible in practice, but avoid querying with a null timestamp.
-        states.push({ source, cursor, entries: [] });
-        continue;
-      }
-
-      const entries = await queryRowsForSource(client, source, cursor.lastDeliveredAt, batchSize);
+      const entries = await queryRowsForSource(
+        client,
+        source,
+        cursor.lastDeliveredAt,
+        cursor.lastDeliveredId,
+        batchSize
+      );
       states.push({ source, cursor, entries });
     }
-
-    const pollCounts = states.map((s) => `${s.source}=${s.entries.length}`).join(', ');
-    console.log(`[siem-delivery] Polled ${pollCounts} rows`);
 
     // Phase 2: interleave by timestamp. Preserving global temporal ordering
     // across sources is critical for SIEM correctness — a receiver that sees
@@ -256,8 +269,14 @@ export async function processSiemDelivery(): Promise<void> {
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
     if (merged.length === 0) {
+      // Idle poll — no log line. The worker runs every 30s and the vast
+      // majority of cycles are idle; logging here would emit ~2880 no-op
+      // lines per day per instance.
       return;
     }
+
+    const pollCounts = states.map((s) => `${s.source}=${s.entries.length}`).join(', ');
+    console.log(`[siem-delivery] Polled ${pollCounts} rows`);
 
     // Phase 3: single delivery call for the merged, time-ordered batch.
     const result = await deliverToSiemWithRetry(config, merged);

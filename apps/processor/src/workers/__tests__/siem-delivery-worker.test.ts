@@ -433,7 +433,7 @@ describe('processSiemDelivery', () => {
     });
   });
 
-  it('uses timestamp-only cursor to resume after last delivered position', async () => {
+  it('uses tuple (timestamp, id) cursor to resume after last delivered position', async () => {
     mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
 
@@ -454,8 +454,8 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'an existing cursor',
-      should: 'use timestamp-only comparison (not composite with non-monotonic IDs)',
-      actual: sql.includes('WHERE timestamp > $1'),
+      should: 'use tuple (timestamp, id) > ($1, $2) cursor so same-timestamp siblings are not dropped',
+      actual: sql.includes('(timestamp, id) > ($1, $2)'),
       expected: true,
     });
 
@@ -468,8 +468,15 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'an existing cursor',
-      should: 'pass batchSize as second param',
+      should: 'pass cursor id as second param',
       actual: params[1],
+      expected: 'log_99',
+    });
+
+    assert({
+      given: 'an existing cursor',
+      should: 'pass batchSize as third param',
+      actual: params[2],
       expected: 100,
     });
   });
@@ -1020,6 +1027,130 @@ describe('processSiemDelivery', () => {
       given: 'a total delivery failure',
       should: 'not advance either cursor',
       actual: advanceCalls.length,
+      expected: 0,
+    });
+  });
+
+  it('cursor row with null lastDeliveredAt is treated as uninitialized and re-initialized', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    // activity_logs cursor is healthy and empty
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+    // security_audit_log cursor exists but with null timestamps — created by a
+    // prior error-path recordError() that ran before the cursor was ever
+    // initialized. The schema check constraint allows (null, null), so the
+    // worker must NOT skip this source forever — it must re-init it.
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ lastDeliveredId: null, lastDeliveredAt: null, deliveryCount: 0 }],
+      rowCount: 1,
+    });
+    stubCursorInit(); // worker should now initCursor for security_audit_log
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const initInserts = mockQuery.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' &&
+        (call[0] as string).includes('ON CONFLICT (id) DO NOTHING')
+    );
+
+    assert({
+      given: 'a security_audit_log cursor row with null lastDeliveredAt',
+      should: 'INSERT a fresh sentinel cursor row with NOW() (re-initialize)',
+      actual: initInserts.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'a security_audit_log cursor row with null lastDeliveredAt',
+      should: 'target the security_audit_log source for re-init',
+      actual: (initInserts[0][1] as unknown[])[0],
+      expected: 'security_audit_log',
+    });
+
+    // Crucially: NO security_audit_log SELECT happened — same as a brand-new
+    // source (no historical backfill, no permanent skip).
+    const securityQueryCount = findAllCallsContaining('FROM security_audit_log').length;
+    assert({
+      given: 'a security_audit_log cursor row with null lastDeliveredAt',
+      should: 'not query security_audit_log on the re-init run',
+      actual: securityQueryCount,
+      expected: 0,
+    });
+  });
+
+  it('returns rows whose timestamp ties the cursor timestamp (no same-microsecond drop)', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    const tieTimestamp = new Date('2026-04-10T12:00:00.000Z');
+    // activity_logs cursor sits exactly at tieTimestamp with id 'log_a' delivered
+    stubCursorRow('log_a', tieTimestamp, 1);
+    stubSourceRows([]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const activityQuery = mockQuery.mock.calls.find(
+      (call) => typeof call[0] === 'string' && (call[0] as string).includes('FROM activity_logs')
+    );
+
+    assert({
+      given: 'a cursor sitting on a row that may have same-timestamp siblings',
+      should: 'use a tuple (timestamp, id) > ($1, $2) cursor, not a strict timestamp >',
+      actual:
+        typeof activityQuery?.[0] === 'string' &&
+        (activityQuery[0] as string).includes('(timestamp, id) > ($1, $2)'),
+      expected: true,
+    });
+
+    assert({
+      given: 'a cursor sitting on a row that may have same-timestamp siblings',
+      should: 'pass the cursor timestamp as the first param',
+      actual: (activityQuery?.[1] as unknown[])[0],
+      expected: tieTimestamp,
+    });
+
+    assert({
+      given: 'a cursor sitting on a row that may have same-timestamp siblings',
+      should: 'pass the cursor id as the second param so same-timestamp rows with id > cursor id still match',
+      actual: (activityQuery?.[1] as unknown[])[1],
+      expected: 'log_a',
+    });
+  });
+
+  it('does not log the polled-rows line when both sources are empty', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const polledLogCalls = consoleSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && (call[0] as string).includes('Polled')
+    );
+
+    consoleSpy.mockRestore();
+
+    assert({
+      given: 'a polling cycle where both sources returned zero rows',
+      should: 'not emit the [siem-delivery] Polled info log',
+      actual: polledLogCalls.length,
       expected: 0,
     });
   });
