@@ -91,7 +91,10 @@ export function withAdminAuth<T extends AdminRouteContext>(
   return async (request: Request, context?: T): Promise<Response> => {
     const endpoint = new URL(request.url).pathname;
     const authenticatedUser = await verifyAuth(request);
-    const result = await verifyAdminAuth(request);
+    // Skip verifyAdminAuth's internal audit — withAdminAuth is the single
+    // audit point and emits exactly one event per request (see
+    // emitAdminAuditDenied / emitAdminAuditAccess below).
+    const result = await verifyAdminAuth(request, { skipInternalAudit: true });
 
     if (isAdminAuthError(result)) {
       emitAdminAuditDenied(request, endpoint, authenticatedUser?.id);
@@ -103,7 +106,19 @@ export function withAdminAuth<T extends AdminRouteContext>(
   };
 }
 
-export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | NextResponse> {
+/**
+ * Options for verifyAdminAuth.
+ * `skipInternalAudit` is used by withAdminAuth to avoid double-emitting
+ * access-denied audit events (the wrapper audits after this call returns).
+ */
+export interface VerifyAdminAuthOptions {
+  skipInternalAudit?: boolean;
+}
+
+export async function verifyAdminAuth(
+  request: Request,
+  options: VerifyAdminAuthOptions = {}
+): Promise<VerifiedUser | NextResponse> {
   const user = await verifyAuth(request);
   if (!user) {
     return NextResponse.json(
@@ -129,7 +144,9 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
         authType: 'session',
         action: 'deny_access',
       });
-      auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: method, details: { reason: 'csrf_validation_failed' }, riskScore: 0.5 });
+      if (!options.skipInternalAudit) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: method, details: { reason: 'csrf_validation_failed' }, riskScore: 0.5 });
+      }
       // Return the CSRF error response directly to preserve error codes
       return csrfError;
     }
@@ -151,7 +168,9 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
       authType: 'session',
       action: 'deny_access',
     });
-    auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: 'admin_access', details: { reason: validationResult.reason ?? 'admin_role_version_validation_failed' }, riskScore: 0.5 });
+    if (!options.skipInternalAudit) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: user.id, resourceType: 'admin_route', resourceId: 'admin_access', details: { reason: validationResult.reason ?? 'admin_role_version_validation_failed' }, riskScore: 0.5 });
+    }
     return NextResponse.json(
       { error: 'Forbidden: Admin access required' },
       { status: 403 }

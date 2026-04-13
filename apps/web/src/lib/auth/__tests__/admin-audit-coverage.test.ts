@@ -270,7 +270,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
   });
 
   describe('denied admin access - insufficient role', () => {
-    it('emits authz.access.denied audit event with userId for non-admin user', async () => {
+    it('emits exactly one authz.access.denied audit event with userId for non-admin user', async () => {
       mockAdminRoleDenied();
       const wrappedHandler = withAdminAuth(handler);
       const request = new Request('http://localhost/api/admin/users');
@@ -278,14 +278,13 @@ describe('Admin audit coverage (withAdminAuth)', () => {
       const response = await wrappedHandler(request);
 
       expect(response.status).toBe(403);
-      // Two denied audit events: one from verifyAdminAuth (role validation)
-      // and one from withAdminAuth wrapper (denied access)
-      expect(mockAuditRequest).toHaveBeenCalledTimes(2);
+      // withAdminAuth is the single audit point — passes skipInternalAudit
+      // to verifyAdminAuth to avoid the double-emit seen when both layers audit.
+      expect(mockAuditRequest).toHaveBeenCalledTimes(1);
       expect(mockAuditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
           eventType: 'authz.access.denied',
-          userId: 'user-456',
           resourceType: 'admin-endpoint',
           resourceId: '/api/admin/users',
           riskScore: 0.5,
