@@ -978,6 +978,77 @@ describe('processSiemDelivery', () => {
     });
   });
 
+  it('recordError UPSERT does not overwrite advanced cursor state on partial delivery', async () => {
+    // Regression pin: Phase 6 in the worker runs recordError() AFTER
+    // advanceCursor() for partial deliveries, and depends on recordError's
+    // UPDATE SET clause touching ONLY lastError/lastErrorAt/updatedAt. If a
+    // future refactor adds lastDeliveredId/lastDeliveredAt/deliveryCount to
+    // that SET clause, the just-advanced cursor state for sources that made
+    // partial progress would be clobbered.
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([
+      makeActivityRow('log_a', new Date('2026-04-10T00:00:10Z')),
+      makeActivityRow('log_b', new Date('2026-04-10T00:00:30Z')),
+    ]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([makeSecurityRow('sec_a', new Date('2026-04-10T00:00:20Z'))]);
+
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: false,
+      entriesDelivered: 2, // log_a + sec_a delivered, log_b remains
+      error: 'HTTP 503',
+    });
+
+    stubCursorAdvance(); // activity_logs advance
+    stubCursorAdvance(); // security_audit_log advance
+    stubErrorUpsert(); // activity_logs error
+    stubErrorUpsert(); // security_audit_log error
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const errorUpsertCalls = mockQuery.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' && (call[0] as string).includes('"lastError" = $2')
+    );
+
+    assert({
+      given: 'a partial-delivery failure after per-source advance',
+      should: 'emit a recordError UPSERT for each source',
+      actual: errorUpsertCalls.length,
+      expected: 2,
+    });
+
+    for (const call of errorUpsertCalls) {
+      const sql = call[0] as string;
+
+      assert({
+        given: 'the recordError UPSERT SQL',
+        should: 'not overwrite lastDeliveredId (would clobber the advance)',
+        actual: sql.includes('"lastDeliveredId" ='),
+        expected: false,
+      });
+
+      assert({
+        given: 'the recordError UPSERT SQL',
+        should: 'not overwrite lastDeliveredAt (would clobber the advance)',
+        actual: sql.includes('"lastDeliveredAt" ='),
+        expected: false,
+      });
+
+      assert({
+        given: 'the recordError UPSERT SQL',
+        should: 'not overwrite deliveryCount (would reset the counter)',
+        actual: sql.includes('"deliveryCount" ='),
+        expected: false,
+      });
+    }
+  });
+
   it('delivery failure records error on both source cursors', async () => {
     mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
     mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
