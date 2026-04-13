@@ -58,6 +58,8 @@ export function mapSecurityAuditToSiemEntry(row: SecurityAuditSiemRow): AuditLog
     userId: row.userId ?? null,
     actorEmail: '-',
     actorDisplayName: null,
+    // Why: security_audit_log has no AI-attribution columns. If a future
+    // schema migration adds them, surface them here instead of hard-coding false.
     isAiGenerated: false,
     aiProvider: null,
     aiModel: null,

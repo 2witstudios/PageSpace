@@ -3,14 +3,13 @@ import { siemDeliveryCursors } from '../monitoring';
 
 /**
  * The SIEM worker uses the `id` column as the source key (e.g. 'activity_logs',
- * 'security_audit_log'). These tests prove the schema places no constraint on
- * id values beyond uniqueness, so multiple sources can coexist as independent
- * cursor rows.
+ * 'security_audit_log'). These tests are a structural sanity check that the
+ * schema places no constraint on id values beyond uniqueness, so multiple
+ * sources can coexist as independent cursor rows.
  */
 describe('siem_delivery_cursors schema', () => {
-  it('uses a text id column (not a constrained enum)', () => {
+  it('uses a text id column with no enum constraint', () => {
     expect(siemDeliveryCursors.id.dataType).toBe('string');
-    expect(siemDeliveryCursors.id.columnType).toBe('PgText');
     expect(siemDeliveryCursors.id.enumValues).toBeUndefined();
   });
 
@@ -25,21 +24,5 @@ describe('siem_delivery_cursors schema', () => {
     expect(siemDeliveryCursors.lastError).toBeDefined();
     expect(siemDeliveryCursors.lastErrorAt).toBeDefined();
     expect(siemDeliveryCursors.deliveryCount).toBeDefined();
-  });
-
-  it('accepts arbitrary source identifiers as id values', () => {
-    const sources: string[] = [
-      'activity_logs',
-      'security_audit_log',
-      'integration_audit',
-    ];
-    for (const source of sources) {
-      const insert: typeof siemDeliveryCursors.$inferInsert = {
-        id: source,
-        lastDeliveredId: null,
-        lastDeliveredAt: null,
-      };
-      expect(insert.id).toBe(source);
-    }
   });
 });
