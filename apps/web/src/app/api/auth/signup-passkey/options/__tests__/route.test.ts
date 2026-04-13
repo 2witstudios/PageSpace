@@ -22,6 +22,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -110,7 +115,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
       await POST(createRequest());
 
       expect(loggers.auth.info).toHaveBeenCalledWith('Passkey signup options generated', expect.objectContaining({
-        email: 'use***',
+        email: 'us***@example.com',
       }));
     });
   });
@@ -248,7 +253,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(body.error).toBe('An account with this email already exists');
       expect(body.code).toBe('EMAIL_EXISTS');
       expect(loggers.auth.info).toHaveBeenCalledWith('Passkey signup - email already exists', expect.objectContaining({
-        email: 'use***',
+        email: 'us***@example.com',
       }));
     });
 

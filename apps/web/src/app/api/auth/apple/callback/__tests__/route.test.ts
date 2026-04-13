@@ -79,6 +79,11 @@ vi.mock('@pagespace/lib/server', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
   }),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -1009,6 +1014,94 @@ describe('POST /api/auth/apple/callback', () => {
         'Apple OAuth callback error',
         new Error('Network failure')
       );
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via Apple OAuth" log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "New user created via Apple OAuth" log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('New user created via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in "Updating existing user via Apple OAuth" log', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      };
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "User updated via Apple OAuth" log', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      };
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const call = findInfoCall('User updated via Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in desktop missing-deviceId error log', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'desktop' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      const errCall = vi.mocked(loggers.auth.error).mock.calls.find(
+        call => call[0] === 'Desktop OAuth callback missing deviceId'
+      );
+      expect(errCall).toBeDefined();
+      const meta = errCall?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
     });
   });
 });

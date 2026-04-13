@@ -78,6 +78,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -677,6 +682,67 @@ describe('POST /api/auth/google/one-tap', () => {
         'Google One Tap error',
         new Error('Database error')
       );
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via Google One Tap" log', async () => {
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via Google One Tap');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "New user created via Google One Tap" log', async () => {
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      const call = findInfoCall('New user created via Google One Tap');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in "Updating existing user via Google One Tap" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via Google One Tap');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "User updated via Google One Tap" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      const call = findInfoCall('User updated via Google One Tap');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
     });
   });
 });

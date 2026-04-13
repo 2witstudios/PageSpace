@@ -58,7 +58,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
@@ -189,7 +189,7 @@ export async function POST(req: Request) {
 
     const { userInfo } = verificationResult;
     loggers.auth.info('Google ID token verified', {
-      email: userInfo.email,
+      email: maskEmail(userInfo.email),
       provider: userInfo.provider,
     });
 
@@ -217,7 +217,7 @@ export async function POST(req: Request) {
 
     // Create or link user account
     loggers.auth.info('Creating or linking OAuth user', {
-      email: userInfo.email,
+      email: maskEmail(userInfo.email),
       provider: userInfo.provider,
     });
 
@@ -240,7 +240,7 @@ export async function POST(req: Request) {
 
     loggers.auth.info('OAuth user created/linked', {
       userId: user.id,
-      email: user.email,
+      email: maskEmail(user.email),
       provider: user.provider,
     });
 

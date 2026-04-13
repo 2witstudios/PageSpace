@@ -55,6 +55,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   audit: vi.fn(),
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -182,7 +187,7 @@ describe('POST /api/auth/resend-verification', () => {
       expect(response.headers.get('Retry-After')).toBe('3600');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Email resend rate limit exceeded',
-        { email: 'test@example.com' }
+        { email: 'te***@example.com' }
       );
     });
 
@@ -247,7 +252,7 @@ describe('POST /api/auth/resend-verification', () => {
 
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Verification email resent',
-        { userId: 'test-user-id', email: 'test@example.com' }
+        { userId: 'test-user-id', email: 'te***@example.com' }
       );
     });
 

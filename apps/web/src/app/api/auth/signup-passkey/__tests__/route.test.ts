@@ -45,6 +45,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -485,8 +490,23 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey signup failed', expect.objectContaining({
         error: 'VERIFICATION_FAILED',
-        email: 'use***',
+        email: 'us***@example.com',
       }));
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email and omits name in "Passkey signup successful" log', async () => {
+      await POST(createRequest());
+
+      const call = findInfoCall('Passkey signup successful');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta.email).toBe('us***@example.com');
+      expect(meta).not.toHaveProperty('name');
     });
   });
 
@@ -517,7 +537,7 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Passkey signup verification error',
         new Error('Unexpected'),
-        { email: 'user@example.com', clientIP: '127.0.0.1' },
+        { email: 'us***@example.com', clientIP: '127.0.0.1' },
       );
     });
   });

@@ -7,7 +7,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
@@ -137,7 +137,7 @@ export async function POST(req: Request) {
         user.image !== resolvedImage ||
         (email_verified && !user.emailVerified)
       ) {
-        loggers.auth.info('Updating existing user via Google One Tap', { email });
+        loggers.auth.info('Updating existing user via Google One Tap', { email: maskEmail(email) });
         await authRepository.updateUser(user.id, {
           googleId: googleId || user.googleId,
           provider: user.provider === 'email' ? 'google' : user.provider,
@@ -150,13 +150,12 @@ export async function POST(req: Request) {
         user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Google One Tap', {
           userId: user.id,
-          name: user.name,
         });
       }
     } else {
       // Create new user
       isNewUser = true;
-      loggers.auth.info('Creating new user via Google One Tap', { email });
+      loggers.auth.info('Creating new user via Google One Tap', { email: maskEmail(email) });
       user = await authRepository.createUser({
         id: createId(),
         name: userName,
@@ -184,7 +183,6 @@ export async function POST(req: Request) {
 
       loggers.auth.info('New user created via Google One Tap', {
         userId: user.id,
-        name: user.name,
       });
     }
 

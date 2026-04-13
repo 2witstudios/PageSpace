@@ -37,6 +37,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -96,6 +101,7 @@ import {
   createOrLinkOAuthUser,
   validateOrCreateDeviceToken,
   auditRequest,
+  loggers,
 } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -810,6 +816,56 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(body.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Google ID token verified" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Google ID token verified');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "Creating or linking OAuth user" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Creating or linking OAuth user');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "OAuth user created/linked" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('OAuth user created/linked');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
     });
   });
 });

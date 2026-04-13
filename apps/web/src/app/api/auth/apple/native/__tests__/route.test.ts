@@ -76,6 +76,11 @@ vi.mock('@pagespace/lib/server', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
   }),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -655,6 +660,54 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(401);
       expect(body.error).toBe('Token expired. Please try again.');
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via native Apple OAuth" log', async () => {
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue({
+        id: 'new-user-id',
+        name: 'Test',
+        email: 'test@example.com',
+        appleId: 'apple-sub-123',
+        tokenVersion: 0,
+        provider: 'apple',
+        image: null,
+        emailVerified: new Date(),
+      } as never);
+
+      await POST(createNativeRequest(validPayload));
+
+      const call = findInfoCall('Creating new user via native Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('masks email in "Updating existing user via native Apple OAuth" log', async () => {
+      const existingUser = {
+        id: 'existing-id',
+        name: null,
+        email: 'test@example.com',
+        appleId: null,
+        tokenVersion: 0,
+        provider: 'email',
+        image: null,
+        emailVerified: new Date(),
+      };
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'Joe', appleId: 'apple-sub-123' } as never);
+
+      await POST(createNativeRequest({ ...validPayload, givenName: 'Joe' }));
+
+      const call = findInfoCall('Updating existing user via native Apple OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
     });
   });
 });

@@ -38,6 +38,7 @@ vi.mock('../../logging/logger-config', () => ({
 }));
 
 import { db } from '@pagespace/db';
+import { loggers } from '../../logging/logger-config';
 import {
   getAccountLockoutStatus,
   isAccountLockedByEmail,
@@ -203,6 +204,13 @@ describe('account-lockout', () => {
       expect(result.success).toBe(true);
       expect(result.lockedUntil).toBeDefined();
       expect(result.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+      const warnCall = vi.mocked(loggers.api.warn).mock.calls.find(
+        c => c[0] === 'Account locked due to failed login attempts'
+      );
+      expect(warnCall).toBeDefined();
+      const meta = warnCall?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
     });
 
     it('resets counter when lockout has expired', async () => {

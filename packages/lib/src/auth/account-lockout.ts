@@ -13,6 +13,7 @@
 import { db, users } from '@pagespace/db';
 import { eq, sql } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
+import { maskEmail } from '../audit';
 
 // Lockout thresholds
 const MAX_FAILED_ATTEMPTS = 10;
@@ -150,7 +151,7 @@ export async function recordFailedLoginAttempt(
 
       loggers.api.warn('Account locked due to failed login attempts', {
         userId,
-        email,
+        email: maskEmail(email),
         failedAttempts: failedLoginAttempts,
         lockedUntil: lockedUntil.toISOString(),
       });

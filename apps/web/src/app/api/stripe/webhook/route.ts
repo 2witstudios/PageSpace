@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, subscriptions, stripeEvents, users } from '@pagespace/db';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, maskEmail } from '@pagespace/lib/server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -279,7 +279,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         })
         .where(eq(users.email, customerEmail));
 
-      loggers.api.info('Linked Stripe customer to user', { customerId, email: customerEmail });
+      loggers.api.info('Linked Stripe customer to user', { customerId, email: maskEmail(customerEmail) });
     }
 
     // Bridge to control-plane: trigger tenant provisioning if metadata.slug is present

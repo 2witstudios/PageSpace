@@ -80,6 +80,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -121,7 +126,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, auditRequest } from '@pagespace/lib/server';
+import { validateOrCreateDeviceToken, auditRequest, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -713,5 +718,37 @@ describe('POST /api/auth/google/native', () => {
       expect((updateArgs[1] as Record<string, unknown>).image).toBe('/processed-avatar.jpg');
     });
 
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via native Google OAuth" log', async () => {
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('masks email in "Updating existing user via native Google OAuth" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
   });
 });

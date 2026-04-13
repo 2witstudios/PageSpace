@@ -88,6 +88,11 @@ vi.mock('@pagespace/lib/server', () => ({
     deviceToken: 'mock-device-token',
     deviceTokenRecordId: 'device-record-id',
   }),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({

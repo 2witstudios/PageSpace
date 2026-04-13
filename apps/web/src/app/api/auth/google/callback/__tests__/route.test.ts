@@ -96,6 +96,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -1145,6 +1150,78 @@ describe('GET /api/auth/google/callback', () => {
       expect(locationUrl.searchParams.get('error')).toBe('oauth_error');
       expect(locationUrl.searchParams.has('code')).toBe(false);
       expect(locationUrl.searchParams.has('state')).toBe(false);
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user" log', async () => {
+      const request = createCallbackRequest({ code: 'valid-code' });
+      await GET(request);
+
+      const call = findInfoCall('Creating new user via Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "New user created" log', async () => {
+      const request = createCallbackRequest({ code: 'valid-code' });
+      await GET(request);
+
+      const call = findInfoCall('New user created via Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in "Updating existing user" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createCallbackRequest({ code: 'valid-code' });
+      await GET(request);
+
+      const call = findInfoCall('Updating existing user via Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('does not include name in "User updated" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createCallbackRequest({ code: 'valid-code' });
+      await GET(request);
+
+      const call = findInfoCall('User updated via Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta).not.toHaveProperty('name');
+      expect(meta).toHaveProperty('userId');
+    });
+
+    it('masks email in desktop missing-deviceId error log', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+      });
+
+      const request = createCallbackRequest({ code: 'valid-code', state });
+      await GET(request);
+
+      const errCall = vi.mocked(loggers.auth.error).mock.calls.find(
+        call => call[0] === 'Desktop OAuth callback missing deviceId'
+      );
+      expect(errCall).toBeDefined();
+      const meta = errCall?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
     });
   });
 

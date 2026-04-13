@@ -5,7 +5,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, maskEmail } from '@pagespace/lib/server';
 
 type GiftTier = 'pro' | 'founder' | 'business';
 
@@ -116,8 +116,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     loggers.api.info('Admin gifted subscription', {
       adminId: adminUserId,
       targetUserId,
-      targetUserName: targetUser.name,
-      targetUserEmail: targetUser.email,
+      targetUserEmail: maskEmail(targetUser.email),
       tier: giftTier,
       subscriptionId: subscription.id,
       couponId: giftCoupon.id,
@@ -199,8 +198,7 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
     loggers.api.info('Admin revoked subscription', {
       adminId: adminUserId,
       targetUserId,
-      targetUserName: targetUser.name,
-      targetUserEmail: targetUser.email,
+      targetUserEmail: maskEmail(targetUser.email),
       subscriptionId: activeSubscription.stripeSubscriptionId,
       previousTier: targetUser.subscriptionTier,
     });
