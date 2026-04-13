@@ -1,5 +1,8 @@
+import { createId } from '@paralleldrive/cuid2';
 import { loadSiemConfig, validateSiemConfig, deliverToSiemWithRetry } from '../services/siem-adapter';
 import { mapActivityLogsToSiemEntries, type ActivityLogSiemRow } from '../services/siem-event-mapper';
+import { buildReceipts } from '../services/siem-receipt-builder';
+import { writeReceipts } from './siem-receipt-writer';
 import { getPoolForWorker } from '../db';
 
 const CURSOR_ID = 'activity_logs';
@@ -91,9 +94,13 @@ export async function processSiemDelivery(): Promise<void> {
       return;
     }
 
-    // Map and deliver
+    // Map and deliver. deliveryId is generated ONCE per worker run and reused
+    // across any retries the adapter performs internally — same logical
+    // delivery = same id = one row in the receipts table per source, not one
+    // per network attempt.
     const entries = mapActivityLogsToSiemEntries(logsResult.rows as unknown as ActivityLogSiemRow[]);
-    const result = await deliverToSiemWithRetry(config, entries);
+    const deliveryId = createId();
+    const result = await deliverToSiemWithRetry(config, entries, deliveryId);
 
     // Advance cursor past any delivered entries (handles both full and partial delivery)
     if (result.entriesDelivered > 0) {
@@ -112,6 +119,25 @@ export async function processSiemDelivery(): Promise<void> {
            "updatedAt" = NOW()`,
         [CURSOR_ID, lastDeliveredRow.id, lastDeliveredRow.timestamp, newCount]
       );
+
+      // Durable attestation: write per-source receipts for what was shipped.
+      // Done AFTER cursor advance so the receipts table never references an
+      // entry the worker hasn't committed progress on. A zero-delivery failure
+      // never lands here — the cursor's lastError is the only record in that
+      // case, per the receipts design. Partial deliveries still produce
+      // receipts for the delivered prefix because those entries did ship.
+      const deliveredEntries = entries.slice(0, result.entriesDelivered);
+      const receipts = buildReceipts({
+        deliveryId,
+        deliveredAt: new Date(),
+        webhookStatus: result.webhookStatus ?? null,
+        webhookResponseHash: result.responseHash ?? null,
+        ackReceivedAt: result.ackReceivedAt ?? null,
+        deliveredEntries,
+      });
+      if (receipts.length > 0) {
+        await writeReceipts(client, receipts);
+      }
     }
 
     if (result.success) {

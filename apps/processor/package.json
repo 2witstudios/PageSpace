@@ -13,6 +13,7 @@
   "dependencies": {
     "@pagespace/db": "workspace:*",
     "@pagespace/lib": "workspace:*",
+    "@paralleldrive/cuid2": "^2.2.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.7",

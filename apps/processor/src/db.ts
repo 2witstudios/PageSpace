@@ -1,5 +1,5 @@
 // Minimal pg Pool interface to keep processor build self-contained without @types/pg
-interface PgPoolClient {
+export interface PgPoolClient {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
   release(): void;
 }

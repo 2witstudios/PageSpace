@@ -10,6 +10,7 @@ import {
   boolean,
   jsonb,
   index,
+  uniqueIndex,
   real,
   pgEnum,
   check
@@ -439,5 +440,40 @@ export const siemDeliveryCursors = pgTable('siem_delivery_cursors', {
     'siem_delivery_cursors_delivered_cursor_pair',
     sql`(${table.lastDeliveredId} IS NULL) = (${table.lastDeliveredAt} IS NULL)`
   ),
+}));
+
+/**
+ * SIEM delivery receipts — durable attestation that a given audit event was
+ * shipped to the configured SIEM in a specific delivery batch, with optional
+ * ack timestamp when the receiver echoed the X-PageSpace-Delivery-Id header
+ * back in X-PageSpace-Delivery-Ack.
+ *
+ * One row per (deliveryId, source). A single worker run generates a single
+ * deliveryId but can produce up to N receipts — one per source present in the
+ * delivered prefix — because the merged batch interleaves sources and each
+ * source has its own temporal range and count. `receiptId` is a surrogate row
+ * id so `deliveryId` can safely repeat across sources; the uniqueness invariant
+ * is enforced by siem_delivery_receipts_delivery_source_unique.
+ */
+export const siemDeliveryReceipts = pgTable('siem_delivery_receipts', {
+  receiptId: text('receiptId').primaryKey().$defaultFn(() => createId()),
+  deliveryId: text('deliveryId').notNull(),
+  source: text('source').notNull(), // 'activity_logs' | 'security_audit_log'
+  firstEntryId: text('firstEntryId').notNull(),
+  lastEntryId: text('lastEntryId').notNull(),
+  firstEntryTimestamp: timestamp('firstEntryTimestamp', { mode: 'date' }).notNull(),
+  lastEntryTimestamp: timestamp('lastEntryTimestamp', { mode: 'date' }).notNull(),
+  entryCount: integer('entryCount').notNull(),
+  deliveredAt: timestamp('deliveredAt', { mode: 'date' }).notNull(),
+  webhookStatus: integer('webhookStatus'),
+  webhookResponseHash: text('webhookResponseHash'),
+  ackReceivedAt: timestamp('ackReceivedAt', { mode: 'date' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  deliverySourceUnique: uniqueIndex('siem_delivery_receipts_delivery_source_unique').on(table.deliveryId, table.source),
+  deliveryIdIdx: index('idx_siem_receipts_delivery_id').on(table.deliveryId),
+  firstEntryIdx: index('idx_siem_receipts_first_entry').on(table.firstEntryId),
+  lastEntryIdx: index('idx_siem_receipts_last_entry').on(table.lastEntryId),
+  deliveredAtIdx: index('idx_siem_receipts_delivered_at').on(table.deliveredAt),
 }));
 

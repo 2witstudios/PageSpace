@@ -267,6 +267,7 @@ function makeReqRes(overrides: {
   params?: Record<string, string>;
   body?: any;
   headers?: Record<string, string>;
+  query?: Record<string, string>;
 } = {}) {
   const statusCode = { value: 200 };
   const jsonMock = vi.fn();
@@ -281,6 +282,7 @@ function makeReqRes(overrides: {
     params: overrides.params ?? {},
     body: overrides.body ?? {},
     headers: overrides.headers ?? {},
+    query: overrides.query ?? {},
     path: '/',
     method: 'GET',
     ip: '127.0.0.1',
@@ -1248,5 +1250,109 @@ describe('Exported instances', () => {
     const server = await import('../server');
 
     expect(typeof server.queueManager.getQueueStatus).toBe('function');
+  });
+});
+
+// ===========================================================================
+// GET /siem/receipts endpoint (wave 3b)
+// ===========================================================================
+
+describe('GET /siem/receipts', () => {
+  beforeEach(async () => {
+    await import('../server');
+  });
+
+  function getReceiptsHandler() {
+    const handlers = capturedGet['GET:/siem/receipts'];
+    expect(handlers).toBeDefined();
+    return handlers[handlers.length - 1];
+  }
+
+  function stubPool(queryImpl: ReturnType<typeof vi.fn>) {
+    return async () => ({
+      connect: vi.fn().mockResolvedValue({
+        query: queryImpl,
+        release: vi.fn(),
+      }),
+    });
+  }
+
+  it('given a known delivered entry, should return matching receipts', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ ts: new Date('2026-04-10T12:00:30Z') }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          deliveryId: 'delivery-xyz',
+          source: 'activity_logs',
+          deliveredAt: new Date('2026-04-10T12:05:00Z'),
+          webhookStatus: 200,
+          ackReceivedAt: new Date('2026-04-10T12:05:01Z'),
+          entryCount: 3,
+        }],
+        rowCount: 1,
+      });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res, jsonMock, statusCode } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const body = jsonMock.mock.calls[0][0];
+    expect(body.entryId).toBe('log_1');
+    expect(body.source).toBe('activity_logs');
+    expect(body.receipts).toHaveLength(1);
+    expect(body.receipts[0].deliveryId).toBe('delivery-xyz');
+    expect(body.receipts[0].deliveredAt).toBe('2026-04-10T12:05:00.000Z');
+    expect(body.receipts[0].ackReceivedAt).toBe('2026-04-10T12:05:01.000Z');
+  });
+
+  it('given an entry that has never been delivered, should return 200 with empty receipts', async () => {
+    const { getPoolForWorker } = await import('../db');
+    // Entry not found in source table → zero rows → 200 empty.
+    const query = vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res, jsonMock, statusCode } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_unknown' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const body = jsonMock.mock.calls[0][0];
+    expect(body.receipts).toEqual([]);
+  });
+
+  it('given a source not in the whitelist, should return 400', async () => {
+    const { req, res, statusCode, jsonMock } = makeReqRes({
+      query: { source: 'integration_audit_log', entryId: 'abc' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(400);
+    expect(jsonMock.mock.calls[0][0].error).toContain('source');
+  });
+
+  it('given a request missing entryId, should return 400', async () => {
+    const { req, res, statusCode, jsonMock } = makeReqRes({
+      query: { source: 'activity_logs' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    expect(statusCode.value).toBe(400);
+    expect(jsonMock.mock.calls[0][0].error).toContain('entryId');
+  });
+
+  it('should register the endpoint', () => {
+    expect(capturedGet['GET:/siem/receipts']).toBeDefined();
   });
 });

@@ -110,6 +110,92 @@ app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avata
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
 
+// ---------------------------------------------------------------------------
+// SIEM receipts query endpoint
+//
+// Internal to the processor cluster; same auth posture as /health (none today,
+// since the processor runs behind the Caddy/VPC boundary). Exposes forensic
+// "did event X ship?" lookups against siem_delivery_receipts.
+//
+// Source is whitelisted — NEVER interpolated into SQL — so the per-source
+// lookup runs as two independent parameterized queries. An empty result is a
+// 200 with receipts:[] — the absence of a receipt is a valid answer.
+// ---------------------------------------------------------------------------
+const SIEM_RECEIPT_SOURCES = {
+  activity_logs: 'activity_logs',
+  security_audit_log: 'security_audit_log',
+} as const;
+type SiemReceiptSource = keyof typeof SIEM_RECEIPT_SOURCES;
+
+app.get('/siem/receipts', async (req, res) => {
+  const source = typeof req.query.source === 'string' ? req.query.source : '';
+  const entryId = typeof req.query.entryId === 'string' ? req.query.entryId : '';
+
+  if (!entryId) {
+    return res.status(400).json({ error: 'entryId query parameter is required' });
+  }
+  if (!(source in SIEM_RECEIPT_SOURCES)) {
+    return res.status(400).json({ error: 'source must be activity_logs or security_audit_log' });
+  }
+
+  const sourceKey = source as SiemReceiptSource;
+  const sourceTable = sourceKey === 'activity_logs' ? 'activity_logs' : 'security_audit_log';
+  const sourceTimestampColumn = sourceKey === 'activity_logs' ? 'timestamp' : 'timestamp';
+
+  try {
+    const pool = getPoolForWorker();
+    const client = await pool.connect();
+    try {
+      // Two-stage lookup: resolve the entry's timestamp from its own source
+      // table, then find receipts whose [first, last] range covers it.
+      const entryResult = await client.query(
+        `SELECT "${sourceTimestampColumn}" AS ts FROM ${sourceTable} WHERE id = $1 LIMIT 1`,
+        [entryId]
+      );
+
+      if (entryResult.rows.length === 0) {
+        return res.status(200).json({ entryId, source: sourceKey, receipts: [] });
+      }
+
+      const entryTs = (entryResult.rows[0] as { ts: Date | string }).ts;
+
+      const receiptsResult = await client.query(
+        `SELECT "deliveryId", "source", "deliveredAt", "webhookStatus", "ackReceivedAt", "entryCount"
+         FROM siem_delivery_receipts
+         WHERE "source" = $1
+           AND "firstEntryTimestamp" <= $2
+           AND "lastEntryTimestamp"  >= $2
+         ORDER BY "deliveredAt" DESC
+         LIMIT 10`,
+        [sourceKey, entryTs]
+      );
+
+      const receipts = receiptsResult.rows.map((row) => {
+        const r = row as Record<string, unknown>;
+        const deliveredAt = r.deliveredAt instanceof Date ? r.deliveredAt : new Date(String(r.deliveredAt));
+        const ackReceivedAt = r.ackReceivedAt
+          ? (r.ackReceivedAt instanceof Date ? r.ackReceivedAt : new Date(String(r.ackReceivedAt)))
+          : null;
+        return {
+          deliveryId: r.deliveryId as string,
+          source: r.source as SiemReceiptSource,
+          deliveredAt: deliveredAt.toISOString(),
+          webhookStatus: (r.webhookStatus as number | null) ?? null,
+          ackReceivedAt: ackReceivedAt ? ackReceivedAt.toISOString() : null,
+          entryCount: r.entryCount as number,
+        };
+      });
+
+      return res.status(200).json({ entryId, source: sourceKey, receipts });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('[siem-receipts] Query failed:', err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: 'Failed to query SIEM receipts' });
+  }
+});
+
 // Queue status endpoint
 app.get(
   '/api/queue/status',

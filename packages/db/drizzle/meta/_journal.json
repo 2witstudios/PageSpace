@@ -687,6 +687,13 @@
       "when": 1775844983055,
       "tag": "0097_familiar_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1776099769401,
+      "tag": "0098_brainy_nomad",
+      "breakpoints": true
     }
   ]
 }

@@ -94,6 +94,7 @@ import {
   type WebhookConfig,
   type SyslogConfig,
 } from '../siem-adapter';
+import { assert } from '../../__tests__/riteway';
 
 const makeEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   id: 'entry-1',
@@ -310,7 +311,7 @@ describe('formatWebhookPayload', () => {
   it('includes correct structure', () => {
     const entry = makeEntry();
     const payload = JSON.parse(formatWebhookPayload([entry]));
-    expect(payload.version).toBe('1.1');
+    expect(payload.version).toBe('1.2');
     expect(payload.source).toBe('pagespace-audit');
     expect(payload.count).toBe(1);
     expect(payload.entries).toHaveLength(1);
@@ -951,7 +952,7 @@ describe('deliverToSiemWithRetry', () => {
     };
     mockValidateExternalURL.mockResolvedValue({ valid: false, error: 'SSRF blocked' });
 
-    const result = await deliverToSiemWithRetry(config, [makeEntry()], 0);
+    const result = await deliverToSiemWithRetry(config, [makeEntry()], undefined, 0);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
   });
@@ -964,7 +965,7 @@ describe('deliverToSiemWithRetry', () => {
     };
     mockValidateExternalURL.mockResolvedValue({ valid: false, error: 'blocked' });
 
-    const result = await deliverToSiemWithRetry(config, [makeEntry()], 0);
+    const result = await deliverToSiemWithRetry(config, [makeEntry()], undefined, 0);
     expect(result.success).toBe(false);
   });
 
@@ -977,7 +978,7 @@ describe('deliverToSiemWithRetry', () => {
     // Non-retryable failure
     mockValidateExternalURL.mockResolvedValue({ valid: false, error: 'blocked' });
 
-    const result = await deliverToSiemWithRetry(config, [makeEntry()], 0);
+    const result = await deliverToSiemWithRetry(config, [makeEntry()], undefined, 0);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
   });
@@ -991,7 +992,7 @@ describe('deliverToSiemWithRetry', () => {
       webhook: { url: 'https://example.com', secret: 'sec', batchSize: 100, retryAttempts: 3 },
     };
 
-    const result = await deliverToSiemWithRetry(config, [makeEntry()], -1);
+    const result = await deliverToSiemWithRetry(config, [makeEntry()], undefined, -1);
     expect(result.success).toBe(false);
     expect(result.error).toBe('Max retries exceeded');
     expect(result.retryable).toBe(false);
@@ -1012,7 +1013,7 @@ describe('deliverToSiemWithRetry', () => {
       text: vi.fn().mockResolvedValue('Server Error'),
     }));
 
-    const resultPromise = deliverToSiemWithRetry(config, [makeEntry()], 2);
+    const resultPromise = deliverToSiemWithRetry(config, [makeEntry()], undefined, 2);
     // Advance through delays
     await vi.runAllTimersAsync();
     const result = await resultPromise;
@@ -1020,6 +1021,206 @@ describe('deliverToSiemWithRetry', () => {
     expect(result.success).toBe(false);
     // After max retries with retryable failures, the last attempt's result is returned
     expect(result.retryable).toBe(true);
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('delivery_id round-trip (wave 3b receipts)', () => {
+  const webhookConfig: WebhookConfig = {
+    url: 'https://siem.example.com/hook',
+    secret: 'sec',
+    batchSize: 100,
+    retryAttempts: 3,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockValidateExternalURL.mockResolvedValue({ valid: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function makeFetchMock(opts: {
+    ok?: boolean;
+    status?: number;
+    body?: string;
+    headers?: Record<string, string>;
+  } = {}) {
+    const { ok = true, status = 200, body = 'OK', headers = {} } = opts;
+    return vi.fn().mockResolvedValue({
+      ok,
+      status,
+      text: vi.fn().mockResolvedValue(body),
+      headers: { get: (name: string) => headers[name] ?? null },
+    });
+  }
+
+  it('webhook payload version is 1.2', () => {
+    const payload = JSON.parse(formatWebhookPayload([makeEntry()], 'd-1'));
+    assert({
+      given: 'the webhook payload version',
+      should: 'be "1.2"',
+      actual: payload.version,
+      expected: '1.2',
+    });
+  });
+
+  it('includes deliveryId as top-level JSON field when provided', () => {
+    const payload = JSON.parse(formatWebhookPayload([makeEntry()], 'delivery-xyz'));
+    assert({
+      given: 'a webhook delivery with deliveryId',
+      should: 'include deliveryId as top-level JSON field',
+      actual: payload.deliveryId,
+      expected: 'delivery-xyz',
+    });
+  });
+
+  it('sets X-PageSpace-Delivery-Id header on the fetch call', async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    const call = fetchMock.mock.calls[0];
+    const sentHeaders = (call[1] as { headers: Record<string, string> }).headers;
+
+    assert({
+      given: 'a webhook delivery with deliveryId',
+      should: 'set X-PageSpace-Delivery-Id header',
+      actual: sentHeaders['X-PageSpace-Delivery-Id'],
+      expected: 'delivery-xyz',
+    });
+  });
+
+  it('sets ackReceivedAt to a Date when response ack matches outgoing id', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeFetchMock({ headers: { 'X-PageSpace-Delivery-Ack': 'delivery-xyz' } })
+    );
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a webhook response with matching X-PageSpace-Delivery-Ack header',
+      should: 'set ackReceivedAt to a non-null Date',
+      actual: result.ackReceivedAt instanceof Date,
+      expected: true,
+    });
+  });
+
+  it('leaves ackReceivedAt null when response ack is mismatched', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeFetchMock({ headers: { 'X-PageSpace-Delivery-Ack': 'some-other-id' } })
+    );
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a mismatched X-PageSpace-Delivery-Ack header',
+      should: 'leave ackReceivedAt null',
+      actual: result.ackReceivedAt,
+      expected: null,
+    });
+  });
+
+  it('leaves ackReceivedAt null but still sets responseHash when no ack header', async () => {
+    vi.stubGlobal('fetch', makeFetchMock({ body: 'received' }));
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a webhook response with no ack header',
+      should: 'leave ackReceivedAt null',
+      actual: result.ackReceivedAt,
+      expected: null,
+    });
+
+    assert({
+      given: 'a webhook response with no ack header',
+      should: 'still set responseHash from the body',
+      actual: typeof result.responseHash === 'string' && (result.responseHash as string).length === 64,
+      expected: true,
+    });
+  });
+
+  it('still computes responseHash on non-2xx failures', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeFetchMock({ ok: false, status: 500, body: 'boom', headers: {} })
+    );
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a webhook failure (500)',
+      should: 'still compute responseHash from the response body',
+      actual: typeof result.responseHash === 'string' && (result.responseHash as string).length === 64,
+      expected: true,
+    });
+
+    assert({
+      given: 'a webhook failure (500)',
+      should: 'carry the webhookStatus 500 on the result',
+      actual: result.webhookStatus,
+      expected: 500,
+    });
+  });
+
+  it('stamps deliveryId into the pagespace@52000 SD-PARAM block for syslog', () => {
+    const entry = makeEntry();
+    const msg = formatSyslogMessage(entry, 'local0', undefined, 'delivery-xyz');
+    assert({
+      given: 'a syslog delivery with deliveryId',
+      should: 'include deliveryId="delivery-xyz" in the pagespace@52000 SD-PARAM',
+      actual: msg.includes('deliveryId="delivery-xyz"'),
+      expected: true,
+    });
+  });
+
+  it('reuses the same deliveryId across retries (single call to underlying delivery per attempt)', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: vi.fn().mockResolvedValue('fail'),
+        headers: { get: () => null },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: vi.fn().mockResolvedValue('ok'),
+        headers: { get: () => null },
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const resultPromise = deliverToSiemWithRetry(
+      { enabled: true, type: 'webhook', webhook: webhookConfig },
+      [makeEntry()],
+      'delivery-xyz',
+      2
+    );
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    const firstHeaders = (fetchMock.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    const secondHeaders = (fetchMock.mock.calls[1][1] as { headers: Record<string, string> }).headers;
+
+    assert({
+      given: 'a retry after partial webhook failure',
+      should: 'reuse the same deliveryId on the retry call',
+      actual: {
+        first: firstHeaders['X-PageSpace-Delivery-Id'],
+        second: secondHeaders['X-PageSpace-Delivery-Id'],
+        success: result.success,
+      },
+      expected: { first: 'delivery-xyz', second: 'delivery-xyz', success: true },
+    });
 
     vi.useRealTimers();
     vi.unstubAllGlobals();

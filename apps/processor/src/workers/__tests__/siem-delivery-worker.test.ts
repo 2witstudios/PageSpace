@@ -149,12 +149,21 @@ describe('processSiemDelivery', () => {
     mockQuery.mockResolvedValueOnce({ rows, rowCount: 2 });
 
     // Delivery succeeds
-    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: true,
+      entriesDelivered: 2,
+      deliveryId: 'adapter-echoed-id',
+      webhookStatus: 200,
+      responseHash: 'rh',
+      ackReceivedAt: null,
+    });
 
     // 4. Cursor upsert
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    // 5. Receipt INSERT
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
-    // 5. Advisory unlock in finally
+    // 6. Advisory unlock in finally
     stubLockRelease();
 
     await processSiemDelivery();
@@ -178,6 +187,13 @@ describe('processSiemDelivery', () => {
       should: 'pass 2 mapped entries',
       actual: mockDeliverToSiemWithRetry.mock.calls[0][1].length,
       expected: 2,
+    });
+
+    assert({
+      given: 'successful delivery',
+      should: 'generate and pass a deliveryId string to the adapter',
+      actual: typeof mockDeliverToSiemWithRetry.mock.calls[0][2],
+      expected: 'string',
     });
 
     // The 4th query call (index 3) is the cursor advance (after lock, cursor read, logs read)
@@ -311,23 +327,26 @@ describe('processSiemDelivery', () => {
     // Syslog delivers 2 of 3 then fails mid-batch
     mockDeliverToSiemWithRetry.mockResolvedValue({
       success: false, entriesDelivered: 2, error: 'TCP connection reset',
+      deliveryId: 'd-partial', webhookStatus: null, responseHash: null, ackReceivedAt: null,
     });
 
     // 4. Cursor advance upsert
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    // 5. Error upsert
+    // 5. Receipt INSERT (partial delivery still attests what shipped)
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    // 6. Advisory unlock
+    // 6. Error upsert
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    // 7. Advisory unlock
     stubLockRelease();
 
     await processSiemDelivery();
 
-    // 6 queries: lock, cursor read, logs read, cursor advance, error upsert, unlock
+    // 7 queries: lock, cursor read, logs read, cursor advance, receipt insert, error upsert, unlock
     assert({
       given: 'partial delivery (2 of 3)',
-      should: 'issue 6 queries (lock + cursor + logs + advance + error + unlock)',
+      should: 'issue 7 queries (lock + cursor + logs + advance + receipt + error + unlock)',
       actual: mockQuery.mock.calls.length,
-      expected: 6,
+      expected: 7,
     });
 
     // Cursor advance is at index 3 — should point to log_2 (2nd row, index 1)
@@ -339,8 +358,17 @@ describe('processSiemDelivery', () => {
       expected: 'log_2',
     });
 
-    // Error upsert is at index 4
-    const errorCall = mockQuery.mock.calls[4];
+    // Receipt insert at index 4 references the delivered prefix only
+    const receiptCall = mockQuery.mock.calls[4];
+    assert({
+      given: 'partial delivery of 2 entries',
+      should: 'emit a receipt INSERT after cursor advance',
+      actual: (receiptCall[0] as string).includes('INSERT INTO siem_delivery_receipts'),
+      expected: true,
+    });
+
+    // Error upsert is at index 5
+    const errorCall = mockQuery.mock.calls[5];
     assert({
       given: 'partial delivery failure',
       should: 'record the error message',
@@ -522,6 +550,137 @@ describe('processSiemDelivery', () => {
       should: 'use CURSOR_ID as lock key via hashtext',
       actual: (lockQuery[1] as unknown[])[0],
       expected: 'activity_logs',
+    });
+  });
+
+  it('successful delivery writes a receipt AFTER cursor advancement', async () => {
+    const config = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: { url: 'https://siem.example.com', secret: 's3cret', batchSize: 100, retryAttempts: 3 },
+    };
+    mockLoadSiemConfig.mockReturnValue(config);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // cursor read
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
+        userId: 'u1', actorEmail: 'a@b.com', actorDisplayName: 'A',
+        isAiGenerated: false, aiProvider: null, aiModel: null, aiConversationId: null,
+        operation: 'page.create', resourceType: 'page', resourceId: 'p1',
+        resourceTitle: null, driveId: null, pageId: null,
+        metadata: null, previousLogHash: null, logHash: null,
+      }],
+      rowCount: 1,
+    });
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: true, entriesDelivered: 1,
+      deliveryId: 'd-echo', webhookStatus: 200, responseHash: 'rh', ackReceivedAt: new Date(),
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // cursor advance
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // receipt insert
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    // Index 3 = cursor advance, index 4 = receipt insert
+    const advanceSql = mockQuery.mock.calls[3][0] as string;
+    const receiptSql = mockQuery.mock.calls[4][0] as string;
+
+    assert({
+      given: 'a successful delivery',
+      should: 'write the receipt AFTER the cursor advance',
+      actual: {
+        advanceIsCursor: advanceSql.includes('siem_delivery_cursors'),
+        receiptIsReceipts: receiptSql.includes('INSERT INTO siem_delivery_receipts'),
+      },
+      expected: { advanceIsCursor: true, receiptIsReceipts: true },
+    });
+  });
+
+  it('receipt INSERT carries the same deliveryId that was passed to the adapter', async () => {
+    const config = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: { url: 'https://siem.example.com', secret: 's3cret', batchSize: 100, retryAttempts: 3 },
+    };
+    mockLoadSiemConfig.mockReturnValue(config);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
+        userId: 'u1', actorEmail: 'a@b.com', actorDisplayName: 'A',
+        isAiGenerated: false, aiProvider: null, aiModel: null, aiConversationId: null,
+        operation: 'op', resourceType: 'page', resourceId: 'p1',
+        resourceTitle: null, driveId: null, pageId: null,
+        metadata: null, previousLogHash: null, logHash: null,
+      }],
+      rowCount: 1,
+    });
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // cursor advance
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // receipt insert
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const generatedDeliveryId = mockDeliverToSiemWithRetry.mock.calls[0][2] as string;
+    const receiptParams = mockQuery.mock.calls[4][1] as unknown[];
+    // Params order from writer: deliveryId, source, firstEntryId, lastEntryId, ...
+    const receiptDeliveryId = receiptParams[0];
+
+    assert({
+      given: 'a successful delivery',
+      should: 'write the receipt with the deliveryId that was passed to the adapter',
+      actual: receiptDeliveryId,
+      expected: generatedDeliveryId,
+    });
+  });
+
+  it('zero-delivery failure does NOT write any receipt row', async () => {
+    const config = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: { url: 'https://siem.example.com', secret: 's3cret', batchSize: 100, retryAttempts: 3 },
+    };
+    mockLoadSiemConfig.mockReturnValue(config);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 'log_1', timestamp: new Date('2026-04-10T12:00:00Z'),
+        userId: 'u1', actorEmail: 'a@b.com', actorDisplayName: 'A',
+        isAiGenerated: false, aiProvider: null, aiModel: null, aiConversationId: null,
+        operation: 'op', resourceType: 'page', resourceId: 'p1',
+        resourceTitle: null, driveId: null, pageId: null,
+        metadata: null, previousLogHash: null, logHash: null,
+      }],
+      rowCount: 1,
+    });
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: false, entriesDelivered: 0, error: 'HTTP 502: Bad Gateway',
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // error upsert
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const anyReceiptInsert = mockQuery.mock.calls.some(
+      (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('siem_delivery_receipts')
+    );
+
+    assert({
+      given: 'a zero-delivery failure',
+      should: 'NOT emit any INSERT against siem_delivery_receipts',
+      actual: anyReceiptInsert,
+      expected: false,
     });
   });
 });

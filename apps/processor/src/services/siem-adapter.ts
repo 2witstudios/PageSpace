@@ -1,4 +1,4 @@
-import { createHmac } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import * as net from 'net';
 import * as dgram from 'dgram';
 import { validateExternalURL } from '@pagespace/lib/security';
@@ -36,6 +36,22 @@ export interface SiemDeliveryResult {
   entriesDelivered: number;
   error?: string;
   retryable?: boolean;
+  // Delivery attestation — stamped by the delivery path so the worker can
+  // persist receipts without re-doing any of the work.
+  //
+  // For webhook: `deliveryId` echoes the caller-supplied id; `webhookStatus`
+  // is the last HTTP status observed; `responseHash` is a SHA-256 of the
+  // response body (truncated to 64 hex chars); `ackReceivedAt` is non-null
+  // only when the receiver echoed X-PageSpace-Delivery-Ack with a matching id.
+  //
+  // For syslog: `deliveryId` still echoes, but `webhookStatus`, `responseHash`,
+  // and `ackReceivedAt` are all `null` — syslog is connectionless and has no
+  // ack mechanism. The deliveryId is stamped into the pagespace@52000 SD-PARAM
+  // for the receiver's forensic use.
+  deliveryId?: string;
+  webhookStatus?: number | null;
+  ackReceivedAt?: Date | null;
+  responseHash?: string | null;
 }
 
 // Configuration types
@@ -163,12 +179,17 @@ export function computeHmacSignature(payload: string, secret: string): string {
 
 /**
  * Format audit log entry for webhook delivery
+ *
+ * `deliveryId` is threaded from the worker so the receiver sees the same id in
+ * both the body and the `X-PageSpace-Delivery-Id` header, and can echo it back
+ * via `X-PageSpace-Delivery-Ack` for end-to-end attestation.
  */
-export function formatWebhookPayload(entries: AuditLogEntry[]): string {
+export function formatWebhookPayload(entries: AuditLogEntry[], deliveryId?: string): string {
   const payload = {
-    version: '1.1',
+    version: '1.2',
     source: 'pagespace-audit',
     timestamp: new Date().toISOString(),
+    ...(deliveryId ? { deliveryId } : {}),
     count: entries.length,
     entries: entries.map(entry => ({
       id: entry.id,
@@ -206,13 +227,30 @@ export function formatWebhookPayload(entries: AuditLogEntry[]): string {
 }
 
 /**
+ * Compute SHA-256 hash of a response body as a tamper-resistant delivery
+ * attestation. Full 64-hex-char SHA-256 digest; stored on the receipt so an
+ * operator can prove what body the receiver returned at ship time.
+ */
+export function hashResponseBody(body: string): string {
+  return createHash('sha256').update(body).digest('hex');
+}
+
+/**
  * Send webhook request with HMAC authentication
+ *
+ * Receipt-related fields on the returned result:
+ *  - `deliveryId`: echoes the caller-supplied id for round-trip confirmation
+ *  - `webhookStatus`: last HTTP status observed (also on failure)
+ *  - `responseHash`: SHA-256 of the response body, regardless of status
+ *  - `ackReceivedAt`: non-null only when the response's
+ *    X-PageSpace-Delivery-Ack header matched the outgoing deliveryId
  */
 export async function sendWebhook(
   config: WebhookConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
-  const payload = formatWebhookPayload(entries);
+  const payload = formatWebhookPayload(entries, deliveryId);
   const signature = computeHmacSignature(payload, config.secret);
 
   try {
@@ -229,36 +267,67 @@ export async function sendWebhook(
         entriesDelivered: 0,
         error: `Invalid webhook URL: ${validation.error || 'SSRF protection blocked request'}`,
         retryable: false, // Don't retry blocked URLs
+        deliveryId,
+        webhookStatus: null,
+        ackReceivedAt: null,
+        responseHash: null,
       };
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-PageSpace-Signature': signature,
+      'X-PageSpace-Timestamp': new Date().toISOString(),
+    };
+    if (deliveryId) {
+      headers['X-PageSpace-Delivery-Id'] = deliveryId;
     }
 
     // Proceed with fetch (only if validation passed)
     const response = await fetch(config.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-PageSpace-Signature': signature,
-        'X-PageSpace-Timestamp': new Date().toISOString(),
-      },
+      headers,
       body: payload,
     });
+
+    let responseBody = '';
+    try {
+      if (typeof (response as { text?: unknown }).text === 'function') {
+        responseBody = await response.text();
+      }
+    } catch {
+      responseBody = '';
+    }
+    const responseHash = hashResponseBody(responseBody);
+
+    // Ack round-trip: if the receiver echoed our id back, mark the delivery
+    // as attested. Mismatch or missing → null (operator sees unattested).
+    const headerAck = readResponseHeader(response, 'X-PageSpace-Delivery-Ack');
+    const ackReceivedAt = deliveryId && headerAck && headerAck === deliveryId ? new Date() : null;
 
     if (response.ok) {
       return {
         success: true,
         entriesDelivered: entries.length,
+        deliveryId,
+        webhookStatus: response.status,
+        ackReceivedAt,
+        responseHash,
       };
     }
 
     // Determine if error is retryable
     const retryable = response.status >= 500 || response.status === 429;
-    const errorText = await response.text().catch(() => 'Unknown error');
 
     return {
       success: false,
       entriesDelivered: 0,
-      error: `HTTP ${response.status}: ${errorText}`,
+      error: `HTTP ${response.status}: ${responseBody || 'Unknown error'}`,
       retryable,
+      deliveryId,
+      webhookStatus: response.status,
+      ackReceivedAt,
+      responseHash,
     };
   } catch (error) {
     // Network errors are retryable
@@ -267,8 +336,26 @@ export async function sendWebhook(
       entriesDelivered: 0,
       error: error instanceof Error ? error.message : 'Network error',
       retryable: true,
+      deliveryId,
+      webhookStatus: null,
+      ackReceivedAt: null,
+      responseHash: null,
     };
   }
+}
+
+/**
+ * Minimal Response.headers accessor that survives the two header-bag shapes
+ * node/undici may emit (Headers interface vs a plain object in test mocks).
+ */
+function readResponseHeader(response: Response, name: string): string | null {
+  const headers = (response as unknown as { headers?: unknown }).headers;
+  if (!headers) return null;
+  if (typeof (headers as { get?: unknown }).get === 'function') {
+    return (headers as { get: (name: string) => string | null }).get(name);
+  }
+  const plain = headers as Record<string, string | undefined>;
+  return plain[name] ?? plain[name.toLowerCase()] ?? null;
 }
 
 /**
@@ -277,7 +364,8 @@ export async function sendWebhook(
 export function formatSyslogMessage(
   entry: AuditLogEntry,
   facility: SyslogFacility,
-  hostname?: string
+  hostname?: string,
+  deliveryId?: string
 ): string {
   const facilityCode = SYSLOG_FACILITY_CODES[facility];
   const severity = SYSLOG_SEVERITY.INFORMATIONAL;
@@ -316,6 +404,9 @@ export function formatSyslogMessage(
   }
   if (entry.logHash) {
     auditData.push(`logHash="${escapeSDParam(entry.logHash)}"`);
+  }
+  if (deliveryId) {
+    auditData.push(`deliveryId="${escapeSDParam(deliveryId)}"`);
   }
 
   sdElements.push(`[pagespace@52000 ${auditData.join(' ')}]`);
@@ -382,7 +473,8 @@ function truncateToByteLength(str: string, maxBytes: number): string {
  */
 export function sendSyslogTcp(
   config: SyslogConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
   return new Promise((resolve) => {
     const client = new net.Socket();
@@ -410,7 +502,7 @@ export function sendSyslogTcp(
           return;
         }
 
-        const message = formatSyslogMessage(entries[index], config.facility);
+        const message = formatSyslogMessage(entries[index], config.facility, undefined, deliveryId);
         // RFC 5425: Octet-counting framing for TCP
         const framedMessage = `${Buffer.byteLength(message, 'utf8')} ${message}`;
 
@@ -452,7 +544,8 @@ export function sendSyslogTcp(
  */
 export function sendSyslogUdp(
   config: SyslogConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
   return new Promise((resolve) => {
     const client = dgram.createSocket('udp4');
@@ -471,7 +564,7 @@ export function sendSyslogUdp(
         return;
       }
 
-      const message = formatSyslogMessage(entries[index], config.facility);
+      const message = formatSyslogMessage(entries[index], config.facility, undefined, deliveryId);
       const buffer = Buffer.from(message, 'utf8');
 
       client.send(buffer, 0, buffer.length, config.port, config.host, (err) => {
@@ -511,7 +604,8 @@ export function sendSyslogUdp(
  */
 export async function sendSyslog(
   config: SyslogConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
   // SSRF Protection: Validate syslog host before connecting
   // Use validateExternalURL with a fake URL to leverage DNS resolution checks
@@ -547,12 +641,20 @@ export async function sendSyslog(
     };
   }
 
-  // Proceed with socket connection (only if validation passed)
-  if (config.protocol === 'tcp') {
-    return sendSyslogTcp(config, entries);
-  } else {
-    return sendSyslogUdp(config, entries);
-  }
+  // Proceed with socket connection (only if validation passed). Syslog is
+  // connectionless — ack/status/responseHash are always null on success; the
+  // deliveryId is still echoed so receipts are correctly indexed.
+  const base = config.protocol === 'tcp'
+    ? await sendSyslogTcp(config, entries, deliveryId)
+    : await sendSyslogUdp(config, entries, deliveryId);
+
+  return {
+    ...base,
+    deliveryId,
+    webhookStatus: null,
+    ackReceivedAt: null,
+    responseHash: null,
+  };
 }
 
 /**
@@ -560,7 +662,8 @@ export async function sendSyslog(
  */
 export async function deliverToSiem(
   config: SiemConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
   if (!config.enabled) {
     return {
@@ -577,9 +680,9 @@ export async function deliverToSiem(
   }
 
   if (config.type === 'webhook' && config.webhook) {
-    return sendWebhook(config.webhook, entries);
+    return sendWebhook(config.webhook, entries, deliveryId);
   } else if (config.type === 'syslog' && config.syslog) {
-    return sendSyslog(config.syslog, entries);
+    return sendSyslog(config.syslog, entries, deliveryId);
   }
 
   return {
@@ -595,7 +698,8 @@ export async function deliverToSiem(
  */
 export async function deliverToSiemBatched(
   config: SiemConfig,
-  entries: AuditLogEntry[]
+  entries: AuditLogEntry[],
+  deliveryId?: string
 ): Promise<SiemDeliveryResult> {
   if (!config.enabled || entries.length === 0) {
     return {
@@ -607,10 +711,12 @@ export async function deliverToSiemBatched(
   const batchSize = config.webhook?.batchSize || 100;
   let totalDelivered = 0;
   let lastError: string | undefined;
+  let lastResult: SiemDeliveryResult | undefined;
 
   for (let i = 0; i < entries.length; i += batchSize) {
     const batch = entries.slice(i, i + batchSize);
-    const result = await deliverToSiem(config, batch);
+    const result = await deliverToSiem(config, batch, deliveryId);
+    lastResult = result;
 
     totalDelivered += result.entriesDelivered;
 
@@ -622,6 +728,10 @@ export async function deliverToSiemBatched(
         entriesDelivered: totalDelivered,
         error: lastError,
         retryable: result.retryable,
+        deliveryId,
+        webhookStatus: result.webhookStatus ?? null,
+        ackReceivedAt: result.ackReceivedAt ?? null,
+        responseHash: result.responseHash ?? null,
       };
     }
   }
@@ -629,6 +739,10 @@ export async function deliverToSiemBatched(
   return {
     success: true,
     entriesDelivered: totalDelivered,
+    deliveryId,
+    webhookStatus: lastResult?.webhookStatus ?? null,
+    ackReceivedAt: lastResult?.ackReceivedAt ?? null,
+    responseHash: lastResult?.responseHash ?? null,
   };
 }
 
@@ -648,12 +762,15 @@ export function calculateBackoffDelay(attempt: number, baseDelay: number = 1000)
 export async function deliverToSiemWithRetry(
   config: SiemConfig,
   entries: AuditLogEntry[],
+  deliveryId?: string,
   maxRetries?: number
 ): Promise<SiemDeliveryResult> {
   const retries = maxRetries ?? config.webhook?.retryAttempts ?? 3;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const result = await deliverToSiemBatched(config, entries);
+    // Reuse the same deliveryId across retries so the receiver de-dupes and
+    // the final receipt row attests a single logical "delivery", not N.
+    const result = await deliverToSiemBatched(config, entries, deliveryId);
 
     if (result.success) {
       return result;
@@ -673,5 +790,9 @@ export async function deliverToSiemWithRetry(
     entriesDelivered: 0,
     error: 'Max retries exceeded',
     retryable: false,
+    deliveryId,
+    webhookStatus: null,
+    ackReceivedAt: null,
+    responseHash: null,
   };
 }
