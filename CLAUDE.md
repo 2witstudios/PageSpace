@@ -28,7 +28,7 @@ packages/
 - **Full-stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
 - **Database**: PostgreSQL + Drizzle ORM
 - **AI**: Vercel AI SDK + multi-provider (Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama)
-- **Auth**: Opaque session tokens (SHA-256 hashed, bcryptjs passwords)
+- **Auth**: Passwordless — passkeys (WebAuthn) + magic links. Opaque session tokens, SHA-256 hashed at rest.
 - **Real-time**: Socket.IO with Redis pub/sub
 - **Editors**: TipTap (rich text), Monaco (code), custom sheet + canvas
 - **State**: Zustand (client) + SWR (server cache)
