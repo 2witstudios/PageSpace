@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
       if (result.error.code === 'EMAIL_EXISTS') {
         loggers.auth.info('Passkey signup - email already exists', {
           ip: clientIP,
-          email: normalizedEmail.substring(0, 3) + '***',
+          email: maskEmail(normalizedEmail),
         });
         return NextResponse.json(
           { error: 'An account with this email already exists', code: 'EMAIL_EXISTS' },
@@ -125,7 +125,7 @@ export async function POST(req: Request) {
 
     loggers.auth.info('Passkey signup options generated', {
       ip: clientIP,
-      email: normalizedEmail.substring(0, 3) + '***',
+      email: maskEmail(normalizedEmail),
     });
 
     return NextResponse.json({

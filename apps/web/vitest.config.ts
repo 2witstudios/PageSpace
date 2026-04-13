@@ -58,6 +58,7 @@ export default defineConfig({
       '@pagespace/lib/email-templates/VerificationEmail': path.resolve(packagesDir, 'lib/src/email-templates/VerificationEmail'),
       '@pagespace/lib/api-utils': path.resolve(packagesDir, 'lib/src/utils/api-utils'),
       '@pagespace/lib/audit/security-audit': path.resolve(packagesDir, 'lib/src/audit/security-audit'),
+      '@pagespace/lib/audit/mask-email': path.resolve(packagesDir, 'lib/src/audit/mask-email'),
       '@pagespace/lib/security': path.resolve(packagesDir, 'lib/src/security'),
       '@pagespace/lib/secure-compare': path.resolve(packagesDir, 'lib/src/auth/secure-compare'),
       '@pagespace/lib/auth': path.resolve(packagesDir, 'lib/src/auth'),

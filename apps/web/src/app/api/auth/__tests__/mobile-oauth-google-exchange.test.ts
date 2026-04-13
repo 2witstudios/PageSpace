@@ -14,30 +14,36 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/oauth/google/exchange/route';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/server', () => ({
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-  }),
-  verifyOAuthIdToken: vi.fn(),
-  createOrLinkOAuthUser: vi.fn(),
-  OAuthProvider: {
-    GOOGLE: 'google',
-    APPLE: 'apple',
-  },
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+      deviceToken: 'mock-device-token',
+    }),
+    verifyOAuthIdToken: vi.fn(),
+    createOrLinkOAuthUser: vi.fn(),
+    OAuthProvider: {
+      GOOGLE: 'google',
+      APPLE: 'apple',
     },
-    security: {
-      warn: vi.fn(),
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-  },
-  auditRequest: vi.fn(),
-}));
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
@@ -96,6 +102,7 @@ import {
   createOrLinkOAuthUser,
   validateOrCreateDeviceToken,
   auditRequest,
+  loggers,
 } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -810,6 +817,56 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const body = await response.json();
 
       expect(body.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Google ID token verified" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Google ID token verified');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "Creating or linking OAuth user" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('Creating or linking OAuth user');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
+    });
+
+    it('masks email in "OAuth user created/linked" log', async () => {
+      const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validExchangePayload),
+      });
+
+      await POST(request);
+
+      const call = findInfoCall('OAuth user created/linked');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('oa***@example.com');
     });
   });
 });

@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
       loggers.auth.warn('Passkey signup failed', {
         error: result.error.code,
         ip: clientIP,
-        email: email.substring(0, 3) + '***',
+        email: maskEmail(email),
       });
       auditRequest(req, {
         eventType: 'auth.login.failure',
@@ -168,7 +168,7 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }
 
-    loggers.auth.info('Passkey signup successful', { userId, email: email.substring(0, 3) + '***', name });
+    loggers.auth.info('Passkey signup successful', { userId, email: maskEmail(email) });
 
     // Reset rate limits on successful signup
     await Promise.allSettled([
@@ -282,7 +282,7 @@ export async function POST(req: Request) {
     );
 
   } catch (error) {
-    loggers.auth.error('Passkey signup verification error', error as Error, { email, clientIP });
+    loggers.auth.error('Passkey signup verification error', error as Error, { email: email ? maskEmail(email) : undefined, clientIP });
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

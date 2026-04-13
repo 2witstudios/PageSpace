@@ -104,6 +104,11 @@
       "import": "./dist/audit/security-audit.js",
       "require": "./dist/audit/security-audit.js"
     },
+    "./audit/mask-email": {
+      "types": "./dist/audit/mask-email.d.ts",
+      "import": "./dist/audit/mask-email.js",
+      "require": "./dist/audit/mask-email.js"
+    },
     "./broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",

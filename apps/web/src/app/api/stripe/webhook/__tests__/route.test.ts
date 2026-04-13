@@ -87,8 +87,31 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      api: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    },
+    maskEmail,
+  };
+});
+
 // Import after mocks
 import { POST } from '../route';
+import { loggers } from '@pagespace/lib/server';
 
 // Helper to create mock Stripe event
 const mockStripeEvent = (type: string, data: unknown) => ({
@@ -571,6 +594,31 @@ describe('POST /api/stripe/webhook', () => {
           stripeCustomerId: 'cus_new123',
         })
       );
+    });
+
+    it('masks customer email in "Linked Stripe customer to user" log', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'jane@example.com',
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      const call = vi.mocked(loggers.api.info).mock.calls.find(
+        c => c[0] === 'Linked Stripe customer to user'
+      );
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('ja***@example.com');
     });
 
     it('should skip non-subscription checkout sessions', async () => {

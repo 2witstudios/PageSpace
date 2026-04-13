@@ -38,6 +38,13 @@ describe('mapActivityLogToSiemEntry', () => {
 
     assert({
       given: 'a complete activity_logs row',
+      should: "stamp source as 'activity_logs'",
+      actual: entry.source,
+      expected: 'activity_logs',
+    });
+
+    assert({
+      given: 'a complete activity_logs row',
       should: 'map timestamp as Date',
       actual: entry.timestamp instanceof Date,
       expected: true,

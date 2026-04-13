@@ -97,6 +97,7 @@ import {
 
 const makeEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   id: 'entry-1',
+  source: 'activity_logs',
   timestamp: new Date('2024-01-01T00:00:00Z'),
   userId: 'user-1',
   actorEmail: 'user@example.com',
@@ -309,10 +310,32 @@ describe('formatWebhookPayload', () => {
   it('includes correct structure', () => {
     const entry = makeEntry();
     const payload = JSON.parse(formatWebhookPayload([entry]));
-    expect(payload.version).toBe('1.0');
+    expect(payload.version).toBe('1.1');
     expect(payload.source).toBe('pagespace-audit');
     expect(payload.count).toBe(1);
     expect(payload.entries).toHaveLength(1);
+  });
+
+  it('stamps each entry with its source (activity_logs)', () => {
+    const entry = makeEntry({ source: 'activity_logs' });
+    const payload = JSON.parse(formatWebhookPayload([entry]));
+    expect(payload.entries[0].source).toBe('activity_logs');
+  });
+
+  it('stamps each entry with its source (security_audit_log)', () => {
+    const entry = makeEntry({ source: 'security_audit_log' });
+    const payload = JSON.parse(formatWebhookPayload([entry]));
+    expect(payload.entries[0].source).toBe('security_audit_log');
+  });
+
+  it('preserves per-entry source across mixed batches', () => {
+    const entries = [
+      makeEntry({ id: 'a1', source: 'activity_logs' }),
+      makeEntry({ id: 's1', source: 'security_audit_log' }),
+    ];
+    const payload = JSON.parse(formatWebhookPayload(entries));
+    expect(payload.entries[0].source).toBe('activity_logs');
+    expect(payload.entries[1].source).toBe('security_audit_log');
   });
 
   it('includes AI data when isAiGenerated is true', () => {
@@ -421,6 +444,18 @@ describe('formatSyslogMessage', () => {
     const entry = makeEntry({ actorEmail: 'user"with"quotes@example.com' });
     const msg = formatSyslogMessage(entry, 'local0');
     expect(msg).toBeTruthy();
+  });
+
+  it('emits source as a SD-PARAM in the pagespace@52000 element', () => {
+    const entry = makeEntry({ source: 'activity_logs' });
+    const msg = formatSyslogMessage(entry, 'local0');
+    expect(msg).toContain('source="activity_logs"');
+  });
+
+  it('emits security_audit_log as the source SD-PARAM when applicable', () => {
+    const entry = makeEntry({ source: 'security_audit_log' });
+    const msg = formatSyslogMessage(entry, 'local0');
+    expect(msg).toContain('source="security_audit_log"');
   });
 });
 

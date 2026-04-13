@@ -6,7 +6,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
@@ -133,7 +133,7 @@ export async function POST(req: Request) {
     if (user) {
       // Update existing user if needed
       if (!user.appleId || !user.name) {
-        loggers.auth.info('Updating existing user via Apple OAuth', { email });
+        loggers.auth.info('Updating existing user via Apple OAuth', { email: maskEmail(email) });
         await authRepository.updateUser(user.id, {
           appleId: appleId || user.appleId,
           provider: 'apple',
@@ -142,11 +142,11 @@ export async function POST(req: Request) {
         });
 
         user = await authRepository.findUserById(user.id) || user;
-        loggers.auth.info('User updated via Apple OAuth', { userId: user.id, name: user.name });
+        loggers.auth.info('User updated via Apple OAuth', { userId: user.id });
       }
     } else {
       // Create new user
-      loggers.auth.info('Creating new user via Apple OAuth', { email });
+      loggers.auth.info('Creating new user via Apple OAuth', { email: maskEmail(email) });
       user = await authRepository.createUser({
         id: createId(),
         name: userName,
@@ -160,7 +160,7 @@ export async function POST(req: Request) {
         storageUsedBytes: 0,
         subscriptionTier: 'free',
       });
-      loggers.auth.info('New user created via Apple OAuth', { userId: user.id, name: user.name });
+      loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
 
     // Provision getting started drive for new users
@@ -225,7 +225,7 @@ export async function POST(req: Request) {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
           userId: user.id,
-          email: user.email,
+          email: maskEmail(user.email),
         });
           return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }

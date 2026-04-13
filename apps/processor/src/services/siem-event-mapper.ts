@@ -34,6 +34,7 @@ export function mapActivityLogToSiemEntry(row: ActivityLogSiemRow): AuditLogEntr
 
   return {
     id: row.id,
+    source: 'activity_logs',
     timestamp,
     userId: row.userId ?? null,
     actorEmail: row.actorEmail,

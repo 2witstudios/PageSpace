@@ -41,21 +41,27 @@ vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
   VerificationEmail: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-    security: {
-      warn: vi.fn(),
-    },
-  },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-}));
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
@@ -182,7 +188,7 @@ describe('POST /api/auth/resend-verification', () => {
       expect(response.headers.get('Retry-After')).toBe('3600');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Email resend rate limit exceeded',
-        { email: 'test@example.com' }
+        { email: 'te***@example.com' }
       );
     });
 
@@ -247,7 +253,7 @@ describe('POST /api/auth/resend-verification', () => {
 
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Verification email resent',
-        { userId: 'test-user-id', email: 'test@example.com' }
+        { userId: 'test-user-id', email: 'te***@example.com' }
       );
     });
 
