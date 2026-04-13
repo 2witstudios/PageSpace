@@ -1,10 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
-// Mock dependencies to avoid resolution errors (maskEmail doesn't need DB)
-vi.mock('@pagespace/db', () => ({}));
-vi.mock('drizzle-orm', () => ({}));
-
-import { maskEmail } from '../index';
+import { maskEmail } from '../mask-email';
 
 describe('maskEmail', () => {
   it('masks standard email addresses', () => {

@@ -63,24 +63,30 @@ vi.mock('@pagespace/lib/auth', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-    deviceTokenRecordId: 'device-record-id',
-  }),
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+      deviceToken: 'mock-device-token',
+      deviceTokenRecordId: 'device-record-id',
+    }),
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-    security: {
-      warn: vi.fn(),
-    },
-  },
-  auditRequest: vi.fn(),
-}));
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -121,7 +127,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, auditRequest } from '@pagespace/lib/server';
+import { validateOrCreateDeviceToken, auditRequest, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -713,5 +719,37 @@ describe('POST /api/auth/google/native', () => {
       expect((updateArgs[1] as Record<string, unknown>).image).toBe('/processed-avatar.jpg');
     });
 
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email in "Creating new user via native Google OAuth" log', async () => {
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Creating new user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
+
+    it('masks email in "Updating existing user via native Google OAuth" log', async () => {
+      const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      const call = findInfoCall('Updating existing user via native Google OAuth');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as { email?: string };
+      expect(meta.email).toBe('te***@example.com');
+    });
   });
 });

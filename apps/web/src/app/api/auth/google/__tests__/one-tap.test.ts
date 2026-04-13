@@ -64,20 +64,26 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-    security: {
-      warn: vi.fn(),
-    },
-  },
-  auditRequest: vi.fn(),
-}));
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),

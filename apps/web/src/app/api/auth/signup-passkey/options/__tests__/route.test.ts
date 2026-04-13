@@ -12,17 +12,23 @@ vi.mock('@pagespace/lib/auth', () => ({
   generateRegistrationOptionsForSignup: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
     },
-  },
-  auditRequest: vi.fn(),
-}));
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -110,7 +116,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
       await POST(createRequest());
 
       expect(loggers.auth.info).toHaveBeenCalledWith('Passkey signup options generated', expect.objectContaining({
-        email: 'use***',
+        email: 'us***@example.com',
       }));
     });
   });
@@ -248,7 +254,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(body.error).toBe('An account with this email already exists');
       expect(body.code).toBe('EMAIL_EXISTS');
       expect(loggers.auth.info).toHaveBeenCalledWith('Passkey signup - email already exists', expect.objectContaining({
-        email: 'use***',
+        email: 'us***@example.com',
       }));
     });
 
