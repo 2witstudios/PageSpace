@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { generateAuthenticationOptions } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -32,9 +32,10 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_options', {
-        ip: clientIP,
-        retryAfter: rateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'passkey_rate_limit_options' },
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
@@ -57,10 +58,10 @@ export async function POST(req: Request) {
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: email ? email.substring(0, 3) + '***' : undefined,
-        flow: 'authenticate_options',
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'authenticate_options' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },

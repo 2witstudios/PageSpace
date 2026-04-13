@@ -21,7 +21,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  logSecurityEvent: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -38,7 +38,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { POST } from '../route';
 import { generateAuthenticationOptions } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
@@ -131,9 +131,14 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many requests');
       expect(body.retryAfter).toBe(60);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_options', expect.objectContaining({
-        retryAfter: 60,
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_rate_limit_options' }),
+          riskScore: 0.5,
+        })
+      );
     });
 
     it('does not proceed to validation when rate limited', async () => {
@@ -185,29 +190,28 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'authenticate_options',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'authenticate_options' }),
+          riskScore: 0.6,
+        })
+      );
     });
 
-    it('masks email in CSRF security event when email is provided', async () => {
+    it('does not leak email in CSRF audit details', async () => {
       vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
 
       await POST(createRequest({ csrfToken: 'bad', email: 'user@example.com' }));
 
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        email: 'use***',
-      }));
-    });
-
-    it('does not include email in CSRF security event when email is not provided', async () => {
-      vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
-
-      await POST(createRequest({ csrfToken: 'bad' }));
-
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        email: undefined,
-      }));
+      const auditCall = vi.mocked(auditRequest).mock.calls.find(
+        ([, event]) =>
+          (event as { details?: { reason?: string } }).details?.reason === 'passkey_csrf_invalid'
+      );
+      expect(auditCall).toBeDefined();
+      const details = (auditCall![1] as { details: Record<string, unknown> }).details;
+      expect(details).not.toHaveProperty('email');
     });
   });
 

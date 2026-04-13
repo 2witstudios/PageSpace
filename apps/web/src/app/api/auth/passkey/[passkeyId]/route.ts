@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   authenticateSessionRequest,
@@ -42,11 +42,11 @@ export async function DELETE(
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        logSecurityEvent('passkey_csrf_invalid', {
+        auditRequest(req, {
+          eventType: 'security.suspicious.activity',
           userId,
-          passkeyId,
-          ip: clientIP,
-          flow: 'delete',
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'delete', passkeyId },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -91,8 +91,10 @@ export async function DELETE(
       passkeyId,
       ip: clientIP,
     });
-    securityAudit.logTokenRevoked(userId, 'passkey', 'user_deleted').catch((error) => {
-      loggers.security.warn('[PasskeyDelete] audit logTokenRevoked failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.token.revoked',
+      userId,
+      details: { tokenType: 'passkey', reason: 'user_deleted' },
     });
 
     return NextResponse.json({ success: true });
@@ -134,11 +136,11 @@ export async function PATCH(
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        logSecurityEvent('passkey_csrf_invalid', {
+        auditRequest(req, {
+          eventType: 'security.suspicious.activity',
           userId,
-          passkeyId,
-          ip: clientIP,
-          flow: 'update',
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'update', passkeyId },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },

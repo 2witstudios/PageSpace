@@ -44,20 +44,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
-  logSecurityEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -97,7 +85,7 @@ import {
   sessionService,
   generateCSRFToken,
 } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
@@ -232,6 +220,19 @@ describe('POST /api/auth/passkey/authenticate', () => {
       }));
     });
 
+    it('audits successful passkey login', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'user-1',
+          sessionId: 'mock-session-id',
+        })
+      );
+    });
+
     it('does not include Secure flag in non-production', async () => {
       vi.stubEnv('NODE_ENV', 'test');
 
@@ -269,9 +270,14 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(response.status).toBe(429);
       expect(body.error).toBe('Too many requests');
       expect(body.retryAfter).toBe(300);
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_rate_limit_auth', expect.objectContaining({
-        retryAfter: 300,
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_rate_limit_auth' }),
+          riskScore: 0.5,
+        })
+      );
     });
   });
 
@@ -318,9 +324,14 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'authenticate',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'authenticate' }),
+          riskScore: 0.6,
+        })
+      );
     });
   });
 
@@ -378,6 +389,24 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey authentication failed', expect.objectContaining({
         error: 'VERIFICATION_FAILED',
       }));
+    });
+
+    it('audits auth failure on verification error', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'passkey_auth_verification_failed' }),
+          riskScore: 0.3,
+        })
+      );
     });
   });
 

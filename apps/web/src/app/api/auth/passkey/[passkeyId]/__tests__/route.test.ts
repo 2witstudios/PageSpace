@@ -22,20 +22,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
-  logSecurityEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -51,7 +39,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { DELETE, PATCH } from '../route';
 import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
@@ -131,6 +119,21 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
         passkeyId: 'test-passkey-id',
       }));
     });
+
+    it('audits passkey token revocation on success', async () => {
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
+
+      await DELETE(createDeleteRequest(), createContext());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.token.revoked',
+          userId: 'user-1',
+          details: expect.objectContaining({ tokenType: 'passkey', reason: 'user_deleted' }),
+        })
+      );
+    });
   });
 
   describe('authentication errors', () => {
@@ -170,9 +173,14 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'delete',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'delete' }),
+          riskScore: 0.6,
+        })
+      );
     });
 
     it('skips CSRF validation for Bearer token auth', async () => {
@@ -337,9 +345,14 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
-      expect(logSecurityEvent).toHaveBeenCalledWith('passkey_csrf_invalid', expect.objectContaining({
-        flow: 'update',
-      }));
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'update' }),
+          riskScore: 0.6,
+        })
+      );
     });
 
     it('returns 403 when CSRF token is missing', async () => {

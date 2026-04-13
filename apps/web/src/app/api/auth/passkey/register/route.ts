@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { verifyRegistration, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -44,10 +44,11 @@ export async function POST(req: Request) {
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        logSecurityEvent('passkey_csrf_invalid', {
+        auditRequest(req, {
+          eventType: 'security.suspicious.activity',
           userId,
-          ip: clientIP,
-          flow: 'register',
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'register' },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -64,10 +65,11 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_register', {
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
         userId,
-        ip: clientIP,
-        retryAfter: rateLimitResult.retryAfter,
+        riskScore: 0.5,
+        details: { reason: 'passkey_rate_limit_register' },
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
@@ -132,8 +134,10 @@ export async function POST(req: Request) {
       passkeyId: result.data.passkeyId,
       ip: clientIP,
     });
-    securityAudit.logTokenCreated(userId, 'passkey', clientIP).catch((error) => {
-      loggers.security.warn('[PasskeyRegister] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId,
+      details: { tokenType: 'passkey' },
     });
 
     return NextResponse.json({

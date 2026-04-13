@@ -49,7 +49,12 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  logSecurityEvent: vi.fn(),
+  auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -71,7 +76,7 @@ import { POST } from '../route';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
-import { loggers, logSecurityEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { parse } from 'cookie';
 
@@ -130,9 +135,13 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('CSRF token required');
       expect(body.code).toBe('LOGIN_CSRF_MISSING');
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'magic_link_csrf_missing',
-        { ip: '127.0.0.1', hasHeader: false, hasCookie: true }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_missing' }),
+          riskScore: 0.4,
+        })
       );
     });
 
@@ -166,9 +175,13 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid CSRF token');
       expect(body.code).toBe('LOGIN_CSRF_MISMATCH');
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'magic_link_csrf_mismatch',
-        { ip: '127.0.0.1' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_mismatch' }),
+          riskScore: 0.6,
+        })
       );
     });
 
@@ -182,6 +195,14 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid or expired CSRF token');
       expect(body.code).toBe('LOGIN_CSRF_INVALID');
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_invalid' }),
+          riskScore: 0.6,
+        })
+      );
     });
   });
 
@@ -238,9 +259,13 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.retryAfter).toBe(600);
       expect(response.headers.get('Retry-After')).toBe('600');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'magic_link_rate_limit_ip',
-        { ip: '127.0.0.1' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'magic_link_rate_limit_ip' }),
+          riskScore: 0.5,
+        })
       );
     });
 
@@ -256,9 +281,13 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(429);
       expect(body.error).toContain('Too many requests for this email');
       expect(body.retryAfter).toBe(300);
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'magic_link_rate_limit_email',
-        { email: 'te***@example.com', ip: '127.0.0.1' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'magic_link_rate_limit_email' }),
+          riskScore: 0.5,
+        })
       );
     });
 
@@ -319,9 +348,15 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(200);
       expect(body.message).toContain('If an account exists');
       expect(sendEmail).not.toHaveBeenCalled();
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'magic_link_suspended_user',
-        { email: 'te***@example.com', ip: '127.0.0.1' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({
+            reason: 'magic_link_user_suspended',
+          }),
+          riskScore: 0.5,
+        })
       );
     });
 
@@ -357,6 +392,27 @@ describe('POST /api/auth/magic-link/send', () => {
         { error: { code: 'DATABASE_ERROR', message: 'Connection failed' } }
       );
     });
+
+    it('audits unexpected service errors via auditRequest', async () => {
+      vi.mocked(createMagicLinkToken).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'DATABASE_ERROR', message: 'Connection failed' },
+      });
+
+      const request = createMagicLinkRequest();
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({
+            reason: 'magic_link_database_error',
+          }),
+        })
+      );
+    });
   });
 
   describe('email sending', () => {
@@ -380,6 +436,22 @@ describe('POST /api/auth/magic-link/send', () => {
           isNewUser: false,
           ip: '127.0.0.1',
         }
+      );
+    });
+
+    it('audits magic link token creation on successful email send', async () => {
+      const request = createMagicLinkRequest();
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.token.created',
+          details: expect.objectContaining({
+            tokenType: 'magic_link',
+            isNewUser: false,
+          }),
+        })
       );
     });
 

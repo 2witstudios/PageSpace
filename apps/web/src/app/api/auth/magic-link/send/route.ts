@@ -8,7 +8,7 @@ import {
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
@@ -21,14 +21,6 @@ const sendMagicLinkSchema = z.object({
   { message: 'deviceId and deviceName are required for desktop platform' }
 );
 
-/** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return '***@***';
-  const visibleChars = Math.min(2, local.length);
-  return `${local.slice(0, visibleChars)}***@${domain}`;
-}
-
 export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
@@ -40,10 +32,10 @@ export async function POST(req: Request) {
     const csrfTokenCookie = cookies.login_csrf;
 
     if (!csrfTokenHeader || !csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_missing', {
-        ip: clientIP,
-        hasHeader: !!csrfTokenHeader,
-        hasCookie: !!csrfTokenCookie,
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.4,
+        details: { reason: 'magic_link_csrf_missing', hasHeader: !!csrfTokenHeader, hasCookie: !!csrfTokenCookie },
       });
       return Response.json(
         {
@@ -56,7 +48,11 @@ export async function POST(req: Request) {
     }
 
     if (csrfTokenHeader !== csrfTokenCookie) {
-      logSecurityEvent('magic_link_csrf_mismatch', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_mismatch' },
+      });
       return Response.json(
         {
           error: 'Invalid CSRF token',
@@ -68,7 +64,11 @@ export async function POST(req: Request) {
     }
 
     if (!validateLoginCSRFToken(csrfTokenHeader)) {
-      logSecurityEvent('magic_link_csrf_invalid', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_invalid' },
+      });
       return Response.json(
         {
           error: 'Invalid or expired CSRF token',
@@ -108,7 +108,11 @@ export async function POST(req: Request) {
     ]);
 
     if (!ipRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_ip', { ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_ip' },
+      });
       return Response.json(
         {
           error: 'Too many requests. Please try again later.',
@@ -126,7 +130,11 @@ export async function POST(req: Request) {
     }
 
     if (!emailRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_email', { email: maskEmail(normalizedEmail), ip: clientIP });
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_email' },
+      });
       return Response.json(
         {
           error: 'Too many requests for this email. Please try again later.',
@@ -156,7 +164,11 @@ export async function POST(req: Request) {
     // Even if user is suspended, we return success but don't send email
     if (!result.ok) {
       if (result.error.code === 'USER_SUSPENDED') {
-        logSecurityEvent('magic_link_suspended_user', { email: maskEmail(normalizedEmail), ip: clientIP });
+        auditRequest(req, {
+          eventType: 'auth.login.failure',
+          riskScore: 0.5,
+          details: { reason: 'magic_link_user_suspended' },
+        });
         // Return success to prevent enumeration, but don't send email
         return Response.json({
           message: 'If an account exists with this email, we have sent a sign-in link.',
@@ -173,6 +185,11 @@ export async function POST(req: Request) {
 
       // For other errors, log and return generic success
       loggers.auth.error('Magic link creation failed', { error: result.error });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
+      });
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
       });
@@ -194,13 +211,12 @@ export async function POST(req: Request) {
         isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
-      securityAudit.logEvent({
-        eventType: 'data.write',
-        resourceType: 'magic_link',
-        resourceId: 'magic_link_request',
-        ipAddress: clientIP,
-      }).catch((error) => {
-        loggers.security.warn('[MagicLinkSend] audit logEvent failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.token.created',
+        details: {
+          tokenType: 'magic_link',
+          isNewUser: result.data.isNewUser,
+        },
       });
     } catch (error) {
       // Log but don't expose email sending errors
