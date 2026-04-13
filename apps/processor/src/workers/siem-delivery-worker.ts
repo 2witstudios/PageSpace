@@ -1,3 +1,4 @@
+import { createId } from '@paralleldrive/cuid2';
 import {
   loadSiemConfig,
   validateSiemConfig,
@@ -13,6 +14,8 @@ import {
   mapSecurityAuditEventsToSiemEntries,
   type SecurityAuditSiemRow,
 } from '../services/security-audit-event-mapper';
+import { buildReceipts } from '../services/siem-receipt-builder';
+import { writeReceipts } from './siem-receipt-writer';
 import { runChainPreflight } from './siem-delivery-preflight';
 import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
 import { notifyChainPreflightFailure } from '@pagespace/lib/audit';
@@ -417,7 +420,12 @@ export async function processSiemDelivery(): Promise<void> {
     }
 
     // Phase 3: single delivery call for the merged, time-ordered batch.
-    const result = await deliverToSiemWithRetry(config, merged);
+    // deliveryId is generated ONCE per worker run and reused across any
+    // retries the adapter performs internally — same logical delivery → same
+    // id → one row per source in siem_delivery_receipts, not one per network
+    // attempt. The receiver may also use this id for its own de-duplication.
+    const deliveryId = createId();
+    const result = await deliverToSiemWithRetry(config, merged, deliveryId);
 
     // Phase 4: walk the delivered prefix and track per-source progress. The
     // adapter reports entriesDelivered as the count of the merged batch that
@@ -435,21 +443,62 @@ export async function processSiemDelivery(): Promise<void> {
       );
     }
 
-    // Phase 5: advance cursors for sources whose entries were actually delivered.
-    // Sources with zero progress keep their cursor exactly where it was.
-    for (const state of states) {
-      const lastDelivered = perSourceLastDelivered.get(state.source);
-      if (!lastDelivered) continue;
+    // Phase 5 + 5b: advance cursors AND write per-source receipts atomically.
+    //
+    // The cursor upsert and the receipt INSERT must commit or roll back
+    // together. If the cursor advanced but the receipt write failed, the
+    // worker would mark events as delivered while leaving no attestation
+    // row — `/siem/receipts` would return a false negative for data that
+    // already shipped. Wrapping both writes in a single BEGIN/COMMIT closes
+    // that window: on rollback the cursor stays put and the next run
+    // re-delivers the same events with a fresh deliveryId, which the
+    // receiver de-dupes via its own idempotency key. A missing receipt is
+    // never a correctness failure; an advanced cursor without a receipt
+    // would be.
+    //
+    // Sources with zero progress keep their cursor exactly where it was —
+    // the loop body is a no-op for them.
+    if (delivered.length > 0) {
+      await client.query('BEGIN');
+      try {
+        for (const state of states) {
+          const lastDelivered = perSourceLastDelivered.get(state.source);
+          if (!lastDelivered) continue;
 
-      const count = perSourceDeliveredCount.get(state.source) ?? 0;
-      const newCount = state.cursor.deliveryCount + count;
-      await advanceCursor(
-        client,
-        state.source,
-        lastDelivered.id,
-        lastDelivered.timestamp,
-        newCount
-      );
+          const count = perSourceDeliveredCount.get(state.source) ?? 0;
+          const newCount = state.cursor.deliveryCount + count;
+          await advanceCursor(
+            client,
+            state.source,
+            lastDelivered.id,
+            lastDelivered.timestamp,
+            newCount
+          );
+        }
+
+        // buildReceipts groups by source, so a single dual-source delivery
+        // yields up to one receipt per source — every receipt sharing this
+        // run's deliveryId.
+        const receipts = buildReceipts({
+          deliveryId,
+          deliveredAt: new Date(),
+          webhookStatus: result.webhookStatus ?? null,
+          webhookResponseHash: result.responseHash ?? null,
+          ackReceivedAt: result.ackReceivedAt ?? null,
+          deliveredEntries: delivered,
+        });
+        if (receipts.length > 0) {
+          await writeReceipts(client, receipts);
+        }
+
+        await client.query('COMMIT');
+      } catch (txnError) {
+        // Rollback before rethrowing so the catch block above doesn't
+        // observe an open transaction. `.catch` swallows the rollback
+        // failure deliberately — the original error is what matters.
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw txnError;
+      }
     }
 
     // Phase 6: result logging + failure handling.

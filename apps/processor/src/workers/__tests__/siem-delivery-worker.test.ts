@@ -125,6 +125,24 @@ function stubErrorUpsert() {
   mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 }
 
+/** Response for the receipt INSERT (Phase 5b) — emitted by writeReceipts
+ *  after every successful or partial delivery whose delivered prefix is
+ *  non-empty. Tests that mock a delivery with entriesDelivered > 0 must
+ *  stub one of these AFTER the cursor advance and BEFORE the lock release. */
+function stubReceiptWrite() {
+  mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+}
+
+/** Response for `BEGIN` — opens the Phase 5+5b atomic txn. */
+function stubBegin() {
+  mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+}
+
+/** Response for `COMMIT` — closes the Phase 5+5b atomic txn. */
+function stubCommit() {
+  mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+}
+
 // --- Row factories --------------------------------------------------------
 
 function makeActivityRow(id: string, timestamp: Date, overrides: Record<string, unknown> = {}) {
@@ -270,7 +288,10 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
 
+    stubBegin();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -412,7 +433,10 @@ describe('processSiemDelivery', () => {
       error: 'TCP connection reset',
     });
 
+    stubBegin();
     stubCursorAdvance(); // activity_logs advance
+    stubReceiptWrite(); // partial-delivery receipt for the delivered prefix
+    stubCommit();
     stubErrorUpsert(); // activity_logs error
     stubErrorUpsert(); // security_audit_log error
     stubLockRelease();
@@ -613,8 +637,11 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 4 });
 
+    stubBegin();
     stubCursorAdvance();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -668,8 +695,11 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 4 });
 
+    stubBegin();
     stubCursorAdvance();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -771,7 +801,10 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
 
+    stubBegin();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -813,7 +846,10 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
 
+    stubBegin();
     stubCursorAdvance(); // activity_logs advance only
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -897,8 +933,11 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 4 });
 
+    stubBegin();
     stubCursorAdvance();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -975,9 +1014,13 @@ describe('processSiemDelivery', () => {
       error: 'HTTP 503: timeout',
     });
 
-    // activity_logs advance, security_audit_log advance, then 2 error upserts
+    // BEGIN, activity_logs advance, security_audit_log advance,
+    // partial-delivery receipt write, COMMIT, then 2 error upserts.
+    stubBegin();
     stubCursorAdvance();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubErrorUpsert();
     stubErrorUpsert();
     stubLockRelease();
@@ -1050,8 +1093,11 @@ describe('processSiemDelivery', () => {
       error: 'HTTP 503',
     });
 
+    stubBegin();
     stubCursorAdvance(); // activity_logs advance
     stubCursorAdvance(); // security_audit_log advance
+    stubReceiptWrite(); // partial-delivery receipts (one per source represented)
+    stubCommit();
     stubErrorUpsert(); // activity_logs error
     stubErrorUpsert(); // security_audit_log error
     stubLockRelease();
@@ -1316,7 +1362,10 @@ describe('processSiemDelivery', () => {
 
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 3 });
 
+    stubBegin();
     stubCursorAdvance(); // only activity_logs advances
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -1391,8 +1440,11 @@ describe('processSiemDelivery', () => {
     mockRunChainPreflight.mockResolvedValue(null); // clean
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
 
+    stubBegin();
     stubCursorAdvance();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -1612,7 +1664,10 @@ describe('processSiemDelivery', () => {
     mockRunChainPreflight.mockResolvedValue(null);
     mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
 
+    stubBegin();
     stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
     stubLockRelease();
 
     await processSiemDelivery();
@@ -1715,6 +1770,199 @@ describe('processSiemDelivery', () => {
       should: 'NOT fire notifyChainPreflightFailure',
       actual: mockNotifyChainPreflightFailure.mock.calls.length,
       expected: 0,
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Wave 3b: per-run delivery receipts
+  //
+  // These tests pin the contract that `writeReceipts` runs AFTER cursor
+  // advance, only when something was actually delivered, and that the same
+  // deliveryId is shared across every per-source receipt produced by a single
+  // worker run. mockRunChainPreflight defaults to clean (null) in beforeEach.
+  // -------------------------------------------------------------------------
+
+  it('successful dual-source delivery writes one receipt per source with the same deliveryId', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([
+      makeActivityRow('log_a', new Date('2026-04-10T00:00:10Z')),
+      makeActivityRow('log_b', new Date('2026-04-10T00:00:30Z')),
+    ]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([
+      makeSecurityRow('sec_a', new Date('2026-04-10T00:00:20Z')),
+      makeSecurityRow('sec_b', new Date('2026-04-10T00:00:40Z')),
+    ]);
+
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: true,
+      entriesDelivered: 4,
+      webhookStatus: 200,
+      ackReceivedAt: null,
+      responseHash: 'abc',
+    });
+
+    stubBegin();
+    stubCursorAdvance(); // activity_logs advance
+    stubCursorAdvance(); // security_audit_log advance
+    stubReceiptWrite();
+    stubCommit();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const receiptInserts = findAllCallsContaining('INSERT INTO siem_delivery_receipts');
+
+    assert({
+      given: 'a successful dual-source delivery',
+      should: 'emit exactly one INSERT against siem_delivery_receipts (one round trip, multi-row)',
+      actual: receiptInserts.length,
+      expected: 1,
+    });
+
+    // Writer params (post-receiptId fix): 12 columns × N rows. Sources land
+    // at param indices 2 and 14 (0-based), since receiptId is at index 0.
+    const params = receiptInserts[0][1] as unknown[];
+    const sourcesInsideInsert = [params[2], params[14]];
+
+    assert({
+      given: 'a dual-source delivery',
+      should: 'write one receipt row per source',
+      actual: sourcesInsideInsert.sort(),
+      expected: ['activity_logs', 'security_audit_log'],
+    });
+
+    const deliveryIds = [params[1], params[13]];
+
+    assert({
+      given: 'two receipts from the same worker run',
+      should: 'share the same deliveryId',
+      actual: deliveryIds[0] === deliveryIds[1] && typeof deliveryIds[0] === 'string',
+      expected: true,
+    });
+  });
+
+  it('partial delivery writes receipts only for sources represented in the delivered prefix', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([
+      makeActivityRow('log_a', new Date('2026-04-10T00:00:10Z')),
+      makeActivityRow('log_b', new Date('2026-04-10T00:00:30Z')),
+    ]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([
+      makeSecurityRow('sec_a', new Date('2026-04-10T00:00:20Z')),
+    ]);
+
+    // Merged: [log_a(10), sec_a(20), log_b(30)]. Adapter delivers only the
+    // first entry (log_a) before failing — so only activity_logs should get
+    // a receipt; security_audit_log had no rows in the delivered prefix.
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: false,
+      entriesDelivered: 1,
+      error: 'HTTP 503: timeout',
+      webhookStatus: 503,
+      responseHash: null,
+      ackReceivedAt: null,
+    });
+
+    stubBegin();
+    stubCursorAdvance(); // activity_logs advance only
+    stubReceiptWrite();
+    stubCommit();
+    stubErrorUpsert(); // activity_logs error
+    stubErrorUpsert(); // security_audit_log error
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const receiptInserts = findAllCallsContaining('INSERT INTO siem_delivery_receipts');
+    const params = receiptInserts[0][1] as unknown[];
+
+    // Single-source insert → 12 params, source slot at index 2.
+    assert({
+      given: 'a partial delivery whose prefix only contains activity_logs entries',
+      should: 'write exactly one receipt row',
+      actual: params.length,
+      expected: 12,
+    });
+
+    assert({
+      given: 'a partial delivery whose prefix only contains activity_logs entries',
+      should: 'tag the lone receipt with source=activity_logs',
+      actual: params[2],
+      expected: 'activity_logs',
+    });
+  });
+
+  it('zero-delivery failure does NOT emit any INSERT against siem_delivery_receipts', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_1', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 0);
+    stubSourceRows([]);
+
+    mockDeliverToSiemWithRetry.mockResolvedValue({
+      success: false,
+      entriesDelivered: 0,
+      error: 'HTTP 502: Bad Gateway',
+    });
+
+    // No cursor advance, no receipt write — only the two error upserts.
+    stubErrorUpsert();
+    stubErrorUpsert();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const receiptInserts = findAllCallsContaining('INSERT INTO siem_delivery_receipts');
+
+    assert({
+      given: 'a zero-delivery failure',
+      should: 'NOT emit any INSERT against siem_delivery_receipts',
+      actual: receiptInserts.length,
+      expected: 0,
+    });
+  });
+
+  it('receipt write happens AFTER cursor advance in the same worker run', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_1', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
+
+    stubBegin();
+    stubCursorAdvance();
+    stubReceiptWrite();
+    stubCommit();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const advanceIdx = findCallContaining('"deliveryCount" = $4');
+    const receiptIdx = findCallContaining('INSERT INTO siem_delivery_receipts');
+
+    assert({
+      given: 'a successful single-source delivery',
+      should: 'emit the receipt INSERT after the cursor advance UPSERT',
+      actual: advanceIdx >= 0 && receiptIdx > advanceIdx,
+      expected: true,
     });
   });
 });

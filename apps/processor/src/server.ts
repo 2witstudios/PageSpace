@@ -14,12 +14,17 @@ import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
-import { loadSiemConfig } from './services/siem-adapter';
+import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
 import { readCursorSnapshots } from './workers/siem-cursor-reader';
 import { readRecentReceipts } from './workers/siem-receipt-reader';
 import { getPoolForWorker } from './db';
+
+// Whitelist for the /siem/receipts endpoint, derived from the canonical
+// SIEM_SOURCES list so a third source added there cannot silently bypass
+// validation here.
+const SIEM_SOURCE_SET: ReadonlySet<string> = new Set(SIEM_SOURCES);
 
 // Load environment variables
 dotenv.config();
@@ -171,6 +176,100 @@ app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avata
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
 
+// ---------------------------------------------------------------------------
+// SIEM receipts query endpoint
+//
+// Forensic "did event X ship?" lookup against siem_delivery_receipts. Returns
+// deliveryId, ack state, and webhook status for any receipt whose [first,last]
+// timestamp range covers the queried entry — info-disclosure surface, so it
+// requires the same authenticateService + requireScope pipeline every other
+// processor route uses.
+//
+// The new `siem:read` scope must be granted on the service token before this
+// endpoint can be called.
+// ---------------------------------------------------------------------------
+
+/**
+ * Two literal parameterized statements, one per source. No template-string
+ * interpolation of table names — a future bug that loosens the whitelist
+ * cannot become a SQLi vector because there is no SQL-builder path to abuse.
+ */
+async function fetchEntryTimestamp(
+  client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  source: AuditLogSource,
+  entryId: string,
+): Promise<Date | string | null> {
+  const result = source === 'activity_logs'
+    ? await client.query('SELECT timestamp AS ts FROM activity_logs WHERE id = $1 LIMIT 1', [entryId])
+    : await client.query('SELECT timestamp AS ts FROM security_audit_log WHERE id = $1 LIMIT 1', [entryId]);
+
+  if (result.rows.length === 0) return null;
+  return (result.rows[0] as { ts: Date | string }).ts;
+}
+
+app.get('/siem/receipts', authenticateService, requireScope('siem:read'), async (req, res) => {
+  const source = typeof req.query.source === 'string' ? req.query.source : '';
+  const entryId = typeof req.query.entryId === 'string' ? req.query.entryId : '';
+
+  if (!entryId) {
+    return res.status(400).json({ error: 'entryId query parameter is required' });
+  }
+  if (!SIEM_SOURCE_SET.has(source)) {
+    return res.status(400).json({ error: `source must be one of: ${SIEM_SOURCES.join(', ')}` });
+  }
+
+  const sourceKey = source as AuditLogSource;
+
+  try {
+    const pool = getPoolForWorker();
+    const client = await pool.connect();
+    try {
+      // Two-stage lookup: resolve the entry's timestamp from its own source
+      // table (literal-switch SQL — no template interpolation), then find
+      // receipts whose [first, last] range covers it.
+      const entryTs = await fetchEntryTimestamp(client, sourceKey, entryId);
+
+      if (entryTs === null) {
+        return res.status(200).json({ entryId, source: sourceKey, receipts: [] });
+      }
+
+      const receiptsResult = await client.query(
+        `SELECT "deliveryId", "source", "deliveredAt", "webhookStatus", "ackReceivedAt", "entryCount"
+         FROM siem_delivery_receipts
+         WHERE "source" = $1
+           AND "firstEntryTimestamp" <= $2
+           AND "lastEntryTimestamp"  >= $2
+         ORDER BY "deliveredAt" DESC
+         LIMIT 10`,
+        [sourceKey, entryTs]
+      );
+
+      const receipts = receiptsResult.rows.map((row) => {
+        const r = row as Record<string, unknown>;
+        const deliveredAt = r.deliveredAt instanceof Date ? r.deliveredAt : new Date(String(r.deliveredAt));
+        const ackReceivedAt = r.ackReceivedAt
+          ? (r.ackReceivedAt instanceof Date ? r.ackReceivedAt : new Date(String(r.ackReceivedAt)))
+          : null;
+        return {
+          deliveryId: r.deliveryId as string,
+          source: r.source as AuditLogSource,
+          deliveredAt: deliveredAt.toISOString(),
+          webhookStatus: (r.webhookStatus as number | null) ?? null,
+          ackReceivedAt: ackReceivedAt ? ackReceivedAt.toISOString() : null,
+          entryCount: r.entryCount as number,
+        };
+      });
+
+      return res.status(200).json({ entryId, source: sourceKey, receipts });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('[siem-receipts] Query failed:', err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: 'Failed to query SIEM receipts' });
+  }
+});
+
 // Queue status endpoint
 app.get(
   '/api/queue/status',
@@ -204,13 +303,17 @@ app.get(
   }
 );
 
-// Default-deny catch-all for protected API routes
-// Any request to /api/* or /cache/* that wasn't matched by explicit routes above
-// MUST be rejected to prevent authorization bypass on unrecognized endpoints
+// Default-deny catch-all for protected routes
+// Any request to /api/*, /cache/*, or /siem/* that wasn't matched by an
+// explicit route above MUST be rejected to prevent authorization bypass on
+// unrecognized endpoints.
 app.use('/api', authenticateService, (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 app.use('/cache', authenticateService, (req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+app.use('/siem', authenticateService, (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
