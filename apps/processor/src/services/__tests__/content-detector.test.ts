@@ -53,12 +53,74 @@ const PDF_BYTES = Buffer.from(
   'binary',
 );
 
-function makeMachO(): Buffer {
-  const buf = Buffer.alloc(4096);
-  buf.writeUInt32LE(0xfeedfacf, 0);
-  buf.writeUInt32LE(0x01000007, 4);
-  buf.writeUInt32LE(0x00000003, 8);
-  buf.writeUInt32LE(0x00000002, 12);
+/**
+ * Build a minimal ELF64 executable fixture that Magika can classify as `elf`.
+ * The ELF header itself is only 64 bytes, but Magika's classifier looks at the
+ * first+last block of the file and expects a realistic distribution of bytes
+ * (load commands, program headers, text section contents). A header followed
+ * by 4KB of zero padding classifies as `iso` or `bin` because zero runs are
+ * the hallmark of sparse disk images, not executables.
+ *
+ * So we do two things:
+ *  - Emit a correct ELF64 header (e_ident + type/machine/version/entry/phoff/
+ *    shoff/flags/ehsize/phentsize/phnum/shentsize/shnum/shstrndx).
+ *  - Follow the header with a realistic-looking program payload: one PT_LOAD
+ *    program header, then pseudo-random bytes that simulate compiled machine
+ *    code. Random bytes have the same byte-frequency distribution as real
+ *    x86-64 text sections from the classifier's point of view.
+ */
+function makeElf64(): Buffer {
+  const payloadSize = 8192;
+  const buf = Buffer.alloc(64 + 56 + payloadSize);
+  let off = 0;
+
+  // e_ident
+  buf.writeUInt8(0x7f, off++); // EI_MAG0
+  buf.writeUInt8(0x45, off++); // 'E'
+  buf.writeUInt8(0x4c, off++); // 'L'
+  buf.writeUInt8(0x46, off++); // 'F'
+  buf.writeUInt8(2, off++);    // EI_CLASS = ELFCLASS64
+  buf.writeUInt8(1, off++);    // EI_DATA  = ELFDATA2LSB
+  buf.writeUInt8(1, off++);    // EI_VERSION
+  buf.writeUInt8(0, off++);    // EI_OSABI = System V
+  buf.writeUInt8(0, off++);    // EI_ABIVERSION
+  // 7 bytes EI_PAD — already zero
+  off = 16;
+
+  buf.writeUInt16LE(2, off); off += 2;       // e_type = ET_EXEC
+  buf.writeUInt16LE(0x3e, off); off += 2;    // e_machine = EM_X86_64
+  buf.writeUInt32LE(1, off); off += 4;       // e_version
+  buf.writeBigUInt64LE(0x400078n, off); off += 8; // e_entry
+  buf.writeBigUInt64LE(64n, off); off += 8;  // e_phoff — program headers right after ehdr
+  buf.writeBigUInt64LE(0n, off); off += 8;   // e_shoff
+  buf.writeUInt32LE(0, off); off += 4;       // e_flags
+  buf.writeUInt16LE(64, off); off += 2;      // e_ehsize
+  buf.writeUInt16LE(56, off); off += 2;      // e_phentsize
+  buf.writeUInt16LE(1, off); off += 2;       // e_phnum
+  buf.writeUInt16LE(0, off); off += 2;       // e_shentsize
+  buf.writeUInt16LE(0, off); off += 2;       // e_shnum
+  buf.writeUInt16LE(0, off); off += 2;       // e_shstrndx
+
+  // Program header (PT_LOAD)
+  off = 64;
+  buf.writeUInt32LE(1, off); off += 4;               // p_type = PT_LOAD
+  buf.writeUInt32LE(5, off); off += 4;               // p_flags = PF_R|PF_X
+  buf.writeBigUInt64LE(0n, off); off += 8;           // p_offset
+  buf.writeBigUInt64LE(0x400000n, off); off += 8;    // p_vaddr
+  buf.writeBigUInt64LE(0x400000n, off); off += 8;    // p_paddr
+  buf.writeBigUInt64LE(BigInt(64 + 56 + payloadSize), off); off += 8; // p_filesz
+  buf.writeBigUInt64LE(BigInt(64 + 56 + payloadSize), off); off += 8; // p_memsz
+  buf.writeBigUInt64LE(0x200000n, off); off += 8;    // p_align
+
+  // Fake text section — deterministic pseudo-random bytes so tests are stable.
+  // Using a simple LCG keyed off ELF so the byte distribution roughly matches
+  // compiled machine code rather than zero padding.
+  let state = 0x5eedbee5;
+  for (let i = 0; i < payloadSize; i++) {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    buf.writeUInt8(state & 0xff, 64 + 56 + i);
+  }
+
   return buf;
 }
 
@@ -66,7 +128,7 @@ const fixtures = {
   png: path.join(FIXTURE_DIR, 'sample.png'),
   python: path.join(FIXTURE_DIR, 'sample.py'),
   pdf: path.join(FIXTURE_DIR, 'sample.pdf'),
-  macho: path.join(FIXTURE_DIR, 'sample-macho.bin'),
+  elf: path.join(FIXTURE_DIR, 'sample-elf.bin'),
 };
 
 beforeAll(async () => {
@@ -74,7 +136,7 @@ beforeAll(async () => {
   await fs.writeFile(fixtures.png, PNG_BYTES);
   await fs.writeFile(fixtures.python, PYTHON_SOURCE, 'utf8');
   await fs.writeFile(fixtures.pdf, PDF_BYTES);
-  await fs.writeFile(fixtures.macho, makeMachO());
+  await fs.writeFile(fixtures.elf, makeElf64());
 });
 
 afterAll(async () => {
@@ -87,25 +149,26 @@ beforeEach(() => {
 });
 
 describe('detectContentType', () => {
-  it('given real fixtures on disk, classifies via the loaded magika model', async () => {
-    const [png, py, pdf, macho] = await Promise.all([
+  it('given real fixtures on disk, classifies each as its true type via the loaded magika model', async () => {
+    const [png, py, pdf, elf] = await Promise.all([
       detectContentType(fixtures.png),
       detectContentType(fixtures.python),
       detectContentType(fixtures.pdf),
-      detectContentType(fixtures.macho),
+      detectContentType(fixtures.elf),
     ]);
 
-    for (const result of [png, py, pdf, macho]) {
+    for (const result of [png, py, pdf, elf]) {
       expect(result.source).toBe('magika');
-      expect(typeof result.label).toBe('string');
-      expect(result.label.length).toBeGreaterThan(0);
-      expect(typeof result.mimeType).toBe('string');
-      expect(result.mimeType.length).toBeGreaterThan(0);
     }
 
+    // Each fixture must classify as its canonical label — this is what proves
+    // the DENIED_LABELS denylist would actually catch a renamed executable at
+    // upload time. If we loosen these expectations we lose the load-bearing
+    // evidence that Magika is working.
     expect(png.label).toBe('png');
     expect(py.label).toBe('python');
     expect(pdf.label).toBe('pdf');
+    expect(elf.label).toBe('elf');
   }, 15000);
 
   it('given a missing file path, returns the fallback shape without throwing', async () => {
