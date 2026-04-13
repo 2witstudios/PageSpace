@@ -13,7 +13,6 @@ import {
   verifyConnectionFingerprint,
   getConnectionFingerprint,
   validateMessageSize,
-  logSecurityEvent,
   isSecureConnection,
   validateIncomingMessageWithError,
   type IncomingMessage,
@@ -26,7 +25,7 @@ import {
   isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections
@@ -67,15 +66,14 @@ export async function UPGRADE(
   request: NextRequest
 ) {
   const requestUrl = request.url;
-  const clientIp =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
 
   // SECURITY CHECK 1: Verify secure connection in production
   if (!isSecureConnection(requestUrl, request)) {
-    logSecurityEvent('ws_insecure_connection_rejected', {
-      ip: clientIp,
-      url: requestUrl,
-      severity: 'error',
+    auditRequest(request, {
+      eventType: 'security.anomaly.detected',
+      resourceType: 'mcp_websocket',
+      riskScore: 0.7,
+      details: { originalEvent: 'ws_insecure_connection_rejected', url: requestUrl },
     });
     client.close(1008, 'Secure connection required');
     return;
@@ -84,10 +82,11 @@ export async function UPGRADE(
   // SECURITY CHECK 2: Extract and validate opaque token from Authorization header
   const authHeader = request.headers.get('authorization');
   if (!authHeader?.startsWith('Bearer ')) {
-    logSecurityEvent('ws_authentication_failed', {
-      ip: clientIp,
-      severity: 'warn',
-      reason: 'Missing Authorization header',
+    auditRequest(request, {
+      eventType: 'auth.login.failure',
+      resourceType: 'mcp_websocket',
+      riskScore: 0.3,
+      details: { originalEvent: 'ws_authentication_failed', reason: 'Missing Authorization header' },
     });
     client.close(1008, 'Authorization required');
     return;
@@ -100,20 +99,22 @@ export async function UPGRADE(
   try {
     claims = await sessionService.validateSession(token);
   } catch (error) {
-    logSecurityEvent('ws_session_validation_error', {
-      ip: clientIp,
-      severity: 'error',
-      error: error instanceof Error ? error.message : String(error),
+    auditRequest(request, {
+      eventType: 'auth.login.failure',
+      resourceType: 'mcp_websocket',
+      riskScore: 0.3,
+      details: { originalEvent: 'ws_session_validation_error', error: error instanceof Error ? error.message : String(error) },
     });
     client.close(1008, 'Authentication error');
     return;
   }
 
   if (!claims) {
-    logSecurityEvent('ws_authentication_failed', {
-      ip: clientIp,
-      severity: 'warn',
-      reason: 'Invalid or expired session token',
+    auditRequest(request, {
+      eventType: 'auth.login.failure',
+      resourceType: 'mcp_websocket',
+      riskScore: 0.3,
+      details: { originalEvent: 'ws_authentication_failed', reason: 'Invalid or expired session token' },
     });
     client.close(1008, 'Invalid or expired token');
     return;
@@ -123,11 +124,12 @@ export async function UPGRADE(
 
   // SECURITY CHECK 3: Verify scope allows MCP operations
   if (!claims.scopes.includes('mcp:*') && !claims.scopes.includes('*')) {
-    logSecurityEvent('ws_insufficient_permissions', {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
       userId,
-      ip: clientIp,
-      severity: 'warn',
-      scopes: claims.scopes,
+      resourceType: 'mcp_websocket',
+      riskScore: 0.5,
+      details: { originalEvent: 'ws_insufficient_permissions', scopes: claims.scopes },
     });
     client.close(1008, 'Insufficient permissions');
     return;
@@ -144,24 +146,16 @@ export async function UPGRADE(
   // Mark as verified immediately - session service already validated the token
   markChallengeVerified(client);
 
-  logSecurityEvent('ws_connection_established', {
-    userId,
-    sessionId: claims.sessionId,
-    ip: clientIp,
-    severity: 'info',
-    fingerprint: fingerprint.substring(0, 16) + '...',
-  });
-
-  securityAudit.logEvent({
+  // Fingerprint is intentionally NOT embedded in audit details — it is a
+  // stable, client-linkable pseudonym (hash of IP+UA) that would persist in
+  // the tamper-evident audit chain and resist GDPR erasure requests.
+  auditRequest(request, {
     eventType: 'auth.session.created',
     userId,
     sessionId: claims.sessionId,
     resourceType: 'mcp_websocket',
-  }).catch((error) => {
-    loggers.security.warn('[MCP-WS] audit log failed', {
-      error: error instanceof Error ? error.message : String(error),
-      userId,
-    });
+    riskScore: 0,
+    details: { originalEvent: 'ws_connection_established' },
   });
 
   // Send welcome message (no challenge needed - session service did the auth)
@@ -179,11 +173,12 @@ export async function UPGRADE(
       // SECURITY CHECK 5: Validate message size
       const sizeValidation = validateMessageSize(data);
       if (!sizeValidation.valid) {
-        logSecurityEvent('ws_message_too_large', {
+        auditRequest(request, {
+          eventType: 'security.anomaly.detected',
           userId,
-          size: sizeValidation.size,
-          maxSize: sizeValidation.maxSize,
-          severity: 'warn',
+          resourceType: 'mcp_websocket',
+          riskScore: 0.3,
+          details: { originalEvent: 'ws_message_too_large', size: sizeValidation.size, maxSize: sizeValidation.maxSize },
         });
         client.send(
           JSON.stringify({
@@ -200,10 +195,12 @@ export async function UPGRADE(
       try {
         parsedData = JSON.parse(data.toString());
       } catch (error) {
-        logSecurityEvent('ws_message_json_parse_error', {
+        auditRequest(request, {
+          eventType: 'security.anomaly.detected',
           userId,
-          error: error instanceof Error ? error.message : String(error),
-          severity: 'warn',
+          resourceType: 'mcp_websocket',
+          riskScore: 0.3,
+          details: { originalEvent: 'ws_message_json_parse_error', error: error instanceof Error ? error.message : String(error) },
         });
         client.send(
           JSON.stringify({
@@ -219,11 +216,12 @@ export async function UPGRADE(
       const validationResult = validateIncomingMessageWithError(parsedData);
 
       if (!validationResult.success) {
-        logSecurityEvent('ws_message_validation_failed', {
+        auditRequest(request, {
+          eventType: 'security.anomaly.detected',
           userId,
-          error: validationResult.error,
-          issues: validationResult.issues,
-          severity: 'warn',
+          resourceType: 'mcp_websocket',
+          riskScore: 0.3,
+          details: { originalEvent: 'ws_message_validation_failed', error: validationResult.error, issues: validationResult.issues },
         });
         client.send(
           JSON.stringify({
@@ -243,10 +241,12 @@ export async function UPGRADE(
         // SECURITY CHECK 6: Verify connection fingerprint on ping to detect session hijacking
         const currentFingerprint = getConnectionFingerprint(request);
         if (!verifyConnectionFingerprint(client, currentFingerprint)) {
-          logSecurityEvent('ws_fingerprint_mismatch', {
+          auditRequest(request, {
+            eventType: 'security.anomaly.detected',
             userId,
-            severity: 'critical',
-            reason: 'Connection fingerprint changed - possible session hijacking',
+            resourceType: 'mcp_websocket',
+            riskScore: 0.7,
+            details: { originalEvent: 'ws_fingerprint_mismatch', reason: 'Connection fingerprint changed - possible session hijacking' },
           });
           client.send(
             JSON.stringify({
@@ -269,11 +269,12 @@ export async function UPGRADE(
         const health = checkConnectionHealth(client);
 
         if (!health.isHealthy) {
-          logSecurityEvent('ws_unhealthy_connection_tool_attempt', {
+          auditRequest(request, {
+            eventType: 'security.anomaly.detected',
             userId,
-            reason: health.reason,
-            readyState: health.readyState,
-            severity: 'warn',
+            resourceType: 'mcp_websocket',
+            riskScore: 0.5,
+            details: { originalEvent: 'ws_unhealthy_connection_tool_attempt', reason: health.reason, readyState: health.readyState },
           });
           client.send(
             JSON.stringify({
@@ -286,29 +287,17 @@ export async function UPGRADE(
         }
       }
 
-      // Handle tool execution responses
+      // Handle tool execution responses (protocol-level ack, not audited)
       if (isToolResultMessage(message)) {
-        logSecurityEvent('ws_tool_execution_result', {
-          userId,
-          requestId: message.id,
-          success: message.success,
-          severity: 'info',
-        });
-
         const mcpBridge = getMCPBridge();
         mcpBridge.handleToolResponse(message);
         return;
       }
 
       // Handle fetch bridge responses (desktop proxying HTTP for local AI providers)
+      // These are protocol-level transport events, not audit events
       if (isFetchBridgeInitialized()) {
         if (isFetchResponseStartMessage(message)) {
-          logSecurityEvent('ws_fetch_response_start', {
-            userId,
-            requestId: message.id,
-            status: message.status,
-            severity: 'info',
-          });
           getFetchBridge().handleResponseStart(message);
           return;
         }
@@ -321,11 +310,14 @@ export async function UPGRADE(
           return;
         }
         if (isFetchResponseErrorMessage(message)) {
-          logSecurityEvent('ws_fetch_response_error', {
+          // Fetch errors are typically network/provider issues, not security events.
+          // Log at low risk so they don't inflate anomaly signals.
+          auditRequest(request, {
+            eventType: 'security.anomaly.detected',
             userId,
-            requestId: message.id,
-            error: message.error,
-            severity: 'warn',
+            resourceType: 'mcp_websocket',
+            riskScore: 0.1,
+            details: { originalEvent: 'ws_fetch_response_error', requestId: message.id, error: message.error },
           });
           getFetchBridge().handleResponseError(message);
           return;
@@ -334,10 +326,12 @@ export async function UPGRADE(
 
       // Note: Unknown message types are now caught by Zod validation above
     } catch (error) {
-      logSecurityEvent('ws_message_parse_error', {
+      auditRequest(request, {
+        eventType: 'security.anomaly.detected',
         userId,
-        error: error instanceof Error ? error.message : String(error),
-        severity: 'error',
+        resourceType: 'mcp_websocket',
+        riskScore: 0.3,
+        details: { originalEvent: 'ws_message_parse_error', error: error instanceof Error ? error.message : String(error) },
       });
       client.send(
         JSON.stringify({
@@ -350,34 +344,37 @@ export async function UPGRADE(
 
   // Handle client disconnect
   client.on('close', (code, reason) => {
-    // Check before unregister — if another socket replaced this one, don't cancel its fetches
-    const isActiveConnection = getConnection(userId) === client;
-
-    logSecurityEvent('ws_connection_closed', {
-      userId,
-      code,
-      reason: reason.toString(),
-      severity: 'info',
-    });
+    // Only audit abnormal closes. Normal closes (1000 = clean, 1001 = going away)
+    // are routine transport-level lifecycle events, not security events — auditing
+    // them would pollute forensics with noise.
+    const isNormalClose = code === 1000 || code === 1001;
+    if (!isNormalClose) {
+      auditRequest(request, {
+        eventType: 'security.anomaly.detected',
+        userId,
+        resourceType: 'mcp_websocket',
+        riskScore: 0.3,
+        details: { originalEvent: 'ws_connection_closed', code, reason: reason.toString() },
+      });
+    }
 
     // Clean up resources — only cancel fetch-bridge requests if this socket
     // is still the active connection (prevents stale socket from canceling
-    // in-flight requests after a reconnect)
+    // in-flight requests after a reconnect).
     if (isFetchBridgeInitialized() && getConnection(userId) === client) {
       getFetchBridge().cancelUserRequests(userId);
     }
     unregisterConnection(userId, client);
-    if (isActiveConnection) {
-      getFetchBridge().cancelUserRequests(userId);
-    }
   });
 
   // Handle errors
   client.on('error', (error) => {
-    logSecurityEvent('ws_error', {
+    auditRequest(request, {
+      eventType: 'security.anomaly.detected',
       userId,
-      error: error instanceof Error ? error.message : String(error),
-      severity: 'error',
+      resourceType: 'mcp_websocket',
+      riskScore: 0.3,
+      details: { originalEvent: 'ws_error', error: error instanceof Error ? error.message : String(error) },
     });
   });
 }
