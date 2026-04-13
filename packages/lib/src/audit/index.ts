@@ -17,8 +17,6 @@ export {
   auditSecurityEvent,
 } from './security-audit-adapter';
 
-export { auditSafe } from './audit-safe';
-
 export { audit, auditRequest } from './audit-log';
 
 export { queryAuditEvents } from './audit-query';
