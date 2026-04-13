@@ -14,7 +14,7 @@ import {
   loadActivityLogHashableFields,
   loadSecurityAuditHashableFields,
 } from './siem-anchor-loader';
-import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
+import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from '../services/siem-sources';
 
 /**
  * SIEM chain-verification preflight — the impure DB-facing orchestration.
@@ -70,8 +70,6 @@ export interface PreflightDbError {
 
 export type PreflightResult = PreflightHalt | PreflightDbError;
 
-const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log'] as const;
-
 /**
  * Run chain verification across every source represented in the merged batch.
  *
@@ -79,7 +77,7 @@ const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log
  *   - Returns `null` if verification passes for every source (delivery
  *     proceeds).
  *   - Returns a PreflightHalt if any source's sub-batch fails. Sources are
- *     checked in SOURCES order so diagnostics are stable across runs.
+ *     checked in SIEM_SOURCES order so diagnostics are stable across runs.
  *   - Sources whose cursor is still at CURSOR_INIT_SENTINEL are SKIPPED —
  *     the worker never delivers a batch whose anchor hash it can't recover
  *     without also running verification against that anchor, so we trust
@@ -95,14 +93,14 @@ export async function runChainPreflight(
   merged: readonly AuditLogEntry[]
 ): Promise<PreflightResult | null> {
   const bySource = new Map<AuditLogSource, AuditLogEntry[]>();
-  for (const source of SOURCES) {
+  for (const source of SIEM_SOURCES) {
     bySource.set(source, []);
   }
   for (const entry of merged) {
     bySource.get(entry.source)?.push(entry);
   }
 
-  for (const source of SOURCES) {
+  for (const source of SIEM_SOURCES) {
     const entries = bySource.get(source) ?? [];
     if (entries.length === 0) continue;
 

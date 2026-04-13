@@ -63,7 +63,8 @@ vi.mock('@pagespace/lib/audit', () => ({
   notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
 }));
 
-import { processSiemDelivery, SOURCES } from '../siem-delivery-worker';
+import { processSiemDelivery } from '../siem-delivery-worker';
+import { SIEM_SOURCES } from '../../services/siem-sources';
 import type { AuditLogSource } from '../../services/siem-adapter';
 
 const WEBHOOK_CONFIG = {
@@ -1408,12 +1409,12 @@ describe('processSiemDelivery', () => {
     });
   });
 
-  it('SOURCES constant is typed as AuditLogSource[] and contains both sources', () => {
+  it('SIEM_SOURCES constant is typed as AuditLogSource[] and contains both sources', () => {
     const expected: AuditLogSource[] = ['activity_logs', 'security_audit_log'];
     assert({
-      given: 'the exported SOURCES constant',
+      given: 'the exported SIEM_SOURCES constant',
       should: 'equal the two known AuditLogSource values in order',
-      actual: [...SOURCES],
+      actual: [...SIEM_SOURCES],
       expected,
     });
   });

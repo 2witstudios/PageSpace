@@ -59,6 +59,7 @@ export {
   activityChangeGroupTypeEnum,
   contentFormatEnum,
   siemDeliveryCursors,
+  siemDeliveryReceipts,
 } from './schema/monitoring';
 
 // Security audit logging re-exports

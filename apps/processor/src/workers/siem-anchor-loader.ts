@@ -3,7 +3,7 @@ import type {
   ActivityLogHashableFields,
   SecurityAuditHashableFields,
 } from '../services/siem-chain-hashers';
-import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
+import { CURSOR_INIT_SENTINEL } from '../services/siem-sources';
 
 /**
  * DB-side loaders for the SIEM chain verification preflight.
