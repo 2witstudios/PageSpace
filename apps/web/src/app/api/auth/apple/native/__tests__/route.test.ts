@@ -72,19 +72,10 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
+  auditRequest: vi.fn(),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
   }),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -120,7 +111,7 @@ import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { getClientIP } from '@/lib/auth';
-import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -614,12 +605,14 @@ describe('POST /api/auth/apple/native', () => {
     it('logs auth events on successful login', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'login',
-        'new-user-id',
-        'test@example.com',
-        '127.0.0.1',
-        'Apple OAuth Native (ios)'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-id',
+          sessionId: 'mock-session-id',
+          details: { method: 'Apple OAuth Native (ios)' },
+        })
       );
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
