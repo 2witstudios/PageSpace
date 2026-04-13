@@ -42,9 +42,9 @@ export async function POST(req: Request) {
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'passkey_csrf_invalid', flow: 'signup_options', email: normalizedEmail.substring(0, 3) + '***' },
-        riskScore: 0.5,
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'signup_options' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -62,8 +62,8 @@ export async function POST(req: Request) {
     if (!ipRateLimitResult.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: ipRateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_options_ip' },
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -81,8 +81,8 @@ export async function POST(req: Request) {
     if (!emailRateLimitResult.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'passkey_rate_limit_signup_email', email: normalizedEmail.substring(0, 3) + '***', retryAfter: emailRateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_options_email' },
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },

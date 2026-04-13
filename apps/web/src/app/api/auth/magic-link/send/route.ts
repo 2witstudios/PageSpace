@@ -33,9 +33,9 @@ export async function POST(req: Request) {
 
     if (!csrfTokenHeader || !csrfTokenCookie) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'magic_link_csrf_missing', hasHeader: !!csrfTokenHeader, hasCookie: !!csrfTokenCookie },
+        eventType: 'security.suspicious.activity',
         riskScore: 0.4,
+        details: { reason: 'magic_link_csrf_missing', hasHeader: !!csrfTokenHeader, hasCookie: !!csrfTokenCookie },
       });
       return Response.json(
         {
@@ -49,9 +49,9 @@ export async function POST(req: Request) {
 
     if (csrfTokenHeader !== csrfTokenCookie) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'magic_link_csrf_mismatch' },
-        riskScore: 0.5,
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_mismatch' },
       });
       return Response.json(
         {
@@ -65,9 +65,9 @@ export async function POST(req: Request) {
 
     if (!validateLoginCSRFToken(csrfTokenHeader)) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'magic_link_csrf_invalid' },
-        riskScore: 0.5,
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'magic_link_csrf_invalid' },
       });
       return Response.json(
         {
@@ -110,8 +110,8 @@ export async function POST(req: Request) {
     if (!ipRateLimit.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'magic_link_rate_limit_ip' },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_ip' },
       });
       return Response.json(
         {
@@ -132,8 +132,8 @@ export async function POST(req: Request) {
     if (!emailRateLimit.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'magic_link_rate_limit_email', email: maskEmail(normalizedEmail) },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'magic_link_rate_limit_email' },
       });
       return Response.json(
         {
@@ -166,11 +166,8 @@ export async function POST(req: Request) {
       if (result.error.code === 'USER_SUSPENDED') {
         auditRequest(req, {
           eventType: 'auth.login.failure',
-          details: {
-            attemptedUser: maskEmail(normalizedEmail),
-            reason: 'user_suspended',
-          },
           riskScore: 0.5,
+          details: { reason: 'magic_link_user_suspended' },
         });
         // Return success to prevent enumeration, but don't send email
         return Response.json({
@@ -190,11 +187,8 @@ export async function POST(req: Request) {
       loggers.auth.error('Magic link creation failed', { error: result.error });
       auditRequest(req, {
         eventType: 'auth.login.failure',
-        details: {
-          attemptedUser: maskEmail(normalizedEmail),
-          reason: `magic_link_${result.error.code.toLowerCase()}`,
-        },
         riskScore: 0.3,
+        details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
       });
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
@@ -221,7 +215,6 @@ export async function POST(req: Request) {
         eventType: 'auth.token.created',
         details: {
           tokenType: 'magic_link',
-          email: maskEmail(normalizedEmail),
           isNewUser: result.data.isNewUser,
         },
       });

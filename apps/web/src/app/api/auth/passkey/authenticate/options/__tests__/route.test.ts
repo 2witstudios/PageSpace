@@ -135,8 +135,8 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_options', retryAfter: 60 }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'passkey_rate_limit_options' }),
+          riskScore: 0.5,
         })
       );
     });
@@ -193,39 +193,25 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'authenticate_options' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'authenticate_options' }),
+          riskScore: 0.6,
         })
       );
     });
 
-    it('masks email in CSRF security event when email is provided', async () => {
+    it('does not leak email in CSRF audit details', async () => {
       vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
 
       await POST(createRequest({ csrfToken: 'bad', email: 'user@example.com' }));
 
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', email: 'use***' }),
-        })
+      const auditCall = vi.mocked(auditRequest).mock.calls.find(
+        ([, event]) =>
+          (event as { details?: { reason?: string } }).details?.reason === 'passkey_csrf_invalid'
       );
-    });
-
-    it('does not include email in CSRF security event when email is not provided', async () => {
-      vi.mocked(validateLoginCSRFToken).mockReturnValue(false);
-
-      await POST(createRequest({ csrfToken: 'bad' }));
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', email: undefined }),
-        })
-      );
+      expect(auditCall).toBeDefined();
+      const details = (auditCall![1] as { details: Record<string, unknown> }).details;
+      expect(details).not.toHaveProperty('email');
     });
   });
 

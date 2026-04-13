@@ -274,8 +274,8 @@ describe('POST /api/auth/passkey/authenticate', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_auth', retryAfter: 300 }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'passkey_rate_limit_auth' }),
+          riskScore: 0.5,
         })
       );
     });
@@ -327,9 +327,9 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'authenticate' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'authenticate' }),
+          riskScore: 0.6,
         })
       );
     });
@@ -403,7 +403,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'auth.login.failure',
-          details: expect.objectContaining({ attemptedUser: 'unknown', reason: 'passkey_auth_verification_failed' }),
+          details: expect.objectContaining({ reason: 'passkey_auth_verification_failed' }),
           riskScore: 0.3,
         })
       );

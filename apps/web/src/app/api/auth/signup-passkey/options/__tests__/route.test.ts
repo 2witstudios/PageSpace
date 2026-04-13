@@ -182,9 +182,9 @@ describe('POST /api/auth/signup-passkey/options', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'signup_options', email: 'use***' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup_options' }),
+          riskScore: 0.6,
         })
       );
     });
@@ -205,8 +205,8 @@ describe('POST /api/auth/signup-passkey/options', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: 3600 }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_options_ip' }),
+          riskScore: 0.5,
         })
       );
     });
@@ -226,8 +226,8 @@ describe('POST /api/auth/signup-passkey/options', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_email', email: 'use***' }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_options_email' }),
+          riskScore: 0.5,
         })
       );
     });

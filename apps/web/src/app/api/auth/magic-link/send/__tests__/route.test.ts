@@ -138,8 +138,8 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'magic_link_csrf_missing' }),
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_missing' }),
           riskScore: 0.4,
         })
       );
@@ -178,9 +178,9 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'magic_link_csrf_mismatch' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_mismatch' }),
+          riskScore: 0.6,
         })
       );
     });
@@ -198,9 +198,9 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'magic_link_csrf_invalid' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_csrf_invalid' }),
+          riskScore: 0.6,
         })
       );
     });
@@ -263,8 +263,8 @@ describe('POST /api/auth/magic-link/send', () => {
         request,
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'magic_link_rate_limit_ip' }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'magic_link_rate_limit_ip' }),
+          riskScore: 0.5,
         })
       );
     });
@@ -285,8 +285,8 @@ describe('POST /api/auth/magic-link/send', () => {
         request,
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'magic_link_rate_limit_email', email: 'te***@example.com' }),
-          riskScore: 0.4,
+          details: expect.objectContaining({ reason: 'magic_link_rate_limit_email' }),
+          riskScore: 0.5,
         })
       );
     });
@@ -353,8 +353,7 @@ describe('POST /api/auth/magic-link/send', () => {
         expect.objectContaining({
           eventType: 'auth.login.failure',
           details: expect.objectContaining({
-            attemptedUser: 'te***@example.com',
-            reason: 'user_suspended',
+            reason: 'magic_link_user_suspended',
           }),
           riskScore: 0.5,
         })
@@ -450,7 +449,7 @@ describe('POST /api/auth/magic-link/send', () => {
           eventType: 'auth.token.created',
           details: expect.objectContaining({
             tokenType: 'magic_link',
-            email: 'te***@example.com',
+            isNewUser: false,
           }),
         })
       );

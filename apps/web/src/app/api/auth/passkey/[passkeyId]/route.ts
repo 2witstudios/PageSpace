@@ -43,10 +43,10 @@ export async function DELETE(
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
         auditRequest(req, {
-          eventType: 'security.anomaly.detected',
+          eventType: 'security.suspicious.activity',
           userId,
-          details: { originalEvent: 'passkey_csrf_invalid', passkeyId, flow: 'delete' },
-          riskScore: 0.5,
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'delete', passkeyId },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -137,10 +137,10 @@ export async function PATCH(
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
         auditRequest(req, {
-          eventType: 'security.anomaly.detected',
+          eventType: 'security.suspicious.activity',
           userId,
-          details: { originalEvent: 'passkey_csrf_invalid', passkeyId, flow: 'update' },
-          riskScore: 0.5,
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'update', passkeyId },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },

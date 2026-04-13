@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -51,11 +51,8 @@ export async function GET(req: Request) {
       });
       auditRequest(req, {
         eventType: 'auth.login.failure',
-        details: {
-          attemptedUser: 'unknown',
-          reason: `magic_link_${result.error.code.toLowerCase()}`,
-        },
         riskScore: 0.3,
+        details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
       });
 
       return redirectWithError(errorCode);
@@ -164,7 +161,12 @@ export async function GET(req: Request) {
             desktopRedirectUrl.searchParams.set('welcome', 'true');
           }
 
-          logAuthEvent('magic_link_login', userId, undefined, clientIP);
+          auditRequest(req, {
+            eventType: 'auth.login.success',
+            userId,
+            sessionId: sessionClaims.sessionId,
+            details: { method: 'magic_link', platform: 'desktop' },
+          });
           trackAuthEvent(userId, 'magic_link_login', {
             ip: clientIP,
             isNewUser,
@@ -173,11 +175,6 @@ export async function GET(req: Request) {
           });
 
           loggers.auth.info('Magic link login successful (desktop)', { userId, ip: clientIP });
-          auditRequest(req, {
-            eventType: 'auth.login.success',
-            userId,
-            sessionId: sessionClaims.sessionId,
-          });
 
           const headers = new Headers();
           appendSessionCookie(headers, sessionToken);
@@ -197,7 +194,6 @@ export async function GET(req: Request) {
     }
 
     // Log auth event
-    logAuthEvent('magic_link_login', userId, undefined, clientIP);
     trackAuthEvent(userId, 'magic_link_login', {
       ip: clientIP,
       isNewUser,
@@ -236,15 +232,16 @@ export async function GET(req: Request) {
     const secureFlag = isProduction ? '; Secure' : '';
     headers.append('Set-Cookie', `csrf_token=${csrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
 
-    loggers.auth.info('Magic link login successful', {
-      userId,
-      isNewUser,
-      ip: clientIP,
-    });
     auditRequest(req, {
       eventType: 'auth.login.success',
       userId,
       sessionId: sessionClaims.sessionId,
+      details: { method: 'magic_link' },
+    });
+    loggers.auth.info('Magic link login successful', {
+      userId,
+      isNewUser,
+      ip: clientIP,
     });
 
     return NextResponse.redirect(redirectUrl.toString(), {

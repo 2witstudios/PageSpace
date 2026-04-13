@@ -176,9 +176,9 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'delete' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'delete' }),
+          riskScore: 0.6,
         })
       );
     });
@@ -348,9 +348,9 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'update' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'update' }),
+          riskScore: 0.6,
         })
       );
     });

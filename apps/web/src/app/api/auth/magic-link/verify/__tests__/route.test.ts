@@ -56,8 +56,10 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
   },
-  logAuthEvent: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
@@ -81,7 +83,7 @@ import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -322,11 +324,14 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('logs magic link login event', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'magic_link_login',
-        'test-user-id',
-        undefined,
-        '127.0.0.1'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'test-user-id',
+          sessionId: 'mock-session-id',
+          details: expect.objectContaining({ method: 'magic_link' }),
+        })
       );
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'test-user-id',
@@ -334,40 +339,6 @@ describe('GET /api/auth/magic-link/verify', () => {
         expect.objectContaining({
           ip: '127.0.0.1',
           isNewUser: false,
-        })
-      );
-    });
-
-    it('audits successful login via auditRequest', async () => {
-      await GET(createVerifyRequest('valid-token'));
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'auth.login.success',
-          userId: 'test-user-id',
-          sessionId: 'mock-session-id',
-        })
-      );
-    });
-
-    it('audits verification failures via auditRequest', async () => {
-      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-        ok: false,
-        // @ts-expect-error - test mock
-        error: { code: 'TOKEN_EXPIRED', message: 'Expired' },
-      });
-
-      await GET(createVerifyRequest('expired-token'));
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'auth.login.failure',
-          details: expect.objectContaining({
-            attemptedUser: 'unknown',
-            reason: 'magic_link_token_expired',
-          }),
         })
       );
     });

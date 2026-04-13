@@ -59,8 +59,10 @@ vi.mock('@pagespace/lib/verification-utils', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    security: {
+      warn: vi.fn(),
+    },
   },
-  logAuthEvent: vi.fn(),
   auditRequest: vi.fn(),
 }));
 

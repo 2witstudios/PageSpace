@@ -58,7 +58,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
@@ -167,8 +167,10 @@ export async function POST(req: Request) {
       loggers.auth.warn('Google ID token verification failed', {
         error: verificationResult.error,
       });
-      securityAudit.logAuthFailure('unknown', clientIP, 'mobile_google_verify_failed').catch((error) => {
-        loggers.security.warn('[MobileGoogleExchange] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'mobile_google_verify_failed' },
       });
 
       // Track failed OAuth attempt
@@ -290,9 +292,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Log successful OAuth login
-    logAuthEvent('login', user.id, user.email, clientIP, 'Google OAuth Mobile');
-
     // Track successful OAuth login
     trackAuthEvent(user.id, 'login', {
       email: user.email,
@@ -305,8 +304,11 @@ export async function POST(req: Request) {
 
     // Generate CSRF token using session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
-    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[MobileGoogleExchange] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'Google OAuth Mobile' },
     });
 
     // Return tokens in JSON response for mobile client
@@ -340,8 +342,10 @@ export async function POST(req: Request) {
     return Response.json(response, { status: 200, headers });
   } catch (error) {
     loggers.auth.error('Mobile Google OAuth error', error as Error);
-    securityAudit.logAuthFailure('unknown', getClientIP(req), 'mobile_google_exchange_error').catch((auditError) => {
-      loggers.security.warn('[MobileGoogleExchange] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'mobile_google_exchange_error' },
     });
 
     // Track failed OAuth attempt

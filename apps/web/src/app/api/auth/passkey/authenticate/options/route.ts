@@ -34,8 +34,8 @@ export async function POST(req: Request) {
     if (!rateLimitResult.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'passkey_rate_limit_options', retryAfter: rateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'passkey_rate_limit_options' },
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
@@ -59,9 +59,9 @@ export async function POST(req: Request) {
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'passkey_csrf_invalid', flow: 'authenticate_options', email: email ? email.substring(0, 3) + '***' : undefined },
-        riskScore: 0.5,
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'authenticate_options' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },

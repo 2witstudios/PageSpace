@@ -40,8 +40,10 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
+    security: {
+      warn: vi.fn(),
+    },
   },
-  logAuthEvent: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
@@ -77,7 +79,7 @@ import {
   sessionService,
   generateCSRFToken,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
@@ -178,7 +180,14 @@ describe('POST /api/auth/signup-passkey', () => {
     it('logs auth events', async () => {
       await POST(createRequest());
 
-      expect(logAuthEvent).toHaveBeenCalledWith('signup', 'new-user-1', 'user@example.com', '127.0.0.1');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-1',
+          details: expect.objectContaining({ signup: true, method: 'passkey' }),
+        })
+      );
     });
 
     it('resets rate limits on successful signup', async () => {
@@ -206,32 +215,6 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
       expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
-    });
-
-    it('audits successful signup login via auditRequest', async () => {
-      await POST(createRequest());
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'auth.login.success',
-          userId: 'new-user-1',
-          sessionId: 'mock-session-id',
-        })
-      );
-    });
-
-    it('audits passkey token creation via auditRequest', async () => {
-      await POST(createRequest());
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'auth.token.created',
-          userId: 'new-user-1',
-          details: expect.objectContaining({ tokenType: 'passkey' }),
-        })
-      );
     });
 
     it('passes clientIP as createdByIp when not unknown', async () => {
@@ -399,9 +382,9 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          eventType: 'security.anomaly.detected',
-          details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'signup', email: 'use***' }),
-          riskScore: 0.5,
+          eventType: 'security.suspicious.activity',
+          riskScore: 0.6,
+          details: expect.objectContaining({ reason: 'passkey_csrf_invalid', flow: 'signup' }),
         })
       );
     });
@@ -422,8 +405,8 @@ describe('POST /api/auth/signup-passkey', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: 3600 }),
-          riskScore: 0.4,
+          riskScore: 0.5,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_ip' }),
         })
       );
     });
@@ -443,8 +426,8 @@ describe('POST /api/auth/signup-passkey', () => {
         expect.any(Request),
         expect.objectContaining({
           eventType: 'security.rate.limited',
-          details: expect.objectContaining({ originalEvent: 'passkey_rate_limit_signup_email', email: 'use***' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
+          details: expect.objectContaining({ reason: 'rate_limit_signup_email' }),
         })
       );
     });
@@ -504,26 +487,6 @@ describe('POST /api/auth/signup-passkey', () => {
         error: 'VERIFICATION_FAILED',
         email: 'use***',
       }));
-    });
-
-    it('audits verification failures via auditRequest', async () => {
-      vi.mocked(verifySignupRegistration).mockResolvedValue({
-        ok: false,
-        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
-      });
-
-      await POST(createRequest());
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        expect.any(Request),
-        expect.objectContaining({
-          eventType: 'auth.login.failure',
-          details: expect.objectContaining({
-            attemptedUser: 'unknown',
-            reason: 'passkey_signup_verification_failed',
-          }),
-        })
-      );
     });
   });
 

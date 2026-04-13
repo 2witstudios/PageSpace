@@ -79,16 +79,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
@@ -130,7 +121,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { validateOrCreateDeviceToken, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -243,14 +234,6 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
 
-    // Re-setup securityAudit mocks after resetAllMocks
-    vi.mocked(securityAudit.logAuthSuccess).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logAuthFailure).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logTokenCreated).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logTokenRevoked).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logDataAccess).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
-    vi.mocked(securityAudit.logLogout).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -385,12 +368,14 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'login',
-        mockNewUser.id,
-        'test@example.com',
-        '127.0.0.1',
-        'Google OAuth Native (ios)'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: mockNewUser.id,
+          sessionId: 'mock-session-id',
+          details: { method: 'Google OAuth Native (ios)' },
+        })
       );
 
       expect(trackAuthEvent).toHaveBeenCalledWith(

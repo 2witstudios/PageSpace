@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -62,9 +62,9 @@ export async function POST(req: Request) {
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
-        eventType: 'security.anomaly.detected',
-        details: { originalEvent: 'passkey_csrf_invalid', flow: 'signup', email: email.substring(0, 3) + '***' },
-        riskScore: 0.5,
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'signup' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -82,8 +82,8 @@ export async function POST(req: Request) {
     if (!ipRateLimitResult.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'passkey_rate_limit_signup_ip', retryAfter: ipRateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_ip' },
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -101,8 +101,8 @@ export async function POST(req: Request) {
     if (!emailRateLimitResult.allowed) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
-        details: { originalEvent: 'passkey_rate_limit_signup_email', email: email.substring(0, 3) + '***', retryAfter: emailRateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_email' },
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
@@ -139,11 +139,8 @@ export async function POST(req: Request) {
       });
       auditRequest(req, {
         eventType: 'auth.login.failure',
-        details: {
-          attemptedUser: 'unknown',
-          reason: `passkey_signup_${result.error.code.toLowerCase()}`,
-        },
         riskScore: 0.3,
+        details: { reason: `passkey_signup_${result.error.code.toLowerCase()}` },
       });
 
       return NextResponse.json(
@@ -171,8 +168,6 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }
 
-    // Log auth events
-    logAuthEvent('signup', userId, email, clientIP);
     loggers.auth.info('Passkey signup successful', { userId, email: email.substring(0, 3) + '***', name });
 
     // Reset rate limits on successful signup
@@ -240,19 +235,20 @@ export async function POST(req: Request) {
       }
     }
 
-    loggers.auth.info('Passkey signup session created', {
-      userId,
-      ip: clientIP,
-    });
     auditRequest(req, {
       eventType: 'auth.login.success',
       userId,
       sessionId: sessionClaims.sessionId,
+      details: { signup: true, method: 'passkey' },
     });
     auditRequest(req, {
       eventType: 'auth.token.created',
       userId,
       details: { tokenType: 'passkey' },
+    });
+    loggers.auth.info('Passkey signup session created', {
+      userId,
+      ip: clientIP,
     });
 
     // Build response headers with session cookie

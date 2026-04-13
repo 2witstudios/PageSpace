@@ -37,10 +37,10 @@ export async function POST(req: Request) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
         auditRequest(req, {
-          eventType: 'security.anomaly.detected',
+          eventType: 'security.suspicious.activity',
           userId,
-          details: { originalEvent: 'passkey_csrf_invalid', flow: 'register_options' },
-          riskScore: 0.5,
+          riskScore: 0.6,
+          details: { reason: 'passkey_csrf_invalid', flow: 'register_options' },
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -60,8 +60,8 @@ export async function POST(req: Request) {
       auditRequest(req, {
         eventType: 'security.rate.limited',
         userId,
-        details: { originalEvent: 'passkey_rate_limit_register', retryAfter: rateLimitResult.retryAfter },
-        riskScore: 0.4,
+        riskScore: 0.5,
+        details: { reason: 'passkey_rate_limit_register' },
       });
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
