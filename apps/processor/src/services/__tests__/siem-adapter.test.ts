@@ -1024,4 +1024,61 @@ describe('deliverToSiemWithRetry', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it('retries only the undelivered tail after a partial batched failure', async () => {
+    vi.useFakeTimers();
+    const config: SiemConfig = {
+      enabled: true,
+      type: 'webhook',
+      // batchSize: 1 so each entry maps to its own fetch call — lets us
+      // observe exactly which entries get re-sent across retries
+      webhook: { url: 'https://example.com', secret: 'sec', batchSize: 1, retryAttempts: 3 },
+    };
+
+    const fetchMock = vi
+      .fn()
+      // Attempt 1: e1 ok, e2 fails retryable → batched returns entriesDelivered=1
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: vi.fn().mockResolvedValue('Server Error'),
+      })
+      // Attempt 2 begins with slice(1) = [e2, e3]: e2 ok, e3 ok → full success
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const entries = [
+      makeEntry({ id: 'e1' }),
+      makeEntry({ id: 'e2' }),
+      makeEntry({ id: 'e3' }),
+    ];
+
+    const resultPromise = deliverToSiemWithRetry(config, entries, 3);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(result.entriesDelivered).toBe(3);
+
+    // Exactly 4 fetch calls total — not 5. The old behavior would have
+    // re-sent e1 on attempt 2, which is the duplication this test pins against.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    // Confirm e1 was sent exactly once by inspecting request bodies
+    const bodies = fetchMock.mock.calls.map(
+      (call) => (call[1] as { body: string }).body
+    );
+    const e1Count = bodies.filter((body) => body.includes('"id":"e1"')).length;
+    const e2Count = bodies.filter((body) => body.includes('"id":"e2"')).length;
+    const e3Count = bodies.filter((body) => body.includes('"id":"e3"')).length;
+
+    expect(e1Count).toBe(1);
+    expect(e2Count).toBe(2); // failed on attempt 1, re-sent on attempt 2
+    expect(e3Count).toBe(1);
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 });

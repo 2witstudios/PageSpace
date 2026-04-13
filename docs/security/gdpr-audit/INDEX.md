@@ -21,13 +21,13 @@ produce these docs. Spec at [`tasks/gdpr-audit.md`](../../../tasks/gdpr-audit.md
 | 1 — DSR/retention | 5 | 6 | ~12 | — |
 | 2 — Consent/legal | — | 6 | 8 | 5 |
 | 3 — Processors | 3 | 10 | 9 | 2 |
-| 4 — Minimization/breach | 5 | 5 | 5 | — |
+| 4 — Minimization/breach | 4 | 5 | 5 | — |
 
 ## Load-bearing findings
 
 Four finding clusters block lawful EU operation today:
 
-1. **F4.13 + F4.15** — No breach detection, no incident model, no
+1. **Stream 4 F13 + F15** — No breach detection, no incident model, no
    notification runbook. A GDPR breach today could not be reported within
    72h as Art 33 requires.
 2. **F-17-2 + F-17-2-1..4** — Erasure cannot complete without manual
@@ -36,7 +36,7 @@ Four finding clusters block lawful EU operation today:
    (Art 17(2) violation).
 3. **F3.9 + F3.11** — No DPA register and no Art 30 record of processing
    exist anywhere in the repo or deploy repo.
-4. **F4.5b + F4.2** — Internal service-to-service traffic is plaintext
+4. **Stream 4 F5b + F2** — Internal service-to-service traffic is plaintext
    HTTP; onprem/tenant file storage has no application-layer encryption at
    rest.
 
