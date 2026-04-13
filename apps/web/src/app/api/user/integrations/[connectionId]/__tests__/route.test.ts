@@ -42,7 +42,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { audit } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 
 const mockUserId = 'user_123';
 const mockConnectionId = 'conn-1';
@@ -67,12 +67,14 @@ describe('DELETE /api/user/integrations/[connectionId] audit', () => {
   });
 
   it('logs token revoked audit event on successful integration deletion', async () => {
+    const request = new Request('http://localhost/api/user/integrations/conn-1', { method: 'DELETE' });
     await DELETE(
-      new Request('http://localhost/api/user/integrations/conn-1', { method: 'DELETE' }),
+      request,
       { params: Promise.resolve({ connectionId: mockConnectionId }) }
     );
 
-    expect(audit).toHaveBeenCalledWith(
+    expect(auditRequest).toHaveBeenCalledWith(
+      request,
       { eventType: 'auth.token.revoked', userId: mockUserId, details: { tokenType: 'integration', reason: 'user_disconnect' } }
     );
   });

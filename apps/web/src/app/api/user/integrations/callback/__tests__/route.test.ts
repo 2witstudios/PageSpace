@@ -59,7 +59,7 @@ const mockLoggers = vi.hoisted(() => ({
     debug: vi.fn(),
   },
 }));
-const mockAudit = vi.hoisted(() => vi.fn());
+const mockAuditRequest = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db', () => ({
   db: {},
@@ -67,8 +67,8 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
-  audit: mockAudit,
-  auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: mockAuditRequest,
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
@@ -164,7 +164,7 @@ describe('GET /api/user/integrations/callback', () => {
     mockUpdateConnectionCredentials.mockResolvedValue(undefined);
     mockUpdateConnectionStatus.mockResolvedValue(undefined);
     mockGetDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true });
-    mockAudit.mockReset();
+    mockAuditRequest.mockReset();
   });
 
   afterEach(() => {
@@ -572,7 +572,8 @@ describe('GET /api/user/integrations/callback', () => {
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
-      expect(mockAudit).toHaveBeenCalledWith(
+      expect(mockAuditRequest).toHaveBeenCalledWith(
+        request,
         { eventType: 'auth.token.created', userId: 'user-123', details: { tokenType: 'integration' } }
       );
     });
@@ -584,7 +585,8 @@ describe('GET /api/user/integrations/callback', () => {
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
-      expect(mockAudit).toHaveBeenCalledWith(
+      expect(mockAuditRequest).toHaveBeenCalledWith(
+        request,
         { eventType: 'auth.token.created', userId: 'user-123', details: { tokenType: 'integration' } }
       );
     });
@@ -594,7 +596,7 @@ describe('GET /api/user/integrations/callback', () => {
       const request = createCallbackRequest({ code: 'auth-code', state: 'invalid-state' });
       await GET(request);
 
-      expect(mockAudit).not.toHaveBeenCalled();
+      expect(mockAuditRequest).not.toHaveBeenCalled();
     });
   });
 
