@@ -1,6 +1,5 @@
 import type { NextRequest } from 'next/server';
 import { createHash } from 'crypto';
-import { logger } from '@pagespace/lib';
 
 /**
  * WebSocket Security Utilities
@@ -8,9 +7,10 @@ import { logger } from '@pagespace/lib';
  * Implements defense-in-depth security controls for WebSocket connections:
  * - Connection fingerprinting (IP + User-Agent hashing)
  * - Message size validation
- * - Security event logging
  *
- * Note: Authentication is now handled by session service (opaque tokens)
+ * Note: Authentication is now handled by session service (opaque tokens).
+ * Security event logging is handled by the centralized `audit()` pipeline
+ * from `@pagespace/lib/server`.
  */
 
 // ============================================================================
@@ -97,65 +97,6 @@ export function validateMessageSize(message: Buffer | ArrayBuffer | Buffer[] | s
   }
 
   return { valid: true };
-}
-
-// ============================================================================
-// SECURITY LOGGING
-// ============================================================================
-
-/**
- * Log security event (structured logging for SIEM integration)
- *
- * @param event - Security event type
- * @param details - Event details
- */
-export function logSecurityEvent(
-  event: string,
-  details: {
-    userId?: string;
-    ip?: string;
-    severity: 'info' | 'warn' | 'error' | 'critical';
-    [key: string]: unknown;
-  }
-): void {
-  // Extract severity for log level routing
-  const { severity, ...restDetails } = details;
-
-  // Create context for structured logging
-  const context = {
-    userId: details.userId,
-    ip: details.ip,
-    component: 'ws-security',
-    eventType: event,
-  };
-
-  // Build metadata excluding severity and context fields
-  const metadata: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(restDetails)) {
-    if (key !== 'userId' && key !== 'ip') {
-      metadata[key] = value;
-    }
-  }
-
-  // Create child logger with context
-  const securityLogger = logger.child(context);
-
-  // Route to appropriate log level using structured logger
-  switch (severity) {
-    case 'critical':
-      securityLogger.fatal(`WebSocket Security Event: ${event}`, metadata);
-      break;
-    case 'error':
-      securityLogger.error(`WebSocket Security Event: ${event}`, metadata);
-      break;
-    case 'warn':
-      securityLogger.warn(`WebSocket Security Event: ${event}`, metadata);
-      break;
-    case 'info':
-    default:
-      securityLogger.info(`WebSocket Security Event: ${event}`, metadata);
-      break;
-  }
 }
 
 // ============================================================================
