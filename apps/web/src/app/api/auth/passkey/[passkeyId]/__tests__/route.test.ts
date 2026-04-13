@@ -22,20 +22,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
   auditRequest: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -130,6 +118,21 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
         userId: 'user-1',
         passkeyId: 'test-passkey-id',
       }));
+    });
+
+    it('audits passkey token revocation on success', async () => {
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
+
+      await DELETE(createDeleteRequest(), createContext());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.token.revoked',
+          userId: 'user-1',
+          details: expect.objectContaining({ tokenType: 'passkey', reason: 'user_deleted' }),
+        })
+      );
     });
   });
 

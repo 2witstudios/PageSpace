@@ -44,20 +44,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
   auditRequest: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -232,6 +220,19 @@ describe('POST /api/auth/passkey/authenticate', () => {
       }));
     });
 
+    it('audits successful passkey login', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'user-1',
+          sessionId: 'mock-session-id',
+        })
+      );
+    });
+
     it('does not include Secure flag in non-production', async () => {
       vi.stubEnv('NODE_ENV', 'test');
 
@@ -388,6 +389,24 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey authentication failed', expect.objectContaining({
         error: 'VERIFICATION_FAILED',
       }));
+    });
+
+    it('audits auth failure on verification error', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ attemptedUser: 'unknown', reason: 'passkey_auth_verification_failed' }),
+          riskScore: 0.3,
+        })
+      );
     });
   });
 

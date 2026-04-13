@@ -6,7 +6,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, auditRequest, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -104,8 +104,10 @@ export async function POST(req: Request) {
         error: result.error.code,
         ip: clientIP,
       });
-      securityAudit.logAuthFailure('unknown', clientIP, `passkey_auth_${result.error.code.toLowerCase()}`).catch((error) => {
-        loggers.security.warn('[PasskeyAuth] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        details: { attemptedUser: 'unknown', reason: `passkey_auth_${result.error.code.toLowerCase()}` },
+        riskScore: 0.3,
       });
 
       return NextResponse.json(
@@ -158,8 +160,10 @@ export async function POST(req: Request) {
       userId,
       ip: clientIP,
     });
-    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[PasskeyAuth] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
     });
 
     let deviceTokenValue: string | undefined;

@@ -21,20 +21,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
   auditRequest: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -175,6 +163,24 @@ describe('POST /api/auth/passkey/register', () => {
         userId: 'user-1',
         passkeyId: 'pk-new-1',
       }));
+    });
+
+    it('audits passkey token creation on success', async () => {
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-new-1' },
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.token.created',
+          userId: 'user-1',
+          details: expect.objectContaining({ tokenType: 'passkey' }),
+        })
+      );
     });
   });
 
