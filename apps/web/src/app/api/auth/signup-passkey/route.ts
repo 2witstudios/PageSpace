@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, logSecurityEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -61,10 +61,10 @@ export async function POST(req: Request) {
     // Verify login CSRF token BEFORE rate limiting so stale tokens
     // don't burn rate limit attempts (cheap stateless HMAC check)
     if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: email.substring(0, 3) + '***',
-        flow: 'signup',
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.6,
+        details: { reason: 'passkey_csrf_invalid', flow: 'signup' },
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -80,9 +80,10 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_ip', {
-        ip: clientIP,
-        retryAfter: ipRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_ip' },
       });
       return NextResponse.json(
         { error: 'Too many requests from this IP', retryAfter: ipRateLimitResult.retryAfter },
@@ -98,9 +99,10 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_signup_email', {
-        email: email.substring(0, 3) + '***',
-        retryAfter: emailRateLimitResult.retryAfter,
+      auditRequest(req, {
+        eventType: 'security.rate.limited',
+        riskScore: 0.5,
+        details: { reason: 'rate_limit_signup_email' },
       });
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
@@ -135,8 +137,10 @@ export async function POST(req: Request) {
         ip: clientIP,
         email: email.substring(0, 3) + '***',
       });
-      securityAudit.logAuthFailure('unknown', clientIP, `passkey_signup_${result.error.code.toLowerCase()}`).catch((error) => {
-        loggers.security.warn('[SignupPasskey] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: `passkey_signup_${result.error.code.toLowerCase()}` },
       });
 
       return NextResponse.json(
@@ -164,8 +168,6 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }
 
-    // Log auth events
-    logAuthEvent('signup', userId, email, clientIP);
     loggers.auth.info('Passkey signup successful', { userId, email: email.substring(0, 3) + '***', name });
 
     // Reset rate limits on successful signup
@@ -233,15 +235,20 @@ export async function POST(req: Request) {
       }
     }
 
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
+      details: { signup: true, method: 'passkey' },
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId,
+      details: { tokenType: 'passkey' },
+    });
     loggers.auth.info('Passkey signup session created', {
       userId,
       ip: clientIP,
-    });
-    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[SignupPasskey] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
-    });
-    securityAudit.logTokenCreated(userId, 'passkey', clientIP).catch((error) => {
-      loggers.security.warn('[SignupPasskey] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
     });
 
     // Build response headers with session cookie

@@ -7,7 +7,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
@@ -86,8 +86,10 @@ export async function POST(req: Request) {
       loggers.auth.warn('Google ID token verification failed', {
         error: verifyError instanceof Error ? verifyError.message : String(verifyError),
       });
-      securityAudit.logAuthFailure('unknown', clientIP, 'google_one_tap_verify_failed').catch((error) => {
-        loggers.security.warn('[GoogleOneTap] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.3,
+        details: { reason: 'google_one_tap_verify_failed' },
       });
       return NextResponse.json(
         { error: 'Invalid Google credential. Please try again.' },
@@ -206,9 +208,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Log successful login
-    logAuthEvent('login', user.id, email, clientIP, 'Google One Tap');
-
     // Track login event (mask email to prevent PII in activity logs)
     const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
     trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
@@ -240,8 +239,11 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
-    securityAudit.logAuthSuccess(user.id, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[GoogleOneTap] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId: user.id });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId: user.id,
+      sessionId: sessionClaims.sessionId,
+      details: { method: 'Google One Tap' },
     });
 
     let deviceTokenValue: string | undefined;
@@ -283,8 +285,10 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     loggers.auth.error('Google One Tap error', error as Error);
-    securityAudit.logAuthFailure('unknown', getClientIP(req), 'google_one_tap_error').catch((auditError) => {
-      loggers.security.warn('[GoogleOneTap] audit logAuthFailure failed', { error: auditError instanceof Error ? auditError.message : String(auditError) });
+    auditRequest(req, {
+      eventType: 'auth.login.failure',
+      riskScore: 0.3,
+      details: { reason: 'google_one_tap_error' },
     });
     return NextResponse.json(
       { error: 'An unexpected error occurred. Please try again.' },
