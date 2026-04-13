@@ -1,5 +1,5 @@
 import { users, db, eq } from '@pagespace/db';
-import { loggers, accountRepository, activityLogRepository, audit, auditRequest } from '@pagespace/lib/server';
+import { loggers, accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
@@ -260,7 +260,7 @@ export async function DELETE(req: Request) {
 
     // Log security audit BEFORE user deletion so the userId FK is still valid.
     // Timeout prevents stalling account deletion if the advisory lock hangs.
-    audit({ eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId });
+    auditRequest(req, { eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId });
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
     await accountRepository.deleteUser(userId);

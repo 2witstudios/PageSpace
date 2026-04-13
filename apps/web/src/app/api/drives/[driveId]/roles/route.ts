@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
-  audit,
+  auditRequest,
   checkDriveAccessForRoles,
   listDriveRoles,
   createDriveRole,
@@ -109,7 +109,7 @@ export async function POST(
       permissions: permissionsSummary,
     }, actorInfo);
 
-    audit({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleName: newRole.name, operation: 'create' } });
+    auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleName: newRole.name, operation: 'create' } });
 
     return NextResponse.json({ role: newRole }, { status: 201 });
   } catch (error) {

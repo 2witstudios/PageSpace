@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
-  audit,
+  auditRequest,
   checkDriveAccessForRoles,
   getRoleById,
   updateDriveRole,
@@ -129,7 +129,7 @@ export async function PATCH(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
-    audit({ eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } });
+    auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } });
 
     return NextResponse.json({ role: updatedRole });
   } catch (error) {
@@ -182,7 +182,7 @@ export async function DELETE(
       previousPermissions: summarizePermissions(existingRole.permissions),
     }, actorInfo);
 
-    audit({ eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } });
+    auditRequest(request, { eventType: 'authz.role.removed', userId, resourceType: 'drive', resourceId: driveId, details: { roleId } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

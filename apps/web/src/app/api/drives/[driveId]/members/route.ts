@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   loggers,
-  audit,
+  auditRequest,
   checkDriveAccess,
   listDriveMembers,
   isMemberOfDrive,
@@ -98,7 +98,7 @@ export async function POST(
       role: role as string,
     }, actorInfo);
 
-    audit({ eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role } });
+    auditRequest(request, { eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role } });
 
     return NextResponse.json({ member: newMember });
   } catch (error) {
