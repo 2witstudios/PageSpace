@@ -70,9 +70,19 @@ function stubCursorMissing() {
   mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 }
 
-/** Response for the init INSERT (ON CONFLICT DO NOTHING) */
-function stubCursorInit() {
-  mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+/** Response for the init INSERT (UPSERT with RETURNING) — returns the
+ *  planted row so the worker can use the DB-side statement_timestamp. */
+function stubCursorInit(plantedAt: Date = new Date()) {
+  mockQuery.mockResolvedValueOnce({
+    rows: [
+      {
+        lastDeliveredId: '__cursor_init__',
+        lastDeliveredAt: plantedAt,
+        deliveryCount: 0,
+      },
+    ],
+    rowCount: 1,
+  });
 }
 
 /** Response for a source rows SELECT */
@@ -675,14 +685,30 @@ describe('processSiemDelivery', () => {
     const initInserts = mockQuery.mock.calls.filter(
       (call) =>
         typeof call[0] === 'string' &&
-        (call[0] as string).includes('ON CONFLICT (id) DO NOTHING')
+        (call[0] as string).includes('statement_timestamp()') &&
+        (call[0] as string).includes('RETURNING')
     );
 
     assert({
       given: 'a missing security_audit_log cursor',
-      should: 'INSERT a sentinel cursor row for security_audit_log with NOW() timestamp',
+      should: 'INSERT a sentinel cursor row planted at the DB clock (statement_timestamp)',
       actual: initInserts.length,
       expected: 1,
+    });
+
+    const initSql = initInserts[0][0] as string;
+    assert({
+      given: 'the init INSERT',
+      should: 'not pass a JS Date for the timestamp — must let Postgres stamp it',
+      actual: (initInserts[0][1] as unknown[]).some((p) => p instanceof Date),
+      expected: false,
+    });
+
+    assert({
+      given: 'the init INSERT',
+      should: 'upsert via ON CONFLICT DO UPDATE so error-only rows are repaired',
+      actual: initSql.includes('ON CONFLICT (id) DO UPDATE'),
+      expected: true,
     });
 
     const initParams = initInserts[0][1] as unknown[];
@@ -691,13 +717,6 @@ describe('processSiemDelivery', () => {
       should: 'target the security_audit_log source',
       actual: initParams[0],
       expected: 'security_audit_log',
-    });
-
-    assert({
-      given: 'a missing security_audit_log cursor',
-      should: 'plant the cursor timestamp at approximately now (within 10s)',
-      actual: (initParams[2] as Date).getTime() >= Date.now() - 10_000,
-      expected: true,
     });
 
     // Crucially: no security_audit_log SELECT happened — zero historical delivery
@@ -1126,12 +1145,13 @@ describe('processSiemDelivery', () => {
     const initInserts = mockQuery.mock.calls.filter(
       (call) =>
         typeof call[0] === 'string' &&
-        (call[0] as string).includes('ON CONFLICT (id) DO NOTHING')
+        (call[0] as string).includes('statement_timestamp()') &&
+        (call[0] as string).includes('ON CONFLICT (id) DO UPDATE')
     );
 
     assert({
       given: 'a security_audit_log cursor row with null lastDeliveredAt',
-      should: 'INSERT a fresh sentinel cursor row with NOW() (re-initialize)',
+      should: 'UPSERT a fresh sentinel cursor row with statement_timestamp (re-initialize)',
       actual: initInserts.length,
       expected: 1,
     });
@@ -1223,6 +1243,91 @@ describe('processSiemDelivery', () => {
       should: 'not emit the [siem-delivery] Polled info log',
       actual: polledLogCalls.length,
       expected: 0,
+    });
+  });
+
+  it('backlogged source caps delivery watermark so newer cross-source rows are deferred', async () => {
+    // Scenario from Codex P2 review: activity_logs has a big historical
+    // backlog (Jan rows), security_audit_log has a few fresh rows (Apr). If we
+    // naively ship every polled row in one batch, the Apr security rows go out
+    // BEFORE most of the Jan activity rows, then the next run ships more Jan
+    // rows — the SIEM receiver's delivery order no longer matches event order.
+    //
+    // Expected behavior: because activity_logs hit its LIMIT (backlog still
+    // pending past the tail), the delivery watermark caps at the activity
+    // batch's last timestamp. Newer security rows past that watermark are
+    // held back — NOT delivered, NOT advanced — until the activity backlog
+    // drains in subsequent runs.
+    const smallBatchConfig = {
+      enabled: true,
+      type: 'webhook' as const,
+      webhook: {
+        url: 'https://siem.example.com',
+        secret: 's3cret',
+        batchSize: 3,
+        retryAttempts: 3,
+      },
+    };
+    mockLoadSiemConfig.mockReturnValue(smallBatchConfig);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    // activity_logs has a backlog — returns LIMIT=3 old rows from Jan
+    stubCursorRow('log_prev', new Date('2026-01-01T00:00:00Z'), 10);
+    stubSourceRows([
+      makeActivityRow('log_jan1', new Date('2026-01-01T01:00:00Z')),
+      makeActivityRow('log_jan2', new Date('2026-01-01T02:00:00Z')),
+      makeActivityRow('log_jan3', new Date('2026-01-01T03:00:00Z')),
+    ]);
+    // security_audit_log is caught up except for 2 fresh rows from April
+    stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 5);
+    stubSourceRows([
+      makeSecurityRow('sec_apr1', new Date('2026-04-10T10:00:00Z')),
+      makeSecurityRow('sec_apr2', new Date('2026-04-10T10:05:00Z')),
+    ]);
+
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 3 });
+
+    stubCursorAdvance(); // only activity_logs advances
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const deliveredBatch = mockDeliverToSiemWithRetry.mock.calls[0][1] as { source: AuditLogSource }[];
+
+    assert({
+      given: 'activity_logs has backlog and security has newer rows',
+      should: 'only deliver the activity (backlogged) prefix, not the newer security rows',
+      actual: deliveredBatch.length,
+      expected: 3,
+    });
+
+    assert({
+      given: 'the delivery watermark cap',
+      should: 'include all three activity_logs rows',
+      actual: deliveredBatch.every((e) => e.source === 'activity_logs'),
+      expected: true,
+    });
+
+    const advanceCalls = mockQuery.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' &&
+        (call[0] as string).includes('"lastDeliveredId" = $2') &&
+        (call[0] as string).includes('"lastDeliveredAt" = $3')
+    );
+
+    assert({
+      given: 'security rows were held back by the watermark',
+      should: 'only issue a cursor advance for activity_logs, not security_audit_log',
+      actual: advanceCalls.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'the single advance call',
+      should: 'target the activity_logs source',
+      actual: (advanceCalls[0][1] as unknown[])[0],
+      expected: 'activity_logs',
     });
   });
 

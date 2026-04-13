@@ -81,17 +81,37 @@ async function loadCursor(client: PgClient, source: AuditLogSource): Promise<Cur
 }
 
 async function initCursor(client: PgClient, source: AuditLogSource): Promise<CursorRow> {
-  const now = new Date();
-  await client.query(
+  // Plant the cursor at the DATABASE clock, not `new Date()`. If the worker
+  // host clock runs ahead of Postgres, any rows whose server-side `timestamp`
+  // defaults landed between DB-now and app-now would be silently skipped on
+  // first init — the tuple cursor `(ts, id) > (app-now, sentinel)` would
+  // exclude them. Read the planted timestamp back via RETURNING so the
+  // in-memory cursor and the row actually match.
+  //
+  // The caller only reaches this path while holding the worker advisory lock
+  // AND after seeing `loadCursor` return either no row or a row with null
+  // cursor fields (an error-only row from `recordError`). Under the lock both
+  // conditions imply we're the unique writer, so DO UPDATE unconditionally
+  // overwrites the planted state without clobbering progress that isn't
+  // there.
+  const result = await client.query(
     `INSERT INTO siem_delivery_cursors (id, "lastDeliveredId", "lastDeliveredAt", "deliveryCount", "lastError", "lastErrorAt", "updatedAt")
-     VALUES ($1, $2, $3, 0, NULL, NULL, NOW())
-     ON CONFLICT (id) DO NOTHING`,
-    [source, CURSOR_INIT_SENTINEL, now]
+     VALUES ($1, $2, statement_timestamp(), 0, NULL, NULL, NOW())
+     ON CONFLICT (id) DO UPDATE SET
+       "lastDeliveredId" = EXCLUDED."lastDeliveredId",
+       "lastDeliveredAt" = EXCLUDED."lastDeliveredAt",
+       "deliveryCount" = 0,
+       "lastError" = NULL,
+       "lastErrorAt" = NULL,
+       "updatedAt" = NOW()
+     RETURNING "lastDeliveredId", "lastDeliveredAt", "deliveryCount"`,
+    [source, CURSOR_INIT_SENTINEL]
   );
+  const row = result.rows[0] as unknown as CursorRow;
   console.log(
-    `[siem-delivery] Initialized cursor for source=${source} at ${now.toISOString()} (no backfill)`
+    `[siem-delivery] Initialized cursor for source=${source} at ${row.lastDeliveredAt?.toISOString()} (no backfill)`
   );
-  return { lastDeliveredId: CURSOR_INIT_SENTINEL, lastDeliveredAt: now, deliveryCount: 0 };
+  return row;
 }
 
 async function queryActivityLogs(
@@ -261,12 +281,38 @@ export async function processSiemDelivery(): Promise<void> {
       states.push({ source, cursor, entries });
     }
 
-    // Phase 2: interleave by timestamp. Preserving global temporal ordering
+    // Phase 2a: compute a safety watermark so a skewed backlog in one source
+    // doesn't cause out-of-order cross-source delivery across runs. If source A
+    // has 10k old rows (Jan) and source B has 5 new rows (Apr), polling each
+    // with LIMIT=batchSize returns A's oldest 100 + all 5 of B's. Naively
+    // merging and shipping would send the 5 Apr rows while 9900 Jan rows from
+    // A are still in the queue — a future run would then ship Jan rows AFTER
+    // Apr rows, violating global chronological order. The fix: if any source
+    // returned a full batch (meaning "more rows may exist after this tail"),
+    // only ship rows with timestamp <= min(backlogged-tail-timestamps). Rows
+    // from other sources past that watermark wait until the next run, when
+    // the backlogged source's cursor has advanced. A source that returned
+    // fewer than batchSize rows is fully drained, contributes no bound, and
+    // its rows are free to ship unconditionally.
+    const backloggedTails = states
+      .filter((s) => s.entries.length === batchSize)
+      .map((s) => s.entries[s.entries.length - 1].timestamp);
+
+    const safeUntil =
+      backloggedTails.length > 0
+        ? new Date(Math.min(...backloggedTails.map((d) => d.getTime())))
+        : null;
+
+    // Phase 2b: interleave by timestamp. Preserving global temporal ordering
     // across sources is critical for SIEM correctness — a receiver that sees
     // a login after the resource access it authorized would flag false anomalies.
-    const merged = states
+    const allEntries = states
       .flatMap((s) => s.entries)
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+    const merged = safeUntil
+      ? allEntries.filter((e) => e.timestamp.getTime() <= safeUntil.getTime())
+      : allEntries;
 
     if (merged.length === 0) {
       // Idle poll — no log line. The worker runs every 30s and the vast
