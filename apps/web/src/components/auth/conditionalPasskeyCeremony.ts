@@ -235,8 +235,22 @@ export const runCeremony = async (deps: CeremonyDeps): Promise<CeremonyResult> =
     verifyAssertion,
   );
 
-  const out = await pipe(ctx);
-  return isTerminal(out) ? out : { status: 'abort', reason: 'ceremony-error' };
+  // Top-level safety net: any throw from a step that does not wrap its own
+  // try/catch (fetch network error in fetchAuthenticationOptions, JSON parse
+  // error, etc.) is classified here instead of propagating to the hook's
+  // useEffect and becoming an unhandled rejection.
+  try {
+    const out = await pipe(ctx);
+    return isTerminal(out) ? out : { status: 'abort', reason: 'ceremony-error' };
+  } catch (err) {
+    const terminal = classifyCeremonyError({ err, mounted: ctx.isMounted() });
+    if (terminal.status === 'abort' && terminal.reason === 'ceremony-error') {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        console.debug('Conditional UI ceremony failed:', err.message);
+      }
+    }
+    return terminal;
+  }
 };
 
 // ---------------------------------------------------------------------------

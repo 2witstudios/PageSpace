@@ -364,4 +364,23 @@ describe('runCeremony (integrated pipe, injected deps)', () => {
     });
     expect(result).toEqual({ status: 'abort', reason: 'options-failed' });
   });
+
+  it('given a step throws, should swallow and return abort ceremony-error', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const result = await runCeremony({
+      csrfToken: 'csrf',
+      refreshIntervalMs: 60_000,
+      getDevicePlatformFields: async () => {
+        throw new Error('platform fields failed');
+      },
+      isMounted: () => true,
+      fetchFn,
+      startAuthentication: vi.fn() as never,
+      cancelCeremony: vi.fn(),
+    });
+    expect(result).toEqual({ status: 'abort', reason: 'ceremony-error' });
+    expect(debugSpy).toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
 });
