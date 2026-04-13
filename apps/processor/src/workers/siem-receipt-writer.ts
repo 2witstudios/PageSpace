@@ -1,7 +1,12 @@
+import { createId } from '@paralleldrive/cuid2';
 import type { PgPoolClient } from '../db';
 import type { ReceiptRow } from '../services/siem-receipt-builder';
 
-const COLUMNS_PER_ROW = 11;
+// receiptId (PK) + 11 receipt columns. The PK column has no SQL DEFAULT in the
+// 0098 migration — Drizzle's $defaultFn fires only when going through the
+// Drizzle insert API, which this raw-SQL writer bypasses. We mint each PK
+// here with the same cuid2 generator the rest of the codebase uses.
+const COLUMNS_PER_ROW = 12;
 
 /**
  * Thin DB-side-effect wrapper around `siem_delivery_receipts`. Keeps the
@@ -31,6 +36,7 @@ export async function writeReceipts(
     }
     valueClauses.push(`(${placeholders.join(', ')})`);
     params.push(
+      createId(), // receiptId — PK with no SQL default; mint per row
       r.deliveryId,
       r.source,
       r.firstEntryId,
@@ -46,6 +52,7 @@ export async function writeReceipts(
   });
 
   const sql = `INSERT INTO siem_delivery_receipts (
+      "receiptId",
       "deliveryId",
       "source",
       "firstEntryId",

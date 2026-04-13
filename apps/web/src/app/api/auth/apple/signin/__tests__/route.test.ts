@@ -153,6 +153,44 @@ describe('POST /api/auth/apple/signin', () => {
       expect(response.status).toBe(200);
       expect(body.url).toContain('https://appleid.apple.com/auth/authorize');
     });
+
+    // Regression guard: signin bounds must match verifyOAuthState so the
+    // server never mints a state it will later reject at the callback.
+    it('returns 400 for returnUrl longer than 2048 chars', async () => {
+      const request = createPostRequest({ returnUrl: '/' + 'a'.repeat(2048) });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.returnUrl).toBeDefined();
+    });
+
+    it('returns 400 for deviceId longer than 128 chars', async () => {
+      const request = createPostRequest({ deviceId: 'x'.repeat(129) });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.deviceId).toBeDefined();
+    });
+
+    it('returns 400 for empty deviceId', async () => {
+      const request = createPostRequest({ deviceId: '' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.deviceId).toBeDefined();
+    });
+
+    it('returns 400 for deviceName longer than 255 chars', async () => {
+      const request = createPostRequest({ deviceName: 'n'.repeat(256) });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.deviceName).toBeDefined();
+    });
   });
 
   describe('return URL safety', () => {

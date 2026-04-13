@@ -25,11 +25,13 @@ export {
   verifyAndAlert,
   setChainAlertHandler,
   getChainAlertHandler,
+  notifyChainPreflightFailure,
   startPeriodicVerification,
   stopPeriodicVerification,
   isPeriodicVerificationRunning,
   type ChainVerificationAlert,
   type ChainAlertHandler,
+  type PreflightChainBreakDetails,
 } from './security-audit-alerting';
 
 export { maskEmail } from './mask-email';

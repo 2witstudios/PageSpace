@@ -475,5 +475,14 @@ export const siemDeliveryReceipts = pgTable('siem_delivery_receipts', {
   firstEntryIdx: index('idx_siem_receipts_first_entry').on(table.firstEntryId),
   lastEntryIdx: index('idx_siem_receipts_last_entry').on(table.lastEntryId),
   deliveredAtIdx: index('idx_siem_receipts_delivered_at').on(table.deliveredAt),
+  // Covers the /siem/receipts lookup: WHERE source = $1 AND
+  // firstEntryTimestamp <= $2 AND lastEntryTimestamp >= $2. The leading source
+  // column lets the index scan to the per-source slice immediately and the
+  // timestamp boundary scan walks only that slice.
+  entryRangeBySourceIdx: index('idx_siem_receipts_source_range').on(
+    table.source,
+    table.firstEntryTimestamp,
+    table.lastEntryTimestamp,
+  ),
 }));
 

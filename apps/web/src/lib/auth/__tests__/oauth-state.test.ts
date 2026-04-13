@@ -73,22 +73,63 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('valid');
   });
 
-  it('returns expired for state without timestamp', () => {
+  it('returns malformed for state without timestamp', () => {
     const state = createState({ returnUrl: '/dashboard', platform: 'web' });
     const result = verifyOAuthState(state);
-    expect(result.status).toBe('expired');
+    expect(result.status).toBe('malformed');
   });
 
-  it('returns expired for state with NaN timestamp', () => {
+  it('returns malformed for state with NaN timestamp', () => {
     const state = createState({ returnUrl: '/dashboard', platform: 'web', timestamp: NaN });
     const result = verifyOAuthState(state);
-    expect(result.status).toBe('expired');
+    expect(result.status).toBe('malformed');
   });
 
-  it('returns expired for state with Infinity timestamp', () => {
+  it('returns malformed for state with Infinity timestamp', () => {
     const state = createState({ returnUrl: '/dashboard', platform: 'web', timestamp: Infinity });
     const result = verifyOAuthState(state);
-    expect(result.status).toBe('expired');
+    expect(result.status).toBe('malformed');
+  });
+
+  it('returns malformed for state with unknown platform value', () => {
+    const state = createState({
+      returnUrl: '/dashboard',
+      platform: 'android',
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
+  });
+
+  it('returns malformed for deviceId longer than 128 chars', () => {
+    const state = createState({
+      platform: 'desktop',
+      deviceId: 'x'.repeat(129),
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
+  });
+
+  it('returns malformed for returnUrl longer than 2048 chars', () => {
+    const state = createState({
+      returnUrl: '/' + 'a'.repeat(2048),
+      platform: 'web',
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
+  });
+
+  it('returns malformed for deviceName longer than 255 chars', () => {
+    const state = createState({
+      platform: 'desktop',
+      deviceId: 'dev-123',
+      deviceName: 'n'.repeat(256),
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
   });
 
   it('extracts data fields from valid state', () => {

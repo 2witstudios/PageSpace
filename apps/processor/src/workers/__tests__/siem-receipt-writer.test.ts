@@ -74,28 +74,49 @@ describe('writeReceipts', () => {
       given: 'two receipts',
       should: 'emit two parameterized value clauses',
       actual: (sql as string).match(/\$\d+/g)?.length,
-      expected: 22, // 2 rows * 11 columns
+      expected: 24, // 2 rows * 12 columns (receiptId PK + 11 receipt fields)
     });
 
     assert({
       given: 'two receipts',
-      should: 'pass 22 params in order',
+      should: 'pass 24 params in order',
       actual: (params as unknown[]).length,
-      expected: 22,
+      expected: 24,
     });
 
     assert({
       given: 'two receipts',
-      should: 'put the first receipt source at param index 1',
-      actual: (params as unknown[])[1],
+      should: 'mint a non-empty receiptId at param index 0 of the first row',
+      actual: typeof (params as unknown[])[0] === 'string' && ((params as unknown[])[0] as string).length > 0,
+      expected: true,
+    });
+
+    assert({
+      given: 'two receipts',
+      should: 'put the first receipt source at param index 2',
+      actual: (params as unknown[])[2],
       expected: 'activity_logs',
     });
 
     assert({
       given: 'two receipts',
-      should: 'put the second receipt source at param index 12',
-      actual: (params as unknown[])[12],
+      should: 'put the second receipt source at param index 14',
+      actual: (params as unknown[])[14],
       expected: 'security_audit_log',
+    });
+
+    assert({
+      given: 'two receipts',
+      should: 'mint distinct receiptIds for each row',
+      actual: (params as unknown[])[0] !== (params as unknown[])[12],
+      expected: true,
+    });
+
+    assert({
+      given: 'the INSERT SQL',
+      should: 'name receiptId as the first column',
+      actual: /INSERT INTO siem_delivery_receipts \(\s*"receiptId"/.test(sql as string),
+      expected: true,
     });
   });
 

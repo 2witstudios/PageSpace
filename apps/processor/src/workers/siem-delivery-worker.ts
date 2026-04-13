@@ -16,7 +16,15 @@ import {
 } from '../services/security-audit-event-mapper';
 import { buildReceipts } from '../services/siem-receipt-builder';
 import { writeReceipts } from './siem-receipt-writer';
+import { runChainPreflight } from './siem-delivery-preflight';
+import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
+import { notifyChainPreflightFailure } from '@pagespace/lib/audit';
 import { getPoolForWorker } from '../db';
+
+// Re-exported so existing imports of CURSOR_INIT_SENTINEL from this module
+// keep working after the constant moved to a shared file to break an import
+// cycle between the worker and its preflight/loader helpers.
+export { CURSOR_INIT_SENTINEL };
 
 export const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log'] as const;
 const DEFAULT_BATCH_SIZE = 100;
@@ -33,8 +41,6 @@ const ADVISORY_LOCK_KEY = 'activity_logs';
 // of the dual-read plan requires the cursor to plant at NOW() with zero backfill,
 // so we need a non-null placeholder until the first real row is delivered. Real
 // row ids are cuids and cannot collide with this sentinel.
-const CURSOR_INIT_SENTINEL = '__cursor_init__';
-
 const ACTIVITY_LOG_COLUMNS = `id, timestamp, "userId", "actorEmail", "actorDisplayName",
         "isAiGenerated", "aiProvider", "aiModel", "aiConversationId",
         operation, "resourceType", "resourceId", "resourceTitle",
@@ -327,6 +333,92 @@ export async function processSiemDelivery(): Promise<void> {
     const pollCounts = states.map((s) => `${s.source}=${s.entries.length}`).join(', ');
     console.log(`[siem-delivery] Polled ${pollCounts} rows`);
 
+    // Phase 2c: chain verification preflight. Before any batch leaves the
+    // system we re-verify the hash chain for every source represented in
+    // `merged`. If any source is tampered with, we halt the ENTIRE run —
+    // not just the offending source — because an operator needs to see the
+    // whole picture before letting events flow again. Cursors stay put on
+    // halt (including the clean source's cursor) so the operator has a
+    // stable state to investigate, and a single alert fires via the
+    // existing webhook surface (#854).
+    //
+    // Sources whose cursor is still at CURSOR_INIT_SENTINEL have no anchor
+    // hash to compare against — they're skipped for this run and start
+    // being verified from the next run forward. See loadAnchorHash for the
+    // null-anchor contract.
+    //
+    // Anchor + hashable fields are loaded from the DB here rather than
+    // carried on AuditLogEntry because (a) the activity_logs mapper drops
+    // contentSnapshot/previousValues/newValues, which the write-side hash
+    // includes, and (b) the security_audit_log mapper folds fields into
+    // metadata and substitutes defaults for null resourceType/resourceId,
+    // which would corrupt recomputation. Loading the raw DB subset keeps
+    // both mappers untouched.
+    const preflightResult = await runChainPreflight(client, merged);
+    if (preflightResult !== null) {
+      if (preflightResult.kind === 'db_error') {
+        // Preflight couldn't even load the data needed to verify. Halt
+        // delivery and surface the error on the affected source's cursor,
+        // but do NOT fire the chain verification webhook — a transient DB
+        // failure is not tamper, and a false tamper page erodes the
+        // alert's credibility. The next poll cycle will retry naturally.
+        await recordError(
+          client,
+          preflightResult.source,
+          `Chain preflight data unavailable: ${preflightResult.message}`
+        );
+        console.warn(
+          `[siem-delivery] Chain preflight data unavailable source=${preflightResult.source}: ${preflightResult.message}`
+        );
+        return;
+      }
+
+      // Include expected/actual hashes when present so /health can
+      // distinguish hash_mismatch from chain_break from missing_hash
+      // without re-reading the cursor row. missing_hash leaves both null.
+      const hashDetail = [
+        preflightResult.expectedHash !== null
+          ? `expected=${preflightResult.expectedHash}`
+          : null,
+        preflightResult.actualHash !== null
+          ? `actual=${preflightResult.actualHash}`
+          : null,
+      ]
+        .filter((s): s is string => s !== null)
+        .join(' ');
+      const errorMessage = `Hash chain broken at index ${preflightResult.breakAtIndex}: ${preflightResult.breakReason} (entry=${preflightResult.entryId})${hashDetail ? ` ${hashDetail}` : ''}`;
+
+      await recordError(client, preflightResult.source, errorMessage);
+
+      // Fire the existing chain verification webhook. notifyChainPreflightFailure
+      // swallows alert-handler errors internally, but we still wrap the call
+      // defensively — a broken alert surface must NEVER mask tamper detection
+      // or drop the lock-release in the finally. The tamper-error write has
+      // already been made above, so /health already shows the failure.
+      const sourceBatchTotalEntries = merged.filter(
+        (e) => e.source === preflightResult.source
+      ).length;
+      try {
+        await notifyChainPreflightFailure({
+          auditSource: preflightResult.source,
+          entryId: preflightResult.entryId,
+          breakAtIndex: preflightResult.breakAtIndex,
+          breakReason: preflightResult.breakReason,
+          expectedHash: preflightResult.expectedHash,
+          actualHash: preflightResult.actualHash,
+          sourceBatchTotalEntries,
+        });
+      } catch (alertError) {
+        const msg = alertError instanceof Error ? alertError.message : String(alertError);
+        console.warn(`[siem-delivery] Chain verification alert failed: ${msg}`);
+      }
+
+      console.error(
+        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightResult.source} index=${preflightResult.breakAtIndex} reason=${preflightResult.breakReason} entry=${preflightResult.entryId}`
+      );
+      return;
+    }
+
     // Phase 3: single delivery call for the merged, time-ordered batch.
     // deliveryId is generated ONCE per worker run and reused across any
     // retries the adapter performs internally — same logical delivery → same
@@ -351,41 +443,61 @@ export async function processSiemDelivery(): Promise<void> {
       );
     }
 
-    // Phase 5: advance cursors for sources whose entries were actually delivered.
-    // Sources with zero progress keep their cursor exactly where it was.
-    for (const state of states) {
-      const lastDelivered = perSourceLastDelivered.get(state.source);
-      if (!lastDelivered) continue;
-
-      const count = perSourceDeliveredCount.get(state.source) ?? 0;
-      const newCount = state.cursor.deliveryCount + count;
-      await advanceCursor(
-        client,
-        state.source,
-        lastDelivered.id,
-        lastDelivered.timestamp,
-        newCount
-      );
-    }
-
-    // Phase 5b: durable per-source receipts for the delivered prefix.
-    // `delivered` was already computed in Phase 4. buildReceipts groups by
-    // source, so a single dual-source delivery yields up to one receipt per
-    // source — every receipt sharing this run's deliveryId. Done AFTER the
-    // cursor advance so a receipt can never reference an entry the worker
-    // hasn't committed progress on. Zero-delivery failures hit the early
-    // return inside buildReceipts and write nothing.
+    // Phase 5 + 5b: advance cursors AND write per-source receipts atomically.
+    //
+    // The cursor upsert and the receipt INSERT must commit or roll back
+    // together. If the cursor advanced but the receipt write failed, the
+    // worker would mark events as delivered while leaving no attestation
+    // row — `/siem/receipts` would return a false negative for data that
+    // already shipped. Wrapping both writes in a single BEGIN/COMMIT closes
+    // that window: on rollback the cursor stays put and the next run
+    // re-delivers the same events with a fresh deliveryId, which the
+    // receiver de-dupes via its own idempotency key. A missing receipt is
+    // never a correctness failure; an advanced cursor without a receipt
+    // would be.
+    //
+    // Sources with zero progress keep their cursor exactly where it was —
+    // the loop body is a no-op for them.
     if (delivered.length > 0) {
-      const receipts = buildReceipts({
-        deliveryId,
-        deliveredAt: new Date(),
-        webhookStatus: result.webhookStatus ?? null,
-        webhookResponseHash: result.responseHash ?? null,
-        ackReceivedAt: result.ackReceivedAt ?? null,
-        deliveredEntries: delivered,
-      });
-      if (receipts.length > 0) {
-        await writeReceipts(client, receipts);
+      await client.query('BEGIN');
+      try {
+        for (const state of states) {
+          const lastDelivered = perSourceLastDelivered.get(state.source);
+          if (!lastDelivered) continue;
+
+          const count = perSourceDeliveredCount.get(state.source) ?? 0;
+          const newCount = state.cursor.deliveryCount + count;
+          await advanceCursor(
+            client,
+            state.source,
+            lastDelivered.id,
+            lastDelivered.timestamp,
+            newCount
+          );
+        }
+
+        // buildReceipts groups by source, so a single dual-source delivery
+        // yields up to one receipt per source — every receipt sharing this
+        // run's deliveryId.
+        const receipts = buildReceipts({
+          deliveryId,
+          deliveredAt: new Date(),
+          webhookStatus: result.webhookStatus ?? null,
+          webhookResponseHash: result.responseHash ?? null,
+          ackReceivedAt: result.ackReceivedAt ?? null,
+          deliveredEntries: delivered,
+        });
+        if (receipts.length > 0) {
+          await writeReceipts(client, receipts);
+        }
+
+        await client.query('COMMIT');
+      } catch (txnError) {
+        // Rollback before rethrowing so the catch block above doesn't
+        // observe an open transaction. `.catch` swallows the rollback
+        // failure deliberately — the original error is what matters.
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw txnError;
       }
     }
 
