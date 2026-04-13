@@ -121,5 +121,8 @@ export * from './file-processing';
 // Real-time and broadcasting utilities (server-only)
 export * from './auth/broadcast-auth';
 
+// Passkey client-safe constants (also re-exported from './client-safe')
+export * from './auth/passkey-client-constants';
+
 // Note: This index includes server-side dependencies and should NOT be imported
 // from client-side components. Use '@pagespace/lib/client-safe' for client-side imports.

@@ -14,6 +14,7 @@ vi.mock('@pagespace/db', () => {
   const eq = vi.fn((a, b) => ({ op: 'eq', a, b }));
   const and = vi.fn((...args: unknown[]) => ({ op: 'and', args }));
   const isNull = vi.fn((a) => ({ op: 'isNull', a }));
+  const lt = vi.fn((a, b) => ({ op: 'lt', a, b }));
   const sql = vi.fn();
 
   return {
@@ -53,7 +54,7 @@ vi.mock('@pagespace/db', () => {
       id: 'vt.id', userId: 'vt.userId', tokenHash: 'vt.tokenHash', tokenPrefix: 'vt.tokenPrefix',
       type: 'vt.type', expiresAt: 'vt.expiresAt', usedAt: 'vt.usedAt', metadata: 'vt.metadata',
     },
-    eq, and, isNull, sql,
+    eq, and, isNull, lt, sql,
   };
 });
 
@@ -331,7 +332,7 @@ describe('passkey-service', () => {
       if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED');
     });
 
-    it('should generate options without email (conditional UI)', async () => {
+    it('should generate options without email (conditional UI) with client-device hints', async () => {
       mockGenAuthOptions.mockResolvedValueOnce({ challenge: 'auth-challenge' });
       mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
       mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
@@ -340,11 +341,12 @@ describe('passkey-service', () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.data.options.challenge).toBe('auth-challenge');
+        expect(result.data.options.hints).toEqual(['client-device']);
         expect(result.data.challengeId).toBe('test-cuid');
       }
     });
 
-    it('should generate options with email when user exists', async () => {
+    it('should generate options with email when user exists, including hints', async () => {
       mockDb.query.users.findFirst.mockResolvedValueOnce({ id: 'user-1' });
       mockDb.query.passkeys.findMany.mockResolvedValueOnce([
         { credentialId: 'cred-1', transports: ['internal'] },
@@ -355,6 +357,51 @@ describe('passkey-service', () => {
 
       const result = await generateAuthenticationOptions({ email: 'test@example.com' });
       expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.options.hints).toEqual(['client-device']);
+      }
+    });
+
+    it('given conditional UI (no email), should only delete EXPIRED challenges for the system user', async () => {
+      mockGenAuthOptions.mockResolvedValueOnce({ challenge: 'auth-challenge' });
+      const whereSpy = vi.fn().mockResolvedValue(undefined);
+      mockDb.delete.mockReturnValue({ where: whereSpy });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      const before = Date.now();
+      const result = await generateAuthenticationOptions({});
+      expect(result.ok).toBe(true);
+
+      // The cleanup where() should have been called with an `and(...)` whose
+      // args include an `lt(expiresAt, <now>)` predicate — proving concurrent
+      // unexpired sessions' challenges are preserved across visitors.
+      expect(whereSpy).toHaveBeenCalledTimes(1);
+      const andClause = whereSpy.mock.calls[0][0] as { op: string; args: Array<{ op: string; b?: Date }> };
+      expect(andClause.op).toBe('and');
+      const ltClause = andClause.args.find((p) => p?.op === 'lt');
+      expect(ltClause).toBeDefined();
+      expect(ltClause?.b).toBeInstanceOf(Date);
+      expect(ltClause!.b!.getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it('given email-scoped flow, should delete ALL unused challenges for that user (no lt clause)', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce({ id: 'user-1' });
+      mockDb.query.passkeys.findMany.mockResolvedValueOnce([
+        { credentialId: 'cred-1', transports: ['internal'] },
+      ]);
+      mockGenAuthOptions.mockResolvedValueOnce({ challenge: 'auth-challenge' });
+      const whereSpy = vi.fn().mockResolvedValue(undefined);
+      mockDb.delete.mockReturnValue({ where: whereSpy });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      const result = await generateAuthenticationOptions({ email: 'test@example.com' });
+      expect(result.ok).toBe(true);
+
+      expect(whereSpy).toHaveBeenCalledTimes(1);
+      const andClause = whereSpy.mock.calls[0][0] as { op: string; args: Array<{ op: string }> };
+      expect(andClause.op).toBe('and');
+      const ltClause = andClause.args.find((p) => p?.op === 'lt');
+      expect(ltClause).toBeUndefined();
     });
   });
 

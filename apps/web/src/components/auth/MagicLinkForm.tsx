@@ -208,7 +208,7 @@ export function MagicLinkForm() {
             onChange={(e) => setEmail(e.target.value)}
             className="pl-10"
             disabled={formState === 'sending'}
-            autoComplete="email"
+            autoComplete="email webauthn"
             autoFocus
           />
         </div>
