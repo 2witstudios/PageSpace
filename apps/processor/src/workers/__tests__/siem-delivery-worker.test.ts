@@ -1,12 +1,22 @@
 import { beforeEach, describe, it, vi } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 
-const { mockLoadSiemConfig, mockValidateSiemConfig, mockDeliverToSiemWithRetry, mockQuery, mockRelease } = vi.hoisted(() => {
+const {
+  mockLoadSiemConfig,
+  mockValidateSiemConfig,
+  mockDeliverToSiemWithRetry,
+  mockQuery,
+  mockRelease,
+  mockRunChainPreflight,
+  mockNotifyChainPreflightFailure,
+} = vi.hoisted(() => {
   const mockLoadSiemConfig = vi.fn();
   const mockValidateSiemConfig = vi.fn();
   const mockDeliverToSiemWithRetry = vi.fn();
   const mockQuery = vi.fn();
   const mockRelease = vi.fn();
+  const mockRunChainPreflight = vi.fn();
+  const mockNotifyChainPreflightFailure = vi.fn();
 
   return {
     mockLoadSiemConfig,
@@ -14,6 +24,8 @@ const { mockLoadSiemConfig, mockValidateSiemConfig, mockDeliverToSiemWithRetry, 
     mockDeliverToSiemWithRetry,
     mockQuery,
     mockRelease,
+    mockRunChainPreflight,
+    mockNotifyChainPreflightFailure,
   };
 });
 
@@ -36,6 +48,19 @@ vi.mock('../../db', () => ({
       release: mockRelease,
     }),
   })),
+}));
+
+// Default preflight stub: returns null (chain verifies clean, no halt). Tests
+// that exercise preflight tamper paths override this via mockRunChainPreflight
+// in-test. Pre-preflight tests (Wave 2 and earlier) see a no-op so they don't
+// have to stub the extra cursor/anchor/hashable DB calls the real preflight
+// would issue.
+vi.mock('../siem-delivery-preflight', () => ({
+  runChainPreflight: mockRunChainPreflight,
+}));
+
+vi.mock('@pagespace/lib/audit', () => ({
+  notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
 }));
 
 import { processSiemDelivery, SOURCES } from '../siem-delivery-worker';
@@ -165,6 +190,9 @@ function findAllCallsContaining(needle: string): unknown[][] {
 describe('processSiemDelivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: preflight verifies clean. Individual tamper tests override this.
+    mockRunChainPreflight.mockResolvedValue(null);
+    mockNotifyChainPreflightFailure.mockResolvedValue(undefined);
   });
 
   it('short-circuit when SIEM disabled', async () => {
@@ -1338,6 +1366,355 @@ describe('processSiemDelivery', () => {
       should: 'equal the two known AuditLogSource values in order',
       actual: [...SOURCES],
       expected,
+    });
+  });
+
+  // --- Phase 2c: chain verification preflight --------------------------------
+  //
+  // These tests use the preflight module as a mock seam. The real preflight
+  // implementation is covered by its own unit tests
+  // (siem-chain-verifier.test.ts + siem-chain-hashers.test.ts +
+  // siem-anchor-loader.test.ts). Here we verify the WORKER's integration
+  // with that surface: does tamper detection halt delivery, are errors
+  // recorded on the right cursor, does the alert fire once, etc.
+
+  it('clean preflight proceeds to delivery as before', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_1', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeSecurityRow('sec_1', new Date('2026-04-10T12:05:00Z'))]);
+
+    mockRunChainPreflight.mockResolvedValue(null); // clean
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
+
+    stubCursorAdvance();
+    stubCursorAdvance();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    assert({
+      given: "both sources' chains verify clean",
+      should: 'proceed to deliverToSiemWithRetry',
+      actual: mockDeliverToSiemWithRetry.mock.calls.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'a clean preflight',
+      should: 'not fire the chain verification alert',
+      actual: mockNotifyChainPreflightFailure.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('tamper on activity_logs does not call deliverToSiemWithRetry', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_tampered', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeSecurityRow('sec_clean', new Date('2026-04-10T12:05:00Z'))]);
+
+    mockRunChainPreflight.mockResolvedValue({
+      source: 'activity_logs',
+      entryId: 'log_tampered',
+      breakAtIndex: 0,
+      breakReason: 'hash_mismatch',
+      expectedHash: 'expected',
+      actualHash: 'tampered',
+    });
+
+    stubErrorUpsert(); // error recorded on activity_logs cursor
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    assert({
+      given: 'a tampered activity_logs row in the merged batch',
+      should: 'NOT call deliverToSiemWithRetry',
+      actual: mockDeliverToSiemWithRetry.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('tamper on activity_logs records a chain error on the activity_logs cursor', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_tampered', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+
+    mockRunChainPreflight.mockResolvedValue({
+      source: 'activity_logs',
+      entryId: 'log_tampered',
+      breakAtIndex: 0,
+      breakReason: 'hash_mismatch',
+      expectedHash: 'expected',
+      actualHash: 'tampered',
+    });
+
+    stubErrorUpsert();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const errorCalls = mockQuery.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && (call[0] as string).includes('"lastError" = $2')
+    );
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'record the chain error on exactly one cursor',
+      actual: errorCalls.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'target the activity_logs cursor',
+      actual: (errorCalls[0][1] as unknown[])[0],
+      expected: 'activity_logs',
+    });
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'include the break index, reason, expected and actual hashes in the error message',
+      actual:
+        typeof (errorCalls[0][1] as unknown[])[1] === 'string' &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('hash_mismatch') &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('log_tampered') &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('expected=expected') &&
+        ((errorCalls[0][1] as string[])[1] as string).includes('actual=tampered'),
+      expected: true,
+    });
+  });
+
+  it('tamper halts delivery for both sources without advancing cursors', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_tampered', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeSecurityRow('sec_clean', new Date('2026-04-10T12:05:00Z'))]);
+
+    mockRunChainPreflight.mockResolvedValue({
+      source: 'activity_logs',
+      entryId: 'log_tampered',
+      breakAtIndex: 0,
+      breakReason: 'hash_mismatch',
+      expectedHash: 'expected',
+      actualHash: 'tampered',
+    });
+
+    stubErrorUpsert();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    const advanceCalls = mockQuery.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' &&
+        (call[0] as string).includes('"lastDeliveredId" = $2') &&
+        (call[0] as string).includes('"lastDeliveredAt" = $3')
+    );
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'NOT advance either source cursor',
+      actual: advanceCalls.length,
+      expected: 0,
+    });
+  });
+
+  it('tamper fires the chain verification alert exactly once', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_tampered', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+
+    mockRunChainPreflight.mockResolvedValue({
+      source: 'activity_logs',
+      entryId: 'log_tampered',
+      breakAtIndex: 0,
+      breakReason: 'hash_mismatch',
+      expectedHash: 'expected',
+      actualHash: 'tampered',
+    });
+
+    stubErrorUpsert();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'fire notifyChainPreflightFailure exactly once',
+      actual: mockNotifyChainPreflightFailure.mock.calls.length,
+      expected: 1,
+    });
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'pass the break details to the alert with auditSource=activity_logs',
+      actual: (mockNotifyChainPreflightFailure.mock.calls[0][0] as { auditSource: string }).auditSource,
+      expected: 'activity_logs',
+    });
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'pass the break reason to the alert',
+      actual: (mockNotifyChainPreflightFailure.mock.calls[0][0] as { breakReason: string }).breakReason,
+      expected: 'hash_mismatch',
+    });
+
+    assert({
+      given: 'a single tampered activity_logs row in the merged batch',
+      should: 'pass the real source batch total (1), not a prefix count',
+      actual: (mockNotifyChainPreflightFailure.mock.calls[0][0] as {
+        sourceBatchTotalEntries: number;
+      }).sourceBatchTotalEntries,
+      expected: 1,
+    });
+  });
+
+  it('fresh-init cursor skip still lets the worker deliver the other source when preflight passes', async () => {
+    // The worker's integration with preflight is the boundary this test
+    // covers; the "fresh init skip" semantics themselves are enforced inside
+    // runChainPreflight and covered by its own tests. Here we just verify
+    // that when the preflight mock says "clean" (whether by skipping or
+    // actually verifying), delivery proceeds unaffected.
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_1', new Date('2026-04-10T12:00:00Z'))]);
+    // security_audit_log is freshly initialized this run
+    stubCursorMissing();
+    stubCursorInit(new Date('2026-04-10T11:00:00Z'));
+
+    mockRunChainPreflight.mockResolvedValue(null);
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
+
+    stubCursorAdvance();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    assert({
+      given: 'a fresh-init security_audit_log cursor and a clean activity_logs batch',
+      should: 'still call delivery for the activity_logs entry',
+      actual: mockDeliverToSiemWithRetry.mock.calls.length,
+      expected: 1,
+    });
+  });
+
+  it('alert webhook throwing does not stop the error write or lock release', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_tampered', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+
+    mockRunChainPreflight.mockResolvedValue({
+      source: 'activity_logs',
+      entryId: 'log_tampered',
+      breakAtIndex: 0,
+      breakReason: 'hash_mismatch',
+      expectedHash: 'expected',
+      actualHash: 'tampered',
+    });
+
+    // Alert throws — the worker must keep going.
+    mockNotifyChainPreflightFailure.mockRejectedValue(new Error('alert webhook is down'));
+
+    stubErrorUpsert();
+    stubLockRelease();
+
+    // If the worker does NOT swallow the alert error, this call would reject.
+    await processSiemDelivery();
+
+    const errorCalls = mockQuery.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && (call[0] as string).includes('"lastError" = $2')
+    );
+    // Note: in the worker, recordError is called BEFORE notifyChainPreflightFailure,
+    // so the error write already happened. What we care about is that the
+    // alert failure didn't cause the processSiemDelivery promise to reject.
+    assert({
+      given: 'the alert webhook throws',
+      should: 'still record the tamper error on the failing source cursor',
+      actual: errorCalls.length >= 1 && (errorCalls[0][1] as unknown[])[0] === 'activity_logs',
+      expected: true,
+    });
+  });
+
+  it('preflight db_error halts delivery, records cursor error, and does NOT fire the chain verification webhook', async () => {
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+
+    stubLockAcquired();
+    stubCursorRow('log_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([makeActivityRow('log_1', new Date('2026-04-10T12:00:00Z'))]);
+    stubCursorRow('sec_prev', new Date('2026-04-10T10:00:00Z'), 0);
+    stubSourceRows([]);
+
+    // Real preflight returns a distinct `db_error` variant when an
+    // anchor-load or hashable-field SELECT throws. The worker must halt
+    // delivery and record a cursor error, but MUST NOT fire the chain
+    // verification webhook — a transient DB blip is not tamper, and
+    // signalling it as such erodes the alert's credibility.
+    mockRunChainPreflight.mockResolvedValue({
+      kind: 'db_error',
+      source: 'activity_logs',
+      message: 'connection refused',
+    });
+
+    stubErrorUpsert();
+    stubLockRelease();
+
+    await processSiemDelivery();
+
+    assert({
+      given: 'a preflight db_error for activity_logs',
+      should: 'NOT call deliverToSiemWithRetry',
+      actual: mockDeliverToSiemWithRetry.mock.calls.length,
+      expected: 0,
+    });
+
+    const errorCalls = mockQuery.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && (call[0] as string).includes('"lastError" = $2')
+    );
+    assert({
+      given: 'a preflight db_error for activity_logs',
+      should: 'record the error on the activity_logs cursor',
+      actual: errorCalls.length === 1 && (errorCalls[0][1] as unknown[])[0] === 'activity_logs',
+      expected: true,
+    });
+
+    assert({
+      given: 'a preflight db_error (not tamper)',
+      should: 'NOT fire notifyChainPreflightFailure',
+      actual: mockNotifyChainPreflightFailure.mock.calls.length,
+      expected: 0,
     });
   });
 });
