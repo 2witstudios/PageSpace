@@ -68,7 +68,8 @@
       "mdast-util-to-hast": "^13.2.1"
     },
     "onlyBuiltDependencies": [
-      "@tensorflow/tfjs-node"
+      "@tensorflow/tfjs-node",
+      "sharp"
     ]
   }
 }

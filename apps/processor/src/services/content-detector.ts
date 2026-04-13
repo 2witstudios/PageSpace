@@ -14,6 +14,7 @@ export interface DetectedContentType {
 }
 
 const DETECTION_TIMEOUT_MS = 250;
+const INIT_RETRY_BACKOFF_MS = 60_000;
 
 const MODEL_DIR = path.resolve(__dirname, '../../assets/magika/standard_v3_3');
 const MODEL_PATH = path.join(MODEL_DIR, 'model.json');
@@ -27,26 +28,34 @@ export const FALLBACK_DETECTION: DetectedContentType = Object.freeze({
   source: 'fallback',
 });
 
-let instancePromise: Promise<Magika | null> | null = null;
+let instancePromise: Promise<Magika> | null = null;
+let lastInitFailureAt = 0;
 
 async function getInstance(): Promise<Magika | null> {
-  if (!instancePromise) {
-    instancePromise = (async () => {
-      try {
-        return await Magika.create({
-          modelPath: MODEL_PATH,
-          modelConfigPath: MODEL_CONFIG_PATH,
-        });
-      } catch (err) {
-        processorLogger.error(
-          'magika init failed',
-          err instanceof Error ? err : null,
-        );
-        return null;
-      }
-    })();
+  if (instancePromise) {
+    return instancePromise;
   }
-  return instancePromise;
+  // Backoff so a hot upload loop can't retry init thousands of times per second
+  // when Magika.create() is failing. Successful loads cache forever.
+  if (Date.now() - lastInitFailureAt < INIT_RETRY_BACKOFF_MS) {
+    return null;
+  }
+  const attempt = Magika.create({
+    modelPath: MODEL_PATH,
+    modelConfigPath: MODEL_CONFIG_PATH,
+  });
+  instancePromise = attempt;
+  try {
+    return await attempt;
+  } catch (err) {
+    processorLogger.error(
+      'magika init failed',
+      err instanceof Error ? err : null,
+    );
+    instancePromise = null;
+    lastInitFailureAt = Date.now();
+    return null;
+  }
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -118,7 +127,8 @@ export async function detectContentType(filePath: string): Promise<DetectedConte
   }
 }
 
-/** test-only helper: drops the memoised singleton */
+/** test-only helper: drops the memoised singleton and clears any backoff window */
 export function __resetContentDetectorForTests(): void {
   instancePromise = null;
+  lastInitFailureAt = 0;
 }

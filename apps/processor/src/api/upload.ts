@@ -20,6 +20,7 @@ const DENIED_LABELS: ReadonlySet<string> = new Set([
   'html',
   'svg',
   'xhtml',
+  'javascript',
 ]);
 
 const router = Router();

@@ -135,6 +135,27 @@ describe('detectContentType', () => {
 
     expect(createSpy).toHaveBeenCalledTimes(1);
   }, 15000);
+
+  it('given a magika init failure, falls back without permanently poisoning the cache', async () => {
+    const mod = await import('magika/node');
+    const createSpy = vi
+      .spyOn(mod.MagikaNode, 'create')
+      .mockRejectedValueOnce(new Error('boom'));
+
+    const failed = await detectContentType(fixtures.python);
+    expect(failed.source).toBe('fallback');
+    expect(createSpy).toHaveBeenCalledTimes(1);
+
+    // The cache should not be permanently poisoned. The reset helper exists
+    // so tests don't have to wait for the production 60s init backoff window
+    // to elapse — it models what time-based recovery does in production.
+    __resetContentDetectorForTests();
+    createSpy.mockRestore();
+
+    const recovered = await detectContentType(fixtures.python);
+    expect(recovered.source).toBe('magika');
+    expect(recovered.label).toBe('python');
+  }, 15000);
 });
 
 async function spyOnMagikaCreate() {

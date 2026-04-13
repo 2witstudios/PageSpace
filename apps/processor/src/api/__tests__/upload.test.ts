@@ -956,6 +956,41 @@ describe('upload router - magika content-type detection', () => {
     });
   });
 
+  it.each([
+    ['html', 'text/html'],
+    ['svg', 'image/svg+xml'],
+    ['xhtml', 'application/xhtml+xml'],
+    ['javascript', 'application/javascript'],
+  ])('rejects single-upload with HTTP 415 when magika labels content as script-active %s', async (label, mimeType) => {
+    mockDetectContentType.mockResolvedValue({
+      label,
+      mimeType,
+      group: 'code',
+      score: 0.99,
+      source: 'magika',
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH, originalname: 'inert.txt' });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(415);
+    expect(response.body.error).toContain('Unsupported file type');
+    expect(response.body.detectedLabel).toBe(label);
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+    expect(mockAddJob).not.toHaveBeenCalled();
+    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
+  });
+
   it('rejects single-upload with HTTP 415 when magika label is denylisted', async () => {
     mockDetectContentType.mockResolvedValue({
       label: 'macho',
