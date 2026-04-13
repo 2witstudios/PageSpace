@@ -13,7 +13,15 @@ import {
   mapSecurityAuditEventsToSiemEntries,
   type SecurityAuditSiemRow,
 } from '../services/security-audit-event-mapper';
+import { runChainPreflight } from './siem-delivery-preflight';
+import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
+import { notifyChainPreflightFailure } from '@pagespace/lib/audit';
 import { getPoolForWorker } from '../db';
+
+// Re-exported so existing imports of CURSOR_INIT_SENTINEL from this module
+// keep working after the constant moved to a shared file to break an import
+// cycle between the worker and its preflight/loader helpers.
+export { CURSOR_INIT_SENTINEL };
 
 export const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log'] as const;
 const DEFAULT_BATCH_SIZE = 100;
@@ -30,8 +38,6 @@ const ADVISORY_LOCK_KEY = 'activity_logs';
 // of the dual-read plan requires the cursor to plant at NOW() with zero backfill,
 // so we need a non-null placeholder until the first real row is delivered. Real
 // row ids are cuids and cannot collide with this sentinel.
-const CURSOR_INIT_SENTINEL = '__cursor_init__';
-
 const ACTIVITY_LOG_COLUMNS = `id, timestamp, "userId", "actorEmail", "actorDisplayName",
         "isAiGenerated", "aiProvider", "aiModel", "aiConversationId",
         operation, "resourceType", "resourceId", "resourceTitle",
@@ -323,6 +329,60 @@ export async function processSiemDelivery(): Promise<void> {
 
     const pollCounts = states.map((s) => `${s.source}=${s.entries.length}`).join(', ');
     console.log(`[siem-delivery] Polled ${pollCounts} rows`);
+
+    // Phase 2c: chain verification preflight. Before any batch leaves the
+    // system we re-verify the hash chain for every source represented in
+    // `merged`. If any source is tampered with, we halt the ENTIRE run —
+    // not just the offending source — because an operator needs to see the
+    // whole picture before letting events flow again. Cursors stay put on
+    // halt (including the clean source's cursor) so the operator has a
+    // stable state to investigate, and a single alert fires via the
+    // existing webhook surface (#854).
+    //
+    // Sources whose cursor is still at CURSOR_INIT_SENTINEL have no anchor
+    // hash to compare against — they're skipped for this run and start
+    // being verified from the next run forward. See loadAnchorHash for the
+    // null-anchor contract.
+    //
+    // Anchor + hashable fields are loaded from the DB here rather than
+    // carried on AuditLogEntry because (a) the activity_logs mapper drops
+    // contentSnapshot/previousValues/newValues, which the write-side hash
+    // includes, and (b) the security_audit_log mapper folds fields into
+    // metadata and substitutes defaults for null resourceType/resourceId,
+    // which would corrupt recomputation. Loading the raw DB subset keeps
+    // both mappers untouched.
+    const preflightHalt = await runChainPreflight(client, merged);
+    if (preflightHalt !== null) {
+      await recordError(
+        client,
+        preflightHalt.source,
+        `Hash chain broken at index ${preflightHalt.breakAtIndex}: ${preflightHalt.breakReason} (entry=${preflightHalt.entryId})`
+      );
+
+      // Fire the existing chain verification webhook. notifyChainPreflightFailure
+      // swallows alert-handler errors internally, but we still wrap the call
+      // defensively — a broken alert surface must NEVER mask tamper detection
+      // or drop the lock-release in the finally. The tamper-error write has
+      // already been made above, so /health already shows the failure.
+      try {
+        await notifyChainPreflightFailure({
+          auditSource: preflightHalt.source,
+          entryId: preflightHalt.entryId,
+          breakAtIndex: preflightHalt.breakAtIndex,
+          breakReason: preflightHalt.breakReason,
+          expectedHash: preflightHalt.expectedHash,
+          actualHash: preflightHalt.actualHash,
+        });
+      } catch (alertError) {
+        const msg = alertError instanceof Error ? alertError.message : String(alertError);
+        console.warn(`[siem-delivery] Chain verification alert failed: ${msg}`);
+      }
+
+      console.error(
+        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightHalt.source} index=${preflightHalt.breakAtIndex} reason=${preflightHalt.breakReason} entry=${preflightHalt.entryId}`
+      );
+      return;
+    }
 
     // Phase 3: single delivery call for the merged, time-ordered batch.
     const result = await deliverToSiemWithRetry(config, merged);
