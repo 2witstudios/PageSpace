@@ -193,10 +193,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           eventType: 'authz.access.denied',
           userId: 'user_123',
           ipAddress: '192.168.1.1',
+          userAgent: 'Mozilla/5.0 Test',
+          resourceType: 'mcp_websocket',
           riskScore: 0.5,
           details: expect.objectContaining({
             originalEvent: 'ws_insufficient_permissions',
-            component: 'mcp_websocket',
             scopes: ['read:pages'],
           }),
         })
@@ -312,7 +313,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.7,
           details: expect.objectContaining({
             originalEvent: 'ws_fingerprint_mismatch',
-            component: 'mcp_websocket',
             reason: 'Connection fingerprint changed - possible session hijacking',
           }),
         })
@@ -336,7 +336,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_authentication_failed',
-            component: 'mcp_websocket',
             reason: 'Invalid or expired session token',
           }),
         })
@@ -358,7 +357,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_session_validation_error',
-            component: 'mcp_websocket',
             error: 'Database error',
           }),
         })
@@ -390,10 +388,11 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           userId: 'user_123',
           sessionId: 'session_123',
           ipAddress: '192.168.1.1',
+          userAgent: 'Mozilla/5.0 Test',
+          resourceType: 'mcp_websocket',
           riskScore: 0,
           details: expect.objectContaining({
             originalEvent: 'ws_connection_established',
-            component: 'mcp_websocket',
           }),
         })
       );
@@ -461,7 +460,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_connection_closed',
-            component: 'mcp_websocket',
             code: 1006,
             reason: 'Abnormal closure',
           }),
@@ -547,7 +545,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_message_too_large',
-            component: 'mcp_websocket',
             size: 10 * 1024 * 1024,
             maxSize: 1024 * 1024,
           }),
@@ -592,7 +589,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_message_json_parse_error',
-            component: 'mcp_websocket',
           }),
         })
       );
@@ -633,7 +629,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
           riskScore: 0.3,
           details: expect.objectContaining({
             originalEvent: 'ws_error',
-            component: 'mcp_websocket',
             error: 'Test error',
           }),
         })

@@ -67,15 +67,20 @@ export async function UPGRADE(
 ) {
   const requestUrl = request.url;
   const clientIp =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
+    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
+    request.headers.get('x-real-ip')?.trim() ||
+    'unknown';
+  const clientUserAgent = request.headers.get('user-agent')?.trim() || 'unknown';
 
   // SECURITY CHECK 1: Verify secure connection in production
   if (!isSecureConnection(requestUrl, request)) {
     audit({
       eventType: 'security.anomaly.detected',
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.7,
-      details: { originalEvent: 'ws_insecure_connection_rejected', component: 'mcp_websocket', url: requestUrl },
+      details: { originalEvent: 'ws_insecure_connection_rejected', url: requestUrl },
     });
     client.close(1008, 'Secure connection required');
     return;
@@ -87,8 +92,10 @@ export async function UPGRADE(
     audit({
       eventType: 'auth.login.failure',
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.3,
-      details: { originalEvent: 'ws_authentication_failed', component: 'mcp_websocket', reason: 'Missing Authorization header' },
+      details: { originalEvent: 'ws_authentication_failed', reason: 'Missing Authorization header' },
     });
     client.close(1008, 'Authorization required');
     return;
@@ -104,8 +111,10 @@ export async function UPGRADE(
     audit({
       eventType: 'auth.login.failure',
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.3,
-      details: { originalEvent: 'ws_session_validation_error', component: 'mcp_websocket', error: error instanceof Error ? error.message : String(error) },
+      details: { originalEvent: 'ws_session_validation_error', error: error instanceof Error ? error.message : String(error) },
     });
     client.close(1008, 'Authentication error');
     return;
@@ -115,8 +124,10 @@ export async function UPGRADE(
     audit({
       eventType: 'auth.login.failure',
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.3,
-      details: { originalEvent: 'ws_authentication_failed', component: 'mcp_websocket', reason: 'Invalid or expired session token' },
+      details: { originalEvent: 'ws_authentication_failed', reason: 'Invalid or expired session token' },
     });
     client.close(1008, 'Invalid or expired token');
     return;
@@ -130,8 +141,10 @@ export async function UPGRADE(
       eventType: 'authz.access.denied',
       userId,
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.5,
-      details: { originalEvent: 'ws_insufficient_permissions', component: 'mcp_websocket', scopes: claims.scopes },
+      details: { originalEvent: 'ws_insufficient_permissions', scopes: claims.scopes },
     });
     client.close(1008, 'Insufficient permissions');
     return;
@@ -153,9 +166,10 @@ export async function UPGRADE(
     userId,
     sessionId: claims.sessionId,
     ipAddress: clientIp,
+    userAgent: clientUserAgent,
     resourceType: 'mcp_websocket',
     riskScore: 0,
-    details: { originalEvent: 'ws_connection_established', component: 'mcp_websocket', fingerprint: fingerprint.substring(0, 16) + '...' },
+    details: { originalEvent: 'ws_connection_established', fingerprint: fingerprint.substring(0, 16) + '...' },
   });
 
   // Send welcome message (no challenge needed - session service did the auth)
@@ -177,8 +191,10 @@ export async function UPGRADE(
           eventType: 'security.anomaly.detected',
           userId,
           ipAddress: clientIp,
+          userAgent: clientUserAgent,
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
-          details: { originalEvent: 'ws_message_too_large', component: 'mcp_websocket', size: sizeValidation.size, maxSize: sizeValidation.maxSize },
+          details: { originalEvent: 'ws_message_too_large', size: sizeValidation.size, maxSize: sizeValidation.maxSize },
         });
         client.send(
           JSON.stringify({
@@ -199,8 +215,10 @@ export async function UPGRADE(
           eventType: 'security.anomaly.detected',
           userId,
           ipAddress: clientIp,
+          userAgent: clientUserAgent,
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
-          details: { originalEvent: 'ws_message_json_parse_error', component: 'mcp_websocket', error: error instanceof Error ? error.message : String(error) },
+          details: { originalEvent: 'ws_message_json_parse_error', error: error instanceof Error ? error.message : String(error) },
         });
         client.send(
           JSON.stringify({
@@ -220,8 +238,10 @@ export async function UPGRADE(
           eventType: 'security.anomaly.detected',
           userId,
           ipAddress: clientIp,
+          userAgent: clientUserAgent,
+          resourceType: 'mcp_websocket',
           riskScore: 0.3,
-          details: { originalEvent: 'ws_message_validation_failed', component: 'mcp_websocket', error: validationResult.error, issues: validationResult.issues },
+          details: { originalEvent: 'ws_message_validation_failed', error: validationResult.error, issues: validationResult.issues },
         });
         client.send(
           JSON.stringify({
@@ -245,8 +265,10 @@ export async function UPGRADE(
             eventType: 'security.anomaly.detected',
             userId,
             ipAddress: clientIp,
+            userAgent: clientUserAgent,
+            resourceType: 'mcp_websocket',
             riskScore: 0.7,
-            details: { originalEvent: 'ws_fingerprint_mismatch', component: 'mcp_websocket', reason: 'Connection fingerprint changed - possible session hijacking' },
+            details: { originalEvent: 'ws_fingerprint_mismatch', reason: 'Connection fingerprint changed - possible session hijacking' },
           });
           client.send(
             JSON.stringify({
@@ -273,8 +295,10 @@ export async function UPGRADE(
             eventType: 'security.anomaly.detected',
             userId,
             ipAddress: clientIp,
+            userAgent: clientUserAgent,
+            resourceType: 'mcp_websocket',
             riskScore: 0.5,
-            details: { originalEvent: 'ws_unhealthy_connection_tool_attempt', component: 'mcp_websocket', reason: health.reason, readyState: health.readyState },
+            details: { originalEvent: 'ws_unhealthy_connection_tool_attempt', reason: health.reason, readyState: health.readyState },
           });
           client.send(
             JSON.stringify({
@@ -316,8 +340,10 @@ export async function UPGRADE(
             eventType: 'security.anomaly.detected',
             userId,
             ipAddress: clientIp,
+            userAgent: clientUserAgent,
+            resourceType: 'mcp_websocket',
             riskScore: 0.1,
-            details: { originalEvent: 'ws_fetch_response_error', component: 'mcp_websocket', requestId: message.id, error: message.error },
+            details: { originalEvent: 'ws_fetch_response_error', requestId: message.id, error: message.error },
           });
           getFetchBridge().handleResponseError(message);
           return;
@@ -330,8 +356,10 @@ export async function UPGRADE(
         eventType: 'security.anomaly.detected',
         userId,
         ipAddress: clientIp,
+        userAgent: clientUserAgent,
+        resourceType: 'mcp_websocket',
         riskScore: 0.3,
-        details: { originalEvent: 'ws_message_parse_error', component: 'mcp_websocket', error: error instanceof Error ? error.message : String(error) },
+        details: { originalEvent: 'ws_message_parse_error', error: error instanceof Error ? error.message : String(error) },
       });
       client.send(
         JSON.stringify({
@@ -353,8 +381,10 @@ export async function UPGRADE(
         eventType: 'security.anomaly.detected',
         userId,
         ipAddress: clientIp,
+        userAgent: clientUserAgent,
+        resourceType: 'mcp_websocket',
         riskScore: 0.3,
-        details: { originalEvent: 'ws_connection_closed', component: 'mcp_websocket', code, reason: reason.toString() },
+        details: { originalEvent: 'ws_connection_closed', code, reason: reason.toString() },
       });
     }
 
@@ -373,8 +403,10 @@ export async function UPGRADE(
       eventType: 'security.anomaly.detected',
       userId,
       ipAddress: clientIp,
+      userAgent: clientUserAgent,
+      resourceType: 'mcp_websocket',
       riskScore: 0.3,
-      details: { originalEvent: 'ws_error', component: 'mcp_websocket', error: error instanceof Error ? error.message : String(error) },
+      details: { originalEvent: 'ws_error', error: error instanceof Error ? error.message : String(error) },
     });
   });
 }
