@@ -60,16 +60,7 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  logAuthEvent: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -92,7 +83,7 @@ import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -333,11 +324,14 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('logs magic link login event', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(logAuthEvent).toHaveBeenCalledWith(
-        'magic_link_login',
-        'test-user-id',
-        undefined,
-        '127.0.0.1'
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'test-user-id',
+          sessionId: 'mock-session-id',
+          details: expect.objectContaining({ method: 'magic_link' }),
+        })
       );
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'test-user-id',
