@@ -130,18 +130,45 @@ class Logger {
   private sanitizeData(data: unknown): unknown {
     if (!this.config.sanitize) return data;
 
-    // Substring match against `lowerKey.includes(s)`, so `name` catches
-    // `username`, `filename`, `firstname`, `lastname`, `displayname`, etc.
-    // and `address` catches `streetaddress`, `homeaddress`, `emailaddress`.
-    // Dedicated LogContext fields (userId, ip, sessionId, requestId, etc.)
-    // are extracted to typed columns by logger-database before the database
-    // sink is reached, so adding broad PII keys here does not affect the
-    // structured columns those callers rely on.
-    const sensitive = [
-      'password', 'token', 'secret', 'api_key', 'apiKey',
-      'authorization', 'cookie', 'credit_card', 'ssn', 'jwt',
-      'email', 'name', 'phone', 'address', 'dob', 'dateofbirth',
+    // The sanitizer walks context + metadata recursively and redacts
+    // any key matching a sensitive pattern. LogContext's defined field
+    // names (userId, sessionId, requestId, driveId, pageId, endpoint,
+    // method, ip, userAgent, duration) don't collide with any pattern
+    // below, so they survive sanitization and reach
+    // logger-database.convertToDbFormat intact for extraction into
+    // typed DB columns.
+    //
+    // WARNING: if you add a LogContext field (or pass an ad-hoc field
+    // via setContext/withContext) whose lowercased key matches any
+    // pattern — e.g. `userName`, `displayName`, `hostName`, `fileName`,
+    // `emailAddress` — it WILL be redacted before logger-database sees
+    // it, and the corresponding typed column will silently contain
+    // '[REDACTED]'. Extend the pattern lists deliberately.
+    //
+    // Two-tier matching:
+    //   substringSensitive — keys that ALWAYS contain credentials or
+    //     secrets, regardless of where the substring appears (e.g.
+    //     `userPassword`, `apiKeyId`).
+    //   exactSensitive — PII field names matched exactly
+    //     (case-insensitive) to avoid colliding with operational keys
+    //     like `eventName`, `hostname`, `ipAddress`, `macAddress`.
+    const substringSensitive = [
+      'password', 'token', 'secret', 'api_key', 'apikey',
+      'authorization', 'cookie', 'credit_card', 'jwt',
     ];
+    const exactSensitive = new Set([
+      // SSN as exact-match, not substring: the three-letter string
+      // `ssn` collides with words like `className` → `classname`,
+      // `possession`, `assignee`. The field name is always the
+      // literal token, so exact-match is sufficient.
+      'ssn',
+      'email', 'emailaddress',
+      'phone', 'phonenumber', 'mobilenumber',
+      'address', 'streetaddress', 'homeaddress', 'mailingaddress',
+      'dob', 'dateofbirth', 'birthdate',
+      'name', 'firstname', 'lastname', 'fullname', 'displayname',
+      'username', 'filename', 'originalname',
+    ]);
 
     if (typeof data === 'string') {
       return data;
@@ -157,7 +184,10 @@ class Logger {
 
       for (const key in source) {
         const lowerKey = key.toLowerCase();
-        if (sensitive.some(s => lowerKey.includes(s))) {
+        if (
+          substringSensitive.some(s => lowerKey.includes(s)) ||
+          exactSensitive.has(lowerKey)
+        ) {
           sanitized[key] = '[REDACTED]';
         } else if (typeof source[key] === 'object') {
           sanitized[key] = this.sanitizeData(source[key]);

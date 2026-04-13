@@ -236,11 +236,13 @@ describe('Logger sanitizeData', () => {
     expect(result.api_key).toBe('[REDACTED]');
   });
 
-  it('does NOT redact "apiKey" field (lowerKey.includes("apiKey") is case-sensitive)', () => {
-    // sensitive list has 'apiKey' but comparison is lowerKey.includes(s), which is case-sensitive
-    // 'apikey'.includes('apiKey') === false, so the field is NOT redacted
+  it('redacts "apiKey" field via lowercase substring match', () => {
+    // substringSensitive contains 'apikey' (lowercase), and comparison is
+    // `lowerKey.includes(s)` on `key.toLowerCase()`, so `apiKey` → 'apikey'
+    // matches 'apikey' and is redacted. (This corrects a latent bug in
+    // master where the camelCase entry `'apiKey'` never matched.)
     const result = anyLogger.sanitizeData({ apiKey: 'key123' });
-    expect(result.apiKey).toBe('key123');
+    expect(result.apiKey).toBe('[REDACTED]');
   });
 
   it('redacts "authorization" field', () => {
@@ -351,6 +353,105 @@ describe('Logger sanitizeData', () => {
   it('redacts field with "password" substring (case-insensitive)', () => {
     const result = anyLogger.sanitizeData({ userPassword: 'abc' });
     expect(result.userPassword).toBe('[REDACTED]');
+  });
+
+  it('preserves operational keys that only superficially resemble PII names', () => {
+    // Regression: the split substring/exact rule must NOT collide with
+    // operational telemetry keys. Before the split, a naive
+    // `includes('name')` redacted every *Name field across the codebase.
+    const result = anyLogger.sanitizeData({
+      eventName: 'user.created',
+      tableName: 'users',
+      functionName: 'handleRequest',
+      hostname: 'worker-07.prod',
+      pathname: '/api/drives',
+      methodName: 'POST',
+      className: 'DriveService',
+      serviceName: 'processor',
+      providerName: 'anthropic',
+      modelName: 'claude-opus-4-6',
+      ipAddress: '10.0.0.4',
+      macAddress: 'aa:bb:cc:dd:ee:ff',
+    });
+    expect(result.eventName).toBe('user.created');
+    expect(result.tableName).toBe('users');
+    expect(result.functionName).toBe('handleRequest');
+    expect(result.hostname).toBe('worker-07.prod');
+    expect(result.pathname).toBe('/api/drives');
+    expect(result.methodName).toBe('POST');
+    expect(result.className).toBe('DriveService');
+    expect(result.serviceName).toBe('processor');
+    expect(result.providerName).toBe('anthropic');
+    expect(result.modelName).toBe('claude-opus-4-6');
+    expect(result.ipAddress).toBe('10.0.0.4');
+    expect(result.macAddress).toBe('aa:bb:cc:dd:ee:ff');
+  });
+
+  it('redacts nested { name } under metadata (use logger.error(msg, err, meta) to preserve error class names)', () => {
+    // This documents the tradeoff introduced by adding `name` to the
+    // PII list: if a caller stuffs an Error into metadata as a raw
+    // object, the nested `name` is correctly redacted because the
+    // sanitizer can't distinguish error-class-name (not PII) from
+    // person-name (PII). The correct API is to pass Errors through
+    // `logger.error(message, err, metadata)`, which bypasses
+    // sanitizeData entirely via createLogEntry's hoisting path.
+    const result = anyLogger.sanitizeData({
+      errorInfo: { name: 'TypeError', message: 'Cannot read property' },
+    });
+    expect(result.errorInfo.name).toBe('[REDACTED]');
+    expect(result.errorInfo.message).toBe('Cannot read property');
+  });
+});
+
+describe('Logger error hoisting (Error passed as 2nd arg bypasses sanitize)', () => {
+  let anyLogger: AnyLogger;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    anyLogger = logger as AnyLogger;
+    anyLogger.config.destination = 'console';
+    anyLogger.config.level = LogLevel.TRACE;
+    anyLogger.config.format = 'json';
+    anyLogger.config.sanitize = true;
+    anyLogger.clearContext();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    anyLogger.config.level = LogLevel.INFO;
+    anyLogger.config.format = 'pretty';
+    anyLogger.clearContext();
+  });
+
+  it('preserves error.name when Error is passed as the structured error arg', () => {
+    // Regression guard for the processor workers fix in PR #982:
+    // `loggers.processor.error('...', err, { contentHash })` must land
+    // the Error's name ('TypeError', 'RangeError', etc.) in
+    // entry.error.name without passing through sanitizeData, so the
+    // `name` PII rule does not redact it.
+    const err = new TypeError('boom');
+    logger.error('something broke', err, { contentHash: 'abc' });
+
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(raw);
+    expect(parsed.error).toBeDefined();
+    expect(parsed.error.name).toBe('TypeError');
+    expect(parsed.error.message).toBe('boom');
+    expect(parsed.metadata).toMatchObject({ contentHash: 'abc' });
+    // And the metadata path did NOT inherit the error object
+    expect(parsed.metadata.name).toBeUndefined();
+  });
+
+  it('fatal() also preserves error.name via the hoisting path', () => {
+    const err = new RangeError('out of range');
+    logger.fatal('critical', err);
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(raw);
+    expect(parsed.error.name).toBe('RangeError');
+    expect(parsed.error.message).toBe('out of range');
   });
 });
 
