@@ -14,6 +14,7 @@ const {
   mockResolvePathWithin,
   mockSanitizeExtension,
   mockCreateReadStream,
+  mockDetectContentType,
   UPLOAD_TEMP_DIR,
 } = vi.hoisted(() => {
   // Set env var BEFORE module loads (hoisted runs first)
@@ -57,6 +58,13 @@ const {
     }),
     mockSanitizeExtension: vi.fn().mockReturnValue('.jpg'),
     mockCreateReadStream,
+    mockDetectContentType: vi.fn().mockResolvedValue({
+      label: 'jpeg',
+      mimeType: 'image/jpeg',
+      group: 'image',
+      score: 0.99,
+      source: 'magika',
+    }),
     UPLOAD_TEMP_DIR,
   };
 });
@@ -92,6 +100,10 @@ vi.mock('../../logger', () => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+}));
+
+vi.mock('../../services/content-detector', () => ({
+  detectContentType: (...args: unknown[]) => mockDetectContentType(...args),
 }));
 
 vi.mock('fs/promises', () => ({
@@ -905,6 +917,189 @@ describe('upload router - multiple upload success paths', () => {
     // Should still succeed even if cleanup fails
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+  });
+});
+
+describe('upload router - magika content-type detection', () => {
+  const TEMP_PATH = `${UPLOAD_TEMP_DIR}/temp-file.jpg`;
+
+  function makeAuth() {
+    return {
+      userId: 'user-1',
+      resourceBinding: { type: 'page', id: 'page-1' },
+      driveId: 'drive-1',
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
+      if (segs.some(s => s.includes('..'))) return null;
+      return `${base}/${segs.join('/')}`;
+    });
+    mockOriginalExists.mockResolvedValue(false);
+    mockSaveOriginalFromFile.mockResolvedValue({
+      contentHash: 'a'.repeat(64),
+      path: '/storage/hash/original',
+    });
+    mockAppendUploadMetadata.mockResolvedValue(undefined);
+    mockAddJob.mockResolvedValue('job-123');
+    mockFsUnlink.mockResolvedValue(undefined);
+    mockSanitizeExtension.mockReturnValue('.jpg');
+    mockDetectContentType.mockResolvedValue({
+      label: 'jpeg',
+      mimeType: 'image/jpeg',
+      group: 'image',
+      score: 0.99,
+      source: 'magika',
+    });
+  });
+
+  it('rejects single-upload with HTTP 415 when magika label is denylisted', async () => {
+    mockDetectContentType.mockResolvedValue({
+      label: 'macho',
+      mimeType: 'application/x-mach-binary',
+      group: 'executable',
+      score: 0.97,
+      source: 'magika',
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH, originalname: 'ls.png' });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(415);
+    expect(response.body.error).toContain('Unsupported file type');
+    expect(response.body.detectedLabel).toBe('macho');
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+    expect(mockAddJob).not.toHaveBeenCalled();
+    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
+  });
+
+  it('passes verified mimeType and detectedLabel into the ingest job for single uploads', async () => {
+    mockDetectContentType.mockResolvedValue({
+      label: 'python',
+      mimeType: 'text/x-python',
+      group: 'code',
+      score: 0.93,
+      source: 'magika',
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({
+        path: TEMP_PATH,
+        originalname: 'sample.py',
+        mimetype: 'text/plain',
+      });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'text/x-python',
+      detectedLabel: 'python',
+    }));
+  });
+
+  it('accepts uploads when magika falls back to application/octet-stream', async () => {
+    mockDetectContentType.mockResolvedValue({
+      label: 'unknown',
+      mimeType: 'application/octet-stream',
+      group: 'unknown',
+      score: 0,
+      source: 'fallback',
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'application/octet-stream',
+      detectedLabel: 'unknown',
+    }));
+  });
+
+  it('rejects denylisted entries inside multi-upload while still processing siblings', async () => {
+    mockDetectContentType
+      .mockResolvedValueOnce({
+        label: 'png',
+        mimeType: 'image/png',
+        group: 'image',
+        score: 0.99,
+        source: 'magika',
+      })
+      .mockResolvedValueOnce({
+        label: 'elf',
+        mimeType: 'application/x-executable',
+        group: 'executable',
+        score: 0.98,
+        source: 'magika',
+      });
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.files = [
+        createMockFile({ path: TEMP_PATH, originalname: 'pic.png' }),
+        createMockFile({ path: `${UPLOAD_TEMP_DIR}/temp-file-2.jpg`, originalname: 'helper' }),
+      ] as Express.Multer.File[];
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/multiple')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toHaveLength(2);
+
+    const accepted = response.body.files[0];
+    const rejected = response.body.files[1];
+
+    expect(accepted.contentHash).toBeDefined();
+    expect(rejected.success).toBe(false);
+    expect(rejected.error).toContain('Unsupported file type');
+    expect(rejected.detectedLabel).toBe('elf');
+
+    expect(mockAddJob).toHaveBeenCalledTimes(1);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'image/png',
+      detectedLabel: 'png',
+    }));
+
+    // Both temp files should be unlinked: one from rejection, one from batch cleanup
+    expect(mockFsUnlink).toHaveBeenCalledWith(`${UPLOAD_TEMP_DIR}/temp-file-2.jpg`);
     expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
   });
 });
