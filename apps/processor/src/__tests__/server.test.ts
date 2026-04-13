@@ -205,6 +205,7 @@ vi.mock('../middleware/resource-binding', () => ({
 vi.mock('../services/siem-adapter', () => ({
   loadSiemConfig: vi.fn(() => ({ enabled: false, type: 'webhook' })),
   validateSiemConfig: vi.fn(() => ({ valid: true, errors: [] })),
+  AUDIT_LOG_SOURCES: ['activity_logs', 'security_audit_log'] as const,
 }));
 
 vi.mock('../db', () => ({
@@ -1354,5 +1355,100 @@ describe('GET /siem/receipts', () => {
 
   it('should register the endpoint', () => {
     expect(capturedGet['GET:/siem/receipts']).toBeDefined();
+  });
+
+  it('given the registered route chain, should include authenticateService middleware', async () => {
+    const { authenticateService } = await import('../middleware/auth');
+    const handlers = capturedGet['GET:/siem/receipts'];
+
+    expect(handlers).toContain(authenticateService);
+  });
+
+  it('given the registered route chain, should be guarded by requireScope("siem:read")', async () => {
+    const { requireScope } = await import('../middleware/auth');
+    const calls = (requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+
+    expect(calls).toContain('siem:read');
+  });
+
+  it('given a security_audit_log entry, should issue a literal SELECT against security_audit_log (no table-name interpolation)', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ ts: new Date('2026-04-10T12:00:30Z') }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res } = makeReqRes({
+      query: { source: 'security_audit_log', entryId: 'sec_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    const entrySql = query.mock.calls[0][0] as string;
+    expect(entrySql).toContain('FROM security_audit_log');
+    expect(entrySql).not.toContain('${');
+  });
+
+  it('given an activity_logs entry, should issue a literal SELECT against activity_logs (no table-name interpolation)', async () => {
+    const { getPoolForWorker } = await import('../db');
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ ts: new Date('2026-04-10T12:00:30Z') }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      await stubPool(query)()
+    );
+
+    const { req, res } = makeReqRes({
+      query: { source: 'activity_logs', entryId: 'log_1' },
+    });
+    await getReceiptsHandler()(req, res);
+
+    const entrySql = query.mock.calls[0][0] as string;
+    expect(entrySql).toContain('FROM activity_logs');
+    expect(entrySql).not.toContain('${');
+  });
+
+  it('given the AuditLogSource canonical list, should accept every member as a valid source param', async () => {
+    // Locks in the rule that the endpoint's source whitelist is derived from
+    // the single canonical AuditLogSource list in siem-adapter — adding a new
+    // source there must not silently fail at the endpoint.
+    const { AUDIT_LOG_SOURCES } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+
+    for (const source of AUDIT_LOG_SOURCES) {
+      const query = vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+        await stubPool(query)()
+      );
+
+      const { req, res, statusCode } = makeReqRes({
+        query: { source, entryId: 'any' },
+      });
+      await getReceiptsHandler()(req, res);
+
+      expect(statusCode.value).toBe(200);
+    }
+  });
+
+  it('given a request to an unregistered /siem path, should respond 404 via a default-deny catch-all', () => {
+    // Mirrors the /api and /cache catch-all assertions: the catch-all is the
+    // app.use('/siem', ...) mount whose final arg is a 2-parameter (req, res)
+    // function (not a router or middleware factory).
+    const siemCatchAll = capturedUse.find(
+      (args) =>
+        args[0] === '/siem' &&
+        typeof args[args.length - 1] === 'function' &&
+        (args[args.length - 1] as Function).length === 2,
+    );
+    expect(siemCatchAll).toBeDefined();
+
+    const handler = siemCatchAll![siemCatchAll!.length - 1];
+    const { req, res, statusCode, jsonMock } = makeReqRes();
+
+    handler(req, res);
+
+    expect(statusCode.value).toBe(404);
+    expect(jsonMock).toHaveBeenCalledWith({ error: 'Endpoint not found' });
   });
 });

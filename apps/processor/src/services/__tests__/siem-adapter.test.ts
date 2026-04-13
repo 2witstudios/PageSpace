@@ -1171,6 +1171,43 @@ describe('delivery_id round-trip (wave 3b receipts)', () => {
     });
   });
 
+  it('given a webhook response with a zero-length body, should leave responseHash null', async () => {
+    // Otherwise we would store the SHA-256 of empty string on every
+    // empty-body response — a constant that destroys the attestation value.
+    vi.stubGlobal('fetch', makeFetchMock({ body: '' }));
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a webhook response with a zero-length body',
+      should: 'leave responseHash null',
+      actual: result.responseHash,
+      expected: null,
+    });
+  });
+
+  it('given a webhook response whose body read throws, should leave responseHash null', async () => {
+    // Operators must be able to distinguish "receiver returned empty body"
+    // from "we failed to read the body" — the second is null, not the
+    // empty-string SHA-256 constant.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: vi.fn().mockRejectedValue(new Error('stream aborted')),
+      headers: { get: () => null },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await sendWebhook(webhookConfig, [makeEntry()], 'delivery-xyz');
+
+    assert({
+      given: 'a webhook response whose body read throws',
+      should: 'leave responseHash null',
+      actual: result.responseHash,
+      expected: null,
+    });
+  });
+
   it('stamps deliveryId into the pagespace@52000 SD-PARAM block for syslog', () => {
     const entry = makeEntry();
     const msg = formatSyslogMessage(entry, 'local0', undefined, 'delivery-xyz');

@@ -5,7 +5,13 @@ import { validateExternalURL } from '@pagespace/lib/security';
 
 // Sources the SIEM worker can read from. Each source has its own cursor row
 // in siem_delivery_cursors and its own pure-function row mapper.
-export type AuditLogSource = 'activity_logs' | 'security_audit_log';
+//
+// AUDIT_LOG_SOURCES is the single canonical runtime list — every consumer
+// (worker, receipts endpoint, type alias) derives from it, so adding a third
+// source here is a one-line change that cannot silently bypass downstream
+// whitelists.
+export const AUDIT_LOG_SOURCES = ['activity_logs', 'security_audit_log'] as const;
+export type AuditLogSource = typeof AUDIT_LOG_SOURCES[number];
 
 // Types for audit log entries
 export interface AuditLogEntry {
@@ -290,15 +296,25 @@ export async function sendWebhook(
       body: payload,
     });
 
-    let responseBody = '';
-    try {
-      if (typeof (response as { text?: unknown }).text === 'function') {
+    // Three states matter for forensics, and they must stay distinguishable:
+    //  - body successfully read AND non-empty → SHA-256 hex (real attestation)
+    //  - body successfully read but zero-length → null (receiver returned
+    //    an empty body, common for 204/202 ack-only responses)
+    //  - body read failed (stream aborted, .text() threw) → null
+    // Hashing the empty string would collapse the latter two cases into the
+    // SHA-256-of-empty-string constant on every read failure, destroying the
+    // attestation signal.
+    let responseBody: string | null = null;
+    if (typeof (response as { text?: unknown }).text === 'function') {
+      try {
         responseBody = await response.text();
+      } catch {
+        responseBody = null;
       }
-    } catch {
-      responseBody = '';
     }
-    const responseHash = hashResponseBody(responseBody);
+    const responseHash = responseBody && responseBody.length > 0
+      ? hashResponseBody(responseBody)
+      : null;
 
     // Ack round-trip: if the receiver echoed our id back, mark the delivery
     // as attested. Mismatch or missing → null (operator sees unattested).

@@ -14,8 +14,10 @@ import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
-import { loadSiemConfig } from './services/siem-adapter';
+import { loadSiemConfig, AUDIT_LOG_SOURCES, type AuditLogSource } from './services/siem-adapter';
 import { getPoolForWorker } from './db';
+
+const AUDIT_LOG_SOURCE_SET: ReadonlySet<string> = new Set(AUDIT_LOG_SOURCES);
 
 // Load environment variables
 dotenv.config();
@@ -113,51 +115,59 @@ app.use('/cache', authenticateService, requireScope('files:read'), requireResour
 // ---------------------------------------------------------------------------
 // SIEM receipts query endpoint
 //
-// Internal to the processor cluster; same auth posture as /health (none today,
-// since the processor runs behind the Caddy/VPC boundary). Exposes forensic
-// "did event X ship?" lookups against siem_delivery_receipts.
+// Forensic "did event X ship?" lookup against siem_delivery_receipts. Returns
+// deliveryId, ack state, and webhook status for any receipt whose [first,last]
+// timestamp range covers the queried entry — info-disclosure surface, so it
+// requires the same authenticateService + requireScope pipeline every other
+// processor route uses.
 //
-// Source is whitelisted — NEVER interpolated into SQL — so the per-source
-// lookup runs as two independent parameterized queries. An empty result is a
-// 200 with receipts:[] — the absence of a receipt is a valid answer.
+// The new `siem:read` scope must be granted on the service token before this
+// endpoint can be called.
 // ---------------------------------------------------------------------------
-const SIEM_RECEIPT_SOURCES = {
-  activity_logs: 'activity_logs',
-  security_audit_log: 'security_audit_log',
-} as const;
-type SiemReceiptSource = keyof typeof SIEM_RECEIPT_SOURCES;
 
-app.get('/siem/receipts', async (req, res) => {
+/**
+ * Two literal parameterized statements, one per source. No template-string
+ * interpolation of table names — a future bug that loosens the whitelist
+ * cannot become a SQLi vector because there is no SQL-builder path to abuse.
+ */
+async function fetchEntryTimestamp(
+  client: { query: (sql: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  source: AuditLogSource,
+  entryId: string,
+): Promise<Date | string | null> {
+  const result = source === 'activity_logs'
+    ? await client.query('SELECT timestamp AS ts FROM activity_logs WHERE id = $1 LIMIT 1', [entryId])
+    : await client.query('SELECT timestamp AS ts FROM security_audit_log WHERE id = $1 LIMIT 1', [entryId]);
+
+  if (result.rows.length === 0) return null;
+  return (result.rows[0] as { ts: Date | string }).ts;
+}
+
+app.get('/siem/receipts', authenticateService, requireScope('siem:read'), async (req, res) => {
   const source = typeof req.query.source === 'string' ? req.query.source : '';
   const entryId = typeof req.query.entryId === 'string' ? req.query.entryId : '';
 
   if (!entryId) {
     return res.status(400).json({ error: 'entryId query parameter is required' });
   }
-  if (!(source in SIEM_RECEIPT_SOURCES)) {
-    return res.status(400).json({ error: 'source must be activity_logs or security_audit_log' });
+  if (!AUDIT_LOG_SOURCE_SET.has(source)) {
+    return res.status(400).json({ error: `source must be one of: ${AUDIT_LOG_SOURCES.join(', ')}` });
   }
 
-  const sourceKey = source as SiemReceiptSource;
-  const sourceTable = sourceKey === 'activity_logs' ? 'activity_logs' : 'security_audit_log';
-  const sourceTimestampColumn = sourceKey === 'activity_logs' ? 'timestamp' : 'timestamp';
+  const sourceKey = source as AuditLogSource;
 
   try {
     const pool = getPoolForWorker();
     const client = await pool.connect();
     try {
       // Two-stage lookup: resolve the entry's timestamp from its own source
-      // table, then find receipts whose [first, last] range covers it.
-      const entryResult = await client.query(
-        `SELECT "${sourceTimestampColumn}" AS ts FROM ${sourceTable} WHERE id = $1 LIMIT 1`,
-        [entryId]
-      );
+      // table (literal-switch SQL — no template interpolation), then find
+      // receipts whose [first, last] range covers it.
+      const entryTs = await fetchEntryTimestamp(client, sourceKey, entryId);
 
-      if (entryResult.rows.length === 0) {
+      if (entryTs === null) {
         return res.status(200).json({ entryId, source: sourceKey, receipts: [] });
       }
-
-      const entryTs = (entryResult.rows[0] as { ts: Date | string }).ts;
 
       const receiptsResult = await client.query(
         `SELECT "deliveryId", "source", "deliveredAt", "webhookStatus", "ackReceivedAt", "entryCount"
@@ -178,7 +188,7 @@ app.get('/siem/receipts', async (req, res) => {
           : null;
         return {
           deliveryId: r.deliveryId as string,
-          source: r.source as SiemReceiptSource,
+          source: r.source as AuditLogSource,
           deliveredAt: deliveredAt.toISOString(),
           webhookStatus: (r.webhookStatus as number | null) ?? null,
           ackReceivedAt: ackReceivedAt ? ackReceivedAt.toISOString() : null,
@@ -229,13 +239,17 @@ app.get(
   }
 );
 
-// Default-deny catch-all for protected API routes
-// Any request to /api/* or /cache/* that wasn't matched by explicit routes above
-// MUST be rejected to prevent authorization bypass on unrecognized endpoints
+// Default-deny catch-all for protected routes
+// Any request to /api/*, /cache/*, or /siem/* that wasn't matched by an
+// explicit route above MUST be rejected to prevent authorization bypass on
+// unrecognized endpoints.
 app.use('/api', authenticateService, (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 app.use('/cache', authenticateService, (req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+app.use('/siem', authenticateService, (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
