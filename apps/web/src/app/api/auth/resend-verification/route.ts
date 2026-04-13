@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import React from 'react';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      loggers.auth.warn('Email resend rate limit exceeded', { email: user.email });
+      loggers.auth.warn('Email resend rate limit exceeded', { email: maskEmail(user.email) });
       return NextResponse.json(
         { error: 'Too many verification emails requested. Please try again later.' },
         {
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
         }),
       });
 
-      loggers.auth.info('Verification email resent', { userId: user.id, email: user.email });
+      loggers.auth.info('Verification email resent', { userId: user.id, email: maskEmail(user.email) });
       auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'email_verification', resourceId: auth.userId });
 
       return NextResponse.json({

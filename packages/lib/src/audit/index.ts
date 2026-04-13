@@ -32,10 +32,4 @@ export {
   type ChainAlertHandler,
 } from './security-audit-alerting';
 
-/** Mask email to prevent PII in audit logs (e.g., john@example.com -> jo***@example.com) */
-export function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return '***@***';
-  const visibleChars = Math.min(2, local.length);
-  return `${local.slice(0, visibleChars)}***@${domain}`;
-}
+export { maskEmail } from './mask-email';

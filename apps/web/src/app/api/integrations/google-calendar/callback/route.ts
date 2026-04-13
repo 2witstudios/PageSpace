@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
@@ -143,7 +143,7 @@ export async function GET(req: Request) {
     }
 
     if (!emailVerified) {
-      loggers.auth.warn('Google account email is not verified', { googleEmail });
+      loggers.auth.warn('Google account email is not verified', { googleEmail: maskEmail(googleEmail) });
       return NextResponse.redirect(
         new URL('/settings/integrations/google-calendar?error=email_not_verified', baseUrl)
       );

@@ -1,6 +1,6 @@
 import { sessionService, generateCSRFToken, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -103,7 +103,7 @@ export async function POST(req: Request) {
       // Update existing user if needed
       const needsUpdate = !user.appleId || (!user.name && name);
       if (needsUpdate) {
-        loggers.auth.info('Updating existing user via native Apple OAuth', { email, platform });
+        loggers.auth.info('Updating existing user via native Apple OAuth', { email: maskEmail(email), platform });
         await authRepository.updateUser(user.id, {
           appleId: user.appleId || appleId,
           provider: user.provider === 'email' ? 'apple' : user.provider,
@@ -115,7 +115,7 @@ export async function POST(req: Request) {
       }
     } else {
       isNewUser = true;
-      loggers.auth.info('Creating new user via native Apple OAuth', { email, platform });
+      loggers.auth.info('Creating new user via native Apple OAuth', { email: maskEmail(email), platform });
       user = await authRepository.createUser({
         id: createId(),
         name: name || email.split('@')[0],

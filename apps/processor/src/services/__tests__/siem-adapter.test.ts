@@ -97,6 +97,7 @@ import {
 
 const makeEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
   id: 'entry-1',
+  source: 'activity_logs',
   timestamp: new Date('2024-01-01T00:00:00Z'),
   userId: 'user-1',
   actorEmail: 'user@example.com',
@@ -309,10 +310,32 @@ describe('formatWebhookPayload', () => {
   it('includes correct structure', () => {
     const entry = makeEntry();
     const payload = JSON.parse(formatWebhookPayload([entry]));
-    expect(payload.version).toBe('1.0');
+    expect(payload.version).toBe('1.1');
     expect(payload.source).toBe('pagespace-audit');
     expect(payload.count).toBe(1);
     expect(payload.entries).toHaveLength(1);
+  });
+
+  it('stamps each entry with its source (activity_logs)', () => {
+    const entry = makeEntry({ source: 'activity_logs' });
+    const payload = JSON.parse(formatWebhookPayload([entry]));
+    expect(payload.entries[0].source).toBe('activity_logs');
+  });
+
+  it('stamps each entry with its source (security_audit_log)', () => {
+    const entry = makeEntry({ source: 'security_audit_log' });
+    const payload = JSON.parse(formatWebhookPayload([entry]));
+    expect(payload.entries[0].source).toBe('security_audit_log');
+  });
+
+  it('preserves per-entry source across mixed batches', () => {
+    const entries = [
+      makeEntry({ id: 'a1', source: 'activity_logs' }),
+      makeEntry({ id: 's1', source: 'security_audit_log' }),
+    ];
+    const payload = JSON.parse(formatWebhookPayload(entries));
+    expect(payload.entries[0].source).toBe('activity_logs');
+    expect(payload.entries[1].source).toBe('security_audit_log');
   });
 
   it('includes AI data when isAiGenerated is true', () => {
@@ -421,6 +444,18 @@ describe('formatSyslogMessage', () => {
     const entry = makeEntry({ actorEmail: 'user"with"quotes@example.com' });
     const msg = formatSyslogMessage(entry, 'local0');
     expect(msg).toBeTruthy();
+  });
+
+  it('emits source as a SD-PARAM in the pagespace@52000 element', () => {
+    const entry = makeEntry({ source: 'activity_logs' });
+    const msg = formatSyslogMessage(entry, 'local0');
+    expect(msg).toContain('source="activity_logs"');
+  });
+
+  it('emits security_audit_log as the source SD-PARAM when applicable', () => {
+    const entry = makeEntry({ source: 'security_audit_log' });
+    const msg = formatSyslogMessage(entry, 'local0');
+    expect(msg).toContain('source="security_audit_log"');
   });
 });
 
@@ -985,6 +1020,63 @@ describe('deliverToSiemWithRetry', () => {
     expect(result.success).toBe(false);
     // After max retries with retryable failures, the last attempt's result is returned
     expect(result.retryable).toBe(true);
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('retries only the undelivered tail after a partial batched failure', async () => {
+    vi.useFakeTimers();
+    const config: SiemConfig = {
+      enabled: true,
+      type: 'webhook',
+      // batchSize: 1 so each entry maps to its own fetch call — lets us
+      // observe exactly which entries get re-sent across retries
+      webhook: { url: 'https://example.com', secret: 'sec', batchSize: 1, retryAttempts: 3 },
+    };
+
+    const fetchMock = vi
+      .fn()
+      // Attempt 1: e1 ok, e2 fails retryable → batched returns entriesDelivered=1
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: vi.fn().mockResolvedValue('Server Error'),
+      })
+      // Attempt 2 begins with slice(1) = [e2, e3]: e2 ok, e3 ok → full success
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const entries = [
+      makeEntry({ id: 'e1' }),
+      makeEntry({ id: 'e2' }),
+      makeEntry({ id: 'e3' }),
+    ];
+
+    const resultPromise = deliverToSiemWithRetry(config, entries, 3);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(result.entriesDelivered).toBe(3);
+
+    // Exactly 4 fetch calls total — not 5. The old behavior would have
+    // re-sent e1 on attempt 2, which is the duplication this test pins against.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    // Confirm e1 was sent exactly once by inspecting request bodies
+    const bodies = fetchMock.mock.calls.map(
+      (call) => (call[1] as { body: string }).body
+    );
+    const e1Count = bodies.filter((body) => body.includes('"id":"e1"')).length;
+    const e2Count = bodies.filter((body) => body.includes('"id":"e2"')).length;
+    const e3Count = bodies.filter((body) => body.includes('"id":"e3"')).length;
+
+    expect(e1Count).toBe(1);
+    expect(e2Count).toBe(2); // failed on attempt 1, re-sent on attempt 2
+    expect(e3Count).toBe(1);
 
     vi.useRealTimers();
     vi.unstubAllGlobals();

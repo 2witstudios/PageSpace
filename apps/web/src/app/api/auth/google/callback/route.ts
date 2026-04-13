@@ -5,7 +5,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
@@ -137,7 +137,7 @@ export async function GET(req: Request) {
         user.image !== resolvedImage ||
         (email_verified && !user.emailVerified)
       ) {
-        loggers.auth.info('Updating existing user via Google OAuth', { email });
+        loggers.auth.info('Updating existing user via Google OAuth', { email: maskEmail(email) });
         await authRepository.updateUser(user.id, {
           googleId: googleId || user.googleId,
           provider: user.provider === 'email' ? 'google' : user.provider,
@@ -147,10 +147,10 @@ export async function GET(req: Request) {
         });
 
         user = await authRepository.findUserById(user.id) || user;
-        loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
+        loggers.auth.info('User updated via Google OAuth', { userId: user.id });
       }
     } else {
-      loggers.auth.info('Creating new user via Google OAuth', { email });
+      loggers.auth.info('Creating new user via Google OAuth', { email: maskEmail(email) });
       user = await authRepository.createUser({
         id: createId(),
         name: userName,
@@ -176,7 +176,7 @@ export async function GET(req: Request) {
         user = { ...user, image: resolvedImage };
       }
 
-      loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
+      loggers.auth.info('New user created via Google OAuth', { userId: user.id });
     }
 
     let isNewlyProvisioned = false;
@@ -242,7 +242,7 @@ export async function GET(req: Request) {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
           userId: user.id,
-          email: user.email,
+          email: maskEmail(user.email),
         });
           return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }

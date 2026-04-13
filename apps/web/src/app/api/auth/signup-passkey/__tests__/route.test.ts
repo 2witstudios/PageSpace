@@ -32,20 +32,26 @@ vi.mock('@pagespace/lib/auth', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    auth: {
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      auth: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      security: {
+        warn: vi.fn(),
+      },
     },
-    security: {
-      warn: vi.fn(),
-    },
-  },
-  auditRequest: vi.fn(),
-}));
+    auditRequest: vi.fn(),
+    maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
@@ -485,8 +491,23 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey signup failed', expect.objectContaining({
         error: 'VERIFICATION_FAILED',
-        email: 'use***',
+        email: 'us***@example.com',
       }));
+    });
+  });
+
+  describe('PII scrub in log metadata', () => {
+    const findInfoCall = (msg: string) =>
+      vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
+
+    it('masks email and omits name in "Passkey signup successful" log', async () => {
+      await POST(createRequest());
+
+      const call = findInfoCall('Passkey signup successful');
+      expect(call).toBeDefined();
+      const meta = call?.[1] as Record<string, unknown>;
+      expect(meta.email).toBe('us***@example.com');
+      expect(meta).not.toHaveProperty('name');
     });
   });
 
@@ -517,7 +538,7 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Passkey signup verification error',
         new Error('Unexpected'),
-        { email: 'user@example.com', clientIP: '127.0.0.1' },
+        { email: 'us***@example.com', clientIP: '127.0.0.1' },
       );
     });
   });
