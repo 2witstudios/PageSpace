@@ -4,7 +4,7 @@ import {
   startAuthentication as webauthnStartAuthentication,
   type AuthenticationResponseJSON,
 } from '@simplewebauthn/browser';
-import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from '@pagespace/lib';
+import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from '@pagespace/lib/client-safe';
 
 // ---------------------------------------------------------------------------
 // Types
