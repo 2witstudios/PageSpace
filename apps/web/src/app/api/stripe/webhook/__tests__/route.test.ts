@@ -87,7 +87,11 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
   loggers: {
     api: {
       error: vi.fn(),
@@ -101,12 +105,9 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+  maskEmail,
+  };
+});
 
 // Import after mocks
 import { POST } from '../route';

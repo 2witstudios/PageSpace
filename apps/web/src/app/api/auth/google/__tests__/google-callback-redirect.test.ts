@@ -66,7 +66,11 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
   loggers: {
     auth: {
       error: vi.fn(),
@@ -83,12 +87,9 @@ vi.mock('@pagespace/lib/server', () => ({
     deviceToken: 'mock-device-token',
     deviceTokenRecordId: 'device-record-id',
   }),
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+  maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),

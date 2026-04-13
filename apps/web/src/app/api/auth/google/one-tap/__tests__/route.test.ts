@@ -65,7 +65,11 @@ vi.mock('@pagespace/lib/auth', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
   loggers: {
     auth: {
       error: vi.fn(),
@@ -78,12 +82,9 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+  maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),

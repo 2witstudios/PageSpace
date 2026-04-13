@@ -36,7 +36,11 @@ vi.mock('@pagespace/lib', () => ({
   secureCompare: (a: string, b: string) => a === b,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
   loggers: {
     auth: {
       error: vi.fn(),
@@ -46,12 +50,9 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+  maskEmail,
+  };
+});
 
 vi.mock('@/lib/integrations/google-calendar/return-url', () => ({
   GOOGLE_CALENDAR_DEFAULT_RETURN_PATH: '/settings',

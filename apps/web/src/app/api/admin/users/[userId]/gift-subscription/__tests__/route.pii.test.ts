@@ -25,51 +25,45 @@ const subscriptionRow = {
   status: 'active',
 };
 
-let selectCount = 0;
+const userSelectThenable = {
+  from: () => ({
+    where: () => Promise.resolve([targetUser]),
+  }),
+};
 
-vi.mock('@pagespace/db', () => {
-  const noActiveSelect = {
-    from: () => ({
-      where: () => ({
-        orderBy: () => ({
-          limit: () => Promise.resolve([]),
-        }),
+const noActiveSubsSelect = {
+  from: () => ({
+    where: () => ({
+      orderBy: () => ({
+        limit: () => Promise.resolve([]),
       }),
     }),
-  };
-  const activeSelect = {
-    from: () => ({
-      where: () => ({
-        orderBy: () => ({
-          limit: () => Promise.resolve([subscriptionRow]),
-        }),
-      }),
-    }),
-  };
-  const userSelect = {
-    from: () => ({
-      where: () => Promise.resolve([targetUser]),
-    }),
-  };
+  }),
+};
 
-  return {
-    db: {
-      select: vi.fn(() => {
-        selectCount++;
-        // POST: 1st call user lookup, 2nd call subscriptions check (should return [])
-        // DELETE: 1st user, 2nd active subscription (should return [active])
-        if (selectCount % 2 === 1) return userSelect;
-        return process.env.__GIFT_TEST_MODE__ === 'delete' ? activeSelect : noActiveSelect;
+const activeSubsSelect = {
+  from: () => ({
+    where: () => ({
+      orderBy: () => ({
+        limit: () => Promise.resolve([subscriptionRow]),
       }),
-    },
-    users: {},
-    subscriptions: { userId: 'userId', status: 'status', updatedAt: 'updatedAt' },
-    eq: vi.fn(),
-    and: vi.fn(),
-    inArray: vi.fn(),
-    desc: vi.fn(),
-  };
-});
+    }),
+  }),
+};
+
+const { dbSelectMock } = vi.hoisted(() => ({ dbSelectMock: vi.fn() }));
+
+vi.mock('@pagespace/db', () => ({
+  db: {
+    select: dbSelectMock,
+  },
+  users: {},
+  subscriptions: { userId: 'userId', status: 'status', updatedAt: 'updatedAt' },
+  eq: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
+  desc: vi.fn(),
+}));
 
 vi.mock('@/lib/stripe', () => ({
   stripe: {
@@ -98,20 +92,21 @@ vi.mock('@/lib/stripe-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
-    api: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
+    loggers: {
+      api: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
     },
-  },
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+    maskEmail,
+  };
+});
 
 import { POST, DELETE } from '../route';
 import { loggers } from '@pagespace/lib/server';
@@ -119,11 +114,14 @@ import { loggers } from '@pagespace/lib/server';
 describe('Gift subscription PII scrub', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    selectCount = 0;
-    delete process.env.__GIFT_TEST_MODE__;
+    dbSelectMock.mockReset();
   });
 
   it('POST: masks targetUserEmail and omits targetUserName in "Admin gifted subscription" log', async () => {
+    dbSelectMock
+      .mockReturnValueOnce(userSelectThenable)
+      .mockReturnValueOnce(noActiveSubsSelect);
+
     const req = new NextRequest('http://localhost/api/admin/users/user-target/gift-subscription', {
       method: 'POST',
       body: JSON.stringify({ tier: 'pro', reason: 'thanks' }),
@@ -141,7 +139,10 @@ describe('Gift subscription PII scrub', () => {
   });
 
   it('DELETE: masks targetUserEmail and omits targetUserName in "Admin revoked subscription" log', async () => {
-    process.env.__GIFT_TEST_MODE__ = 'delete';
+    dbSelectMock
+      .mockReturnValueOnce(userSelectThenable)
+      .mockReturnValueOnce(activeSubsSelect);
+
     const req = new NextRequest('http://localhost/api/admin/users/user-target/gift-subscription', {
       method: 'DELETE',
     });

@@ -14,7 +14,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/oauth/google/exchange/route';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/server', async () => {
+  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
+    '@pagespace/lib/audit/mask-email'
+  );
+  return {
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
@@ -37,12 +41,9 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
-  maskEmail: (email: string) => {
-    const [local, domain] = email.split('@');
-    if (!local || !domain) return '***@***';
-    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
-  },
-}));
+  maskEmail,
+  };
+});
 
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
