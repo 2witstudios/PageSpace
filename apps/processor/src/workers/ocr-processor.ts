@@ -1,6 +1,7 @@
 import Tesseract from 'tesseract.js';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { loggers } from '@pagespace/lib/logger-config';
 import { contentStore } from '../server';
 import type { OCRJobData, OCRResult } from '../types';
 
@@ -25,7 +26,7 @@ const rateLimiter = {
 export async function processOCR(data: OCRJobData): Promise<OCRResult> {
   const { contentHash, language = 'eng', provider = 'tesseract' } = data;
 
-  console.log(`Processing OCR for ${contentHash} with ${provider}`);
+  loggers.processor.info('OCR job started', { contentHash, provider });
 
   // Check if OCR result already cached
   const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'ocr'));
@@ -33,7 +34,7 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
 
   try {
     const cached = await fs.readFile(ocrCachePath, 'utf-8');
-    console.log(`OCR cache hit for ${contentHash}`);
+    loggers.processor.info('OCR cache hit', { contentHash });
     return {
       success: true,
       cached: true,
@@ -66,7 +67,11 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
     await fs.mkdir(cacheDir, { recursive: true });
     await fs.writeFile(ocrCachePath, ocrText);
 
-    console.log(`Successfully extracted ${ocrText.length} characters via OCR from ${contentHash}`);
+    loggers.processor.info('OCR succeeded', {
+      contentHash,
+      provider,
+      textLength: ocrText.length,
+    });
 
     return {
       success: true,
@@ -77,16 +82,20 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
     };
 
   } catch (error) {
-    console.error(`OCR processing failed for ${contentHash}:`, error);
+    loggers.processor.error('OCR processing failed', {
+      contentHash,
+      provider,
+      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+    });
     throw error;
   }
 }
 
 async function performTesseractOCR(imageBuffer: Buffer, language: string): Promise<string> {
-  console.log(`Running Tesseract OCR with language: ${language}`);
-  
+  loggers.processor.debug('Running Tesseract OCR', { language });
+
   const worker = await Tesseract.createWorker(language);
-  
+
   try {
     const { data: { text } } = await worker.recognize(imageBuffer);
     return text;
@@ -98,7 +107,7 @@ async function performTesseractOCR(imageBuffer: Buffer, language: string): Promi
 async function performAIVisionOCR(contentHash: string): Promise<string> {
   // This would integrate with your existing AI vision providers
   // For now, return a placeholder or fall back to Tesseract
-  console.log('AI Vision OCR not yet implemented, falling back to Tesseract');
+  loggers.processor.warn('AI Vision OCR not yet implemented, falling back to Tesseract', { contentHash });
   
   const imageBuffer = await contentStore.getOriginal(contentHash);
   if (!imageBuffer) {
