@@ -25,6 +25,8 @@ const subscriptionRow = {
   status: 'active',
 };
 
+let selectCount = 0;
+
 vi.mock('@pagespace/db', () => {
   const noActiveSelect = {
     from: () => ({
@@ -50,7 +52,6 @@ vi.mock('@pagespace/db', () => {
     }),
   };
 
-  let selectCount = 0;
   return {
     db: {
       select: vi.fn(() => {
@@ -118,6 +119,7 @@ import { loggers } from '@pagespace/lib/server';
 describe('Gift subscription PII scrub', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    selectCount = 0;
     delete process.env.__GIFT_TEST_MODE__;
   });
 
