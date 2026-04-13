@@ -428,7 +428,7 @@ The structured logger at `packages/lib/src/logging/logger.ts:130–165` redacts 
 
 **Evidence:**
 - `find docs/ -iname "*incident*" -o -iname "*breach*" -o -iname "*runbook*"` returns only `docs/runbooks/tenant-migration.md`. The runbook directory exists but contains exactly one runbook, and it is for tenant migrations — not incident response, not breach response.
-- No "notify users" code path. Generic email infrastructure exists (`packages/lib/services/email-service.ts`), but no breach-specific template, no batch sender, no admin action gated on a "breach declared" event.
+- No "notify users" code path. Generic email infrastructure exists (`packages/lib/src/services/email-service.ts`), but no breach-specific template, no batch sender, no admin action gated on a "breach declared" event.
 - No DPA / DPO contact mechanism in the codebase (legal contact may live outside the repo, but nothing in code routes a breach notification to a DPO mailbox).
 - No mechanism to compute the *scope* of a breach by data category — see F16 on the missing data-classification field.
 
