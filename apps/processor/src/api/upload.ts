@@ -10,6 +10,27 @@ import { processorLogger } from '../logger';
 import { rateLimitUpload } from '../middleware/rate-limit';
 import { hasAuthScope } from '../middleware/auth';
 import { resolvePathWithin, sanitizeExtension } from '../utils/security';
+import { detectContentType, type DetectedContentType } from '../services/content-detector';
+
+const DENIED_LABELS: ReadonlySet<string> = new Set([
+  'pebin',
+  'elf',
+  'macho',
+  'dex',
+  'html',
+  'svg',
+  'xhtml',
+  'javascript',
+]);
+
+// Fail closed on unverified content: when Magika can't initialize or falls back
+// to the `unknown` label, we treat the upload as unsafe rather than letting it
+// bypass the denylist. Without this, a broken model / native binding would
+// accept renamed executables because `detected.label` defaults to 'unknown'
+// and escapes DENIED_LABELS.
+function isUnverifiedDetection(detected: DetectedContentType): boolean {
+  return detected.source === 'fallback' || detected.label === 'unknown';
+}
 
 const router = Router();
 
@@ -68,19 +89,11 @@ const upload = multer({
     fileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE_MB || '50') * 1024 * 1024, // Increased to 50MB with disk storage
     files: 5 // Can handle more files with disk storage
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     if (!file.originalname || file.originalname.length === 0) {
       cb(new Error('Invalid filename'));
       return;
     }
-
-    const allowedTypes = ['image/', 'application/pdf', 'text/', 'application/vnd'];
-    const isAllowed = allowedTypes.some(type => file.mimetype.startsWith(type));
-    if (!isAllowed) {
-      cb(new Error('Unsupported file type'));
-      return;
-    }
-
     cb(null, true);
   }
 });
@@ -146,7 +159,7 @@ router.post('/single', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file provided' });
     }
 
-    const { path: tempPath, originalname, mimetype, size } = req.file;
+    const { path: tempPath, originalname, size } = req.file;
 
     // Verify temp file is within expected upload directory (defense-in-depth)
     const normalizedTemp = path.resolve(tempPath);
@@ -160,6 +173,35 @@ router.post('/single', upload.single('file'), async (req, res) => {
       size,
       tempPath
     });
+
+    const detected = await detectContentType(tempPath);
+    if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
+      try {
+        await fs.unlink(tempPath);
+      } catch (cleanupError) {
+        processorLogger.warn('Failed to clean up temp upload after denylist rejection', {
+          tempPath,
+          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+        });
+      }
+      tempFilePath = undefined;
+      const unverified = isUnverifiedDetection(detected);
+      if (unverified) {
+        processorLogger.warn('Rejecting upload with unverified content type', {
+          tempPath,
+          originalname,
+          source: detected.source,
+          label: detected.label,
+        });
+      }
+      return res.status(415).json({
+        error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
+        detectedLabel: detected.label
+      });
+    }
+
+    const verifiedMimeType = detected.mimeType;
+    const detectedLabel = detected.label;
 
     // Calculate content hash from the temporary file
     const contentHash = await computeFileHash(tempPath);
@@ -188,7 +230,13 @@ router.post('/single', upload.single('file'), async (req, res) => {
         });
       }
 
-      const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
+      const jobs = await queueProcessingJobs(
+        contentHash,
+        originalname,
+        verifiedMimeType,
+        pageId,
+        detectedLabel
+      );
 
       return res.json({
         success: true,
@@ -229,7 +277,13 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     // Queue processing jobs based on file type
-    const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
+    const jobs = await queueProcessingJobs(
+      contentHash,
+      originalname,
+      verifiedMimeType,
+      pageId,
+      detectedLabel
+    );
 
     res.json({
       success: true,
@@ -325,9 +379,42 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     }
 
     for (const file of req.files) {
-      const { path: tempPath, originalname, mimetype, size } = file;
+      const { path: tempPath, originalname, size } = file;
 
       try {
+        const detected = await detectContentType(tempPath);
+        if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
+          try {
+            await fs.unlink(tempPath);
+          } catch (cleanupError) {
+            processorLogger.warn('Failed to clean up temp upload after denylist rejection', {
+              tempPath,
+              error: cleanupError instanceof Error ? cleanupError.message : cleanupError
+            });
+          }
+          const idx = tempFilePaths.indexOf(tempPath);
+          if (idx >= 0) tempFilePaths.splice(idx, 1);
+          const unverified = isUnverifiedDetection(detected);
+          if (unverified) {
+            processorLogger.warn('Rejecting upload with unverified content type', {
+              tempPath,
+              originalname,
+              source: detected.source,
+              label: detected.label,
+            });
+          }
+          results.push({
+            originalname,
+            error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
+            detectedLabel: detected.label,
+            success: false
+          });
+          continue;
+        }
+
+        const verifiedMimeType = detected.mimeType;
+        const detectedLabel = detected.label;
+
         // Calculate content hash from file
         const contentHash = await computeFileHash(tempPath);
 
@@ -352,7 +439,13 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
         }
 
         // Queue processing jobs
-        const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
+        const jobs = await queueProcessingJobs(
+          contentHash,
+          originalname,
+          verifiedMimeType,
+          pageId,
+          detectedLabel
+        );
 
         results.push({
           originalname,
@@ -423,14 +516,16 @@ async function queueProcessingJobs(
   contentHash: string,
   originalName: string,
   mimeType: string,
-  pageId?: string
+  pageId?: string,
+  detectedLabel?: string
 ): Promise<string[]> {
   const jobIds: string[] = [];
   const jobId = await queueManager.addJob('ingest-file', {
     contentHash,
     fileId: pageId,
     mimeType,
-    originalName
+    originalName,
+    detectedLabel
   });
   jobIds.push(jobId);
   return jobIds;

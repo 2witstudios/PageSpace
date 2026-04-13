@@ -40,6 +40,7 @@ export interface IngestFileJobData {
   fileId?: string;
   mimeType: string;
   originalName: string;
+  detectedLabel?: string;
 }
 
 export interface ImageOptimizeJobData {

@@ -2,14 +2,15 @@ import path from 'path';
 import fs from 'fs/promises';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
+import { loggers } from '@pagespace/lib/logger-config';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
 import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
 
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
-  const { contentHash, mimeType, originalName } = data;
+  const { contentHash, mimeType } = data;
 
-  console.log(`Extracting text from ${originalName} (${mimeType})`);
+  loggers.processor.info('Text extraction started', { contentHash, mimeType });
 
   // Get original file
   const fileBuffer = await contentStore.getOriginal(contentHash);
@@ -45,7 +46,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
         break;
 
       default:
-        console.log(`Unsupported mime type for text extraction: ${mimeType}`);
+        loggers.processor.warn('Unsupported mime type for text extraction', { contentHash, mimeType });
         return {
           success: false,
           error: `Unsupported file type: ${mimeType}`
@@ -62,7 +63,11 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
       extractedText
     );
 
-    console.log(`Successfully extracted ${extractedText.length} characters from ${originalName}`);
+    loggers.processor.info('Text extraction succeeded', {
+      contentHash,
+      mimeType,
+      textLength: extractedText.length,
+    });
 
     return {
       success: true,
@@ -73,7 +78,15 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     };
 
   } catch (error) {
-    console.error(`Failed to extract text from ${originalName}:`, error);
+    loggers.processor.error(
+      'Text extraction failed',
+      error instanceof Error ? error : undefined,
+      {
+        contentHash,
+        mimeType,
+        ...(error instanceof Error ? {} : { rawError: String(error) }),
+      },
+    );
     throw error;
   }
 }
@@ -116,9 +129,9 @@ async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata:
 
 async function extractDocxText(buffer: Buffer): Promise<string> {
   const result = await mammoth.extractRawText({ buffer });
-  
+
   if (result.messages.length > 0) {
-    console.warn('DOCX extraction warnings:', result.messages);
+    loggers.processor.warn('DOCX extraction warnings', { messageCount: result.messages.length });
   }
 
   return result.value;

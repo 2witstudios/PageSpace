@@ -4,14 +4,10 @@ import * as dgram from 'dgram';
 import { validateExternalURL } from '@pagespace/lib/security';
 
 // Sources the SIEM worker can read from. Each source has its own cursor row
-// in siem_delivery_cursors and its own pure-function row mapper.
-//
-// AUDIT_LOG_SOURCES is the single canonical runtime list — every consumer
-// (worker, receipts endpoint, type alias) derives from it, so adding a third
-// source here is a one-line change that cannot silently bypass downstream
-// whitelists.
-export const AUDIT_LOG_SOURCES = ['activity_logs', 'security_audit_log'] as const;
-export type AuditLogSource = typeof AUDIT_LOG_SOURCES[number];
+// in siem_delivery_cursors and its own pure-function row mapper. The canonical
+// runtime list of sources lives in `services/siem-sources.ts` (SIEM_SOURCES);
+// this type alias is the static counterpart.
+export type AuditLogSource = 'activity_logs' | 'security_audit_log';
 
 // Types for audit log entries
 export interface AuditLogEntry {
@@ -774,6 +770,14 @@ export function calculateBackoffDelay(attempt: number, baseDelay: number = 1000)
 
 /**
  * Deliver with retry logic
+ *
+ * Retries the *undelivered tail*, not the full batch. Transports that support
+ * partial delivery (syslog TCP/UDP mid-batch failure, webhook batched sub-batch
+ * failure) return `entriesDelivered` as a contiguous prefix count; on a
+ * retryable failure we slice past that prefix so the receiver never sees the
+ * already-delivered rows twice. The returned `entriesDelivered` is the
+ * cumulative total across all attempts, which keeps the caller's cursor walk
+ * (`merged.slice(0, entriesDelivered)`) correct.
  */
 export async function deliverToSiemWithRetry(
   config: SiemConfig,
@@ -782,18 +786,45 @@ export async function deliverToSiemWithRetry(
   maxRetries?: number
 ): Promise<SiemDeliveryResult> {
   const retries = maxRetries ?? config.webhook?.retryAttempts ?? 3;
+  let cumulativeDelivered = 0;
+
+  // Track the last attempt's result so the receipt-attestation fields
+  // (webhookStatus / ackReceivedAt / responseHash) on the FINAL return reflect
+  // the most recent transport response, not a frozen-at-start snapshot.
+  let lastResult: SiemDeliveryResult | undefined;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    // Reuse the same deliveryId across retries so the receiver de-dupes and
-    // the final receipt row attests a single logical "delivery", not N.
-    const result = await deliverToSiemBatched(config, entries, deliveryId);
+    // Slice past the already-delivered prefix so retries never re-ship rows
+    // the receiver already accepted; reuse the same deliveryId across attempts
+    // so the receiver de-dupes against a single logical "delivery" and the
+    // final receipt row attests one shipment, not N.
+    const remaining = entries.slice(cumulativeDelivered);
+    const result = await deliverToSiemBatched(config, remaining, deliveryId);
+    cumulativeDelivered += result.entriesDelivered;
+    lastResult = result;
 
     if (result.success) {
-      return result;
+      return {
+        success: true,
+        entriesDelivered: cumulativeDelivered,
+        deliveryId,
+        webhookStatus: result.webhookStatus ?? null,
+        ackReceivedAt: result.ackReceivedAt ?? null,
+        responseHash: result.responseHash ?? null,
+      };
     }
 
     if (!result.retryable || attempt === retries) {
-      return result;
+      return {
+        success: false,
+        entriesDelivered: cumulativeDelivered,
+        error: result.error,
+        retryable: result.retryable,
+        deliveryId,
+        webhookStatus: result.webhookStatus ?? null,
+        ackReceivedAt: result.ackReceivedAt ?? null,
+        responseHash: result.responseHash ?? null,
+      };
     }
 
     // Wait before retry
@@ -803,12 +834,12 @@ export async function deliverToSiemWithRetry(
 
   return {
     success: false,
-    entriesDelivered: 0,
+    entriesDelivered: cumulativeDelivered,
     error: 'Max retries exceeded',
     retryable: false,
     deliveryId,
-    webhookStatus: null,
-    ackReceivedAt: null,
-    responseHash: null,
+    webhookStatus: lastResult?.webhookStatus ?? null,
+    ackReceivedAt: lastResult?.ackReceivedAt ?? null,
+    responseHash: lastResult?.responseHash ?? null,
   };
 }

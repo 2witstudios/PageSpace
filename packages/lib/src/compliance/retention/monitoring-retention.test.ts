@@ -29,6 +29,8 @@ vi.mock('@pagespace/db', () => ({
   },
   apiMetrics: { id: 'apiMetrics.id', timestamp: 'apiMetrics.timestamp' },
   systemLogs: { id: 'systemLogs.id', timestamp: 'systemLogs.timestamp' },
+  errorLogs: { id: 'errorLogs.id', timestamp: 'errorLogs.timestamp' },
+  userActivities: { id: 'userActivities.id', timestamp: 'userActivities.timestamp' },
 }));
 
 import {
@@ -36,9 +38,11 @@ import {
   getRetentionCutoff,
   cleanupApiMetrics,
   cleanupSystemLogs,
+  cleanupErrorLogs,
+  cleanupUserActivities,
   runMonitoringRetentionCleanup,
 } from './monitoring-retention';
-import { apiMetrics, systemLogs } from '@pagespace/db';
+import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db';
 
 const originalEnv = process.env;
 
@@ -46,6 +50,8 @@ beforeEach(() => {
   process.env = { ...originalEnv };
   delete process.env.RETENTION_API_METRICS_DAYS;
   delete process.env.RETENTION_SYSTEM_LOGS_DAYS;
+  delete process.env.RETENTION_ERROR_LOGS_DAYS;
+  delete process.env.RETENTION_USER_ACTIVITIES_DAYS;
   vi.clearAllMocks();
   mockReturning.mockResolvedValue([]);
 });
@@ -61,39 +67,51 @@ describe('getRetentionConfig', () => {
     expect(config).toEqual({
       apiMetricsDays: 90,
       systemLogsDays: 30,
+      errorLogsDays: 90,
+      userActivitiesDays: 180,
     });
   });
 
   it('given_validEnvVars_usesCustomValues', () => {
     process.env.RETENTION_API_METRICS_DAYS = '60';
     process.env.RETENTION_SYSTEM_LOGS_DAYS = '14';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '45';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = '90';
 
     const config = getRetentionConfig();
 
     expect(config).toEqual({
       apiMetricsDays: 60,
       systemLogsDays: 14,
+      errorLogsDays: 45,
+      userActivitiesDays: 90,
     });
   });
 
   it('given_invalidEnvVars_fallsBackToDefaults', () => {
     process.env.RETENTION_API_METRICS_DAYS = 'not-a-number';
     process.env.RETENTION_SYSTEM_LOGS_DAYS = '-5';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '0';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = 'oops';
 
     const config = getRetentionConfig();
 
     expect(config).toEqual({
       apiMetricsDays: 90,
       systemLogsDays: 30,
+      errorLogsDays: 90,
+      userActivitiesDays: 180,
     });
   });
 
   it('given_emptyStringEnvVars_fallsBackToDefaults', () => {
     process.env.RETENTION_API_METRICS_DAYS = '';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '';
 
     const config = getRetentionConfig();
 
     expect(config.apiMetricsDays).toBe(90);
+    expect(config.errorLogsDays).toBe(90);
   });
 });
 
@@ -158,21 +176,63 @@ describe('cleanupSystemLogs', () => {
   });
 });
 
+describe('cleanupErrorLogs', () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const result = await cleanupErrorLogs({ retentionDays: 90 });
+
+    expect(result).toEqual({ table: 'error_logs', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(errorLogs);
+  });
+
+  it('given_expiredRows_returnsDeletedCount', async () => {
+    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }]);
+
+    const result = await cleanupErrorLogs({ retentionDays: 90 });
+
+    expect(result).toEqual({ table: 'error_logs', deleted: 2 });
+  });
+
+  it('given_databaseError_propagates', async () => {
+    mockReturning.mockRejectedValueOnce(new Error('connection lost'));
+
+    await expect(cleanupErrorLogs({ retentionDays: 90 })).rejects.toThrow('connection lost');
+  });
+});
+
+describe('cleanupUserActivities', () => {
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const result = await cleanupUserActivities({ retentionDays: 180 });
+
+    expect(result).toEqual({ table: 'user_activities', deleted: 0 });
+    expect(mockDeleteTable).toHaveBeenCalledWith(userActivities);
+  });
+
+  it('given_expiredRows_returnsDeletedCount', async () => {
+    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }]);
+
+    const result = await cleanupUserActivities({ retentionDays: 180 });
+
+    expect(result).toEqual({ table: 'user_activities', deleted: 4 });
+  });
+});
+
 describe('runMonitoringRetentionCleanup', () => {
-  it('given_defaultConfig_cleansUpMetricsAndLogs', async () => {
+  it('given_defaultConfig_cleansAllFourMonitoringTables', async () => {
     const results = await runMonitoringRetentionCleanup();
     const tables = results.map(r => r.table).sort();
 
-    expect(tables).toEqual(['api_metrics', 'system_logs']);
+    expect(tables).toEqual(['api_metrics', 'error_logs', 'system_logs', 'user_activities']);
   });
 
-  it('given_customEnvConfig_stillCleansBothTables', async () => {
+  it('given_customEnvConfig_stillCleansAllTables', async () => {
     process.env.RETENTION_API_METRICS_DAYS = '45';
     process.env.RETENTION_SYSTEM_LOGS_DAYS = '7';
+    process.env.RETENTION_ERROR_LOGS_DAYS = '60';
+    process.env.RETENTION_USER_ACTIVITIES_DAYS = '120';
 
     const results = await runMonitoringRetentionCleanup();
 
-    expect(results).toHaveLength(2);
+    expect(results).toHaveLength(4);
     for (const result of results) {
       expect(typeof result.table).toBe('string');
       expect(typeof result.deleted).toBe('number');

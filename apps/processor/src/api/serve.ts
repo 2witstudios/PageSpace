@@ -94,7 +94,6 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
     }
 
     let originalName = 'file';
-    let contentType = 'application/octet-stream';
     let contentLength = buffer.length;
 
     const fileRecord = await db.query.files.findFirst({
@@ -105,8 +104,9 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
       contentLength = fileRecord.sizeBytes;
     }
 
-    if (fileRecord?.mimeType) {
-      contentType = fileRecord.mimeType;
+    let storedMime = '';
+    if (typeof fileRecord?.mimeType === 'string') {
+      storedMime = fileRecord.mimeType.trim();
     }
 
     const linkedPageId = decision?.context?.pageId;
@@ -121,14 +121,18 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
         originalName = pageRecord.title;
       }
 
-      if (!fileRecord?.mimeType && pageRecord?.mimeType) {
-        contentType = pageRecord.mimeType;
+      if (storedMime === '' && typeof pageRecord?.mimeType === 'string') {
+        storedMime = pageRecord.mimeType.trim();
       }
     }
+
+    const hasStoredMime = storedMime !== '';
+    const contentType = hasStoredMime ? storedMime : 'application/octet-stream';
 
     // Sanitize filename to prevent header injection
     const sanitizedFilename = sanitizeFilename(originalName);
     const isDangerous = isDangerousMimeType(contentType);
+    const forceAttachment = isDangerous || !hasStoredMime;
 
     res.set({
       'Content-Type': contentType,
@@ -140,16 +144,17 @@ router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
       'X-Frame-Options': 'DENY'
     });
 
-    // Force download for dangerous MIME types + strict CSP
-    if (isDangerous) {
+    if (forceAttachment) {
       res.set({
         'Content-Disposition': `attachment; filename="${sanitizedFilename}"`,
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox;"
       });
-      console.warn(
-        '[Security] Forcing download for dangerous MIME type: hash=%s type=%s filename=%s',
-        contentHash, contentType, sanitizedFilename
-      );
+      if (isDangerous) {
+        console.warn(
+          '[Security] Forcing download for dangerous MIME type: hash=%s type=%s filename=%s',
+          contentHash, contentType, sanitizedFilename
+        );
+      }
     } else {
       res.set({
         'Content-Disposition': `inline; filename="${sanitizedFilename}"`,

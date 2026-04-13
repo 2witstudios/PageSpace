@@ -14,10 +14,17 @@ import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
-import { loadSiemConfig, AUDIT_LOG_SOURCES, type AuditLogSource } from './services/siem-adapter';
+import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
+import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
+import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
+import { readCursorSnapshots } from './workers/siem-cursor-reader';
+import { readRecentReceipts } from './workers/siem-receipt-reader';
 import { getPoolForWorker } from './db';
 
-const AUDIT_LOG_SOURCE_SET: ReadonlySet<string> = new Set(AUDIT_LOG_SOURCES);
+// Whitelist for the /siem/receipts endpoint, derived from the canonical
+// SIEM_SOURCES list so a third source added there cannot silently bypass
+// validation here.
+const SIEM_SOURCE_SET: ReadonlySet<string> = new Set(SIEM_SOURCES);
 
 // Load environment variables
 dotenv.config();
@@ -45,47 +52,108 @@ const corsOptions: cors.CorsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
-// SIEM cursor cache — refreshed in the background so /health never blocks on DB
-let siemCursorCache: { lastDeliveredAt: string | null; lastError: string | null; deliveryCount: number } | null = null;
+// SIEM health cache — refreshed in the background so /health never blocks on DB
+type SiemHealthCache = SiemHealthResponse & { error?: string };
+let siemHealthCache: SiemHealthCache | null = null;
 const SIEM_CACHE_TTL_MS = 15_000; // 15 seconds
 let siemCacheLastRefresh = 0;
+// In-flight guard: N concurrent /health hits during a slow refresh collapse to
+// one DB round trip instead of stampeding the pool.
+let siemRefreshInFlight: Promise<void> | null = null;
 
-export async function refreshSiemCursorCache(): Promise<void> {
+export function refreshSiemCursorCache(): Promise<void> {
+  if (siemRefreshInFlight) return siemRefreshInFlight;
+  siemRefreshInFlight = doRefreshSiemCursorCache().finally(() => {
+    siemRefreshInFlight = null;
+  });
+  return siemRefreshInFlight;
+}
+
+async function doRefreshSiemCursorCache(): Promise<void> {
+  const config = loadSiemConfig();
+
+  if (!config.enabled) {
+    siemHealthCache = buildSiemHealth({
+      enabled: false,
+      type: null,
+      sources: SIEM_SOURCES,
+      cursors: [],
+      recentReceipts: null,
+      cursorInitSentinel: CURSOR_INIT_SENTINEL,
+    });
+    siemCacheLastRefresh = Date.now();
+    return;
+  }
+
   try {
     const pool = getPoolForWorker();
     const client = await pool.connect();
     try {
-      const result = await client.query(
-        'SELECT "lastDeliveredAt", "lastError", "deliveryCount" FROM siem_delivery_cursors WHERE id = $1',
-        ['activity_logs']
-      );
-      if (result.rows.length > 0) {
-        const row = result.rows[0] as Record<string, unknown>;
-        siemCursorCache = {
-          lastDeliveredAt: row.lastDeliveredAt ? String(row.lastDeliveredAt) : null,
-          lastError: (row.lastError as string | null) ?? null,
-          deliveryCount: (row.deliveryCount as number) ?? 0,
-        };
-      } else {
-        siemCursorCache = null;
+      // allSettled so a transient failure in the optional receipts read does
+      // not wipe the primary cursor status that operators rely on.
+      const [cursorsResult, receiptsResult] = await Promise.allSettled([
+        readCursorSnapshots(client, SIEM_SOURCES),
+        readRecentReceipts(client),
+      ]);
+
+      if (cursorsResult.status === 'rejected') {
+        throw cursorsResult.reason;
       }
+
+      let recentReceipts: Awaited<ReturnType<typeof readRecentReceipts>>;
+      if (receiptsResult.status === 'rejected') {
+        const message =
+          receiptsResult.reason instanceof Error
+            ? receiptsResult.reason.message
+            : String(receiptsResult.reason);
+        console.warn('[health] SIEM receipts read failed, omitting lastReceipt:', message);
+        recentReceipts = null;
+      } else {
+        recentReceipts = receiptsResult.value;
+      }
+
+      siemHealthCache = buildSiemHealth({
+        enabled: true,
+        type: config.type,
+        sources: SIEM_SOURCES,
+        cursors: cursorsResult.value,
+        recentReceipts,
+        cursorInitSentinel: CURSOR_INIT_SENTINEL,
+      });
     } finally {
       client.release();
     }
-    siemCacheLastRefresh = Date.now();
   } catch (err) {
-    console.debug('[health] SIEM cursor refresh failed (table may not exist yet):', err instanceof Error ? err.message : err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[health] SIEM cursor refresh failed:', message);
+    // Surface a degraded-but-200 response so k8s liveness probes don't flap
+    // on a transient DB blip inside the SIEM subsystem.
+    siemHealthCache = {
+      enabled: true,
+      type: config.type,
+      sources: {},
+      error: 'health check db error',
+    };
   }
+
+  siemCacheLastRefresh = Date.now();
 }
 
 // Health check — serves cached SIEM status to avoid blocking liveness probes on DB
 app.get('/health', async (req, res) => {
   const siemConfig = loadSiemConfig();
 
-  // Trigger a non-blocking background refresh if cache is stale
-  if (siemConfig.enabled && Date.now() - siemCacheLastRefresh > SIEM_CACHE_TTL_MS) {
+  // Trigger a non-blocking background refresh if cache is stale. The in-flight
+  // guard inside refreshSiemCursorCache coalesces concurrent triggers.
+  if (Date.now() - siemCacheLastRefresh > SIEM_CACHE_TTL_MS) {
     refreshSiemCursorCache().catch(() => undefined);
   }
+
+  const siem: SiemHealthCache = siemHealthCache ?? {
+    enabled: siemConfig.enabled,
+    type: siemConfig.enabled ? siemConfig.type : null,
+    sources: {},
+  };
 
   res.json({
     status: 'healthy',
@@ -96,11 +164,7 @@ app.get('/health', async (req, res) => {
       total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
       rss: Math.round(process.memoryUsage().rss / 1024 / 1024)
     },
-    siem: {
-      enabled: siemConfig.enabled,
-      type: siemConfig.type,
-      ...(siemCursorCache && { cursor: siemCursorCache }),
-    },
+    siem,
   });
 });
 
@@ -150,8 +214,8 @@ app.get('/siem/receipts', authenticateService, requireScope('siem:read'), async 
   if (!entryId) {
     return res.status(400).json({ error: 'entryId query parameter is required' });
   }
-  if (!AUDIT_LOG_SOURCE_SET.has(source)) {
-    return res.status(400).json({ error: `source must be one of: ${AUDIT_LOG_SOURCES.join(', ')}` });
+  if (!SIEM_SOURCE_SET.has(source)) {
+    return res.status(400).json({ error: `source must be one of: ${SIEM_SOURCES.join(', ')}` });
   }
 
   const sourceKey = source as AuditLogSource;
