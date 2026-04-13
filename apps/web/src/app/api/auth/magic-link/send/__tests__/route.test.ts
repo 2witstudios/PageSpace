@@ -50,6 +50,11 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   auditRequest: vi.fn(),
+  maskEmail: (email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -175,7 +180,7 @@ describe('POST /api/auth/magic-link/send', () => {
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           details: expect.objectContaining({ originalEvent: 'magic_link_csrf_mismatch' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
         })
       );
     });
@@ -190,6 +195,14 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Invalid or expired CSRF token');
       expect(body.code).toBe('LOGIN_CSRF_INVALID');
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.anomaly.detected',
+          details: expect.objectContaining({ originalEvent: 'magic_link_csrf_invalid' }),
+          riskScore: 0.5,
+        })
+      );
     });
   });
 
@@ -338,8 +351,11 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          eventType: 'authz.access.denied',
-          details: expect.objectContaining({ originalEvent: 'magic_link_suspended_user', email: 'te***@example.com' }),
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({
+            attemptedUser: 'te***@example.com',
+            reason: 'user_suspended',
+          }),
           riskScore: 0.5,
         })
       );
@@ -377,6 +393,27 @@ describe('POST /api/auth/magic-link/send', () => {
         { error: { code: 'DATABASE_ERROR', message: 'Connection failed' } }
       );
     });
+
+    it('audits unexpected service errors via auditRequest', async () => {
+      vi.mocked(createMagicLinkToken).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'DATABASE_ERROR', message: 'Connection failed' },
+      });
+
+      const request = createMagicLinkRequest();
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({
+            reason: 'magic_link_database_error',
+          }),
+        })
+      );
+    });
   });
 
   describe('email sending', () => {
@@ -403,16 +440,18 @@ describe('POST /api/auth/magic-link/send', () => {
       );
     });
 
-    it('audits magic link request on successful email send', async () => {
+    it('audits magic link token creation on successful email send', async () => {
       const request = createMagicLinkRequest();
       await POST(request);
 
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          eventType: 'data.write',
-          resourceType: 'magic_link',
-          resourceId: 'magic_link_request',
+          eventType: 'auth.token.created',
+          details: expect.objectContaining({
+            tokenType: 'magic_link',
+            email: 'te***@example.com',
+          }),
         })
       );
     });

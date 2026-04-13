@@ -178,7 +178,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'delete' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
         })
       );
     });
@@ -350,7 +350,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'update' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
         })
       );
     });

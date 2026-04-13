@@ -80,6 +80,23 @@ OAuth callbacks, passkey operations, token exchanges, magic links, device auth, 
 - [ ] `pnpm typecheck` passes
 - [ ] No new `any` types
 
+#### Sub-task: `pu/audit-passkey-ml` follow-up — passkey + magic-link cleanup
+
+Follow-up to commits c72a1e5a + 1d72d3a7 migrating these routes to the `auditRequest` pipeline. Review of the branch identified 7 gaps:
+
+**Requirements:**
+
+1. **Given** signup-passkey verification fails, **should** emit `auth.login.failure` via `auditRequest` (currently calls `securityAudit.logAuthFailure`).
+2. **Given** signup-passkey succeeds, **should** emit `auth.login.success` and `auth.token.created` via `auditRequest` (currently calls `securityAudit.logAuthSuccess` + `logTokenCreated`).
+3. **Given** magic-link/verify fails token verification, **should** emit `auth.login.failure` via `auditRequest` with `reason: magic_link_<code>` (currently calls `securityAudit.logAuthFailure`).
+4. **Given** magic-link/verify succeeds (web or desktop path), **should** emit `auth.login.success` via `auditRequest` (currently calls `securityAudit.logAuthSuccess` twice).
+5. **Given** a CSRF-invalid or CSRF-mismatch audit fires, **should** use `riskScore: 0.5` so it surfaces at `warn` level in `audit-log.ts` (currently `0.4` → `info` only). CSRF-missing stays at `0.4` (normal on refresh).
+6. **Given** magic-link/send is called for a suspended user, **should** emit `auth.login.failure` with `reason: user_suspended` (currently emits `authz.access.denied` which is the wrong taxonomy).
+7. **Given** magic-link/send successfully creates + mails a magic link, **should** emit `auth.token.created` with `details: { tokenType: 'magic_link', ... }` (currently emits synthetic `data.write` with constant `resourceId`).
+8. **Given** magic-link token creation fails with an unexpected error, **should** still emit an audit event (currently silent — only logs).
+9. **Given** magic-link/send needs to mask an email for logging, **should** import the shared `maskEmail` from `@pagespace/lib/audit` rather than duplicating it locally.
+10. **Given** signup-passkey and magic-link/verify tests have been updated, **should** drop stale `securityAudit.log*` + `loggers.security.warn` mocks (migration-complete hygiene).
+
 ---
 
 ### PR 2: `audit/admin-routes` — Admin Domain (12 routes) [CRITICAL]

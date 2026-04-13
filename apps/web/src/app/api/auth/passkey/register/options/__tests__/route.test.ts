@@ -149,7 +149,7 @@ describe('POST /api/auth/passkey/register/options', () => {
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'register_options' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
         })
       );
     });

@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
-import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -49,8 +49,13 @@ export async function GET(req: Request) {
         error: result.error.code,
         ip: clientIP,
       });
-      securityAudit.logAuthFailure('unknown', clientIP, `magic_link_${result.error.code.toLowerCase()}`).catch((error) => {
-        loggers.security.warn('[MagicLinkVerify] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        details: {
+          attemptedUser: 'unknown',
+          reason: `magic_link_${result.error.code.toLowerCase()}`,
+        },
+        riskScore: 0.3,
       });
 
       return redirectWithError(errorCode);
@@ -168,8 +173,10 @@ export async function GET(req: Request) {
           });
 
           loggers.auth.info('Magic link login successful (desktop)', { userId, ip: clientIP });
-          securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-            loggers.security.warn('[MagicLinkVerify] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+          auditRequest(req, {
+            eventType: 'auth.login.success',
+            userId,
+            sessionId: sessionClaims.sessionId,
           });
 
           const headers = new Headers();
@@ -234,8 +241,10 @@ export async function GET(req: Request) {
       isNewUser,
       ip: clientIP,
     });
-    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[MagicLinkVerify] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
     });
 
     return NextResponse.redirect(redirectUrl.toString(), {

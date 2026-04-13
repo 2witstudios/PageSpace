@@ -8,7 +8,7 @@ import {
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
@@ -20,14 +20,6 @@ const sendMagicLinkSchema = z.object({
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
   { message: 'deviceId and deviceName are required for desktop platform' }
 );
-
-/** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return '***@***';
-  const visibleChars = Math.min(2, local.length);
-  return `${local.slice(0, visibleChars)}***@${domain}`;
-}
 
 export async function POST(req: Request) {
   try {
@@ -59,7 +51,7 @@ export async function POST(req: Request) {
       auditRequest(req, {
         eventType: 'security.anomaly.detected',
         details: { originalEvent: 'magic_link_csrf_mismatch' },
-        riskScore: 0.4,
+        riskScore: 0.5,
       });
       return Response.json(
         {
@@ -75,7 +67,7 @@ export async function POST(req: Request) {
       auditRequest(req, {
         eventType: 'security.anomaly.detected',
         details: { originalEvent: 'magic_link_csrf_invalid' },
-        riskScore: 0.4,
+        riskScore: 0.5,
       });
       return Response.json(
         {
@@ -173,8 +165,11 @@ export async function POST(req: Request) {
     if (!result.ok) {
       if (result.error.code === 'USER_SUSPENDED') {
         auditRequest(req, {
-          eventType: 'authz.access.denied',
-          details: { originalEvent: 'magic_link_suspended_user', email: maskEmail(normalizedEmail) },
+          eventType: 'auth.login.failure',
+          details: {
+            attemptedUser: maskEmail(normalizedEmail),
+            reason: 'user_suspended',
+          },
           riskScore: 0.5,
         });
         // Return success to prevent enumeration, but don't send email
@@ -193,6 +188,14 @@ export async function POST(req: Request) {
 
       // For other errors, log and return generic success
       loggers.auth.error('Magic link creation failed', { error: result.error });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        details: {
+          attemptedUser: maskEmail(normalizedEmail),
+          reason: `magic_link_${result.error.code.toLowerCase()}`,
+        },
+        riskScore: 0.3,
+      });
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
       });
@@ -215,9 +218,12 @@ export async function POST(req: Request) {
         ip: clientIP,
       });
       auditRequest(req, {
-        eventType: 'data.write',
-        resourceType: 'magic_link',
-        resourceId: 'magic_link_request',
+        eventType: 'auth.token.created',
+        details: {
+          tokenType: 'magic_link',
+          email: maskEmail(normalizedEmail),
+          isNewUser: result.data.isNewUser,
+        },
       });
     } catch (error) {
       // Log but don't expose email sending errors

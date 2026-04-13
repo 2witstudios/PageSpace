@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent, auditRequest, securityAudit } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
       auditRequest(req, {
         eventType: 'security.anomaly.detected',
         details: { originalEvent: 'passkey_csrf_invalid', flow: 'signup', email: email.substring(0, 3) + '***' },
-        riskScore: 0.4,
+        riskScore: 0.5,
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -137,8 +137,13 @@ export async function POST(req: Request) {
         ip: clientIP,
         email: email.substring(0, 3) + '***',
       });
-      securityAudit.logAuthFailure('unknown', clientIP, `passkey_signup_${result.error.code.toLowerCase()}`).catch((error) => {
-        loggers.security.warn('[SignupPasskey] audit logAuthFailure failed', { error: error instanceof Error ? error.message : String(error) });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        details: {
+          attemptedUser: 'unknown',
+          reason: `passkey_signup_${result.error.code.toLowerCase()}`,
+        },
+        riskScore: 0.3,
       });
 
       return NextResponse.json(
@@ -239,11 +244,15 @@ export async function POST(req: Request) {
       userId,
       ip: clientIP,
     });
-    securityAudit.logAuthSuccess(userId, sessionClaims.sessionId, clientIP, req.headers.get('user-agent') || 'unknown').catch((error) => {
-      loggers.security.warn('[SignupPasskey] audit logAuthSuccess failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.login.success',
+      userId,
+      sessionId: sessionClaims.sessionId,
     });
-    securityAudit.logTokenCreated(userId, 'passkey', clientIP).catch((error) => {
-      loggers.security.warn('[SignupPasskey] audit logTokenCreated failed', { error: error instanceof Error ? error.message : String(error), userId });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId,
+      details: { tokenType: 'passkey' },
     });
 
     // Build response headers with session cookie

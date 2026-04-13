@@ -40,21 +40,9 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
       debug: vi.fn(),
     },
-    security: {
-      warn: vi.fn(),
-    },
   },
   logAuthEvent: vi.fn(),
   auditRequest: vi.fn(),
-  securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
-    logDataAccess: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn().mockResolvedValue(undefined),
-    logLogout: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -218,6 +206,32 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
       expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
+    });
+
+    it('audits successful signup login via auditRequest', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.success',
+          userId: 'new-user-1',
+          sessionId: 'mock-session-id',
+        })
+      );
+    });
+
+    it('audits passkey token creation via auditRequest', async () => {
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.token.created',
+          userId: 'new-user-1',
+          details: expect.objectContaining({ tokenType: 'passkey' }),
+        })
+      );
     });
 
     it('passes clientIP as createdByIp when not unknown', async () => {
@@ -387,7 +401,7 @@ describe('POST /api/auth/signup-passkey', () => {
         expect.objectContaining({
           eventType: 'security.anomaly.detected',
           details: expect.objectContaining({ originalEvent: 'passkey_csrf_invalid', flow: 'signup', email: 'use***' }),
-          riskScore: 0.4,
+          riskScore: 0.5,
         })
       );
     });
@@ -490,6 +504,26 @@ describe('POST /api/auth/signup-passkey', () => {
         error: 'VERIFICATION_FAILED',
         email: 'use***',
       }));
+    });
+
+    it('audits verification failures via auditRequest', async () => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({
+            attemptedUser: 'unknown',
+            reason: 'passkey_signup_verification_failed',
+          }),
+        })
+      );
     });
   });
 

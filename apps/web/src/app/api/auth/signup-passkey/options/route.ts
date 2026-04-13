@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       auditRequest(req, {
         eventType: 'security.anomaly.detected',
         details: { originalEvent: 'passkey_csrf_invalid', flow: 'signup_options', email: normalizedEmail.substring(0, 3) + '***' },
-        riskScore: 0.4,
+        riskScore: 0.5,
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },

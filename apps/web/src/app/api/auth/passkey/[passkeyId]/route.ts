@@ -46,7 +46,7 @@ export async function DELETE(
           eventType: 'security.anomaly.detected',
           userId,
           details: { originalEvent: 'passkey_csrf_invalid', passkeyId, flow: 'delete' },
-          riskScore: 0.4,
+          riskScore: 0.5,
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -140,7 +140,7 @@ export async function PATCH(
           eventType: 'security.anomaly.detected',
           userId,
           details: { originalEvent: 'passkey_csrf_invalid', passkeyId, flow: 'update' },
-          riskScore: 0.4,
+          riskScore: 0.5,
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
