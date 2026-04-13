@@ -8,11 +8,14 @@ import { createSignedState } from '@pagespace/lib/integrations';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { generatePKCE } from '@pagespace/lib/auth';
 
+// Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
+// the server can mint a signed state it will later reject at the callback,
+// bouncing users with oauth_error after they complete provider auth.
 const googleSigninSchema = z.object({
-  returnUrl: z.string().optional(),
+  returnUrl: z.string().max(2048).optional(),
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
-  deviceId: z.string().optional(), // For device tracking on all platforms
-  deviceName: z.string().optional(), // Human-readable device name
+  deviceId: z.string().min(1).max(128).optional(),
+  deviceName: z.string().max(255).optional(),
 });
 
 export async function POST(req: Request) {

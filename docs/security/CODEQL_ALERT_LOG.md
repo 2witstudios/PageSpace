@@ -253,3 +253,34 @@ CodeQL's `js/shell-command-injection-from-environment` rule flags shell commands
 - `infrastructure/__tests__/tenant-stack.test.ts` — `execSync` → `execFileSync` with array args
 - `infrastructure/__tests__/generate-tenant-env.test.ts` — `execSync` → `execFileSync` with array args
 - `infrastructure/scripts/__tests__/image-runtime.test.ts` — Refactored `run()`/`composeCmd()` to `composeRun()`/`composeArgs()` using `execFileSync`
+
+## Batch 9: OAuth State Zod Narrowing (1 alert fixed)
+
+**Branch**: `pu/oauth-state-zod-narrow`
+**Date**: 2026-04-13
+**Total Alerts**: 1 (`js/user-controlled-bypass` HIGH)
+**Disposition**: Fixed via zero-trust schema narrowing inside `verifyOAuthState`
+
+### Analysis
+
+CodeQL alert #163 traces taint from `req.url` → `searchParams.get('state')` → `verifiedState.deviceId` into the `if (!deviceId)` branch selector at `google/callback/route.ts:242`. The HMAC verification in `verifyOAuthState()` proves *authenticity* (the state was minted with `OAUTH_STATE_SECRET`) but not *shape* — `platform`, `deviceId`, `deviceName`, and `returnUrl` flowed from `JSON.parse` output directly into branch selection and redirect construction, with no explicit shape check CodeQL's dataflow engine could recognize as a sanitizer.
+
+The fix adds a `z.object({...})` schema inside `verifyOAuthState` that runs `safeParse` **after** HMAC verification. Failures collapse to `{ status: 'malformed' }` so all existing callers (Google callback, Apple callback, `isDesktopOAuthState`, any future OAuth provider) benefit from one change without per-route duplication. The `timestamp` age check moves after the schema parse so it runs on a validated shape. `platform` is now constrained to `z.enum(['web','desktop','ios'])`, matching the signin-side schema.
+
+**Rating: S3 (Should Fix)** — Not exploitable today (HMAC secret required to mint state), but a latent weakness: any past internal caller or key-compromise scenario would hand raw JSON straight into branch selection. Zero-trust posture treats HMAC-verified payloads as still-untrusted until shape-validated.
+
+### Alert Disposition
+
+| Alert | Rule | Severity | File | CWE | Fix Summary | Status |
+|-------|------|----------|------|-----|-------------|--------|
+| #163 | js/user-controlled-bypass | high | google/callback/route.ts:242 | CWE-807 | Added `oauthStateDataSchema` inside `verifyOAuthState`; `safeParse` runs after HMAC check, shape failures collapse to `'malformed'`; age check moved after parse | FIXED |
+
+### Files Modified (3 files)
+
+- `apps/web/src/lib/auth/oauth-state.ts` — Zod schema added, HMAC path narrowed to parsed shape, `OAuthStateData` exported as `z.infer<typeof oauthStateDataSchema>`
+- `apps/web/src/lib/auth/__tests__/oauth-state.test.ts` — New schema-boundary cases (unknown `platform`, length-capped `deviceId`/`returnUrl`/`deviceName`, missing/NaN/Infinity `timestamp` → `'malformed'`)
+- `docs/security/CODEQL_ALERT_LOG.md` — This entry
+
+### Zero-Trust Principle
+
+*Never trust inputs — validate shape even when authenticity is proven.* HMAC verification answers "who minted this?"; schema validation answers "does this match what I expect to consume?". Both boundaries are required. The Apple callback (`apps/web/src/app/api/auth/apple/callback/route.ts`) benefits automatically via the shared `verifyOAuthState()` entry point — no route-level changes required.
