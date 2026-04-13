@@ -1,3 +1,23 @@
+## 2026-04-13
+
+### GitHub Import: Connection Resolution Hardened
+
+`import_from_github` now resolves and authorises GitHub connections through the same path as the rest of the integration runtime, fixing a regression where the tool could fail to find a connection that the same chat had successfully used moments earlier.
+
+#### Fixed
+
+- **Dashboard imports could not find the user's GitHub connection**: the tool resolved against the import-target `driveId` (which always triggered the visibility filter), not the chat-context drive. It now mirrors the global-assistant chat route (`messages/route.ts`) and uses `locationContext.currentDrive`, with the same `!isMember → driveId=null` nullification, so the connection set matches what `github_list_repositories` already sees.
+- **Page agents could not use granted GitHub connections**: the tool only consulted the global-assistant resolution path. It now branches on `chatSource.type` and resolves via `resolveAgentIntegrations` for page-agent chats, mirroring `resolvePageAgentIntegrationTools`.
+
+#### Security
+
+- **Authorisation bypass via `connectionId` parameter**: an LLM-supplied `connectionId` previously skipped grant validation entirely and was accepted by the token loader as long as it satisfied a permissive drive-scope check. A page-agent session could obtain a token for a drive-scoped GitHub connection that the agent held no grant for. Resolution and authorisation are now collapsed into a single `findGitHubConnectionId(ctx, explicitConnectionId?)` function that always validates explicit ids against the resolved allowed set; `loadGitHubToken` is now a pure load-and-decrypt step with no defence-in-depth scoping checks (those are now upstream and stronger).
+
+#### Errors
+
+- "GitHub connection not found" now branches on whether the chat is in a drive context (`...for this drive...`) or the dashboard, matching pre-fix behaviour.
+- Page-agent and global-assistant rejection messages distinguish between "no connection at all" and "explicit id not allowed".
+
 ## 2026-04-10
 
 ### Task-Triggered Workflows
