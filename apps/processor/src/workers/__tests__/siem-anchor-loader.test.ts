@@ -5,7 +5,7 @@ import {
   loadActivityLogHashableFields,
   loadSecurityAuditHashableFields,
 } from '../siem-anchor-loader';
-import { CURSOR_INIT_SENTINEL } from '../siem-delivery-worker';
+import { CURSOR_INIT_SENTINEL } from '../../services/siem-sources';
 
 interface MockQueryCall {
   sql: string;

@@ -17,16 +17,10 @@ import {
 import { buildReceipts } from '../services/siem-receipt-builder';
 import { writeReceipts } from './siem-receipt-writer';
 import { runChainPreflight } from './siem-delivery-preflight';
-import { CURSOR_INIT_SENTINEL } from './siem-delivery-worker-constants';
+import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from '../services/siem-sources';
 import { notifyChainPreflightFailure } from '@pagespace/lib/audit';
 import { getPoolForWorker } from '../db';
 
-// Re-exported so existing imports of CURSOR_INIT_SENTINEL from this module
-// keep working after the constant moved to a shared file to break an import
-// cycle between the worker and its preflight/loader helpers.
-export { CURSOR_INIT_SENTINEL };
-
-export const SOURCES: readonly AuditLogSource[] = ['activity_logs', 'security_audit_log'] as const;
 const DEFAULT_BATCH_SIZE = 100;
 
 // One advisory lock guards the whole worker run — not per-source. Key is kept
@@ -260,7 +254,7 @@ export async function processSiemDelivery(): Promise<void> {
     // we need from them as a tie-breaker — same-timestamp rows just need
     // *some* stable order so neither side gets dropped.
     const states: SourceState[] = [];
-    for (const source of SOURCES) {
+    for (const source of SIEM_SOURCES) {
       let cursor = await loadCursor(client, source);
 
       // Treat a null-timestamp row as uninitialized. The schema CHECK constraint
@@ -516,7 +510,7 @@ export async function processSiemDelivery(): Promise<void> {
       // error write runs after the cursor advance above, so sources that made
       // partial progress still show lastError in /health.
       const errorMessage = result.error ?? 'Unknown delivery error';
-      for (const source of SOURCES) {
+      for (const source of SIEM_SOURCES) {
         await recordError(client, source, errorMessage);
       }
       const partial =
@@ -529,7 +523,7 @@ export async function processSiemDelivery(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
 
     try {
-      for (const source of SOURCES) {
+      for (const source of SIEM_SOURCES) {
         await recordError(client, source, message);
       }
     } catch {
