@@ -892,6 +892,96 @@ describe('GET /health', () => {
 
     expect(mockConnect.mock.calls.length).toBe(firstConnectCount);
   });
+
+  it('given N concurrent refreshes while one is in flight, should collapse to a single DB round trip', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    // Gate the query so the first refresh stays in-flight while we fire more
+    let releaseQuery: (() => void) | undefined;
+    const queryGate = new Promise<void>((resolve) => {
+      releaseQuery = resolve;
+    });
+    const mockQuery = vi
+      .fn()
+      .mockImplementation(async () => {
+        await queryGate;
+        return { rows: [], rowCount: 0 };
+      });
+    const mockConnect = vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({ connect: mockConnect });
+
+    const { refreshSiemCursorCache } = await import('../server');
+
+    // Fire five overlapping refreshes before any completes
+    const flights = [
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+      refreshSiemCursorCache(),
+    ];
+
+    // Now let the single in-flight query complete and await all callers
+    releaseQuery!();
+    await Promise.all(flights);
+
+    // Exactly one pool.connect → one DB round trip despite 5 concurrent callers
+    expect(mockConnect.mock.calls.length).toBe(1);
+  });
+
+  it('given cursors succeed but receipts read rejects, should preserve per-source status and omit lastReceipt without marking the whole section errored', async () => {
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('siem_delivery_cursors')) {
+        return {
+          rows: [
+            {
+              id: 'activity_logs',
+              lastDeliveredId: 'log_42',
+              lastDeliveredAt: new Date('2026-04-10T12:00:00Z'),
+              lastError: null,
+              lastErrorAt: null,
+              deliveryCount: 42,
+              updatedAt: new Date('2026-04-10T12:00:05Z'),
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('siem_delivery_receipts')) {
+        // Simulate a transient receipts failure that is NOT 42P01
+        throw Object.assign(new Error('connection reset'), { code: '08006' });
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
+      connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    });
+
+    await refreshSiemCursorCache();
+    expect(mockRelease).toHaveBeenCalled();
+
+    const { req, res, statusCode, jsonMock } = makeReqRes();
+    await getHealthHandler()(req, res);
+
+    expect(statusCode.value).toBe(200);
+    const { siem } = jsonMock.mock.calls[0][0];
+    expect(siem.enabled).toBe(true);
+    expect(siem.error).toBeUndefined();
+    expect(siem.sources.activity_logs.status).toBe('delivering');
+    expect(siem.sources.activity_logs.deliveryCount).toBe(42);
+    expect(siem.sources.activity_logs.lastReceipt).toBeUndefined();
+  });
 });
 
 // ===========================================================================

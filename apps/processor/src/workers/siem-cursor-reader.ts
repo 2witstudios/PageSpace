@@ -13,7 +13,7 @@ export async function readCursorSnapshots(
   client: PgClient,
   sources: readonly AuditLogSource[],
 ): Promise<CursorSnapshot[]> {
-  const result = await client.query(CURSOR_SELECT_SQL, [sources as unknown as string[]]);
+  const result = await client.query(CURSOR_SELECT_SQL, [[...sources]]);
   return result.rows.map(rowToSnapshot);
 }
 

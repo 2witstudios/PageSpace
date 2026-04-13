@@ -52,8 +52,19 @@ type SiemHealthCache = SiemHealthResponse & { error?: string };
 let siemHealthCache: SiemHealthCache | null = null;
 const SIEM_CACHE_TTL_MS = 15_000; // 15 seconds
 let siemCacheLastRefresh = 0;
+// In-flight guard: N concurrent /health hits during a slow refresh collapse to
+// one DB round trip instead of stampeding the pool.
+let siemRefreshInFlight: Promise<void> | null = null;
 
-export async function refreshSiemCursorCache(): Promise<void> {
+export function refreshSiemCursorCache(): Promise<void> {
+  if (siemRefreshInFlight) return siemRefreshInFlight;
+  siemRefreshInFlight = doRefreshSiemCursorCache().finally(() => {
+    siemRefreshInFlight = null;
+  });
+  return siemRefreshInFlight;
+}
+
+async function doRefreshSiemCursorCache(): Promise<void> {
   const config = loadSiemConfig();
 
   if (!config.enabled) {
@@ -73,16 +84,34 @@ export async function refreshSiemCursorCache(): Promise<void> {
     const pool = getPoolForWorker();
     const client = await pool.connect();
     try {
-      const [cursors, recentReceipts] = await Promise.all([
+      // allSettled so a transient failure in the optional receipts read does
+      // not wipe the primary cursor status that operators rely on.
+      const [cursorsResult, receiptsResult] = await Promise.allSettled([
         readCursorSnapshots(client, SIEM_SOURCES),
         readRecentReceipts(client),
       ]);
+
+      if (cursorsResult.status === 'rejected') {
+        throw cursorsResult.reason;
+      }
+
+      let recentReceipts: Awaited<ReturnType<typeof readRecentReceipts>>;
+      if (receiptsResult.status === 'rejected') {
+        const message =
+          receiptsResult.reason instanceof Error
+            ? receiptsResult.reason.message
+            : String(receiptsResult.reason);
+        console.warn('[health] SIEM receipts read failed, omitting lastReceipt:', message);
+        recentReceipts = null;
+      } else {
+        recentReceipts = receiptsResult.value;
+      }
 
       siemHealthCache = buildSiemHealth({
         enabled: true,
         type: config.type,
         sources: SIEM_SOURCES,
-        cursors,
+        cursors: cursorsResult.value,
         recentReceipts,
         cursorInitSentinel: CURSOR_INIT_SENTINEL,
       });
@@ -109,7 +138,8 @@ export async function refreshSiemCursorCache(): Promise<void> {
 app.get('/health', async (req, res) => {
   const siemConfig = loadSiemConfig();
 
-  // Trigger a non-blocking background refresh if cache is stale
+  // Trigger a non-blocking background refresh if cache is stale. The in-flight
+  // guard inside refreshSiemCursorCache coalesces concurrent triggers.
   if (Date.now() - siemCacheLastRefresh > SIEM_CACHE_TTL_MS) {
     refreshSiemCursorCache().catch(() => undefined);
   }

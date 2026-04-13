@@ -5,10 +5,13 @@ interface PgClient {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
 }
 
+// deliveryId is the tiebreaker so two receipts for the same source with
+// identical deliveredAt (possible under batched delivery with ms-precision
+// timestamps) yield a deterministic winner across refreshes.
 const RECEIPT_SELECT_SQL = `SELECT DISTINCT ON (source)
   "deliveryId", source, "deliveredAt", "ackReceivedAt", "entryCount"
 FROM siem_delivery_receipts
-ORDER BY source, "deliveredAt" DESC`;
+ORDER BY source, "deliveredAt" DESC, "deliveryId" DESC`;
 
 // Returns null if the receipts table does not yet exist (Wave 3b not merged).
 // Returns [] if the table exists but holds no rows.
