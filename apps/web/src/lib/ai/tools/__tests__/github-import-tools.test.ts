@@ -39,9 +39,11 @@ vi.mock('@pagespace/lib/monitoring', () => ({
 vi.mock('@pagespace/lib/integrations', () => ({
   getConnectionWithProvider: vi.fn(),
   decryptCredentials: vi.fn(),
+  listGrantsByAgent: vi.fn().mockResolvedValue([]),
   listUserConnections: vi.fn().mockResolvedValue([]),
   listDriveConnections: vi.fn().mockResolvedValue([]),
   getConfig: vi.fn().mockResolvedValue(null),
+  resolveAgentIntegrations: vi.fn().mockResolvedValue([]),
   resolveGlobalAssistantIntegrations: vi.fn().mockResolvedValue([]),
 }));
 
@@ -71,8 +73,10 @@ import {
 import {
   getConnectionWithProvider,
   decryptCredentials,
+  resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,
 } from '@pagespace/lib/integrations';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -81,12 +85,26 @@ const mockDriveRepo = vi.mocked(driveRepository);
 const mockGetConnection = vi.mocked(getConnectionWithProvider);
 const mockDecryptCredentials = vi.mocked(decryptCredentials);
 const mockResolveIntegrations = vi.mocked(resolveGlobalAssistantIntegrations);
+const mockResolveAgentIntegrations = vi.mocked(resolveAgentIntegrations);
+const mockGetDriveAccess = vi.mocked(getDriveAccess);
 
-function makeContext(userId?: string) {
+function makeContext(
+  userId?: string,
+  options?: {
+    chatSource?: ToolExecutionContext['chatSource'];
+    locationContext?: ToolExecutionContext['locationContext'];
+  }
+) {
   return {
     toolCallId: '1',
     messages: [],
-    experimental_context: userId ? { userId } as ToolExecutionContext : {},
+    experimental_context: userId
+      ? ({
+          userId,
+          chatSource: options?.chatSource,
+          locationContext: options?.locationContext,
+        } as ToolExecutionContext)
+      : {},
   };
 }
 
@@ -258,41 +276,9 @@ describe('github-import-tools', () => {
   });
 
   describe('connection validation', () => {
-    it('throws when connection belongs to a different user', async () => {
-      mockDriveRepo.findByIdBasic.mockResolvedValue({
-        id: 'drive-1',
-        ownerId: 'user-123',
-      } as never);
-      mockGetConnection.mockResolvedValue({
-        id: 'conn-1',
-        providerId: 'github',
-        name: 'GitHub',
-        status: 'active',
-        userId: 'other-user',
-        driveId: null,
-        credentials: {},
-      } as never);
-
-      await expect(
-        githubImportTools.import_from_github.execute!(
-          {
-            connectionId: 'conn-1',
-            mode: 'file',
-            owner: 'octocat',
-            repo: 'hello',
-            driveId: 'drive-1',
-            path: 'README.md',
-          },
-          makeContext('user-123')
-        )
-      ).rejects.toThrow('does not belong');
-    });
+    beforeEach(setupAuthMocks);
 
     it('throws when connection is inactive', async () => {
-      mockDriveRepo.findByIdBasic.mockResolvedValue({
-        id: 'drive-1',
-        ownerId: 'user-123',
-      } as never);
       mockGetConnection.mockResolvedValue({
         id: 'conn-1',
         providerId: 'github',
@@ -316,6 +302,80 @@ describe('github-import-tools', () => {
           makeContext('user-123')
         )
       ).rejects.toThrow('expired');
+    });
+
+    it('throws when access token is missing from credentials', async () => {
+      mockDecryptCredentials.mockResolvedValue({});
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            connectionId: 'conn-1',
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123')
+        )
+      ).rejects.toThrow('access token not found');
+    });
+
+    it('allows a page-agent grant whose connection is scoped to a different drive than the import target', async () => {
+      mockResolveAgentIntegrations.mockResolvedValue([
+        {
+          id: 'grant-1',
+          agentId: 'agent-page-1',
+          connectionId: 'conn-cross-drive',
+          allowedTools: null,
+          deniedTools: null,
+          readOnly: false,
+          rateLimitOverride: null,
+          connection: {
+            id: 'conn-cross-drive',
+            name: 'GitHub',
+            status: 'active',
+            providerId: 'github-provider',
+            provider: { id: 'github-provider', slug: 'github', name: 'GitHub', config: {} },
+          },
+        },
+      ] as never);
+      mockGetConnection.mockResolvedValue({
+        id: 'conn-cross-drive',
+        providerId: 'github',
+        name: 'GitHub',
+        status: 'active',
+        userId: null,
+        driveId: 'drive-source',
+        credentials: { accessToken: 'encrypted' },
+      } as never);
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123', {
+          chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+        })
+      );
+
+      expect(result).toMatchObject({ success: true });
     });
   });
 
@@ -366,6 +426,410 @@ describe('github-import-tools', () => {
           makeContext('user-123')
         )
       ).rejects.toThrow('No active GitHub connection found');
+    });
+
+    it('resolves connection from chat-context drive (not import-target drive) for global assistant', async () => {
+      // User chats from drive-A (where they are owner). Import targets drive-1.
+      // findGitHubConnectionId should call getDriveAccess on drive-A (the chat context),
+      // not drive-1 (the tool-parameter import target).
+      mockGetDriveAccess.mockResolvedValue({
+        isMember: true,
+        role: 'OWNER',
+        isOwner: true,
+        isAdmin: true,
+      } as never);
+
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123', {
+          locationContext: {
+            currentDrive: { id: 'drive-A', name: 'A', slug: 'a' },
+          },
+        })
+      );
+
+      expect(result).toMatchObject({ success: true });
+      expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-A', 'user-123');
+      // Resolver receives the chat-context drive id, not the tool-param drive id.
+      expect(mockResolveIntegrations).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-123',
+        'drive-A',
+        'OWNER'
+      );
+    });
+
+    it('nulls chat drive when user is not a member, allowing visibility filter to be skipped', async () => {
+      // User chats from drive-X where they're not a member (e.g. via stale UI state).
+      // Mirroring the global assistant route, findGitHubConnectionId should pass
+      // driveId=null to the resolver so visibility filtering is bypassed.
+      mockGetDriveAccess.mockResolvedValue({
+        isMember: false,
+        role: null,
+        isOwner: false,
+        isAdmin: false,
+      } as never);
+
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123', {
+          locationContext: {
+            currentDrive: { id: 'drive-X', name: 'X', slug: 'x' },
+          },
+        })
+      );
+
+      expect(mockResolveIntegrations).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-123',
+        null,
+        null
+      );
+    });
+
+    it('passes driveId=null when chatting from dashboard (no current drive)', async () => {
+      // This is the user's reported failing case: global assistant in dashboard,
+      // import target is a specific drive. Connection resolution must not run
+      // the visibility filter against the import-target drive.
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123') // no locationContext
+      );
+
+      expect(mockGetDriveAccess).not.toHaveBeenCalled();
+      expect(mockResolveIntegrations).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-123',
+        null,
+        null
+      );
+    });
+
+    it('resolves via grants for a page agent, ignoring global-assistant config', async () => {
+      mockResolveAgentIntegrations.mockResolvedValue([
+        {
+          id: 'grant-1',
+          agentId: 'agent-page-1',
+          connectionId: 'conn-1',
+          allowedTools: null,
+          deniedTools: null,
+          readOnly: false,
+          rateLimitOverride: null,
+          connection: {
+            id: 'conn-1',
+            name: 'GitHub',
+            status: 'active',
+            providerId: 'github-provider',
+            provider: { id: 'github-provider', slug: 'github', name: 'GitHub', config: {} },
+          },
+        },
+      ] as never);
+
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123', {
+          chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+        })
+      );
+
+      expect(result).toMatchObject({ success: true });
+      expect(mockResolveAgentIntegrations).toHaveBeenCalledWith(
+        expect.anything(),
+        'agent-page-1'
+      );
+      // Page agent path must not consult the global-assistant resolver.
+      expect(mockResolveIntegrations).not.toHaveBeenCalled();
+    });
+
+    it('throws page-agent-specific error when agent has no GitHub grant', async () => {
+      mockResolveAgentIntegrations.mockResolvedValue([]);
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123', {
+            chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+          })
+        )
+      ).rejects.toThrow('does not have a GitHub integration grant');
+    });
+  });
+
+  // Given a page agent calls import_from_github with an explicit connectionId
+  // that is NOT among the agent's grants, should reject (authorization boundary).
+  // Given global assistant calls with an explicit connectionId not in the resolved
+  // set, should reject. Given the explicit id IS in the allowed set, should accept.
+  describe('explicit connectionId enforcement', () => {
+    beforeEach(setupAuthMocks);
+
+    it('rejects explicit connectionId not granted to the page agent', async () => {
+      mockResolveAgentIntegrations.mockResolvedValue([
+        {
+          id: 'grant-1',
+          agentId: 'agent-page-1',
+          connectionId: 'conn-granted',
+          allowedTools: null,
+          deniedTools: null,
+          readOnly: false,
+          rateLimitOverride: null,
+          connection: {
+            id: 'conn-granted',
+            name: 'GitHub',
+            status: 'active',
+            providerId: 'github-provider',
+            provider: { id: 'github-provider', slug: 'github', name: 'GitHub', config: {} },
+          },
+        },
+      ] as never);
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            connectionId: 'conn-attacker',
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123', {
+            chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+          })
+        )
+      ).rejects.toThrow('not granted to this agent');
+    });
+
+    it('accepts explicit connectionId that matches a page agent grant', async () => {
+      mockResolveAgentIntegrations.mockResolvedValue([
+        {
+          id: 'grant-1',
+          agentId: 'agent-page-1',
+          connectionId: 'conn-granted',
+          allowedTools: null,
+          deniedTools: null,
+          readOnly: false,
+          rateLimitOverride: null,
+          connection: {
+            id: 'conn-granted',
+            name: 'GitHub',
+            status: 'active',
+            providerId: 'github-provider',
+            provider: { id: 'github-provider', slug: 'github', name: 'GitHub', config: {} },
+          },
+        },
+      ] as never);
+
+      mockGetConnection.mockResolvedValue({
+        id: 'conn-granted',
+        providerId: 'github',
+        name: 'GitHub',
+        status: 'active',
+        userId: null,
+        driveId: 'drive-source',
+        credentials: { accessToken: 'encrypted' },
+      } as never);
+
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          connectionId: 'conn-granted',
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123', {
+          chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+        })
+      );
+
+      expect(result).toMatchObject({ success: true });
+    });
+
+    it('rejects explicit connectionId not in the global-assistant resolved set', async () => {
+      // mockResolveIntegrations from setupAuthMocks returns conn-1
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            connectionId: 'conn-attacker',
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123')
+        )
+      ).rejects.toThrow('not available in this chat');
+    });
+
+    it('accepts explicit connectionId that matches the global-assistant resolved set', async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockGitHubResponse({
+          name: 'README.md',
+          path: 'README.md',
+          sha: 'abc',
+          size: 5,
+          content: base64Encode('hello'),
+          encoding: 'base64',
+          html_url: '',
+        })
+      );
+
+      const result = await githubImportTools.import_from_github.execute!(
+        {
+          connectionId: 'conn-1',
+          mode: 'file',
+          owner: 'octocat',
+          repo: 'hello',
+          driveId: 'drive-1',
+          path: 'README.md',
+        },
+        makeContext('user-123')
+      );
+
+      expect(result).toMatchObject({ success: true });
+    });
+  });
+
+  // Given user is in a drive chat context with no resolvable GitHub connection,
+  // should hint that the connection should be drive-scoped. Given dashboard
+  // context, should use the generic message.
+  describe('drive-aware error messages', () => {
+    beforeEach(setupAuthMocks);
+
+    it('mentions the drive in the error when chatting from a drive context', async () => {
+      mockResolveIntegrations.mockResolvedValue([]);
+      mockGetDriveAccess.mockResolvedValue({
+        isMember: true,
+        role: 'OWNER',
+        isOwner: true,
+        isAdmin: true,
+      } as never);
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123', {
+            locationContext: {
+              currentDrive: { id: 'drive-A', name: 'A', slug: 'a' },
+            },
+          })
+        )
+      ).rejects.toThrow('for this drive');
+    });
+
+    it('uses the generic error in dashboard context', async () => {
+      mockResolveIntegrations.mockResolvedValue([]);
+
+      await expect(
+        githubImportTools.import_from_github.execute!(
+          {
+            mode: 'file',
+            owner: 'octocat',
+            repo: 'hello',
+            driveId: 'drive-1',
+            path: 'README.md',
+          },
+          makeContext('user-123')
+        )
+      ).rejects.toThrow(/^No active GitHub connection found\. Connect/);
     });
   });
 
