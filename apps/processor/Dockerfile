@@ -1,19 +1,18 @@
 # syntax=docker/dockerfile:1.6
-FROM node:22.17.0-alpine AS base
+FROM node:22.17.0-bookworm-slim AS base
 
-# Install system dependencies for Sharp and Tesseract
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    cairo-dev \
-    jpeg-dev \
-    pango-dev \
-    giflib-dev \
-    pixman-dev \
-    pangomm-dev \
-    libjpeg-turbo-dev \
-    freetype-dev
+# Build-time tools needed by node-gyp / node-pre-gyp for any native addon
+# that has to fall back to compiling from source (notably @tensorflow/tfjs-node
+# when no prebuilt is available for the target arch). Sharp and tesseract.js
+# ship self-contained glibc prebuilds and need no runtime libs on Debian.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      python3 \
+      make \
+      g++ \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -45,18 +44,14 @@ WORKDIR /app/apps/processor
 RUN pnpm build
 
 # Production stage
-FROM node:22.17.0-alpine AS production
+FROM node:22.17.0-bookworm-slim AS production
 
-# Install runtime dependencies for Sharp
-RUN apk add --no-cache \
-    cairo \
-    jpeg \
-    pango \
-    giflib \
-    pixman \
-    pangomm \
-    libjpeg-turbo \
-    freetype
+# Sharp 0.33+ and tesseract.js ship self-contained glibc prebuilds; no extra
+# runtime libs are needed. ca-certificates is kept for outbound HTTPS from
+# any worker that fetches over the network.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -73,7 +68,8 @@ RUN mkdir -p /data/cache /data/files && \
 # This ensures Docker preserves permissions when creating new volumes
 VOLUME ["/data/files", "/data/cache"]
 
-# Switch to non-root user
+# The node:22.17.0-bookworm-slim base image already ships a `node` user
+# with UID/GID 1000, matching the /data ownership set above.
 USER node
 
 # Set environment variables
