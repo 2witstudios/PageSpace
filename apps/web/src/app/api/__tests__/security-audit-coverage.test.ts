@@ -203,4 +203,47 @@ describe('Security Audit Route Coverage', () => {
   it('should discover a reasonable number of routes (sanity check)', () => {
     expect(routes.length).toBeGreaterThanOrEqual(240);
   });
+
+  /**
+   * AI routes are the highest abuse surface in the app: prompt injection,
+   * model abuse, and data exfiltration through agents all probe through
+   * these endpoints before landing. Emitting `authz.access.denied` on the
+   * auth/permission-denial paths is what lets SIEM detect the probing.
+   * Success-only audit coverage is not enough for the AI subset.
+   */
+  const AI_ROUTES_REQUIRING_DENIAL_AUDIT: string[] = [
+    'ai/abort',
+    'ai/chat',
+    'ai/chat/messages',
+    'ai/chat/messages/[messageId]',
+    'ai/chat/messages/[messageId]/undo',
+  ];
+
+  it('AI routes should audit authz.access.denied on auth/permission-failure paths', () => {
+    const routeByPath = new Map(routes.map((r) => [r.path, r.file]));
+    const violations: string[] = [];
+
+    for (const routePath of AI_ROUTES_REQUIRING_DENIAL_AUDIT) {
+      const file = routeByPath.get(routePath);
+      if (!file) {
+        violations.push(`${routePath} (route file not found)`);
+        continue;
+      }
+      const content = readFileSync(file, 'utf-8');
+      if (!/authz\.access\.denied/.test(content)) {
+        violations.push(routePath);
+      }
+    }
+
+    expect(violations).toEqual([]);
+    if (violations.length > 0) {
+      console.error(
+        `\nAI routes missing authz.access.denied audit for ${violations.length} route(s):\n` +
+          violations.map((v) => `  - ${v}`).join('\n') +
+          '\n\nFix: On each early-return path representing an auth/permission' +
+          '\nfailure, call auditRequest(request, { eventType: "authz.access.denied", ... })' +
+          '\nbefore returning the error response so SIEM can detect probing.\n'
+      );
+    }
+  });
 });
