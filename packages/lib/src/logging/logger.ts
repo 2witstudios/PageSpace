@@ -130,9 +130,17 @@ class Logger {
   private sanitizeData(data: unknown): unknown {
     if (!this.config.sanitize) return data;
 
+    // Substring match against `lowerKey.includes(s)`, so `name` catches
+    // `username`, `filename`, `firstname`, `lastname`, `displayname`, etc.
+    // and `address` catches `streetaddress`, `homeaddress`, `emailaddress`.
+    // Dedicated LogContext fields (userId, ip, sessionId, requestId, etc.)
+    // are extracted to typed columns by logger-database before the database
+    // sink is reached, so adding broad PII keys here does not affect the
+    // structured columns those callers rely on.
     const sensitive = [
       'password', 'token', 'secret', 'api_key', 'apiKey',
-      'authorization', 'cookie', 'credit_card', 'ssn', 'jwt'
+      'authorization', 'cookie', 'credit_card', 'ssn', 'jwt',
+      'email', 'name', 'phone', 'address', 'dob', 'dateofbirth',
     ];
 
     if (typeof data === 'string') {

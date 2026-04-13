@@ -269,8 +269,8 @@ describe('Logger sanitizeData', () => {
   });
 
   it('preserves non-sensitive string fields', () => {
-    const result = anyLogger.sanitizeData({ username: 'alice' });
-    expect(result.username).toBe('alice');
+    const result = anyLogger.sanitizeData({ requestId: 'req-123' });
+    expect(result.requestId).toBe('req-123');
   });
 
   it('returns string unchanged', () => {
@@ -279,15 +279,61 @@ describe('Logger sanitizeData', () => {
   });
 
   it('handles arrays by sanitizing each element', () => {
-    const result = anyLogger.sanitizeData([{ password: 'x' }, { name: 'y' }]);
+    const result = anyLogger.sanitizeData([{ password: 'x' }, { requestId: 'req-y' }]);
     expect(result[0].password).toBe('[REDACTED]');
-    expect(result[1].name).toBe('y');
+    expect(result[1].requestId).toBe('req-y');
   });
 
   it('handles nested objects recursively', () => {
-    const result = anyLogger.sanitizeData({ user: { password: 'nested', name: 'bob' } });
+    const result = anyLogger.sanitizeData({ user: { password: 'nested', requestId: 'req-bob' } });
     expect(result.user.password).toBe('[REDACTED]');
-    expect(result.user.name).toBe('bob');
+    expect(result.user.requestId).toBe('req-bob');
+  });
+
+  it('redacts "email" field', () => {
+    const result = anyLogger.sanitizeData({ email: 'alice@example.com' });
+    expect(result.email).toBe('[REDACTED]');
+  });
+
+  it('redacts "name" field', () => {
+    const result = anyLogger.sanitizeData({ name: 'Alice Smith' });
+    expect(result.name).toBe('[REDACTED]');
+  });
+
+  it('redacts substring matches like "username", "firstName", "filename"', () => {
+    const result = anyLogger.sanitizeData({
+      username: 'alice',
+      firstName: 'Alice',
+      lastName: 'Smith',
+      filename: 'W2_2024.pdf',
+    });
+    expect(result.username).toBe('[REDACTED]');
+    expect(result.firstName).toBe('[REDACTED]');
+    expect(result.lastName).toBe('[REDACTED]');
+    expect(result.filename).toBe('[REDACTED]');
+  });
+
+  it('redacts "phone" and "phoneNumber" fields', () => {
+    const result = anyLogger.sanitizeData({ phone: '+15551234', phoneNumber: '555-1234' });
+    expect(result.phone).toBe('[REDACTED]');
+    expect(result.phoneNumber).toBe('[REDACTED]');
+  });
+
+  it('redacts "address" and substring matches', () => {
+    const result = anyLogger.sanitizeData({
+      address: '1 Main St',
+      streetAddress: '1 Main St',
+      emailAddress: 'a@b.com',
+    });
+    expect(result.address).toBe('[REDACTED]');
+    expect(result.streetAddress).toBe('[REDACTED]');
+    expect(result.emailAddress).toBe('[REDACTED]');
+  });
+
+  it('redacts "dob" and "dateOfBirth" fields', () => {
+    const result = anyLogger.sanitizeData({ dob: '1990-01-01', dateOfBirth: '1990-01-01' });
+    expect(result.dob).toBe('[REDACTED]');
+    expect(result.dateOfBirth).toBe('[REDACTED]');
   });
 
   it('returns primitives (number, boolean) unchanged', () => {
