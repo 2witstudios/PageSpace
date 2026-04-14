@@ -22,6 +22,7 @@ import {
   createPasskeyRegisterHandoff,
   peekPasskeyRegisterHandoff,
   consumePasskeyRegisterHandoff,
+  markPasskeyRegisterOptionsIssued,
   type PasskeyRegisterHandoffData,
 } from '../passkey-register-handoff';
 import { tryGetSecurityRedisClient } from '../../security/security-redis';
@@ -30,6 +31,7 @@ interface MockRedis {
   setex: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   eval: ReturnType<typeof vi.fn>;
+  set: ReturnType<typeof vi.fn>;
   store: Map<string, string>;
 }
 
@@ -49,6 +51,20 @@ function makeMockRedis(): MockRedis {
       }
       return value;
     }),
+    set: vi.fn(
+      async (
+        key: string,
+        value: string,
+        ..._flags: unknown[]
+      ): Promise<'OK' | null> => {
+        const hasNX = _flags.includes('NX');
+        if (hasNX && store.has(key)) {
+          return null;
+        }
+        store.set(key, value);
+        return 'OK';
+      }
+    ),
   };
   return redis;
 }
@@ -274,6 +290,91 @@ describe('passkey-register-handoff', () => {
 
       const result = await consumePasskeyRegisterHandoff('some-token');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('markPasskeyRegisterOptionsIssued', () => {
+    it('first call sets the marker via SET NX EX 300 and returns true', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+
+      const result = await markPasskeyRegisterOptionsIssued('token-1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.set).toHaveBeenCalledTimes(1);
+      const [key, value, ...flags] = mockRedis.set.mock.calls[0];
+      expect(key).toMatch(/^auth:passkey-register-handoff-options-issued:/);
+      expect(value).toBe('1');
+      expect(flags).toContain('EX');
+      expect(flags).toContain(300);
+      expect(flags).toContain('NX');
+    });
+
+    it('uses hashToken for the marker key (at-rest protection)', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+
+      await markPasskeyRegisterOptionsIssued('raw-token');
+
+      const [key] = mockRedis.set.mock.calls[0];
+      expect(key).toBe(
+        'auth:passkey-register-handoff-options-issued:hashed_raw-token'
+      );
+    });
+
+    it('second call with the same token returns false (marker already exists)', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+
+      const first = await markPasskeyRegisterOptionsIssued('token-2');
+      const second = await markPasskeyRegisterOptionsIssued('token-2');
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+    });
+
+    it('different tokens both succeed', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+
+      expect(await markPasskeyRegisterOptionsIssued('token-a')).toBe(true);
+      expect(await markPasskeyRegisterOptionsIssued('token-b')).toBe(true);
+    });
+
+    it('returns false for empty or non-string token', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+
+      expect(await markPasskeyRegisterOptionsIssued('')).toBe(false);
+      expect(
+        await markPasskeyRegisterOptionsIssued(null as unknown as string)
+      ).toBe(false);
+      expect(mockRedis.set).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when Redis is unavailable in production (returns false)', async () => {
+      const origEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+
+      const result = await markPasskeyRegisterOptionsIssued('token');
+      expect(result).toBe(false);
+
+      process.env.NODE_ENV = origEnv;
+    });
+
+    it('fails closed when Redis is unavailable in development (returns false)', async () => {
+      const origEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(null);
+
+      const result = await markPasskeyRegisterOptionsIssued('token');
+      expect(result).toBe(false);
+
+      process.env.NODE_ENV = origEnv;
+    });
+
+    it('fails closed when redis.set rejects (transient connection error)', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      mockRedis.set.mockRejectedValueOnce(new Error('ECONNRESET'));
+
+      const result = await markPasskeyRegisterOptionsIssued('token');
+      expect(result).toBe(false);
     });
   });
 

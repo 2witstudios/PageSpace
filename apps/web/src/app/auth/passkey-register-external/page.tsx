@@ -1,22 +1,21 @@
 'use client';
 
 import { Suspense, useEffect, useRef, useState } from 'react';
-import { Loader2, ShieldAlert } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
-import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import { runPasskeyRegisterExternalCeremony } from '@/components/auth/runPasskeyRegisterExternalCeremony';
+import {
+  PasskeyRegisterExternalView,
+  type PasskeyRegisterExternalStatus,
+} from '@/components/auth/PasskeyRegisterExternalView';
 import { parsePasskeyRegisterExternalParams } from '@/components/auth/passkeyExternal';
-
-type Status =
-  | { kind: 'running' }
-  | { kind: 'redirecting' }
-  | { kind: 'complete' }
-  | { kind: 'error'; message: string };
 
 const HANDOFF_SETTLE_MS = 600;
 
 function PasskeyRegisterExternalContent() {
-  const [status, setStatus] = useState<Status>({ kind: 'running' });
+  const [status, setStatus] = useState<PasskeyRegisterExternalStatus>({
+    kind: 'running',
+  });
   const started = useRef(false);
 
   useEffect(() => {
@@ -38,8 +37,6 @@ function PasskeyRegisterExternalContent() {
       return;
     }
 
-    // Drop the fragment from the visible URL so the capability token is not
-    // left sitting in the browser address bar after consumption.
     if (window.location.hash) {
       window.history.replaceState(
         null,
@@ -68,7 +65,7 @@ function PasskeyRegisterExternalContent() {
             }
           }, HANDOFF_SETTLE_MS);
         } else {
-          setStatus({ kind: 'error', message: result.error });
+          setStatus({ kind: 'error', message: result.error, code: result.code });
         }
       })
       .catch((err: unknown) => {
@@ -85,48 +82,7 @@ function PasskeyRegisterExternalContent() {
     };
   }, []);
 
-  if (status.kind === 'complete') {
-    return (
-      <AuthShell>
-        <HandoffCompleteCard variant="passkey-added" />
-      </AuthShell>
-    );
-  }
-
-  return (
-    <AuthShell>
-      <div className="flex flex-col items-center gap-4 py-6 text-center">
-        {status.kind === 'error' ? (
-          <>
-            <ShieldAlert className="h-8 w-8 text-destructive" />
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                Could not add passkey
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">{status.message}</p>
-              <p className="mt-4 text-xs text-muted-foreground">
-                You can close this window and try again from the desktop app.
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                {status.kind === 'redirecting'
-                  ? 'Returning to the desktop app…'
-                  : 'Adding your passkey…'}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Use Touch ID, Windows Hello, or your security key when prompted.
-              </p>
-            </div>
-          </>
-        )}
-      </div>
-    </AuthShell>
-  );
+  return <PasskeyRegisterExternalView status={status} />;
 }
 
 export default function PasskeyRegisterExternalPage() {

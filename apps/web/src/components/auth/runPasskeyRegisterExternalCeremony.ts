@@ -9,9 +9,14 @@ export interface RunPasskeyRegisterExternalCeremonyInput {
   fetchImpl?: typeof fetch;
 }
 
+export type PasskeyRegisterExternalErrorCode = 'ALREADY_REGISTERED' | 'CANCELLED';
+
 export type RunPasskeyRegisterExternalCeremonyResult =
   | { ok: true; deepLink: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: PasskeyRegisterExternalErrorCode };
+
+export const ALREADY_REGISTERED_MESSAGE =
+  'A passkey is already registered on this device. To add another, use a different device, a security key, or iCloud Keychain from another Mac or iPhone.';
 
 async function readError(res: Response, fallback: string): Promise<string> {
   try {
@@ -41,13 +46,20 @@ export async function runPasskeyRegisterExternalCeremony(
   try {
     registrationResponse = await startRegistration({ optionsJSON: options });
   } catch (err) {
-    if (err instanceof Error && err.name === 'NotAllowedError') {
-      return { ok: false, error: 'Registration was cancelled' };
+    if (err instanceof Error) {
+      if (err.name === 'NotAllowedError') {
+        return { ok: false, error: 'Registration was cancelled', code: 'CANCELLED' };
+      }
+      if (err.name === 'InvalidStateError') {
+        return {
+          ok: false,
+          error: ALREADY_REGISTERED_MESSAGE,
+          code: 'ALREADY_REGISTERED',
+        };
+      }
+      return { ok: false, error: err.message };
     }
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : 'Registration failed',
-    };
+    return { ok: false, error: 'Registration failed' };
   }
 
   const verifyRes = await fetchImpl('/api/auth/passkey/register', {

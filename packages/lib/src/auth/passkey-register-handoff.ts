@@ -33,6 +33,8 @@ import { tryGetSecurityRedisClient } from '../security/security-redis';
 import { loggers } from '../logging/logger-config';
 
 const PASSKEY_REGISTER_HANDOFF_PREFIX = 'auth:passkey-register-handoff:';
+const PASSKEY_REGISTER_HANDOFF_OPTIONS_PREFIX =
+  'auth:passkey-register-handoff-options-issued:';
 const PASSKEY_REGISTER_HANDOFF_TTL_SECONDS = 300;
 
 export interface PasskeyRegisterHandoffData {
@@ -42,6 +44,10 @@ export interface PasskeyRegisterHandoffData {
 
 function keyFor(token: string): string {
   return `${PASSKEY_REGISTER_HANDOFF_PREFIX}${hashToken(token)}`;
+}
+
+function optionsMarkerKeyFor(token: string): string {
+  return `${PASSKEY_REGISTER_HANDOFF_OPTIONS_PREFIX}${hashToken(token)}`;
 }
 
 /**
@@ -207,5 +213,59 @@ export async function consumePasskeyRegisterHandoff(
       error as Error
     );
     return null;
+  }
+}
+
+/**
+ * One-options-per-handoff-token guard. Sets a short-lived marker the first
+ * time a handoff token is used to issue WebAuthn registration options.
+ * Returns `true` if the marker was set (first call — caller should proceed)
+ * or `false` if the marker already existed (replay — caller should reject).
+ *
+ * Required because the options endpoint uses `peek` (non-destructive), so
+ * without this guard a single minted handoff token could drive unbounded
+ * `generateRegistrationOptions` calls within its TTL. The legitimate
+ * ceremony calls options exactly once per minted token.
+ *
+ * Fails closed: any Redis unavailability or error returns `false`. A
+ * transient Redis blip forces the client to re-mint, which is acceptable
+ * (mint is session-authed + rate-limited) and strictly safer than opening
+ * the replay window.
+ */
+export async function markPasskeyRegisterOptionsIssued(
+  token: string
+): Promise<boolean> {
+  if (!token || typeof token !== 'string') {
+    return false;
+  }
+
+  const redis = await tryGetSecurityRedisClient();
+
+  if (!redis) {
+    if (process.env.NODE_ENV === 'production') {
+      loggers.auth.error(
+        'Cannot mark passkey register options issued: Redis unavailable in production'
+      );
+    }
+    return false;
+  }
+
+  const key = optionsMarkerKeyFor(token);
+
+  try {
+    const result = await redis.set(
+      key,
+      '1',
+      'EX',
+      PASSKEY_REGISTER_HANDOFF_TTL_SECONDS,
+      'NX'
+    );
+    return result === 'OK';
+  } catch (error) {
+    loggers.auth.error(
+      'Passkey register options marker Redis error',
+      error as Error
+    );
+    return false;
   }
 }
