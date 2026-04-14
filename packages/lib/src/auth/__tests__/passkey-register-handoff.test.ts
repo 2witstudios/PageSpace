@@ -175,6 +175,14 @@ describe('passkey-register-handoff', () => {
 
       process.env.NODE_ENV = origEnv;
     });
+
+    it('should return null when redis.get rejects (transient connection error)', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      mockRedis.get.mockRejectedValueOnce(new Error('ECONNRESET'));
+
+      const result = await peekPasskeyRegisterHandoff('some-token');
+      expect(result).toBeNull();
+    });
   });
 
   describe('consumePasskeyRegisterHandoff', () => {
@@ -258,6 +266,14 @@ describe('passkey-register-handoff', () => {
       expect(result).toBeNull();
 
       process.env.NODE_ENV = origEnv;
+    });
+
+    it('should return null when redis.eval rejects (transient connection error)', async () => {
+      vi.mocked(tryGetSecurityRedisClient).mockResolvedValue(mockRedis as never);
+      mockRedis.eval.mockRejectedValueOnce(new Error('Connection lost'));
+
+      const result = await consumePasskeyRegisterHandoff('some-token');
+      expect(result).toBeNull();
     });
   });
 

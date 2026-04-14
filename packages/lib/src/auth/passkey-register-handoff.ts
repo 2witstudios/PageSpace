@@ -112,7 +112,17 @@ export async function peekPasskeyRegisterHandoff(
   }
 
   const key = keyFor(token);
-  const raw = (await redis.get(key)) as string | null;
+
+  let raw: string | null;
+  try {
+    raw = (await redis.get(key)) as string | null;
+  } catch (error) {
+    loggers.auth.error(
+      'Passkey register handoff peek Redis error',
+      error as Error
+    );
+    return null;
+  }
 
   if (!raw) {
     loggers.auth.warn('Passkey register handoff peek miss', {
@@ -167,7 +177,16 @@ export async function consumePasskeyRegisterHandoff(
     return data
   `;
 
-  const raw = (await redis.eval(luaScript, 1, key)) as string | null;
+  let raw: string | null;
+  try {
+    raw = (await redis.eval(luaScript, 1, key)) as string | null;
+  } catch (error) {
+    loggers.auth.error(
+      'Passkey register handoff consume Redis error',
+      error as Error
+    );
+    return null;
+  }
 
   if (!raw) {
     loggers.auth.warn('Passkey register handoff invalid or already consumed', {
