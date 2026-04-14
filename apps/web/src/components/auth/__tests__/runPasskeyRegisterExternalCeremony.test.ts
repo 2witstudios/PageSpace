@@ -129,7 +129,7 @@ describe('runPasskeyRegisterExternalCeremony', () => {
     expect(result.error).toMatch(/verification/i);
   });
 
-  it('returns an error result when startRegistration is cancelled by the user', async () => {
+  it('returns an error result with code=CANCELLED when startRegistration is cancelled by the user', async () => {
     vi.mocked(startRegistration).mockRejectedValueOnce(
       Object.assign(new Error('timed out or not allowed'), { name: 'NotAllowedError' })
     );
@@ -148,5 +148,51 @@ describe('runPasskeyRegisterExternalCeremony', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected error');
     expect(result.error).toMatch(/cancel/i);
+    expect(result.code).toBe('CANCELLED');
+  });
+
+  it('returns a friendly already-registered error when startRegistration throws InvalidStateError', async () => {
+    vi.mocked(startRegistration).mockRejectedValueOnce(
+      Object.assign(new Error('The authenticator recognized an entry'), {
+        name: 'InvalidStateError',
+      })
+    );
+
+    const fetchImpl = mockFetch({
+      '/api/auth/passkey/register/options': () =>
+        jsonResponse({ options: { challenge: 'c' } }),
+    });
+
+    const result = await runPasskeyRegisterExternalCeremony({
+      handoffToken: 'handoff',
+      deviceName: 'd',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected error');
+    expect(result.code).toBe('ALREADY_REGISTERED');
+    expect(result.error).toMatch(/already registered on this device/i);
+    expect(result.error).toMatch(/different device|security key|iCloud/i);
+  });
+
+  it('surfaces the raw message for unknown errors with no code field', async () => {
+    vi.mocked(startRegistration).mockRejectedValueOnce(new Error('network failure'));
+
+    const fetchImpl = mockFetch({
+      '/api/auth/passkey/register/options': () =>
+        jsonResponse({ options: { challenge: 'c' } }),
+    });
+
+    const result = await runPasskeyRegisterExternalCeremony({
+      handoffToken: 'handoff',
+      deviceName: 'd',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected error');
+    expect(result.error).toBe('network failure');
+    expect(result.code).toBeUndefined();
   });
 });
