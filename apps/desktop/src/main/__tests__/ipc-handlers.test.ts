@@ -220,5 +220,85 @@ describe('IPC Handlers', () => {
       expect(shell.openExternal).not.toHaveBeenCalled();
       expect(result).toEqual({ success: false, error: expect.stringContaining('Invalid') });
     });
+
+    it('allows /auth/passkey-external on the configured app origin', async () => {
+      vi.mocked(shell.openExternal).mockResolvedValue(undefined);
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+
+      const handler = getRegisteredHandler('auth:open-external');
+      const result = await handler(
+        {},
+        'https://pagespace.ai/auth/passkey-external?deviceId=d&deviceName=Mac',
+      );
+
+      expect(shell.openExternal).toHaveBeenCalledWith(
+        'https://pagespace.ai/auth/passkey-external?deviceId=d&deviceName=Mac',
+      );
+      expect(result).toEqual({ success: true });
+    });
+
+    it('allows a localhost http app origin in development', async () => {
+      vi.mocked(shell.openExternal).mockResolvedValue(undefined);
+      vi.mocked(getAppUrl).mockReturnValue('http://localhost:3000/dashboard');
+
+      const handler = getRegisteredHandler('auth:open-external');
+      const result = await handler(
+        {},
+        'http://localhost:3000/auth/passkey-external?deviceId=d&deviceName=Mac',
+      );
+
+      expect(shell.openExternal).toHaveBeenCalledWith(
+        'http://localhost:3000/auth/passkey-external?deviceId=d&deviceName=Mac',
+      );
+      expect(result).toEqual({ success: true });
+    });
+
+    it('rejects app-origin URLs whose path is not /auth/passkey-external', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+
+      const handler = getRegisteredHandler('auth:open-external');
+      const result = await handler(
+        {},
+        'https://pagespace.ai/dashboard/drive/123',
+      );
+
+      expect(shell.openExternal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('not allowed'),
+      });
+    });
+
+    it('rejects app-origin lookalike hosts', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+
+      const handler = getRegisteredHandler('auth:open-external');
+      const result = await handler(
+        {},
+        'https://pagespace.ai.evil.com/auth/passkey-external',
+      );
+
+      expect(shell.openExternal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('not allowed'),
+      });
+    });
+
+    it('rejects http on non-localhost even for /auth/passkey-external', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+
+      const handler = getRegisteredHandler('auth:open-external');
+      const result = await handler(
+        {},
+        'http://pagespace.ai/auth/passkey-external',
+      );
+
+      expect(shell.openExternal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('not allowed'),
+      });
+    });
   });
 });
