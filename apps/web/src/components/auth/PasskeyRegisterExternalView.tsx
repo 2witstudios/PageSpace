@@ -2,11 +2,13 @@
 
 import { CheckCircle2, Info, Loader2, ShieldAlert } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import type { PasskeyRegisterExternalErrorCode } from '@/components/auth/runPasskeyRegisterExternalCeremony';
 
 export type PasskeyRegisterExternalStatus =
   | { kind: 'running' }
   | { kind: 'redirecting' }
+  | { kind: 'complete' }
   | { kind: 'error'; message: string; code?: PasskeyRegisterExternalErrorCode };
 
 export function PasskeyRegisterExternalView({
@@ -14,6 +16,14 @@ export function PasskeyRegisterExternalView({
 }: {
   status: PasskeyRegisterExternalStatus;
 }) {
+  if (status.kind === 'complete') {
+    return (
+      <AuthShell>
+        <HandoffCompleteCard variant="passkey-added" />
+      </AuthShell>
+    );
+  }
+
   return (
     <AuthShell>
       <div className="flex flex-col items-center gap-4 py-6 text-center">

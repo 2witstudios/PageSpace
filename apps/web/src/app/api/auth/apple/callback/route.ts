@@ -15,6 +15,7 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -257,13 +258,13 @@ export async function POST(req: Request) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
-      loggers.auth.info('Desktop Apple OAuth deep link redirect', {
+      loggers.auth.info('Desktop Apple OAuth deep link bridge', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow

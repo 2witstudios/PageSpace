@@ -3,13 +3,17 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import { runPasskeyExternalCeremony } from '@/components/auth/runPasskeyExternalCeremony';
 import { parsePasskeyExternalParams } from '@/components/auth/passkeyExternal';
 
 type Status =
   | { kind: 'running' }
   | { kind: 'redirecting' }
+  | { kind: 'complete' }
   | { kind: 'error'; message: string };
+
+const HANDOFF_SETTLE_MS = 600;
 
 function PasskeyExternalContent() {
   const [status, setStatus] = useState<Status>({ kind: 'running' });
@@ -19,24 +23,63 @@ function PasskeyExternalContent() {
     if (started.current) return;
     started.current = true;
 
+    let unmounted = false;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
     const params = parsePasskeyExternalParams(window.location.search);
     if (!params) {
       setStatus({ kind: 'error', message: 'Missing desktop device info in the handoff URL.' });
       return;
     }
 
-    void runPasskeyExternalCeremony({
+    runPasskeyExternalCeremony({
       deviceId: params.deviceId,
       deviceName: params.deviceName,
-    }).then((result) => {
-      if (result.ok) {
-        setStatus({ kind: 'redirecting' });
-        window.location.href = result.deepLink;
-      } else {
-        setStatus({ kind: 'error', message: result.error });
-      }
-    });
+    })
+      .then((result) => {
+        if (unmounted) return;
+        if (result.ok) {
+          setStatus({ kind: 'redirecting' });
+          window.location.href = result.deepLink;
+          settleTimer = setTimeout(() => {
+            if (unmounted) return;
+            setStatus({ kind: 'complete' });
+            try {
+              window.close();
+            } catch {
+              // Best-effort: many browsers refuse window.close() for tabs
+              // not opened via window.open(). The terminal UI is the fallback.
+            }
+          }, HANDOFF_SETTLE_MS);
+        } else {
+          setStatus({ kind: 'error', message: result.error });
+        }
+      })
+      .catch((err: unknown) => {
+        if (unmounted) return;
+        if (settleTimer) {
+          clearTimeout(settleTimer);
+          settleTimer = undefined;
+        }
+        setStatus({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Unexpected error',
+        });
+      });
+
+    return () => {
+      unmounted = true;
+      if (settleTimer) clearTimeout(settleTimer);
+    };
   }, []);
+
+  if (status.kind === 'complete') {
+    return (
+      <AuthShell>
+        <HandoffCompleteCard variant="signed-in" />
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell>

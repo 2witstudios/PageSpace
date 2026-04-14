@@ -796,7 +796,7 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('desktop platform redirect', () => {
-    it('redirects to deep link with exchange code', async () => {
+    it('returns handoff bridge HTML containing deep link with exchange code', async () => {
       const state = createSignedState({
         returnUrl: '/dashboard',
         platform: 'desktop',
@@ -807,11 +807,37 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code', state });
       const response = await GET(request);
 
-      expect(response.status).toBe(307);
-      const location = response.headers.get('Location')!;
-      expect(location).toContain('pagespace://auth-exchange');
-      expect(location).toContain('code=mock-exchange-code');
-      expect(location).toContain('provider=google');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const body = await response.text();
+      expect(body).toContain('pagespace://auth-exchange');
+      expect(body).toContain('code=mock-exchange-code');
+      expect(body).toContain('provider=google');
+      expect(body).toContain('http-equiv="refresh"');
+    });
+
+    it('emits hardened security headers on the handoff bridge response', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+      });
+
+      const request = createCallbackRequest({ code: 'valid-code', state });
+      const response = await GET(request);
+
+      const csp = response.headers.get('Content-Security-Policy') ?? '';
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("style-src 'unsafe-inline'");
+      expect(csp).toContain("base-uri 'none'");
+      expect(csp).toContain("form-action 'none'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(csp).not.toContain('img-src');
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
     });
 
     it('includes isNewUser flag in deep link for newly provisioned drives', async () => {
@@ -828,9 +854,9 @@ describe('GET /api/auth/google/callback', () => {
 
       const request = createCallbackRequest({ code: 'valid-code', state });
       const response = await GET(request);
-      const location = response.headers.get('Location')!;
+      const body = await response.text();
 
-      expect(location).toContain('isNewUser=true');
+      expect(body).toContain('isNewUser=true');
     });
 
     it('redirects with error when desktop platform has no deviceId', async () => {
