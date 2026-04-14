@@ -3,10 +3,17 @@
  *
  * Provides offline caching for recently viewed pages and static assets.
  * Uses network-first strategy for API data, cache-first for static assets.
+ *
+ * Routing is delegated to classifyRequest in sw-router.js so the decision
+ * logic can be unit-tested in isolation. See that file for the layered
+ * invariants this SW enforces — in particular, the rule that top-level
+ * navigations must not be owned by the service worker.
  */
 
-const CACHE_NAME = 'pagespace-v2';
-const STATIC_CACHE_NAME = 'pagespace-static-v2';
+importScripts('/sw-router.js');
+
+const CACHE_NAME = 'pagespace-v3';
+const STATIC_CACHE_NAME = 'pagespace-static-v3';
 
 // Core pages to cache for offline access
 const OFFLINE_URLS = ['/', '/offline'];
@@ -48,53 +55,70 @@ self.addEventListener('activate', (event) => {
 // Fetch event - handle requests
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  const url = new URL(request.url);
 
   // Only handle GET requests
   if (request.method !== 'GET') return;
 
   // Skip cross-origin requests
+  const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Let the browser handle Next.js build assets directly.
-  // Avoid SW-managed cache for runtime chunks to prevent stale bundle mismatches.
-  if (url.pathname.startsWith('/_next/')) return;
+  const classification = self.classifyRequest({
+    mode: request.mode,
+    method: request.method,
+    url: request.url,
+  });
 
-  // API requests: network-first with cache fallback
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirstWithCache(request));
-    return;
+  switch (classification) {
+    case 'not-intercepted':
+    case 'native-pass-through':
+      // Returning without calling event.respondWith hands the request
+      // back to the browser. This is operationally different from
+      // event.respondWith(fetch(request)): that would move redirect
+      // following into the fetch API, which cannot dispatch to custom
+      // schemes like pagespace:// and would break desktop OAuth.
+      return;
+
+    case 'api-network-first':
+      event.respondWith(networkFirstWithCache(request));
+      return;
+
+    case 'cache-first':
+      event.respondWith(cacheFirstWithNetwork(request));
+      return;
+
+    case 'network-first': {
+      // Next.js RSC (React Server Component) flight data and prefetch
+      // requests must NEVER be cache-first — same URL serves different
+      // content based on headers, and payloads become stale after
+      // deploys.
+      if (
+        request.headers.get('rsc') ||
+        request.headers.get('next-router-prefetch') ||
+        request.headers.get('next-router-state-tree') ||
+        request.headers.get('next-url')
+      ) {
+        event.respondWith(
+          fetch(request).catch(
+            () => new Response('', { status: 503, statusText: 'Service Unavailable' })
+          )
+        );
+        return;
+      }
+
+      // HTML pages with network-first + offline fallback. Note that
+      // top-level HTML navigations never reach this branch — they are
+      // classified 'native-pass-through' by rule 1 above. This branch
+      // handles non-navigate HTML sub-requests (e.g. iframe loads).
+      if (request.headers.get('accept')?.includes('text/html')) {
+        event.respondWith(networkFirstWithOfflineFallback(request));
+        return;
+      }
+
+      event.respondWith(networkFirstWithCache(request));
+      return;
+    }
   }
-
-  // Next.js RSC (React Server Component) flight data and prefetch requests
-  // must NEVER be cache-first — same URL serves different content based on
-  // headers, and payloads become stale after deploys.
-  if (request.headers.get('rsc') ||
-      request.headers.get('next-router-prefetch') ||
-      request.headers.get('next-router-state-tree') ||
-      request.headers.get('next-url')) {
-    event.respondWith(
-      fetch(request).catch(() =>
-        new Response('', { status: 503, statusText: 'Service Unavailable' })
-      )
-    );
-    return;
-  }
-
-  // Static assets (fonts, images): cache-first
-  if (isStaticAsset(url.pathname)) {
-    event.respondWith(cacheFirstWithNetwork(request));
-    return;
-  }
-
-  // HTML pages: network-first, fallback to offline page
-  if (request.headers.get('accept')?.includes('text/html')) {
-    event.respondWith(networkFirstWithOfflineFallback(request));
-    return;
-  }
-
-  // Everything else: network-first to avoid serving stale dynamic content
-  event.respondWith(networkFirstWithCache(request));
 });
 
 /**
@@ -168,25 +192,6 @@ async function networkFirstWithOfflineFallback(request) {
       headers: { 'Content-Type': 'text/plain' },
     });
   }
-}
-
-/**
- * Check if URL is a static asset.
- */
-function isStaticAsset(pathname) {
-  const staticExtensions = [
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.gif',
-    '.svg',
-    '.ico',
-    '.woff',
-    '.woff2',
-    '.ttf',
-    '.eot',
-  ];
-  return staticExtensions.some((ext) => pathname.endsWith(ext));
 }
 
 // Listen for messages from the app with origin verification
