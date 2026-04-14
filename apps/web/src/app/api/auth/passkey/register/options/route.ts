@@ -103,25 +103,25 @@ export async function POST(req: Request) {
           );
         }
       }
-    }
 
-    const rateLimitKey = `passkey_register:${userId}`;
-    const rateLimitResult = await checkDistributedRateLimit(
-      rateLimitKey,
-      DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
-    );
-
-    if (!rateLimitResult.allowed) {
-      auditRequest(req, {
-        eventType: 'security.rate.limited',
-        userId,
-        riskScore: 0.5,
-        details: { reason: 'passkey_rate_limit_register' },
-      });
-      return NextResponse.json(
-        { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
-        { status: 429 }
+      const rateLimitKey = `passkey_register:${userId}`;
+      const rateLimitResult = await checkDistributedRateLimit(
+        rateLimitKey,
+        DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
       );
+
+      if (!rateLimitResult.allowed) {
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          userId,
+          riskScore: 0.5,
+          details: { reason: 'passkey_rate_limit_register' },
+        });
+        return NextResponse.json(
+          { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
+          { status: 429 }
+        );
+      }
     }
 
     const result = await generateRegistrationOptions({ userId });
