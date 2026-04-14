@@ -327,6 +327,21 @@ describe('POST /api/auth/passkey/register', () => {
         })
       );
     });
+
+    it('session-authed path calls checkDistributedRateLimit exactly once with passkey_register:<userId>', async () => {
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-new-1' },
+      });
+
+      await POST(createRequest());
+
+      expect(checkDistributedRateLimit).toHaveBeenCalledTimes(1);
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'passkey_register:user-1',
+        expect.any(Object)
+      );
+    });
   });
 
   describe('input validation', () => {
@@ -510,24 +525,59 @@ describe('POST /api/auth/passkey/register', () => {
       expect(body.code).toBe('HANDOFF_INVALID');
     });
 
-    it('rate limits the handoff branch against the consumed userId bucket', async () => {
+    it('does NOT call checkDistributedRateLimit on the handoff path (consume + TTL + one-time-use is the rate bound)', async () => {
       vi.mocked(consumePasskeyRegisterHandoff).mockResolvedValue({
-        userId: 'user-rl',
+        userId: 'user-handoff',
         createdAt: Date.now(),
       });
-      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
-        allowed: false,
-        attemptsRemaining: 0,
-        retryAfter: 300,
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-handoff-1' },
       });
 
       const response = await POST(handoffRequest());
-      expect(response.status).toBe(429);
-      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        'passkey_register:user-rl',
-        expect.any(Object)
-      );
-      expect(verifyRegistration).not.toHaveBeenCalled();
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.passkeyId).toBe('pk-handoff-1');
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('three back-to-back handoff verifies for the same user all return 200 — the bucket no longer gates desktop', async () => {
+      vi.mocked(consumePasskeyRegisterHandoff)
+        .mockResolvedValueOnce({ userId: 'user-handoff', createdAt: Date.now() })
+        .mockResolvedValueOnce({ userId: 'user-handoff', createdAt: Date.now() })
+        .mockResolvedValueOnce({ userId: 'user-handoff', createdAt: Date.now() });
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-handoff' },
+      });
+
+      const req1 = new Request('http://localhost/api/auth/passkey/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...handoffPayload, handoffToken: 'token-1' }),
+      });
+      const req2 = new Request('http://localhost/api/auth/passkey/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...handoffPayload, handoffToken: 'token-2' }),
+      });
+      const req3 = new Request('http://localhost/api/auth/passkey/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...handoffPayload, handoffToken: 'token-3' }),
+      });
+
+      const r1 = await POST(req1);
+      const r2 = await POST(req2);
+      const r3 = await POST(req3);
+
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r3.status).toBe(200);
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
     });
   });
 

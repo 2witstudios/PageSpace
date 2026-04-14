@@ -236,6 +236,31 @@ describe('POST /api/auth/passkey/register/handoff', () => {
         expect.any(Object)
       );
     });
+
+    it('five back-to-back mint calls succeed and the sixth returns 429 — mint is the real rate gate', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 3 })
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 1 })
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 0 })
+        .mockResolvedValueOnce({ allowed: false, attemptsRemaining: 0, retryAfter: 300 });
+
+      const r1 = await POST(createRequest());
+      const r2 = await POST(createRequest());
+      const r3 = await POST(createRequest());
+      const r4 = await POST(createRequest());
+      const r5 = await POST(createRequest());
+      const r6 = await POST(createRequest());
+
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r3.status).toBe(200);
+      expect(r4.status).toBe(200);
+      expect(r5.status).toBe(200);
+      expect(r6.status).toBe(429);
+      expect(createPasskeyRegisterHandoff).toHaveBeenCalledTimes(5);
+    });
   });
 
   describe('unexpected errors', () => {

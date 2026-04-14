@@ -3,6 +3,7 @@ import {
   generateRegistrationOptions,
   validateCSRFToken,
   peekPasskeyRegisterHandoff,
+  markPasskeyRegisterOptionsIssued,
 } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
@@ -78,6 +79,26 @@ export async function POST(req: Request) {
         );
       }
       userId = peeked.userId;
+
+      const issued = await markPasskeyRegisterOptionsIssued(handoffToken);
+      if (!issued) {
+        auditRequest(req, {
+          eventType: 'security.suspicious.activity',
+          userId,
+          riskScore: 0.6,
+          details: {
+            reason: 'passkey_handoff_options_replayed',
+            flow: 'register_options',
+          },
+        });
+        return NextResponse.json(
+          {
+            error: 'Registration options already issued for this handoff',
+            code: 'OPTIONS_ALREADY_ISSUED',
+          },
+          { status: 401 }
+        );
+      }
     } else {
       const authResult = await authenticateSessionRequest(req);
       if (isAuthError(authResult)) {
@@ -103,25 +124,25 @@ export async function POST(req: Request) {
           );
         }
       }
-    }
 
-    const rateLimitKey = `passkey_register:${userId}`;
-    const rateLimitResult = await checkDistributedRateLimit(
-      rateLimitKey,
-      DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
-    );
-
-    if (!rateLimitResult.allowed) {
-      auditRequest(req, {
-        eventType: 'security.rate.limited',
-        userId,
-        riskScore: 0.5,
-        details: { reason: 'passkey_rate_limit_register' },
-      });
-      return NextResponse.json(
-        { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
-        { status: 429 }
+      const rateLimitKey = `passkey_register:${userId}`;
+      const rateLimitResult = await checkDistributedRateLimit(
+        rateLimitKey,
+        DISTRIBUTED_RATE_LIMITS.PASSKEY_REGISTER
       );
+
+      if (!rateLimitResult.allowed) {
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          userId,
+          riskScore: 0.5,
+          details: { reason: 'passkey_rate_limit_register' },
+        });
+        return NextResponse.json(
+          { error: 'Too many requests', retryAfter: rateLimitResult.retryAfter },
+          { status: 429 }
+        );
+      }
     }
 
     const result = await generateRegistrationOptions({ userId });
