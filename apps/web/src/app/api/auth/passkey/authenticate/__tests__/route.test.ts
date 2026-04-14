@@ -609,4 +609,70 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(createExchangeCode).not.toHaveBeenCalled();
     });
   });
+
+  describe('platform=desktop requires desktopExchange (legacy raw-token path removed)', () => {
+    it('returns 400 when platform=desktop is sent without desktopExchange=true', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'My Mac',
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/desktopExchange/i);
+      expect(sessionService.createSession).not.toHaveBeenCalled();
+      expect(appendSessionCookie).not.toHaveBeenCalled();
+      expect(createExchangeCode).not.toHaveBeenCalled();
+    });
+
+    it('never returns a raw sessionToken in the response body for any desktop request', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'My Mac',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(body.sessionToken).toBeUndefined();
+      expect(body.deviceToken).toBeUndefined();
+    });
+  });
+
+  describe('deviceName input bounds', () => {
+    it('returns 400 when deviceName exceeds 256 characters', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            deviceId: 'device-xyz',
+            deviceName: 'x'.repeat(257),
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBeDefined();
+    });
+  });
 });
