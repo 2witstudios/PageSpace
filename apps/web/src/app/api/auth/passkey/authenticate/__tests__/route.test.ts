@@ -561,6 +561,35 @@ describe('POST /api/auth/passkey/authenticate', () => {
       }));
     });
 
+    it('returns 400 if desktopExchange is set with platform=web (inconsistent request)', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'web',
+            deviceId: 'device-xyz',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/platform/i);
+      expect(createExchangeCode).not.toHaveBeenCalled();
+    });
+
+    it('logs an auth.info entry on successful exchange mint', async () => {
+      await POST(createExchangeRequest());
+
+      expect(loggers.auth.info).toHaveBeenCalledWith(
+        'Desktop passkey exchange mint',
+        expect.objectContaining({ userId: 'user-1', provider: 'passkey' }),
+      );
+    });
+
     it('returns 400 if desktopExchange is set without deviceId (device token required)', async () => {
       const response = await POST(
         new Request('http://localhost/api/auth/passkey/authenticate', {

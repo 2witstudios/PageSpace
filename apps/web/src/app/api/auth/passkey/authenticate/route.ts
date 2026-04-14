@@ -77,6 +77,13 @@ export async function POST(req: Request) {
       );
     }
 
+    if (desktopExchange && platform !== 'desktop') {
+      return NextResponse.json(
+        { error: 'desktopExchange requires platform: desktop' },
+        { status: 400 }
+      );
+    }
+
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
       auditRequest(req, {
@@ -213,6 +220,8 @@ export async function POST(req: Request) {
         userId,
         createdAt: Date.now(),
       });
+
+      loggers.auth.info('Desktop passkey exchange mint', { userId, provider: 'passkey' });
 
       return NextResponse.json(
         {
