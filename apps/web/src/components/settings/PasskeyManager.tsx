@@ -26,6 +26,8 @@ import {
 import { toast } from 'sonner';
 import { Fingerprint, Key, Trash2, Pencil, Shield, Loader2, AlertCircle } from 'lucide-react';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
+import { isDesktopPlatform, getDevicePlatformFields } from '@/lib/desktop-auth';
+import { buildPasskeyRegisterExternalUrl } from '@/components/auth/passkeyExternal';
 
 interface Passkey {
   id: string;
@@ -60,6 +62,18 @@ export function PasskeyManager() {
     setIsSupported(browserSupportsWebAuthn());
   }, []);
 
+  // Desktop: subscribe to passkey:registered IPC so the list refreshes the
+  // moment the system-browser ceremony completes and the main process fires
+  // the `pagespace://passkey-registered` deep link back into the app.
+  useEffect(() => {
+    if (!isDesktopPlatform() || !window.electron?.passkey?.onRegistered) return;
+    const unsubscribe = window.electron.passkey.onRegistered(() => {
+      mutate('/api/auth/passkey');
+      toast.success('Passkey added successfully');
+    });
+    return unsubscribe;
+  }, []);
+
   const { data, error, isLoading } = useSWR<{ passkeys: Passkey[] }>(
     '/api/auth/passkey',
     fetcher,
@@ -77,6 +91,50 @@ export function PasskeyManager() {
     setIsRegistering(true);
 
     try {
+      // Desktop (Electron): Chromium inside the Electron window cannot drive
+      // Touch ID / Windows Hello without entitlements we don't ship. Mint a
+      // handoff token and delegate the ceremony to the system browser, same
+      // shape as the sign-in flow in PasskeyLoginButton.
+      if (isDesktopPlatform()) {
+        if (!window.electron?.auth?.openExternal) {
+          toast.error(
+            'Your desktop app needs to be updated to add a passkey. Please update the app and try again.'
+          );
+          return;
+        }
+
+        const handoffRes = await fetchWithAuth('/api/auth/passkey/register/handoff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!handoffRes.ok) {
+          const err = await handoffRes.json().catch(() => ({}));
+          toast.error(err.error || 'Failed to start passkey registration');
+          return;
+        }
+        const { handoffToken } = (await handoffRes.json()) as { handoffToken: string };
+
+        const fields = await getDevicePlatformFields();
+        if (!('deviceId' in fields) || !fields.deviceId) {
+          toast.error('Could not read desktop device info');
+          return;
+        }
+
+        const externalUrl = buildPasskeyRegisterExternalUrl(window.location.origin, {
+          deviceId: fields.deviceId,
+          deviceName: fields.deviceName,
+          handoffToken,
+        });
+        const result = await window.electron.auth.openExternal(externalUrl);
+        if (!result.success) {
+          toast.error(result.error || 'Failed to open browser for passkey registration');
+          return;
+        }
+        toast.info('Complete your passkey prompt in the browser, then return here.');
+        return;
+      }
+
       // Get registration options
       const optionsRes = await fetchWithAuth('/api/auth/passkey/register/options', {
         method: 'POST',

@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { generateRegistrationOptions, validateCSRFToken } from '@pagespace/lib/auth';
+import {
+  generateRegistrationOptions,
+  validateCSRFToken,
+  peekPasskeyRegisterHandoff,
+} from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -12,44 +16,77 @@ import {
   getClientIP,
 } from '@/lib/auth';
 
+async function readOptionalJson(req: Request): Promise<Record<string, unknown>> {
+  try {
+    const text = await req.text();
+    if (!text) return {};
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * POST /api/auth/passkey/register/options
  *
- * Generate WebAuthn registration options for adding a passkey to the authenticated user's account.
- * Requires session authentication and CSRF token.
+ * Generate WebAuthn registration options for adding a passkey to an account.
+ *
+ * Two auth modes:
+ * - Session: `authenticateSessionRequest` + CSRF header.
+ * - Desktop handoff: `{ handoffToken }` in body — peek (non-destructive) so
+ *   the verify step still finds a live token. Bypasses session + CSRF; the
+ *   handoff token IS the capability, minted against a session and TTL-bound.
  */
 export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
+    const body = await readOptionalJson(req);
+    const handoffToken =
+      typeof body.handoffToken === 'string' ? body.handoffToken : null;
 
-    // Verify session auth
-    const authResult = await authenticateSessionRequest(req);
-    if (isAuthError(authResult)) {
-      return authResult.error;
-    }
+    let userId: string;
 
-    const userId = authResult.userId;
-    const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
-
-    // Verify CSRF token (skip for Bearer token auth - not vulnerable to CSRF)
-    const hasBearerAuth = !!req.headers.get('authorization');
-    if (!hasBearerAuth && sessionId) {
-      const csrfToken = req.headers.get('x-csrf-token');
-      if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
+    if (handoffToken) {
+      const peeked = await peekPasskeyRegisterHandoff(handoffToken);
+      if (!peeked) {
         auditRequest(req, {
           eventType: 'security.suspicious.activity',
-          userId,
           riskScore: 0.6,
-          details: { reason: 'passkey_csrf_invalid', flow: 'register_options' },
+          details: { reason: 'passkey_handoff_invalid', flow: 'register_options' },
         });
         return NextResponse.json(
-          { error: 'Invalid CSRF token' },
-          { status: 403 }
+          { error: 'Invalid or expired handoff token', code: 'HANDOFF_INVALID' },
+          { status: 401 }
         );
+      }
+      userId = peeked.userId;
+    } else {
+      const authResult = await authenticateSessionRequest(req);
+      if (isAuthError(authResult)) {
+        return authResult.error;
+      }
+
+      userId = authResult.userId;
+      const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
+
+      const hasBearerAuth = !!req.headers.get('authorization');
+      if (!hasBearerAuth && sessionId) {
+        const csrfToken = req.headers.get('x-csrf-token');
+        if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
+          auditRequest(req, {
+            eventType: 'security.suspicious.activity',
+            userId,
+            riskScore: 0.6,
+            details: { reason: 'passkey_csrf_invalid', flow: 'register_options' },
+          });
+          return NextResponse.json(
+            { error: 'Invalid CSRF token' },
+            { status: 403 }
+          );
+        }
       }
     }
 
-    // Rate limiting
     const rateLimitKey = `passkey_register:${userId}`;
     const rateLimitResult = await checkDistributedRateLimit(
       rateLimitKey,
@@ -69,7 +106,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Generate registration options
     const result = await generateRegistrationOptions({ userId });
 
     if (!result.ok) {

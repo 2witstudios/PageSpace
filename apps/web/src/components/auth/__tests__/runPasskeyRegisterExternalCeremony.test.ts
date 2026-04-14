@@ -15,7 +15,7 @@ const registrationResponse = {
 };
 
 function mockFetch(handlers: Record<string, () => Response | Promise<Response>>) {
-  return vi.fn(async (input: unknown) => {
+  return vi.fn(async (input: unknown, _init?: unknown) => {
     const url = typeof input === 'string' ? input : (input as Request).url;
     for (const [pattern, handler] of Object.entries(handlers)) {
       if (url.includes(pattern)) return handler();
