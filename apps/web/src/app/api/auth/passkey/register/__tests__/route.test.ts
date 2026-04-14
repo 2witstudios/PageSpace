@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/lib/auth', () => ({
   verifyRegistration: vi.fn(),
   validateCSRFToken: vi.fn(),
+  consumePasskeyRegisterHandoff: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -44,7 +45,11 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { verifyRegistration, validateCSRFToken } from '@pagespace/lib/auth';
+import {
+  verifyRegistration,
+  validateCSRFToken,
+  consumePasskeyRegisterHandoff,
+} from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -88,6 +93,7 @@ describe('POST /api/auth/passkey/register', () => {
       allowed: true,
       attemptsRemaining: 4,
     });
+    vi.mocked(consumePasskeyRegisterHandoff).mockResolvedValue(null);
   });
 
   describe('successful registration', () => {
@@ -387,6 +393,104 @@ describe('POST /api/auth/passkey/register', () => {
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey registration verification failed', expect.objectContaining({
         error: 'VERIFICATION_FAILED',
       }));
+    });
+  });
+
+  describe('desktop handoff-token branch', () => {
+    const handoffPayload = {
+      handoffToken: 'good-token',
+      response: { id: 'cred-1', rawId: 'raw', type: 'public-key' },
+      expectedChallenge: 'challenge-123',
+      name: 'Handoff Passkey',
+    };
+
+    const handoffRequest = () =>
+      new Request('http://localhost/api/auth/passkey/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(handoffPayload),
+      });
+
+    it('accepts a valid handoff token without session auth or CSRF and registers passkey', async () => {
+      vi.mocked(consumePasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-handoff',
+        createdAt: Date.now(),
+      });
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-handoff-1' },
+      });
+
+      const response = await POST(handoffRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.passkeyId).toBe('pk-handoff-1');
+      expect(consumePasskeyRegisterHandoff).toHaveBeenCalledWith('good-token');
+      expect(authenticateSessionRequest).not.toHaveBeenCalled();
+      expect(validateCSRFToken).not.toHaveBeenCalled();
+      expect(verifyRegistration).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-handoff', name: 'Handoff Passkey' })
+      );
+    });
+
+    it('returns 401 with HANDOFF_INVALID and audits when handoff is already consumed', async () => {
+      vi.mocked(consumePasskeyRegisterHandoff).mockResolvedValue(null);
+
+      const response = await POST(handoffRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.code).toBe('HANDOFF_INVALID');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({
+            reason: 'passkey_handoff_invalid',
+            flow: 'register',
+          }),
+        })
+      );
+      expect(verifyRegistration).not.toHaveBeenCalled();
+    });
+
+    it('enforces one-time-use — a second call with the same token is rejected', async () => {
+      vi.mocked(consumePasskeyRegisterHandoff)
+        .mockResolvedValueOnce({ userId: 'user-handoff', createdAt: Date.now() })
+        .mockResolvedValueOnce(null);
+      vi.mocked(verifyRegistration).mockResolvedValue({
+        ok: true,
+        data: { passkeyId: 'pk-handoff-1' },
+      });
+
+      const first = await POST(handoffRequest());
+      expect(first.status).toBe(200);
+
+      const second = await POST(handoffRequest());
+      expect(second.status).toBe(401);
+      const body = await second.json();
+      expect(body.code).toBe('HANDOFF_INVALID');
+    });
+
+    it('rate limits the handoff branch against the consumed userId bucket', async () => {
+      vi.mocked(consumePasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-rl',
+        createdAt: Date.now(),
+      });
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 300,
+      });
+
+      const response = await POST(handoffRequest());
+      expect(response.status).toBe(429);
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'passkey_register:user-rl',
+        expect.any(Object)
+      );
+      expect(verifyRegistration).not.toHaveBeenCalled();
     });
   });
 
