@@ -4,6 +4,7 @@ import {
   verifyAuthentication,
   sessionService,
   generateCSRFToken,
+  createExchangeCode,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
@@ -24,6 +25,7 @@ const verifySchema = z.object({
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().max(128).optional(),
   deviceName: z.string().optional(),
+  desktopExchange: z.boolean().optional().default(false),
 });
 
 /**
@@ -66,7 +68,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, csrfToken, platform, deviceId, deviceName } = validation.data;
+    const { response, expectedChallenge, csrfToken, platform, deviceId, deviceName, desktopExchange } = validation.data;
+
+    if (desktopExchange && !deviceId) {
+      return NextResponse.json(
+        { error: 'deviceId is required for desktop exchange handoff' },
+        { status: 400 }
+      );
+    }
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
@@ -185,6 +194,37 @@ export async function POST(req: Request) {
           userId, error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+
+    if (desktopExchange) {
+      if (!deviceTokenValue) {
+        loggers.auth.error('Desktop exchange requested but device token missing', { userId });
+        return NextResponse.json(
+          { error: 'Failed to create device token for desktop exchange' },
+          { status: 500 }
+        );
+      }
+
+      const code = await createExchangeCode({
+        sessionToken,
+        csrfToken: newCsrfToken,
+        deviceToken: deviceTokenValue,
+        provider: 'passkey',
+        userId,
+        createdAt: Date.now(),
+      });
+
+      return NextResponse.json(
+        {
+          success: true,
+          userId,
+          redirectUrl: '/dashboard',
+          desktopExchangeCode: code,
+        },
+        {
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }
+      );
     }
 
     // Build response headers with session cookie
