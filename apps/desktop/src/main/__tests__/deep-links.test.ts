@@ -104,9 +104,9 @@ describe('handleDeepLink dispatcher', () => {
       await handleDeepLink('pagespace://auth-exchange?code=code123&provider=google');
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      const [calledUrl, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
-      expect(calledUrl).toContain('/api/auth/desktop/exchange');
-      expect(calledInit.method).toBe('POST');
+      const call = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+      expect(call[0]).toContain('/api/auth/desktop/exchange');
+      expect(call[1].method).toBe('POST');
 
       expect(mocks.webContents.send).not.toHaveBeenCalledWith('passkey:registered');
     });

@@ -5,6 +5,7 @@ import { mainWindow } from './state';
 import { setCachedSession } from './state';
 import { getAppUrl } from './app-url';
 import { logger } from './logger';
+import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
 
 export function setupProtocolClient(): void {
   if (process.defaultApp) {
@@ -141,6 +142,21 @@ async function handleAuthExchange(url: string): Promise<boolean> {
   }
 }
 
+function handlePasskeyRegistered(url: string): boolean {
+  return handlePasskeyRegisteredPure(url, {
+    focusWindow: () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    },
+    sendToRenderer: (channel, ...args) => {
+      mainWindow?.webContents.send(channel, ...args);
+    },
+    logger,
+  });
+}
+
 function handleAuthError(url: string): boolean {
   try {
     const urlObj = new URL(url);
@@ -158,6 +174,7 @@ function handleAuthError(url: string): boolean {
 export async function handleDeepLink(url: string): Promise<void> {
   if (await handleAuthExchange(url)) return;
   if (handleAuthError(url)) return;
+  if (handlePasskeyRegistered(url)) return;
 
   if (mainWindow) {
     mainWindow.webContents.send('deep-link', url);

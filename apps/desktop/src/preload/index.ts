@@ -80,6 +80,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('mcp:execute-tool', serverName, toolName, args),
   },
 
+  // Passkey lifecycle events (from pagespace://passkey-registered deep link)
+  passkey: {
+    onRegistered: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('passkey:registered', handler);
+      return () => ipcRenderer.removeListener('passkey:registered', handler);
+    },
+  },
+
   // WebSocket MCP Bridge
   ws: {
     getStatus: () => ipcRenderer.invoke('ws:get-status'),
@@ -152,6 +161,9 @@ export interface ElectronAPI {
       userAgent: string;
     }>;
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  passkey: {
+    onRegistered: (callback: () => void) => () => void;
   };
   mcp: {
     getConfig: () => Promise<MCPConfig>;

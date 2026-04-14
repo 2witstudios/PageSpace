@@ -58,6 +58,19 @@ export interface ElectronAPI {
      */
     openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   };
+  /**
+   * Passkey lifecycle events emitted from the main process after a
+   * `pagespace://passkey-registered` deep link. The credential is already
+   * persisted server-side by the time the callback fires — renderers should
+   * use this to re-fetch their passkey list, not to mutate auth state.
+   */
+  passkey: {
+    /**
+     * Subscribe to `passkey:registered` IPC broadcasts.
+     * @returns Unsubscribe function that removes just this listener.
+     */
+    onRegistered: (callback: () => void) => () => void;
+  };
   mcp: {
     getConfig: () => Promise<MCPConfig>;
     updateConfig: (config: MCPConfig) => Promise<{ success: boolean }>;
