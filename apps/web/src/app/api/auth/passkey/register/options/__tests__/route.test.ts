@@ -268,6 +268,22 @@ describe('POST /api/auth/passkey/register/options', () => {
         })
       );
     });
+
+    it('session-authed path calls checkDistributedRateLimit exactly once with passkey_register:<userId>', async () => {
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      await POST(createRequest());
+
+      expect(checkDistributedRateLimit).toHaveBeenCalledTimes(1);
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'passkey_register:user-1',
+        expect.any(Object)
+      );
+    });
   });
 
   describe('service errors', () => {
@@ -381,15 +397,15 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(generateRegistrationOptions).not.toHaveBeenCalled();
     });
 
-    it('rate limits the handoff branch against the same per-user bucket', async () => {
+    it('does NOT call checkDistributedRateLimit on the handoff path (mint + TTL + one-time-use is the rate bound)', async () => {
       vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
-        userId: 'user-rl',
+        userId: 'user-handoff',
         createdAt: Date.now(),
       });
-      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
-        allowed: false,
-        attemptsRemaining: 0,
-        retryAfter: 300,
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
       });
 
       const request = new Request('http://localhost/api/auth/passkey/register/options', {
@@ -399,12 +415,26 @@ describe('POST /api/auth/passkey/register/options', () => {
       });
 
       const response = await POST(request);
-      expect(response.status).toBe(429);
-      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
-        'passkey_register:user-rl',
-        expect.any(Object)
-      );
-      expect(generateRegistrationOptions).not.toHaveBeenCalled();
+
+      expect(response.status).toBe(200);
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call checkDistributedRateLimit when handoff token is invalid', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue(null);
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'expired-token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.code).toBe('HANDOFF_INVALID');
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
     });
 
     it('treats a JSON "null" body as empty and falls through to the session path (not 500)', async () => {
