@@ -103,6 +103,7 @@ export async function POST(request: Request) {
     const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(authResult)) {
       loggers.ai.warn('AI Chat API: Authentication failed');
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
       return authResult.error;
     }
     userId = authResult.userId;
@@ -193,7 +194,10 @@ export async function POST(request: Request) {
     }
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
-    if (mcpScopeError) return mcpScopeError;
+    if (mcpScopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat', resourceId: chatId, details: { reason: 'mcp_page_scope_denied', method: 'POST' }, riskScore: 0.5 });
+      return mcpScopeError;
+    }
 
     // Ensure userId and chatId are defined
     if (!userId) {
@@ -231,6 +235,7 @@ export async function POST(request: Request) {
         userId: maskedUserId,
         chatId: maskedChatId,
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat', resourceId: chatId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json({ error: 'You do not have permission to view this AI chat' }, { status: 403 });
     }
 
@@ -246,6 +251,7 @@ export async function POST(request: Request) {
         userId: maskedUserId,
         chatId: maskedChatId,
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat', resourceId: chatId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json({ error: 'You do not have permission to send messages in this AI chat' }, { status: 403 });
     }
 
@@ -1220,7 +1226,10 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_settings', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     // Get pageId from query params
@@ -1394,7 +1403,10 @@ async function validateProviderModel(
 export async function PATCH(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_settings', resourceId: 'update', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const body = await request.json();
 
@@ -1453,6 +1465,7 @@ export async function PATCH(request: Request) {
         userId: auth.userId,
         pageId: sanitizedPageId
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'ai_chat_settings', resourceId: sanitizedPageId, details: { reason: 'no_edit_permission', method: 'PATCH' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to modify this page' },
         { status: 403 }

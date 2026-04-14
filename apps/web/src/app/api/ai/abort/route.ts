@@ -24,6 +24,7 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
     const rateLimit = checkRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
     if (!rateLimit.allowed) {
       loggers.api.warn('AI abort rate limited', { userId, retryAfter: rateLimit.retryAfter });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'rate_limited', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Too many requests. Please try again later.' },
         {

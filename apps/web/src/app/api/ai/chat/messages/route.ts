@@ -14,7 +14,10 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
@@ -25,11 +28,15 @@ export async function GET(request: Request) {
     }
 
     const mcpScopeError = await checkMCPPageScope(auth, pageId);
-    if (mcpScopeError) return mcpScopeError;
+    if (mcpScopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'mcp_page_scope_denied', method: 'GET' }, riskScore: 0.5 });
+      return mcpScopeError;
+    }
 
     // Check if user has view permission for this page
     const canView = await canUserViewPage(auth.userId, pageId);
     if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json({
         error: 'You need view permission to access this page\'s chat messages',
         details: 'Contact the page owner to request access'

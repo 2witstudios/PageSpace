@@ -22,6 +22,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: tr
  * Returns a NextResponse if permission denied, null if allowed
  */
 async function checkUndoPermissions(
+  request: Request,
   auth: AuthResult,
   userId: string,
   messageId: string,
@@ -35,7 +36,10 @@ async function checkUndoPermissions(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, preview.pageId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'mcp_page_scope_denied', operationType, pageId: preview.pageId }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     const canEdit = await canUserEditPage(userId, preview.pageId);
     if (!canEdit) {
@@ -44,6 +48,7 @@ async function checkUndoPermissions(
         messageId: maskIdentifier(messageId),
         pageId: maskIdentifier(preview.pageId)
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'no_edit_permission', operationType, pageId: preview.pageId }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
@@ -58,6 +63,7 @@ async function checkUndoPermissions(
         messageId: maskIdentifier(messageId),
         conversationId: maskIdentifier(preview.conversationId)
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_owned', operationType, conversationId: preview.conversationId }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
@@ -78,7 +84,10 @@ export async function GET(
   try {
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'preview', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -100,7 +109,7 @@ export async function GET(
       source: preview.source,
       pageId: preview.pageId ? maskIdentifier(preview.pageId) : null,
     });
-    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'preview');
+    const permissionError = await checkUndoPermissions(request, auth, userId, messageId, preview, 'preview');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Permission check passed');
@@ -140,7 +149,10 @@ export async function POST(
   try {
     // Authenticate with CSRF
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_undo', resourceId: 'execute', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -172,7 +184,7 @@ export async function POST(
     }
 
     // Check permissions
-    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'execution');
+    const permissionError = await checkUndoPermissions(request, auth, userId, messageId, preview, 'execution');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Executing undo', {
