@@ -16,5 +16,6 @@ Remove the AI-exposed GitHub import tool and sanitize obsolete references during
 **Requirements**:
 - Given PageSpace AI tools, should not expose the broken GitHub import tool to page chat or the global assistant
 - Given an AI agent with a stale `import_from_github` tool reference, should allow valid configuration updates without failing on that obsolete tool name
+- Given an agent config update request with malformed `enabledTools`, should reject the request instead of persisting an invalid tool shape
 
 ---

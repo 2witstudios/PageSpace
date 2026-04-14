@@ -12,11 +12,30 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((toolName) => typeof toolName === 'string');
+}
+
+function parseEnabledToolsInput(value: unknown): {
+  value: string[] | null | undefined;
+  isValid: boolean;
+} {
+  if (value === undefined || value === null) {
+    return { value, isValid: true };
+  }
+
+  if (isStringArray(value)) {
+    return { value, isValid: true };
+  }
+
+  return { value: undefined, isValid: false };
+}
+
 function sanitizeRemovedToolNames(enabledTools: string[] | null | undefined): {
   sanitized: string[] | null | undefined;
   removed: string[];
 } {
-  if (!Array.isArray(enabledTools)) {
+  if (!isStringArray(enabledTools)) {
     return { sanitized: enabledTools, removed: [] };
   }
 
@@ -94,11 +113,17 @@ export async function PUT(
       );
     }
 
-    const requestedEnabledTools = sanitizeRemovedToolNames(
-      Array.isArray(enabledTools) ? enabledTools : enabledTools
-    );
+    const parsedEnabledTools = parseEnabledToolsInput(enabledTools);
+    if (!parsedEnabledTools.isValid) {
+      return NextResponse.json(
+        { error: 'enabledTools must be an array of strings, null, or undefined' },
+        { status: 400 }
+      );
+    }
+
+    const requestedEnabledTools = sanitizeRemovedToolNames(parsedEnabledTools.value);
     const persistedEnabledTools = sanitizeRemovedToolNames(
-      Array.isArray(agent.enabledTools) ? agent.enabledTools : agent.enabledTools
+      parseEnabledToolsInput(agent.enabledTools).value
     );
 
     // Validate enabled tools if provided

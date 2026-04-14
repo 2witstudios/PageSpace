@@ -248,6 +248,20 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(body.error).toContain('Invalid tools');
       expect(body.error).toContain('invalid_tool');
     });
+
+    it('should return 400 when enabledTools is not an array, null, or undefined', async () => {
+      const request = createRequest(mockAgentId, {
+        enabledTools: 'read_page',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('enabledTools');
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
   });
 
   describe('authorization', () => {
