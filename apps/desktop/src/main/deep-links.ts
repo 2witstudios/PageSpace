@@ -150,8 +150,8 @@ function handlePasskeyRegistered(url: string): boolean {
       mainWindow.show();
       mainWindow.focus();
     },
-    sendToRenderer: (channel, ...args) => {
-      mainWindow?.webContents.send(channel, ...args);
+    sendToRenderer: (channel) => {
+      mainWindow?.webContents.send(channel);
     },
     logger,
   });

@@ -1,6 +1,6 @@
 export interface PasskeyDeepLinkDeps {
   focusWindow: () => void;
-  sendToRenderer: (channel: string, ...args: unknown[]) => void;
+  sendToRenderer: (channel: string) => void;
   logger: {
     info: (message: string, meta?: Record<string, unknown>) => void;
     warn: (message: string, meta?: Record<string, unknown>) => void;
