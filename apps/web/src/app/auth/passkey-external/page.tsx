@@ -32,28 +32,40 @@ function PasskeyExternalContent() {
       return;
     }
 
-    void runPasskeyExternalCeremony({
+    runPasskeyExternalCeremony({
       deviceId: params.deviceId,
       deviceName: params.deviceName,
-    }).then((result) => {
-      if (unmounted) return;
-      if (result.ok) {
-        setStatus({ kind: 'redirecting' });
-        window.location.href = result.deepLink;
-        settleTimer = setTimeout(() => {
-          if (unmounted) return;
-          setStatus({ kind: 'complete' });
-          try {
-            window.close();
-          } catch {
-            // Best-effort: many browsers refuse window.close() for tabs
-            // not opened via window.open(). The terminal UI is the fallback.
-          }
-        }, HANDOFF_SETTLE_MS);
-      } else {
-        setStatus({ kind: 'error', message: result.error });
-      }
-    });
+    })
+      .then((result) => {
+        if (unmounted) return;
+        if (result.ok) {
+          setStatus({ kind: 'redirecting' });
+          window.location.href = result.deepLink;
+          settleTimer = setTimeout(() => {
+            if (unmounted) return;
+            setStatus({ kind: 'complete' });
+            try {
+              window.close();
+            } catch {
+              // Best-effort: many browsers refuse window.close() for tabs
+              // not opened via window.open(). The terminal UI is the fallback.
+            }
+          }, HANDOFF_SETTLE_MS);
+        } else {
+          setStatus({ kind: 'error', message: result.error });
+        }
+      })
+      .catch((err: unknown) => {
+        if (unmounted) return;
+        if (settleTimer) {
+          clearTimeout(settleTimer);
+          settleTimer = undefined;
+        }
+        setStatus({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Unexpected error',
+        });
+      });
 
     return () => {
       unmounted = true;
