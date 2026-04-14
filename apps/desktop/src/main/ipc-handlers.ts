@@ -102,15 +102,39 @@ export function registerIPCHandlers(): void {
     };
   });
 
-  // Open an OAuth URL in the system browser (allowlisted hostnames only)
+  // Open an auth URL in the system browser. Allows:
+  //  - OAuth providers over HTTPS (Google, Apple)
+  //  - The configured PageSpace app origin on the /auth/passkey-external path
+  //    (HTTPS for remote origins, HTTP only for localhost/127.0.0.1 dev builds)
   const ALLOWED_AUTH_HOSTNAMES = ['accounts.google.com', 'appleid.apple.com'];
+  const PASSKEY_EXTERNAL_PATH = '/auth/passkey-external';
+
+  const isAppOriginMatch = (parsed: URL): boolean => {
+    try {
+      const appUrl = new URL(getAppUrl());
+      if (parsed.hostname !== appUrl.hostname) return false;
+      if (parsed.port !== appUrl.port) return false;
+      const isLocal =
+        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+      if (parsed.protocol === 'https:') return true;
+      if (parsed.protocol === 'http:' && isLocal) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
 
   ipcMain.handle('auth:open-external', async (_event, url: string) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol !== 'https:' || !ALLOWED_AUTH_HOSTNAMES.includes(parsed.hostname)) {
-        console.warn('[Auth IPC] Blocked open-external for URL not in allowlist:', parsed.hostname);
-        return { success: false, error: `URL hostname "${parsed.hostname}" is not allowed` };
+      const isOAuthProvider =
+        parsed.protocol === 'https:' && ALLOWED_AUTH_HOSTNAMES.includes(parsed.hostname);
+      const isPasskeyHandoff =
+        parsed.pathname === PASSKEY_EXTERNAL_PATH && isAppOriginMatch(parsed);
+
+      if (!isOAuthProvider && !isPasskeyHandoff) {
+        console.warn('[Auth IPC] Blocked open-external for URL not in allowlist:', parsed.hostname, parsed.pathname);
+        return { success: false, error: `URL "${parsed.hostname}${parsed.pathname}" is not allowed` };
       }
       await shell.openExternal(url);
       return { success: true };

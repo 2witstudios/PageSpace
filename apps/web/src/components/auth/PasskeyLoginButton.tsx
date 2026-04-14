@@ -9,7 +9,12 @@ import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
+import {
+  getDevicePlatformFields,
+  handleDesktopAuthResponse,
+  isDesktopPlatform,
+} from '@/lib/desktop-auth';
+import { buildPasskeyExternalUrl } from './passkeyExternal';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
@@ -40,6 +45,31 @@ export function PasskeyLoginButton({
     setIsAuthenticating(true);
 
     try {
+      // Desktop (Electron): delegate the WebAuthn ceremony to the system
+      // browser via the auth:open-external IPC. Electron's Chromium cannot
+      // drive platform authenticators on macOS without extra entitlements,
+      // so we mirror the OAuth flow: open an external page that runs the
+      // ceremony and hands back a one-time exchange code over the
+      // pagespace:// deep link.
+      if (isDesktopPlatform() && window.electron?.auth?.openExternal) {
+        const fields = await getDevicePlatformFields();
+        if (!('deviceId' in fields) || !fields.deviceId) {
+          toast.error('Could not read desktop device info');
+          return;
+        }
+        const externalUrl = buildPasskeyExternalUrl(window.location.origin, {
+          deviceId: fields.deviceId,
+          deviceName: fields.deviceName,
+        });
+        const result = await window.electron.auth.openExternal(externalUrl);
+        if (!result.success) {
+          toast.error(result.error || 'Failed to open browser for sign-in');
+          return;
+        }
+        toast.info('Complete sign-in in your browser, then return here.');
+        return;
+      }
+
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
 
