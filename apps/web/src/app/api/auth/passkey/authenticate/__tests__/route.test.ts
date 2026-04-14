@@ -33,6 +33,7 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -84,6 +85,7 @@ import {
   verifyAuthentication,
   sessionService,
   generateCSRFToken,
+  createExchangeCode,
 } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -494,6 +496,88 @@ describe('POST /api/auth/passkey/authenticate', () => {
       await POST(createRequest());
 
       expect(createDeviceToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('desktop external-browser handoff (desktopExchange flag)', () => {
+    const desktopExchangePayload = {
+      ...validPayload,
+      platform: 'desktop' as const,
+      deviceId: 'device-xyz',
+      deviceName: 'Jono Mac',
+      desktopExchange: true,
+    };
+
+    const createExchangeRequest = () =>
+      new Request('http://localhost/api/auth/passkey/authenticate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(desktopExchangePayload),
+      });
+
+    it('mints an exchange code with the created session, csrf and device tokens', async () => {
+      await POST(createExchangeRequest());
+
+      expect(createExchangeCode).toHaveBeenCalledWith(expect.objectContaining({
+        sessionToken: 'ps_sess_mock_session_token',
+        csrfToken: 'mock-csrf-token',
+        deviceToken: 'ps_dev_mock_token',
+        provider: 'passkey',
+        userId: 'user-1',
+      }));
+    });
+
+    it('returns desktopExchangeCode at the top of the response body', async () => {
+      const response = await POST(createExchangeRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.desktopExchangeCode).toBe('mock-exchange-code');
+    });
+
+    it('does not return raw session tokens when desktopExchange is set', async () => {
+      const response = await POST(createExchangeRequest());
+      const body = await response.json();
+
+      expect(body.sessionToken).toBeUndefined();
+      expect(body.csrfToken).toBeUndefined();
+      expect(body.deviceToken).toBeUndefined();
+    });
+
+    it('does not set a session cookie on the response when using exchange handoff', async () => {
+      await POST(createExchangeRequest());
+
+      expect(appendSessionCookie).not.toHaveBeenCalled();
+    });
+
+    it('still creates a session and device token (exchange is just the delivery mechanism)', async () => {
+      await POST(createExchangeRequest());
+
+      expect(sessionService.createSession).toHaveBeenCalled();
+      expect(createDeviceToken).toHaveBeenCalledWith(expect.objectContaining({
+        platform: 'desktop',
+        deviceId: 'device-xyz',
+      }));
+    });
+
+    it('returns 400 if desktopExchange is set without deviceId (device token required)', async () => {
+      const response = await POST(
+        new Request('http://localhost/api/auth/passkey/authenticate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...validPayload,
+            platform: 'desktop',
+            desktopExchange: true,
+          }),
+        }),
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/device/i);
+      expect(createExchangeCode).not.toHaveBeenCalled();
     });
   });
 });
