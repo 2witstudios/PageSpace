@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+type DidFinishLoadCb = () => void;
+
 const mocks = vi.hoisted(() => {
   const webContents = {
     send: vi.fn(),
+    isLoading: vi.fn(() => false),
+    once: vi.fn(),
   };
   const mainWindow = {
     webContents,
@@ -12,7 +16,11 @@ const mocks = vi.hoisted(() => {
     focus: vi.fn(),
     loadURL: vi.fn(),
   };
-  return { webContents, mainWindow };
+  const state: { current: typeof mainWindow | null } = { current: mainWindow };
+  const createWindow = vi.fn(() => {
+    state.current = mainWindow;
+  });
+  return { webContents, mainWindow, state, createWindow };
 });
 
 vi.mock('electron', () => ({
@@ -29,8 +37,14 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../state', () => ({
-  mainWindow: mocks.mainWindow,
+  get mainWindow() {
+    return mocks.state.current;
+  },
   setCachedSession: vi.fn(),
+}));
+
+vi.mock('../window', () => ({
+  createWindow: mocks.createWindow,
 }));
 
 vi.mock('../auth-storage', () => ({
@@ -55,11 +69,17 @@ import { handleDeepLink } from '../deep-links';
 describe('handleDeepLink dispatcher', () => {
   beforeEach(() => {
     mocks.webContents.send.mockReset();
+    mocks.webContents.isLoading.mockReset().mockReturnValue(false);
+    mocks.webContents.once.mockReset();
     mocks.mainWindow.focus.mockReset();
     mocks.mainWindow.show.mockReset();
     mocks.mainWindow.restore.mockReset();
     mocks.mainWindow.isMinimized.mockReset().mockReturnValue(false);
     mocks.mainWindow.loadURL.mockReset();
+    mocks.createWindow.mockReset().mockImplementation(() => {
+      mocks.state.current = mocks.mainWindow;
+    });
+    mocks.state.current = mocks.mainWindow;
   });
 
   afterEach(() => {
@@ -86,6 +106,27 @@ describe('handleDeepLink dispatcher', () => {
 
       expect(mocks.mainWindow.restore).toHaveBeenCalled();
       expect(mocks.mainWindow.focus).toHaveBeenCalled();
+    });
+
+    it('when no main window exists (macOS all-windows-closed), should create one and defer the IPC until did-finish-load', async () => {
+      vi.stubGlobal('fetch', vi.fn());
+      mocks.state.current = null;
+      mocks.webContents.isLoading.mockReturnValue(true);
+
+      await handleDeepLink('pagespace://passkey-registered');
+
+      expect(mocks.createWindow).toHaveBeenCalledTimes(1);
+      expect(mocks.webContents.send).not.toHaveBeenCalledWith('passkey:registered');
+      expect(mocks.webContents.once).toHaveBeenCalledWith(
+        'did-finish-load',
+        expect.any(Function),
+      );
+
+      const onceCall = mocks.webContents.once.mock.calls[0];
+      const deferred = onceCall[1] as DidFinishLoadCb;
+      deferred();
+
+      expect(mocks.webContents.send).toHaveBeenCalledWith('passkey:registered');
     });
   });
 
