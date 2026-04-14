@@ -41,6 +41,12 @@ export interface PasskeyRegisterExternalFields {
 const PASSKEY_REGISTER_EXTERNAL_PATH = '/auth/passkey-register-external';
 const PASSKEY_REGISTERED_DEEP_LINK = 'pagespace://passkey-registered';
 
+/**
+ * Builds the external-browser handoff URL. The `handoffToken` is carried in
+ * the URL fragment so it never touches the network, server access logs, CDN
+ * logs, the browser's Referer header, or same-origin fetches. `deviceId` and
+ * `deviceName` stay in the query since they are not capability-bearing.
+ */
 export function buildPasskeyRegisterExternalUrl(
   origin: string,
   { deviceId, deviceName, handoffToken }: PasskeyRegisterExternalFields,
@@ -48,17 +54,20 @@ export function buildPasskeyRegisterExternalUrl(
   const url = new URL(PASSKEY_REGISTER_EXTERNAL_PATH, origin);
   url.searchParams.set('deviceId', deviceId);
   url.searchParams.set('deviceName', deviceName);
-  url.searchParams.set('handoffToken', handoffToken);
+  const fragment = new URLSearchParams({ handoffToken });
+  url.hash = fragment.toString();
   return url.toString();
 }
 
 export function parsePasskeyRegisterExternalParams(
   search: string,
+  hash = '',
 ): PasskeyRegisterExternalFields | null {
   const params = new URLSearchParams(search);
   const deviceId = params.get('deviceId');
   const deviceName = params.get('deviceName');
-  const handoffToken = params.get('handoffToken');
+  const fragment = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+  const handoffToken = fragment.get('handoffToken');
   if (!deviceId || !deviceName || !handoffToken) return null;
   return { deviceId, deviceName, handoffToken };
 }

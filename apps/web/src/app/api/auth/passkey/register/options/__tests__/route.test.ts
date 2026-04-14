@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/lib/auth', () => ({
   generateRegistrationOptions: vi.fn(),
   validateCSRFToken: vi.fn(),
+  peekPasskeyRegisterHandoff: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -37,22 +38,35 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   isSessionAuthResult: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  getBearerToken: vi.fn((req: Request) => {
+    const header = req.headers.get('authorization');
+    return header && header.startsWith('Bearer ') ? header.slice(7) : null;
+  }),
 }));
 
 import { POST } from '../route';
-import { generateRegistrationOptions, validateCSRFToken } from '@pagespace/lib/auth';
+import {
+  generateRegistrationOptions,
+  validateCSRFToken,
+  peekPasskeyRegisterHandoff,
+} from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 
-const createRequest = (headers: Record<string, string> = {}) =>
+const createRequest = (
+  headers: Record<string, string> = {},
+  body: Record<string, unknown> = {},
+) =>
   new Request('http://localhost/api/auth/passkey/register/options', {
     method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       'x-csrf-token': 'valid-csrf-token',
       ...headers,
     },
+    body: JSON.stringify(body),
   });
 
 describe('POST /api/auth/passkey/register/options', () => {
@@ -75,6 +89,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       allowed: true,
       attemptsRemaining: 4,
     });
+    vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue(null);
   });
 
   describe('successful options generation', () => {
@@ -162,6 +177,19 @@ describe('POST /api/auth/passkey/register/options', () => {
       });
 
       const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Invalid CSRF token');
+    });
+
+    it('does NOT skip CSRF when Authorization uses a non-Bearer scheme (e.g. Basic)', async () => {
+      vi.mocked(validateCSRFToken).mockReturnValue(false);
+
+      const response = await POST(createRequest({
+        Authorization: 'Basic dXNlcjpwYXNz',
+        'x-csrf-token': 'bad',
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
@@ -294,6 +322,154 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(loggers.auth.warn).toHaveBeenCalledWith('Passkey registration options failed', expect.objectContaining({
         error: 'DB_ERROR',
       }));
+    });
+  });
+
+  describe('desktop handoff-token branch', () => {
+    it('accepts a valid handoff token without session auth or CSRF', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-handoff',
+        createdAt: Date.now(),
+      });
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: { challenge: 'h-chal' } },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'good-token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.options).toEqual({ challenge: 'h-chal' });
+      expect(peekPasskeyRegisterHandoff).toHaveBeenCalledWith('good-token');
+      expect(authenticateSessionRequest).not.toHaveBeenCalled();
+      expect(validateCSRFToken).not.toHaveBeenCalled();
+      expect(generateRegistrationOptions).toHaveBeenCalledWith({ userId: 'user-handoff' });
+    });
+
+    it('returns 401 with HANDOFF_INVALID and audits when handoff token is invalid/expired', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue(null);
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'expired-token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.code).toBe('HANDOFF_INVALID');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({
+            reason: 'passkey_handoff_invalid',
+            flow: 'register_options',
+          }),
+        })
+      );
+      expect(generateRegistrationOptions).not.toHaveBeenCalled();
+    });
+
+    it('rate limits the handoff branch against the same per-user bucket', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-rl',
+        createdAt: Date.now(),
+      });
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 300,
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'good-token' }),
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(429);
+      expect(checkDistributedRateLimit).toHaveBeenCalledWith(
+        'passkey_register:user-rl',
+        expect.any(Object)
+      );
+      expect(generateRegistrationOptions).not.toHaveBeenCalled();
+    });
+
+    it('treats a JSON "null" body as empty and falls through to the session path (not 500)', async () => {
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': 'valid-csrf-token',
+        },
+        body: 'null',
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      // Handoff never engaged; session auth path ran instead.
+      expect(peekPasskeyRegisterHandoff).not.toHaveBeenCalled();
+      expect(authenticateSessionRequest).toHaveBeenCalled();
+    });
+
+    it('returns 400 (not 500, not session fallthrough) when body is malformed JSON', async () => {
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': 'valid-csrf-token',
+        },
+        body: 'not-json{',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+      // Parse error surfaced before auth, so session auth never ran and no
+      // handoff token was consulted — matches register/route.ts behavior.
+      expect(authenticateSessionRequest).not.toHaveBeenCalled();
+      expect(peekPasskeyRegisterHandoff).not.toHaveBeenCalled();
+    });
+
+    it('uses peek (not consume) so the verify step still finds the token', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-1',
+        createdAt: Date.now(),
+      });
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'good-token' }),
+      });
+
+      await POST(request);
+
+      expect(peekPasskeyRegisterHandoff).toHaveBeenCalledTimes(1);
     });
   });
 

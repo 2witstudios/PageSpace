@@ -82,7 +82,7 @@ describe('parsePasskeyExternalParams', () => {
 });
 
 describe('buildPasskeyRegisterExternalUrl', () => {
-  it('builds an /auth/passkey-register-external URL with all three fields', () => {
+  it('puts deviceId + deviceName in query but handoffToken in the URL fragment', () => {
     const url = buildPasskeyRegisterExternalUrl('https://pagespace.ai', {
       deviceId: 'device-123',
       deviceName: 'Jono Mac',
@@ -94,7 +94,14 @@ describe('buildPasskeyRegisterExternalUrl', () => {
     expect(parsed.pathname).toBe('/auth/passkey-register-external');
     expect(parsed.searchParams.get('deviceId')).toBe('device-123');
     expect(parsed.searchParams.get('deviceName')).toBe('Jono Mac');
-    expect(parsed.searchParams.get('handoffToken')).toBe('handoff-abc');
+    // handoffToken must NOT appear in the query — it's a capability token and
+    // fragments are never sent to the server, never logged in access logs or
+    // CDNs, and never carried in the Referer header.
+    expect(parsed.searchParams.get('handoffToken')).toBeNull();
+    expect(parsed.search).not.toContain('handoffToken');
+
+    const fragment = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+    expect(fragment.get('handoffToken')).toBe('handoff-abc');
   });
 
   it('encodes device names with spaces and special characters', () => {
@@ -108,7 +115,7 @@ describe('buildPasskeyRegisterExternalUrl', () => {
     expect(parsed.searchParams.get('deviceName')).toBe("Jono's MacBook Pro");
   });
 
-  it('round-trips build → parse for a device name with special characters', () => {
+  it('round-trips build → parse with search + hash for special characters', () => {
     const fields = {
       deviceId: 'device-xyz',
       deviceName: "Jono's MacBook Pro / Work",
@@ -116,7 +123,7 @@ describe('buildPasskeyRegisterExternalUrl', () => {
     };
     const url = buildPasskeyRegisterExternalUrl('https://pagespace.ai', fields);
     const parsed = new URL(url);
-    const recovered = parsePasskeyRegisterExternalParams(parsed.search);
+    const recovered = parsePasskeyRegisterExternalParams(parsed.search, parsed.hash);
     expect(recovered).toEqual(fields);
   });
 
@@ -136,9 +143,17 @@ describe('buildPasskeyRegisterExternalUrl', () => {
 describe('parsePasskeyRegisterExternalParams', () => {
   it('returns deviceId, deviceName, and handoffToken when all are present', () => {
     expect(
-      parsePasskeyRegisterExternalParams(
-        '?deviceId=d-1&deviceName=Mac&handoffToken=h-1',
-      ),
+      parsePasskeyRegisterExternalParams('?deviceId=d-1&deviceName=Mac', '#handoffToken=h-1'),
+    ).toEqual({
+      deviceId: 'd-1',
+      deviceName: 'Mac',
+      handoffToken: 'h-1',
+    });
+  });
+
+  it('accepts a hash string without a leading #', () => {
+    expect(
+      parsePasskeyRegisterExternalParams('?deviceId=d-1&deviceName=Mac', 'handoffToken=h-1'),
     ).toEqual({
       deviceId: 'd-1',
       deviceName: 'Mac',
@@ -148,23 +163,23 @@ describe('parsePasskeyRegisterExternalParams', () => {
 
   it('returns null when deviceId is missing', () => {
     expect(
-      parsePasskeyRegisterExternalParams('?deviceName=Mac&handoffToken=h-1'),
+      parsePasskeyRegisterExternalParams('?deviceName=Mac', '#handoffToken=h-1'),
     ).toBeNull();
   });
 
   it('returns null when deviceName is missing', () => {
     expect(
-      parsePasskeyRegisterExternalParams('?deviceId=d-1&handoffToken=h-1'),
+      parsePasskeyRegisterExternalParams('?deviceId=d-1', '#handoffToken=h-1'),
     ).toBeNull();
   });
 
-  it('returns null when handoffToken is missing', () => {
+  it('returns null when handoffToken fragment is missing', () => {
     expect(
       parsePasskeyRegisterExternalParams('?deviceId=d-1&deviceName=Mac'),
     ).toBeNull();
   });
 
-  it('returns null for an empty search string', () => {
+  it('returns null for an empty search and hash', () => {
     expect(parsePasskeyRegisterExternalParams('')).toBeNull();
   });
 });
