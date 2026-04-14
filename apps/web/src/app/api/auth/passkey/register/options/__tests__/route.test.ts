@@ -390,6 +390,50 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(generateRegistrationOptions).not.toHaveBeenCalled();
     });
 
+    it('treats a JSON "null" body as empty and falls through to the session path (not 500)', async () => {
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': 'valid-csrf-token',
+        },
+        body: 'null',
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      // Handoff never engaged; session auth path ran instead.
+      expect(peekPasskeyRegisterHandoff).not.toHaveBeenCalled();
+      expect(authenticateSessionRequest).toHaveBeenCalled();
+    });
+
+    it('treats malformed JSON as empty body and falls through to the session path', async () => {
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': 'valid-csrf-token',
+        },
+        body: 'not-json{',
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      expect(peekPasskeyRegisterHandoff).not.toHaveBeenCalled();
+    });
+
     it('uses peek (not consume) so the verify step still finds the token', async () => {
       vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
         userId: 'user-1',

@@ -20,7 +20,11 @@ async function readOptionalJson(req: Request): Promise<Record<string, unknown>> 
   try {
     const text = await req.text();
     if (!text) return {};
-    return JSON.parse(text) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, unknown>;
   } catch {
     return {};
   }

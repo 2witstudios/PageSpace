@@ -122,7 +122,13 @@ describe('PasskeyManager — desktop external-browser branch', () => {
     expect(parsed.pathname).toBe('/auth/passkey-register-external');
     expect(parsed.searchParams.get('deviceId')).toBe('device-xyz');
     expect(parsed.searchParams.get('deviceName')).toBe('Jono Mac');
-    expect(parsed.searchParams.get('handoffToken')).toBe('handoff-abc');
+    // handoffToken must live in the URL fragment, never in the query, so it
+    // is never sent to the server, never logged in access logs/CDNs, and
+    // never carried in the Referer header on downstream requests.
+    expect(parsed.searchParams.get('handoffToken')).toBeNull();
+    expect(parsed.search).not.toContain('handoffToken');
+    const fragment = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+    expect(fragment.get('handoffToken')).toBe('handoff-abc');
   });
 
   it('does not run the WebAuthn ceremony or call register/options in the Electron window', async () => {
@@ -221,7 +227,9 @@ describe('PasskeyManager — desktop without IPC bridge', () => {
 
   it('does not subscribe to passkey:registered when bridge is missing', async () => {
     render(<PasskeyManager />);
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /add passkey/i })).toBeInTheDocument()
+    );
     expect(swrMutateMock).not.toHaveBeenCalled();
   });
 });

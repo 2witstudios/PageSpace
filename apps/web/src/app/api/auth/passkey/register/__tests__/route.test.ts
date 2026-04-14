@@ -311,6 +311,24 @@ describe('POST /api/auth/passkey/register', () => {
   });
 
   describe('input validation', () => {
+    it('returns 400 (not 500) when the request body is malformed JSON', async () => {
+      const request = new Request('http://localhost/api/auth/passkey/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': 'valid-csrf-token',
+        },
+        body: 'not-json{',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+      expect(authenticateSessionRequest).not.toHaveBeenCalled();
+    });
+
     it('returns 400 for missing expectedChallenge', async () => {
       const response = await POST(createRequest({ response: {} }));
       const body = await response.json();

@@ -19,7 +19,10 @@ function PasskeyRegisterExternalContent() {
     if (started.current) return;
     started.current = true;
 
-    const params = parsePasskeyRegisterExternalParams(window.location.search);
+    const params = parsePasskeyRegisterExternalParams(
+      window.location.search,
+      window.location.hash,
+    );
     if (!params) {
       setStatus({
         kind: 'error',
@@ -28,17 +31,34 @@ function PasskeyRegisterExternalContent() {
       return;
     }
 
-    void runPasskeyRegisterExternalCeremony({
+    // Drop the fragment from the visible URL so the capability token is not
+    // left sitting in the browser address bar after consumption.
+    if (window.location.hash) {
+      window.history.replaceState(
+        null,
+        '',
+        window.location.pathname + window.location.search,
+      );
+    }
+
+    runPasskeyRegisterExternalCeremony({
       handoffToken: params.handoffToken,
       deviceName: params.deviceName,
-    }).then((result) => {
-      if (result.ok) {
-        setStatus({ kind: 'redirecting' });
-        window.location.href = result.deepLink;
-      } else {
-        setStatus({ kind: 'error', message: result.error });
-      }
-    });
+    })
+      .then((result) => {
+        if (result.ok) {
+          setStatus({ kind: 'redirecting' });
+          window.location.href = result.deepLink;
+        } else {
+          setStatus({ kind: 'error', message: result.error });
+        }
+      })
+      .catch((err: unknown) => {
+        setStatus({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Unexpected error',
+        });
+      });
   }, []);
 
   return (

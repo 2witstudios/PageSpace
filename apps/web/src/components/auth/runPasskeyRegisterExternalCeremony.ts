@@ -1,6 +1,8 @@
 import { startRegistration } from '@simplewebauthn/browser';
 import { buildPasskeyRegisteredDeepLink } from './passkeyExternal';
 
+type RegisterOptionsJSON = Parameters<typeof startRegistration>[0]['optionsJSON'];
+
 export interface RunPasskeyRegisterExternalCeremonyInput {
   handoffToken: string;
   deviceName: string;
@@ -33,15 +35,11 @@ export async function runPasskeyRegisterExternalCeremony(
   if (!optionsRes.ok) {
     return { ok: false, error: await readError(optionsRes, 'Failed to fetch registration options') };
   }
-  const { options } = (await optionsRes.json()) as {
-    options: { challenge: string };
-  };
+  const { options } = (await optionsRes.json()) as { options: RegisterOptionsJSON };
 
   let registrationResponse: Awaited<ReturnType<typeof startRegistration>>;
   try {
-    registrationResponse = await startRegistration({
-      optionsJSON: options as unknown as Parameters<typeof startRegistration>[0]['optionsJSON'],
-    });
+    registrationResponse = await startRegistration({ optionsJSON: options });
   } catch (err) {
     if (err instanceof Error && err.name === 'NotAllowedError') {
       return { ok: false, error: 'Registration was cancelled' };
