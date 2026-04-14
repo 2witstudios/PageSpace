@@ -18,7 +18,10 @@ export async function PATCH(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'update', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId, conversationId } = await context.params;
 
@@ -34,11 +37,15 @@ export async function PATCH(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'mcp_page_scope_denied', agentId, method: 'PATCH' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions (need edit to modify conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);
     if (!canEdit) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'no_edit_permission', agentId, method: 'PATCH' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to modify this conversation' },
         { status: 403 }
@@ -112,7 +119,10 @@ export async function DELETE(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId, conversationId } = await context.params;
 
@@ -128,11 +138,15 @@ export async function DELETE(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'mcp_page_scope_denied', agentId, method: 'DELETE' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions (need edit to delete conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);
     if (!canEdit) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'no_edit_permission', agentId, method: 'DELETE' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to delete this conversation' },
         { status: 403 }

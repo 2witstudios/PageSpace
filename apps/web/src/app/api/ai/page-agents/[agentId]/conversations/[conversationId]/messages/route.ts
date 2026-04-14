@@ -55,7 +55,10 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId, conversationId } = await context.params;
 
@@ -77,11 +80,15 @@ export async function GET(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'mcp_page_scope_denied', agentId, method: 'GET' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);
     if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'no_view_permission', agentId, method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to view this agent\'s conversations' },
         { status: 403 }

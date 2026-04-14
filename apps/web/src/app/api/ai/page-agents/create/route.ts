@@ -15,7 +15,10 @@ import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-age
 export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const { userId } = auth;
 
     const body = await request.json();
@@ -40,7 +43,10 @@ export async function POST(request: Request) {
 
     // Enforce MCP token scope
     const scopeError = checkMCPDriveScope(auth, driveId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'mcp_drive_scope_denied', driveId, method: 'POST' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // If parentId is provided, verify it exists and belongs to this drive
     if (parentId) {
@@ -59,6 +65,7 @@ export async function POST(request: Request) {
       // Creating in a folder - check permissions on parent page
       const canEdit = await canUserEditPage(userId, parentId);
       if (!canEdit) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'no_edit_permission_on_parent', parentId, driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(
           { error: 'Insufficient permissions to create agents in this folder' },
           { status: 403 }
@@ -67,6 +74,7 @@ export async function POST(request: Request) {
     } else {
       // Creating at root level - check if user owns the drive
       if (drive.ownerId !== userId) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'not_drive_owner', driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(
           { error: 'Only drive owners can create agents at the root level' },
           { status: 403 }
