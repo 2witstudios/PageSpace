@@ -52,7 +52,7 @@ function unauthorized(message: string, status = 401): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
 
-function getBearerToken(request: Request): string | null {
+export function getBearerToken(request: Request): string | null {
   const authHeader = request.headers.get('authorization');
   if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) {
     return null;

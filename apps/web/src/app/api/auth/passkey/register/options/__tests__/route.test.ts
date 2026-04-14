@@ -38,6 +38,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   isSessionAuthResult: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  getBearerToken: vi.fn((req: Request) => {
+    const header = req.headers.get('authorization');
+    return header && header.startsWith('Bearer ') ? header.slice(7) : null;
+  }),
 }));
 
 import { POST } from '../route';
@@ -173,6 +177,19 @@ describe('POST /api/auth/passkey/register/options', () => {
       });
 
       const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Invalid CSRF token');
+    });
+
+    it('does NOT skip CSRF when Authorization uses a non-Bearer scheme (e.g. Basic)', async () => {
+      vi.mocked(validateCSRFToken).mockReturnValue(false);
+
+      const response = await POST(createRequest({
+        Authorization: 'Basic dXNlcjpwYXNz',
+        'x-csrf-token': 'bad',
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
@@ -413,13 +430,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(authenticateSessionRequest).toHaveBeenCalled();
     });
 
-    it('treats malformed JSON as empty body and falls through to the session path', async () => {
-      vi.mocked(generateRegistrationOptions).mockResolvedValue({
-        ok: true,
-        // @ts-expect-error - partial mock data
-        data: { options: {} },
-      });
-
+    it('returns 400 (not 500, not session fallthrough) when body is malformed JSON', async () => {
       const request = new Request('http://localhost/api/auth/passkey/register/options', {
         method: 'POST',
         headers: {
@@ -430,7 +441,12 @@ describe('POST /api/auth/passkey/register/options', () => {
       });
 
       const response = await POST(request);
-      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid request body');
+      // Parse error surfaced before auth, so session auth never ran and no
+      // handoff token was consulted — matches register/route.ts behavior.
+      expect(authenticateSessionRequest).not.toHaveBeenCalled();
       expect(peekPasskeyRegisterHandoff).not.toHaveBeenCalled();
     });
 

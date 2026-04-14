@@ -11,23 +11,28 @@ import {
 } from '@pagespace/lib/security';
 import {
   authenticateSessionRequest,
+  getBearerToken,
   isAuthError,
   isSessionAuthResult,
   getClientIP,
 } from '@/lib/auth';
 
+/**
+ * Reads the request body as a JSON object. Empty bodies resolve to `{}` so
+ * unauthenticated/session callers without a body still reach the session-auth
+ * path. Non-object JSON (null, arrays, primitives) is normalized to `{}`.
+ * Malformed JSON surfaces as a SyntaxError so the caller can return a
+ * controlled 400 — swallowing it would hide client errors and let bad input
+ * accidentally engage the session path.
+ */
 async function readOptionalJson(req: Request): Promise<Record<string, unknown>> {
-  try {
-    const text = await req.text();
-    if (!text) return {};
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
+  const text = await req.text();
+  if (!text) return {};
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {};
   }
+  return parsed as Record<string, unknown>;
 }
 
 /**
@@ -44,7 +49,16 @@ async function readOptionalJson(req: Request): Promise<Record<string, unknown>> 
 export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
-    const body = await readOptionalJson(req);
+
+    let body: Record<string, unknown>;
+    try {
+      body = await readOptionalJson(req);
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid request body' },
+        { status: 400 }
+      );
+    }
     const handoffToken =
       typeof body.handoffToken === 'string' ? body.handoffToken : null;
 
@@ -73,7 +87,7 @@ export async function POST(req: Request) {
       userId = authResult.userId;
       const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
 
-      const hasBearerAuth = !!req.headers.get('authorization');
+      const hasBearerAuth = !!getBearerToken(req);
       if (!hasBearerAuth && sessionId) {
         const csrfToken = req.headers.get('x-csrf-token');
         if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {

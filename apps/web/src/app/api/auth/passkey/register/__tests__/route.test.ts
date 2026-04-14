@@ -42,6 +42,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   isSessionAuthResult: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  getBearerToken: vi.fn((req: Request) => {
+    const header = req.headers.get('authorization');
+    return header && header.startsWith('Bearer ') ? header.slice(7) : null;
+  }),
 }));
 
 import { POST } from '../route';
@@ -233,6 +237,21 @@ describe('POST /api/auth/passkey/register', () => {
       });
 
       const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Invalid CSRF token');
+    });
+
+    it('does NOT skip CSRF when Authorization uses a non-Bearer scheme (e.g. Basic)', async () => {
+      vi.mocked(validateCSRFToken).mockReturnValue(false);
+
+      const response = await POST(
+        createRequest(validPayload, {
+          Authorization: 'Basic dXNlcjpwYXNz',
+          'x-csrf-token': 'bad',
+        })
+      );
       const body = await response.json();
 
       expect(response.status).toBe(403);

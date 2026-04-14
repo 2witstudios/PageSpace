@@ -10,6 +10,7 @@ import {
 } from '@pagespace/lib/security';
 import {
   authenticateSessionRequest,
+  getBearerToken,
   isAuthError,
   isSessionAuthResult,
 } from '@/lib/auth';
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
     const userId = authResult.userId;
     const sessionId = isSessionAuthResult(authResult) ? authResult.sessionId : null;
 
-    const hasBearerAuth = !!req.headers.get('authorization');
+    const hasBearerAuth = !!getBearerToken(req);
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
