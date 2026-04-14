@@ -12,6 +12,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   generateRegistrationOptions: vi.fn(),
   validateCSRFToken: vi.fn(),
   peekPasskeyRegisterHandoff: vi.fn(),
+  markPasskeyRegisterOptionsIssued: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -49,6 +50,7 @@ import {
   generateRegistrationOptions,
   validateCSRFToken,
   peekPasskeyRegisterHandoff,
+  markPasskeyRegisterOptionsIssued,
 } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -90,6 +92,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       attemptsRemaining: 4,
     });
     vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue(null);
+    vi.mocked(markPasskeyRegisterOptionsIssued).mockResolvedValue(true);
   });
 
   describe('successful options generation', () => {
@@ -500,6 +503,104 @@ describe('POST /api/auth/passkey/register/options', () => {
       await POST(request);
 
       expect(peekPasskeyRegisterHandoff).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks the handoff token as options-issued on the happy path', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-handoff',
+        createdAt: Date.now(),
+      });
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'good-token' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(markPasskeyRegisterOptionsIssued).toHaveBeenCalledWith('good-token');
+    });
+
+    it('returns 401 OPTIONS_ALREADY_ISSUED when marker indicates replay', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-handoff',
+        createdAt: Date.now(),
+      });
+      vi.mocked(markPasskeyRegisterOptionsIssued).mockResolvedValue(false);
+
+      const request = new Request('http://localhost/api/auth/passkey/register/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffToken: 'replayed-token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(body.code).toBe('OPTIONS_ALREADY_ISSUED');
+      expect(generateRegistrationOptions).not.toHaveBeenCalled();
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          userId: 'user-handoff',
+          details: expect.objectContaining({
+            reason: 'passkey_handoff_options_replayed',
+            flow: 'register_options',
+          }),
+        })
+      );
+    });
+
+    it('two calls with the same handoff token: first 200, second 401 OPTIONS_ALREADY_ISSUED', async () => {
+      vi.mocked(peekPasskeyRegisterHandoff).mockResolvedValue({
+        userId: 'user-handoff',
+        createdAt: Date.now(),
+      });
+      vi.mocked(markPasskeyRegisterOptionsIssued)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: { challenge: 'c1' } },
+      });
+
+      const makeReq = () =>
+        new Request('http://localhost/api/auth/passkey/register/options', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handoffToken: 'replay-target' }),
+        });
+
+      const first = await POST(makeReq());
+      const second = await POST(makeReq());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(401);
+      const body = await second.json();
+      expect(body.code).toBe('OPTIONS_ALREADY_ISSUED');
+      expect(generateRegistrationOptions).toHaveBeenCalledTimes(1);
+    });
+
+    it('session-authed path does NOT call markPasskeyRegisterOptionsIssued', async () => {
+      vi.mocked(generateRegistrationOptions).mockResolvedValue({
+        ok: true,
+        // @ts-expect-error - partial mock data
+        data: { options: {} },
+      });
+
+      await POST(createRequest());
+
+      expect(markPasskeyRegisterOptionsIssued).not.toHaveBeenCalled();
     });
   });
 
