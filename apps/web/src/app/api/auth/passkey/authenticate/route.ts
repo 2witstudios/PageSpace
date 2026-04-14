@@ -24,7 +24,7 @@ const verifySchema = z.object({
   csrfToken: z.string().min(1),
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().max(128).optional(),
-  deviceName: z.string().optional(),
+  deviceName: z.string().max(256).optional(),
   desktopExchange: z.boolean().optional().default(false),
 });
 
@@ -80,6 +80,17 @@ export async function POST(req: Request) {
     if (desktopExchange && platform !== 'desktop') {
       return NextResponse.json(
         { error: 'desktopExchange requires platform: desktop' },
+        { status: 400 }
+      );
+    }
+
+    // Desktop auth must go through the external-browser exchange flow. The
+    // legacy path that returned a raw sessionToken in the response body for
+    // platform=desktop is removed — it's dead code after #1001 and leaking
+    // raw tokens in JSON is strictly worse than the opaque exchange code.
+    if (platform === 'desktop' && !desktopExchange) {
+      return NextResponse.json(
+        { error: 'platform=desktop requires desktopExchange=true' },
         { status: 400 }
       );
     }
@@ -255,7 +266,6 @@ export async function POST(req: Request) {
         userId,
         redirectUrl: '/dashboard',
         csrfToken: newCsrfToken,
-        ...(platform === 'desktop' && { sessionToken }),
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
