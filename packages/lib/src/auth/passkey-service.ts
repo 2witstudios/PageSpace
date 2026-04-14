@@ -222,10 +222,10 @@ export async function generateRegistrationOptions(
   });
 
   // WebAuthn Level 3: hint browser to prefer the OS platform authenticator
-  // (Touch ID / Windows Hello) over the cross-device QR flow. This is a
-  // preference only — users can still pick "use a different device" in the
-  // browser's native picker. SimpleWebAuthn v13 doesn't accept hints in
-  // generateRegistrationOptions, so we splice it on post-call.
+  // (Touch ID / Windows Hello) while still allowing "use a different device"
+  // as a fallback. SimpleWebAuthn v13's `preferredAuthenticatorType: 'localDevice'`
+  // would also force `authenticatorAttachment: 'platform'`, which hard-excludes
+  // cross-device — so we bypass it and splice `hints` on post-call.
   const options = {
     ...rawOptions,
     hints: ['client-device' as const],
