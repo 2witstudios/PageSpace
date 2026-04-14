@@ -806,6 +806,30 @@ describe('POST /api/auth/apple/callback', () => {
       expect(body).toContain('http-equiv="refresh"');
     });
 
+    it('emits hardened security headers on the handoff bridge response', async () => {
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+      });
+
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      const csp = response.headers.get('Content-Security-Policy') ?? '';
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("style-src 'unsafe-inline'");
+      expect(csp).toContain("base-uri 'none'");
+      expect(csp).toContain("form-action 'none'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(csp).not.toContain('img-src');
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+    });
+
     it('includes isNewUser flag in deep link for new users', async () => {
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
