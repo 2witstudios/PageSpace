@@ -212,11 +212,30 @@ describe('Security Audit Route Coverage', () => {
    * Success-only audit coverage is not enough for the AI subset.
    */
   const AI_ROUTES_REQUIRING_DENIAL_AUDIT: string[] = [
+    // Chat subset
     'ai/abort',
     'ai/chat',
     'ai/chat/messages',
     'ai/chat/messages/[messageId]',
     'ai/chat/messages/[messageId]/undo',
+    // Settings
+    'ai/settings',
+    // Global assistant
+    'ai/global',
+    'ai/global/active',
+    'ai/global/[id]',
+    'ai/global/[id]/messages',
+    'ai/global/[id]/messages/[messageId]',
+    'ai/global/[id]/usage',
+    // Page agents
+    'ai/page-agents/consult',
+    'ai/page-agents/create',
+    'ai/page-agents/multi-drive',
+    'ai/page-agents/[agentId]/config',
+    'ai/page-agents/[agentId]/conversations',
+    'ai/page-agents/[agentId]/conversations/[conversationId]',
+    'ai/page-agents/[agentId]/conversations/[conversationId]/messages',
+    'ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]',
   ];
 
   it('AI routes should audit authz.access.denied on auth/permission-failure paths', () => {
