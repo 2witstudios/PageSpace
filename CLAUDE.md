@@ -80,6 +80,7 @@ When you need to understand a subsystem, read these canonical sources (not docs 
 | UI refresh protection | `apps/web/src/stores/useEditingStore.ts` |
 | Integrations (GitHub, Calendar, OAuth) | `packages/lib/src/integrations/` |
 | DB schema (all tables) | `packages/db/src/schema/` |
+| Audit/activity/system log tables — which to write to | `docs/security/audit-data-model.md` |
 | Services (billing, search, calendar sync) | `packages/lib/src/services/` |
 | Deployment mode detection | `packages/lib/src/deployment-mode.ts` |
 | AI provider setup | `apps/web/src/lib/ai/` |
