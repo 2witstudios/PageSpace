@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
-import { AuthShell } from '@/components/auth';
+import { AuthShell } from '@/components/auth/AuthShell';
 import { runPasskeyExternalCeremony } from '@/components/auth/runPasskeyExternalCeremony';
 import { parsePasskeyExternalParams } from '@/components/auth/passkeyExternal';
 
