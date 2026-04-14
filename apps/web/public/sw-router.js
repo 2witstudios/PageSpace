@@ -65,6 +65,8 @@ function classifyRequest(input) {
   // navigations under /api/; mode is the semantic boundary.
   if (mode === 'navigate') return 'native-pass-through';
 
+  // Base is only consulted by unit tests that pass relative-ish URLs;
+  // production SW callers always pass absolute same-origin URLs.
   const parsed = new URL(url, 'http://localhost');
 
   // Next.js runtime chunks: let the browser fetch directly to avoid
@@ -77,6 +79,8 @@ function classifyRequest(input) {
 
   if (isStaticAssetPath(parsed.pathname)) return 'cache-first';
 
+  // Next.js RSC/prefetch headers are handled inside sw.js's
+  // network-first branch, not here — the classifier is header-agnostic.
   return 'network-first';
 }
 
@@ -85,5 +89,4 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 if (typeof self !== 'undefined') {
   self.classifyRequest = classifyRequest;
-  self.isStaticAssetPath = isStaticAssetPath;
 }
