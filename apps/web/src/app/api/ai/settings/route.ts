@@ -83,7 +83,10 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     // Get user's current provider settings via repository
@@ -195,7 +198,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'save_api_key', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const body = await request.json();
@@ -316,7 +322,10 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'update_selection', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const body = await request.json();
@@ -408,7 +417,10 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'delete_api_key', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const body = await request.json();

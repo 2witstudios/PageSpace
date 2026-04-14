@@ -69,7 +69,10 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { id } = await context.params;
@@ -204,6 +207,7 @@ export async function POST(
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
       loggers.api.debug('Global Assistant Chat API: Authentication failed', {});
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'send', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;

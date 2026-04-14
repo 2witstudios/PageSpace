@@ -41,7 +41,10 @@ export async function PATCH(
   try {
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -74,6 +77,7 @@ export async function PATCH(
         messageId: maskIdentifier(messageId),
         pageId: maskIdentifier(message.pageId)
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'message', resourceId: messageId, details: { reason: 'no_edit_permission', method: 'PATCH', pageId: message.pageId }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to edit messages in this chat' },
         { status: 403 }
@@ -149,7 +153,10 @@ export async function DELETE(
   try {
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { messageId } = await context.params;
@@ -173,6 +180,7 @@ export async function DELETE(
         messageId: maskIdentifier(messageId),
         pageId: maskIdentifier(message.pageId)
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'message', resourceId: messageId, details: { reason: 'no_edit_permission', method: 'DELETE', pageId: message.pageId }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }

@@ -20,7 +20,10 @@ export async function PATCH(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { agentId, conversationId, messageId } = await context.params;
@@ -36,7 +39,10 @@ export async function PATCH(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'mcp_page_scope_denied', agentId, conversationId, method: 'PATCH' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check if user can edit the page (agent) this message belongs to
     const canEdit = await canUserEditPage(userId, agentId);
@@ -46,6 +52,7 @@ export async function PATCH(
         messageId: maskIdentifier(messageId),
         agentId: maskIdentifier(agentId),
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'PATCH' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to edit messages in this chat' },
         { status: 403 }
@@ -128,14 +135,20 @@ export async function DELETE(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { agentId, conversationId, messageId } = await context.params;
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'mcp_page_scope_denied', agentId, conversationId, method: 'DELETE' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check if user can edit the page (agent) this message belongs to
     const canEdit = await canUserEditPage(userId, agentId);
@@ -145,6 +158,7 @@ export async function DELETE(
         messageId: maskIdentifier(messageId),
         agentId: maskIdentifier(agentId),
       });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'DELETE' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }

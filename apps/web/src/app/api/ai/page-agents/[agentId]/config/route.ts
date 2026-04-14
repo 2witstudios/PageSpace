@@ -20,7 +20,10 @@ export async function PUT(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'config', details: { reason: 'auth_failed', method: 'PUT' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const { userId } = auth;
 
     const { agentId } = await context.params;
@@ -55,11 +58,15 @@ export async function PUT(
 
     // Enforce MCP token scope
     const scopeError = checkMCPDriveScope(auth, agent.driveId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'mcp_drive_scope_denied', driveId: agent.driveId, method: 'PUT' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions
     const canEdit = await canUserEditPage(userId, agentId);
     if (!canEdit) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_edit_permission', method: 'PUT' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to update this agent' },
         { status: 403 }

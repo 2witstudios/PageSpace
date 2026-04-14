@@ -146,7 +146,10 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'consult', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const body = await request.json();
@@ -182,11 +185,15 @@ export async function POST(request: Request) {
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'mcp_page_scope_denied', action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check view permissions
     const canView = await canUserViewPage(userId, agentId);
     if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_view_permission', action: 'consult', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to consult this agent' },
         { status: 403 }

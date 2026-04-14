@@ -19,7 +19,10 @@ export async function PATCH(
   try {
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { id: conversationId, messageId } = await context.params;
@@ -112,7 +115,10 @@ export async function DELETE(
   try {
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { id: conversationId, messageId } = await context.params;

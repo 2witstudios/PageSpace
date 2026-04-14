@@ -25,7 +25,10 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId } = await context.params;
 
@@ -41,11 +44,15 @@ export async function GET(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'mcp_page_scope_denied', method: 'GET' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);
     if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to view this agent' },
         { status: 403 }
@@ -131,7 +138,10 @@ export async function POST(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_conversation', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      return auth.error;
+    }
 
     const { agentId } = await context.params;
 
@@ -147,11 +157,15 @@ export async function POST(
 
     // Check MCP page scope
     const scopeError = await checkMCPPageScope(auth, agentId);
-    if (scopeError) return scopeError;
+    if (scopeError) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'mcp_page_scope_denied', method: 'POST' }, riskScore: 0.5 });
+      return scopeError;
+    }
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);
     if (!canView) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to create conversations for this agent' },
         { status: 403 }

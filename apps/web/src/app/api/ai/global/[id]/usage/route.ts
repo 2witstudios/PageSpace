@@ -18,7 +18,10 @@ export async function GET(
 ) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) {
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_usage', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      return auth.error;
+    }
     const userId = auth.userId;
 
     const { id } = await context.params;
