@@ -10,7 +10,7 @@ import { runPasskeyExternalCeremony } from '../runPasskeyExternalCeremony';
 const authResponse = { id: 'cred-1', rawId: 'raw', type: 'public-key' };
 
 function mockFetch(handlers: Record<string, () => Response | Promise<Response>>) {
-  return vi.fn(async (input: unknown) => {
+  return vi.fn(async (input: unknown, _init?: unknown) => {
     const url = typeof input === 'string' ? input : (input as Request).url;
     for (const [pattern, handler] of Object.entries(handlers)) {
       if (url.includes(pattern)) return handler();
@@ -71,11 +71,12 @@ describe('runPasskeyExternalCeremony', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    const verifyCall = fetchImpl.mock.calls.find(([url]) =>
-      typeof url === 'string' && url === '/api/auth/passkey/authenticate'
+    const verifyCall = fetchImpl.mock.calls.find(
+      (call) => typeof call[0] === 'string' && call[0] === '/api/auth/passkey/authenticate',
     );
     expect(verifyCall).toBeDefined();
-    const body = JSON.parse((verifyCall![1] as RequestInit).body as string);
+    const init = verifyCall![1] as RequestInit;
+    const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({
       platform: 'desktop',
       deviceId: 'device-xyz',

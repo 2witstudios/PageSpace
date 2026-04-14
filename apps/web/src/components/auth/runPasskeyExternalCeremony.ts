@@ -41,12 +41,14 @@ export async function runPasskeyExternalCeremony(
     return { ok: false, error: await readError(optionsRes, 'Failed to fetch passkey options') };
   }
   const { options } = (await optionsRes.json()) as {
-    options: { challenge: string; allowCredentials?: unknown[] };
+    options: { challenge: string };
   };
 
   let authResponse: Awaited<ReturnType<typeof startAuthentication>>;
   try {
-    authResponse = await startAuthentication({ optionsJSON: options });
+    authResponse = await startAuthentication({
+      optionsJSON: options as unknown as Parameters<typeof startAuthentication>[0]['optionsJSON'],
+    });
   } catch (err) {
     if (err instanceof Error && err.name === 'NotAllowedError') {
       return { ok: false, error: 'Authentication was cancelled' };
