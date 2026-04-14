@@ -103,8 +103,13 @@ export type PasskeyError =
   | { code: 'PASSKEY_NOT_FOUND' }
   | { code: 'EMAIL_EXISTS' };
 
+export type RegistrationOptionsWithHints =
+  Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>> & {
+    hints?: readonly string[];
+  };
+
 export type GenerateRegOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>> } }
+  | { ok: true; data: { options: RegistrationOptionsWithHints } }
   | { ok: false; error: PasskeyError };
 
 export type VerifyRegistrationResult =
@@ -137,7 +142,7 @@ export type UpdateNameResult =
   | { ok: false; error: PasskeyError };
 
 export type GenerateSignupRegOptionsResult =
-  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>>; challengeId: string } }
+  | { ok: true; data: { options: RegistrationOptionsWithHints; challengeId: string } }
   | { ok: false; error: PasskeyError };
 
 export type VerifySignupRegistrationResult =
@@ -201,7 +206,7 @@ export async function generateRegistrationOptions(
   }));
 
   // Generate options with discoverable credentials (required for true passwordless)
-  const options = await simpleGenerateRegistrationOptions({
+  const rawOptions = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
     userName: user.email,
@@ -215,6 +220,16 @@ export async function generateRegistrationOptions(
     },
     timeout: PASSKEY_CONFIG.timeout,
   });
+
+  // WebAuthn Level 3: hint browser to prefer the OS platform authenticator
+  // (Touch ID / Windows Hello) while still allowing "use a different device"
+  // as a fallback. SimpleWebAuthn v13's `preferredAuthenticatorType: 'localDevice'`
+  // would also force `authenticatorAttachment: 'platform'`, which hard-excludes
+  // cross-device — so we bypass it and splice `hints` on post-call.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
 
   // Clean up old unused challenges
   await db
@@ -725,7 +740,7 @@ export async function generateRegistrationOptionsForSignup(
   }
 
   // Generate options with email as userName (user doesn't exist yet)
-  const options = await simpleGenerateRegistrationOptions({
+  const rawOptions = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
     userName: normalizedEmail,
@@ -738,6 +753,12 @@ export async function generateRegistrationOptionsForSignup(
     },
     timeout: PASSKEY_CONFIG.timeout,
   });
+
+  // See generateRegistrationOptions for rationale on the client-device hint.
+  const options = {
+    ...rawOptions,
+    hints: ['client-device' as const],
+  };
 
   // Clean up old unused signup challenges for this email
   // We use a deterministic ID based on email hash to enable cleanup

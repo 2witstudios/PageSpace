@@ -189,6 +189,54 @@ describe('passkey-service', () => {
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.data.options.challenge).toBe('challenge123');
     });
+
+    // WebAuthn L3 hint — tells the browser to prefer the OS platform authenticator
+    // (Touch ID / Windows Hello) over the cross-device QR flow, while still allowing
+    // the user to pick "use a different device" in the native picker.
+    it('generateRegistrationOptions_default_includesClientDeviceHint', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1', email: 'a@b.com', name: 'Test', suspendedAt: null,
+      });
+      mockDb.query.passkeys.findMany.mockResolvedValueOnce([]);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'challenge123', rp: {} });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      const result = await generateRegistrationOptions({ userId: 'user-1' });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect((result.data.options as { hints?: readonly string[] }).hints).toEqual(['client-device']);
+      }
+    });
+
+    // Portability constraint: we must NOT set authenticatorAttachment,
+    // because 'platform' would hard-exclude cross-device registration and
+    // the user has asked to keep that path open as a fallback.
+    it('generateRegistrationOptions_default_omitsAuthenticatorAttachment', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1', email: 'a@b.com', name: 'Test', suspendedAt: null,
+      });
+      mockDb.query.passkeys.findMany.mockResolvedValueOnce([]);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'challenge123', rp: {} });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      await generateRegistrationOptions({ userId: 'user-1' });
+
+      const simpleWebAuthnArgs = mockGenRegOptions.mock.calls[0]?.[0] as {
+        authenticatorSelection?: {
+          authenticatorAttachment?: string;
+          residentKey?: string;
+          requireResidentKey?: boolean;
+          userVerification?: string;
+        };
+      };
+      expect(simpleWebAuthnArgs.authenticatorSelection?.authenticatorAttachment).toBeUndefined();
+      expect(simpleWebAuthnArgs.authenticatorSelection?.residentKey).toBe('required');
+      expect(simpleWebAuthnArgs.authenticatorSelection?.requireResidentKey).toBe(true);
+      expect(simpleWebAuthnArgs.authenticatorSelection?.userVerification).toBe('required');
+    });
   });
 
   describe('verifyRegistration', () => {
@@ -653,6 +701,46 @@ describe('passkey-service', () => {
         expect(result.data.options.challenge).toBe('signup-challenge');
         expect(result.data.challengeId).toBe('test-cuid');
       }
+    });
+
+    it('generateRegistrationOptionsForSignup_default_includesClientDeviceHint', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce(null);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'signup-challenge' });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      const result = await generateRegistrationOptionsForSignup({
+        email: 'new@example.com', name: 'New User',
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect((result.data.options as { hints?: readonly string[] }).hints).toEqual(['client-device']);
+      }
+    });
+
+    it('generateRegistrationOptionsForSignup_default_omitsAuthenticatorAttachment', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce(null);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'signup-challenge' });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      await generateRegistrationOptionsForSignup({
+        email: 'new@example.com', name: 'New User',
+      });
+
+      const simpleWebAuthnArgs = mockGenRegOptions.mock.calls[0]?.[0] as {
+        authenticatorSelection?: {
+          authenticatorAttachment?: string;
+          residentKey?: string;
+          requireResidentKey?: boolean;
+          userVerification?: string;
+        };
+      };
+      expect(simpleWebAuthnArgs.authenticatorSelection?.authenticatorAttachment).toBeUndefined();
+      expect(simpleWebAuthnArgs.authenticatorSelection?.residentKey).toBe('required');
+      expect(simpleWebAuthnArgs.authenticatorSelection?.requireResidentKey).toBe(true);
+      expect(simpleWebAuthnArgs.authenticatorSelection?.userVerification).toBe('required');
     });
   });
 

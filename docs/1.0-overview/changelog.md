@@ -1,5 +1,13 @@
 ## 2026-04-13
 
+### Passkey Registration: Prefer Platform Authenticator
+
+Passkey enrolment now nudges the browser toward the built-in platform authenticator (Touch ID, Windows Hello, Android biometrics) instead of defaulting to the cross-device QR picker. Users can still choose "use a different device" from the native browser dialog — this is a preference, not a restriction.
+
+#### Changed
+
+- **`hints: ['client-device']` on registration options**: `generateRegistrationOptions` and `generateRegistrationOptionsForSignup` now emit the WebAuthn Level 3 hint so browsers surface the local biometric UI first. `authenticatorAttachment` is deliberately left unset to preserve cross-device enrolment as a fallback.
+
 ### GitHub Import: Connection Resolution Hardened
 
 `import_from_github` now resolves and authorises GitHub connections through the same path as the rest of the integration runtime, fixing a regression where the tool could fail to find a connection that the same chat had successfully used moments earlier.
