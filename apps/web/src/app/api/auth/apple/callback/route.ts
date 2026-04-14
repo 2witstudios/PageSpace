@@ -15,6 +15,29 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { buildHandoffBridgeHtml } from '@/app/api/auth/_shared/buildHandoffBridgeHtml';
+
+const HANDOFF_BRIDGE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+const buildHandoffBridgeResponse = (deepLink: string, title: string): NextResponse => {
+  const html = buildHandoffBridgeHtml({
+    deepLink,
+    title,
+    body: 'Return to the PageSpace desktop app — you can safely close this window.',
+  });
+  return new NextResponse(html, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': HANDOFF_BRIDGE_CSP,
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+};
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -257,13 +280,13 @@ export async function POST(req: Request) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
-      loggers.auth.info('Desktop Apple OAuth deep link redirect', {
+      loggers.auth.info('Desktop Apple OAuth deep link bridge', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow

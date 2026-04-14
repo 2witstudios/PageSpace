@@ -3,13 +3,17 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import { runPasskeyRegisterExternalCeremony } from '@/components/auth/runPasskeyRegisterExternalCeremony';
 import { parsePasskeyRegisterExternalParams } from '@/components/auth/passkeyExternal';
 
 type Status =
   | { kind: 'running' }
   | { kind: 'redirecting' }
+  | { kind: 'complete' }
   | { kind: 'error'; message: string };
+
+const HANDOFF_SETTLE_MS = 600;
 
 function PasskeyRegisterExternalContent() {
   const [status, setStatus] = useState<Status>({ kind: 'running' });
@@ -18,6 +22,9 @@ function PasskeyRegisterExternalContent() {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
+
+    let unmounted = false;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
     const params = parsePasskeyRegisterExternalParams(
       window.location.search,
@@ -46,20 +53,45 @@ function PasskeyRegisterExternalContent() {
       deviceName: params.deviceName,
     })
       .then((result) => {
+        if (unmounted) return;
         if (result.ok) {
           setStatus({ kind: 'redirecting' });
           window.location.href = result.deepLink;
+          settleTimer = setTimeout(() => {
+            if (unmounted) return;
+            setStatus({ kind: 'complete' });
+            try {
+              window.close();
+            } catch {
+              // Best-effort: many browsers refuse window.close() for tabs
+              // not opened via window.open(). The terminal UI is the fallback.
+            }
+          }, HANDOFF_SETTLE_MS);
         } else {
           setStatus({ kind: 'error', message: result.error });
         }
       })
       .catch((err: unknown) => {
+        if (unmounted) return;
         setStatus({
           kind: 'error',
           message: err instanceof Error ? err.message : 'Unexpected error',
         });
       });
+
+    return () => {
+      unmounted = true;
+      if (settleTimer) clearTimeout(settleTimer);
+    };
   }, []);
+
+  if (status.kind === 'complete') {
+    return (
+      <AuthShell>
+        <HandoffCompleteCard variant="passkey-added" />
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell>
