@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-import { PasskeyRegisterExternalView } from '../passkey-register-external/page';
+import { PasskeyRegisterExternalView } from '@/components/auth/PasskeyRegisterExternalView';
 
 describe('PasskeyRegisterExternalView', () => {
   it('renders a loading state while the ceremony is running', () => {
