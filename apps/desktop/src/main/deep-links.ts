@@ -5,6 +5,8 @@ import { mainWindow } from './state';
 import { setCachedSession } from './state';
 import { getAppUrl } from './app-url';
 import { logger } from './logger';
+import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
+import { createWindow } from './window';
 
 export function setupProtocolClient(): void {
   if (process.defaultApp) {
@@ -141,6 +143,38 @@ async function handleAuthExchange(url: string): Promise<boolean> {
   }
 }
 
+function handlePasskeyRegistered(url: string): boolean {
+  return handlePasskeyRegisteredPure(url, {
+    focusWindow: () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        return;
+      }
+      // macOS: all windows closed while app lives in dock. Spawn one so the
+      // renderer can receive the broadcast — otherwise the deep link would be
+      // silently consumed.
+      createWindow();
+    },
+    sendToRenderer: (channel) => {
+      const target = mainWindow;
+      if (!target) {
+        logger.error('[Passkey Deep Link] No main window available after focus');
+        return;
+      }
+      if (target.webContents.isLoading()) {
+        target.webContents.once('did-finish-load', () => {
+          target.webContents.send(channel);
+        });
+        return;
+      }
+      target.webContents.send(channel);
+    },
+    logger,
+  });
+}
+
 function handleAuthError(url: string): boolean {
   try {
     const urlObj = new URL(url);
@@ -158,6 +192,7 @@ function handleAuthError(url: string): boolean {
 export async function handleDeepLink(url: string): Promise<void> {
   if (await handleAuthExchange(url)) return;
   if (handleAuthError(url)) return;
+  if (handlePasskeyRegistered(url)) return;
 
   if (mainWindow) {
     mainWindow.webContents.send('deep-link', url);
