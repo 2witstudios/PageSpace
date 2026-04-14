@@ -12,11 +12,6 @@ export {
   type QueryEventsOptions,
 } from './security-audit';
 
-export {
-  auditAuthEvent,
-  auditSecurityEvent,
-} from './security-audit-adapter';
-
 export { audit, auditRequest } from './audit-log';
 
 export { queryAuditEvents } from './audit-query';
