@@ -1,3 +1,17 @@
+## 2026-04-14
+
+### Passkey Desktop Handoff: Register Rate-Limit + Replay Hardening
+
+Fixes a production incident where desktop-v1.0.22 users were blocked from adding a second passkey in the same 15-minute window: the post-#1012 ceremony burned three tokens from the per-user `PASSKEY_REGISTER` bucket (mint + options + verify) against a bucket sized for two. Also closes a correctness gap that two independent review bots (CodeRabbit, Codex) caught during PR review: because `/register/options` uses non-destructive `peek`, a minted handoff token could drive unbounded `generateRegistrationOptions` calls within its 300s TTL.
+
+#### Fixed
+
+- **Double-debit on passkey-add from desktop**: the per-user rate-limit blocks on `/api/auth/passkey/register/options` and `/api/auth/passkey/register` now run only in the session-auth path. The desktop handoff path is bounded by the existing mint endpoint (session-authed + rate-limited, 5/15min/user), the 300s handoff TTL, and the new per-token options guard below. A successful ceremony is now a single token debit on the mint path, not three.
+
+#### Security
+
+- **One-options-per-handoff-token guard**: new `markPasskeyRegisterOptionsIssued` helper in `@pagespace/lib/auth/passkey-register-handoff` uses Redis `SET NX EX 300` keyed by `auth:passkey-register-handoff-options-issued:<sha256(token)>`. The first `/register/options` call for a minted handoff sets the marker; any replay within the TTL returns `401 OPTIONS_ALREADY_ISSUED` with a `security.suspicious.activity` audit event (`reason: passkey_handoff_options_replayed`). Matches the legitimate ceremony (client calls options exactly once per minted token) and is a tighter bound than the pre-#1012 bucket. Fails closed on Redis unavailability or error — clients must re-mint.
+
 ## 2026-04-13
 
 ### Passkey Registration: Prefer Platform Authenticator
