@@ -98,12 +98,6 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
-vi.mock('../../tools/github-import-tools', () => ({
-  githubImportTools: {
-    import_from_github: { name: 'import_from_github', description: 'Import from GitHub' },
-  },
-}));
-
 import { pageSpaceTools } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
@@ -117,10 +111,13 @@ import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
-import { githubImportTools } from '../../tools/github-import-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
+    it('does not expose the removed GitHub import tool', () => {
+      expect(pageSpaceTools).not.toHaveProperty('import_from_github');
+    });
+
     it('equals the merged object of all tool modules', () => {
       expect(pageSpaceTools).toEqual({
         ...driveTools,
@@ -135,7 +132,6 @@ describe('ai-tools', () => {
         ...calendarReadTools,
         ...calendarWriteTools,
         ...channelTools,
-        ...githubImportTools,
       });
     });
 
@@ -153,7 +149,6 @@ describe('ai-tools', () => {
         Object.keys(calendarReadTools),
         Object.keys(calendarWriteTools),
         Object.keys(channelTools),
-        Object.keys(githubImportTools),
       ];
 
       const allKeys = moduleKeysets.flat();
