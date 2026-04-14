@@ -104,10 +104,13 @@ export function registerIPCHandlers(): void {
 
   // Open an auth URL in the system browser. Allows:
   //  - OAuth providers over HTTPS (Google, Apple)
-  //  - The configured PageSpace app origin on the /auth/passkey-external path
-  //    (HTTPS for remote origins, HTTP only for localhost/127.0.0.1 dev builds)
+  //  - The configured PageSpace app origin on an allowlisted passkey-handoff
+  //    path (HTTPS for remote origins, HTTP only for localhost/127.0.0.1 dev)
   const ALLOWED_AUTH_HOSTNAMES = ['accounts.google.com', 'appleid.apple.com'];
-  const PASSKEY_EXTERNAL_PATH = '/auth/passkey-external';
+  const ALLOWED_PASSKEY_PATHS: ReadonlySet<string> = new Set([
+    '/auth/passkey-external',
+    '/auth/passkey-register-external',
+  ]);
 
   const isAppOriginMatch = (parsed: URL): boolean => {
     try {
@@ -130,7 +133,7 @@ export function registerIPCHandlers(): void {
       const isOAuthProvider =
         parsed.protocol === 'https:' && ALLOWED_AUTH_HOSTNAMES.includes(parsed.hostname);
       const isPasskeyHandoff =
-        parsed.pathname === PASSKEY_EXTERNAL_PATH && isAppOriginMatch(parsed);
+        ALLOWED_PASSKEY_PATHS.has(parsed.pathname) && isAppOriginMatch(parsed);
 
       if (!isOAuthProvider && !isPasskeyHandoff) {
         console.warn('[Auth IPC] Blocked open-external for URL not in allowlist:', parsed.hostname, parsed.pathname);
