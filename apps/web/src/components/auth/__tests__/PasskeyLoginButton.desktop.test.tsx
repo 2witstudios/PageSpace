@@ -125,6 +125,58 @@ describe('PasskeyLoginButton — desktop external-browser branch', () => {
   });
 });
 
+describe('PasskeyLoginButton — desktop without IPC bridge', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    vi.mocked(getDevicePlatformFields).mockResolvedValue({
+      platform: 'desktop',
+      deviceId: 'device-xyz',
+      deviceName: 'Jono Mac',
+    });
+
+    delete (window as unknown as { electron?: ElectronBridge }).electron;
+
+    fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+  });
+
+  it('surfaces an update-app error and posts nothing when openExternal is missing', async () => {
+    render(<PasskeyLoginButton csrfToken="csrf-token-value" />);
+
+    await userEvent.click(screen.getByRole('button', { name: /sign in with passkey/i }));
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/desktop app/i));
+
+    const passkeyFetchCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('/api/auth/passkey/authenticate')
+    );
+    expect(passkeyFetchCalls).toHaveLength(0);
+
+    expect(startAuthentication).not.toHaveBeenCalled();
+  });
+
+  it('does not fall through to the web ceremony when IPC bridge is missing', async () => {
+    (window as unknown as { electron: { isDesktop: boolean; auth: Record<string, never> } }).electron = {
+      isDesktop: true,
+      auth: {},
+    };
+
+    render(<PasskeyLoginButton csrfToken="csrf-token-value" />);
+
+    await userEvent.click(screen.getByRole('button', { name: /sign in with passkey/i }));
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/desktop app/i));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(startAuthentication).not.toHaveBeenCalled();
+
+    delete (window as unknown as { electron?: ElectronBridge }).electron;
+  });
+});
+
 describe('PasskeyLoginButton — web path (regression guard)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

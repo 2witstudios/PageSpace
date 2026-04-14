@@ -51,7 +51,20 @@ export function PasskeyLoginButton({
       // so we mirror the OAuth flow: open an external page that runs the
       // ceremony and hands back a one-time exchange code over the
       // pagespace:// deep link.
-      if (isDesktopPlatform() && window.electron?.auth?.openExternal) {
+      if (isDesktopPlatform()) {
+        // The server rejects platform=desktop without desktopExchange, and
+        // Chromium inside the Electron BrowserWindow cannot drive platform
+        // authenticators without entitlements we don't ship — so an older
+        // desktop bridge that lacks the openExternal IPC has no working
+        // sign-in path. Surface a clear update prompt instead of silently
+        // falling through to a request the server will reject with 400.
+        if (!window.electron?.auth?.openExternal) {
+          toast.error(
+            'Your desktop app needs to be updated to sign in with a passkey. Please update the app and try again.'
+          );
+          return;
+        }
+
         const fields = await getDevicePlatformFields();
         if (!('deviceId' in fields) || !fields.deviceId) {
           toast.error('Could not read desktop device info');
