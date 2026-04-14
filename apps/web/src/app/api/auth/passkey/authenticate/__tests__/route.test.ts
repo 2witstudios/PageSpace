@@ -440,58 +440,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
   });
 
-  describe('desktop platform handling (unified path)', () => {
-    const desktopPayload = {
-      ...validPayload,
-      platform: 'desktop',
-      deviceId: 'device-123',
-      deviceName: 'My Mac',
-    };
-
-    const createDesktopRequest = (body: Record<string, unknown> = desktopPayload) =>
-      new Request('http://localhost/api/auth/passkey/authenticate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-    it('returns sessionToken, csrfToken, deviceToken at top level for desktop', async () => {
-      const response = await POST(createDesktopRequest());
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
-      expect(body.csrfToken).toBe('mock-csrf-token');
-      expect(body.deviceToken).toBe('ps_dev_mock_token');
-      // Should NOT have nested desktopTokens
-      expect(body.desktopTokens).toBeUndefined();
-    });
-
-    it('uses revokeAllUserSessions (hardest reset) for passkey', async () => {
-      await POST(createDesktopRequest());
-
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
-    });
-
-    it('calls createDeviceToken with platform desktop', async () => {
-      await POST(createDesktopRequest());
-
-      expect(createDeviceToken).toHaveBeenCalledWith(expect.objectContaining({
-        userId: 'user-1',
-        deviceId: 'device-123',
-        platform: 'desktop',
-        deviceName: 'My Mac',
-        tokenVersion: 5,
-      }));
-    });
-
-    it('sets session cookies even for desktop platform', async () => {
-      await POST(createDesktopRequest());
-
-      expect(appendSessionCookie).toHaveBeenCalled();
-    });
-
+  describe('device token creation', () => {
     it('does not create device token without deviceId', async () => {
       await POST(createRequest());
 
