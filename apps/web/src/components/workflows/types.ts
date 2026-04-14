@@ -1,6 +1,3 @@
-import type { EventTrigger } from '@pagespace/db';
-export type { EventTrigger };
-
 /** JSON-serialized workflow from the API (dates are strings, not Date objects). */
 export interface Workflow {
   id: string;
@@ -10,13 +7,10 @@ export interface Workflow {
   agentPageId: string;
   prompt: string;
   contextPageIds: string[];
-  triggerType: 'cron' | 'event';
+  triggerType: 'cron';
   cronExpression: string | null;
   timezone: string;
   isEnabled: boolean;
-  eventTriggers?: EventTrigger[] | null;
-  watchedFolderIds?: string[] | null;
-  eventDebounceSecs?: number | null;
   lastRunAt: string | null;
   nextRunAt: string | null;
   lastRunStatus: 'never_run' | 'success' | 'error' | 'running';

@@ -222,23 +222,19 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(executeWorkflow).toHaveBeenCalledWith(mockWorkflow);
   });
 
-  test('event workflow with stale cronExpression does not compute nextRunAt', async () => {
+  test('non-scheduled workflow is treated as not found', async () => {
     const eventWorkflow = {
       ...mockWorkflow,
       triggerType: 'event' as const,
       cronExpression: '0 9 * * 1-5', // stale leftover
     };
     mockSelectWhere.mockResolvedValue([eventWorkflow]);
-    vi.mocked(executeWorkflow).mockResolvedValue({
-      success: true,
-      responseText: 'Done',
-      toolCallCount: 0,
-      durationMs: 100,
-    });
 
     const request = new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' });
-    await POST(request, createContext('wf_1'));
+    const response = await POST(request, createContext('wf_1'));
 
+    expect(response.status).toBe(404);
+    expect(executeWorkflow).not.toHaveBeenCalled();
     expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
