@@ -158,18 +158,18 @@ function handlePasskeyRegistered(url: string): boolean {
       createWindow();
     },
     sendToRenderer: (channel) => {
-      const window = mainWindow;
-      if (!window) {
+      const target = mainWindow;
+      if (!target) {
         logger.error('[Passkey Deep Link] No main window available after focus');
         return;
       }
-      if (window.webContents.isLoading()) {
-        window.webContents.once('did-finish-load', () => {
-          mainWindow?.webContents.send(channel);
+      if (target.webContents.isLoading()) {
+        target.webContents.once('did-finish-load', () => {
+          target.webContents.send(channel);
         });
         return;
       }
-      window.webContents.send(channel);
+      target.webContents.send(channel);
     },
     logger,
   });
