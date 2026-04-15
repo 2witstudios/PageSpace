@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Check, X, HelpCircle, Building2, ArrowRight } from "lucide-react";
+import { Check, X, Building2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -18,7 +18,7 @@ interface Plan {
   features: {
     storage: string;
     aiCalls: string;
-    proSessions: string;
+    proAiCalls: string;
     byok: boolean;
     realtime: boolean;
     hierarchicalAgents: boolean;
@@ -36,7 +36,7 @@ const plans: Plan[] = [
     features: {
       storage: "500 MB",
       aiCalls: "50/day",
-      proSessions: "—",
+      proAiCalls: "—",
       byok: true,
       realtime: true,
       hierarchicalAgents: true,
@@ -54,11 +54,11 @@ const plans: Plan[] = [
     features: {
       storage: "2 GB",
       aiCalls: "200/day",
-      proSessions: "50/month",
+      proAiCalls: "50/day",
       byok: true,
       realtime: true,
       hierarchicalAgents: true,
-      prioritySupport: false,
+      prioritySupport: true,
     },
   },
   {
@@ -71,7 +71,7 @@ const plans: Plan[] = [
     features: {
       storage: "10 GB",
       aiCalls: "500/day",
-      proSessions: "100/month",
+      proAiCalls: "100/day",
       byok: true,
       realtime: true,
       hierarchicalAgents: true,
@@ -88,7 +88,7 @@ const plans: Plan[] = [
     features: {
       storage: "50 GB",
       aiCalls: "1,000/day",
-      proSessions: "500/month",
+      proAiCalls: "500/day",
       byok: true,
       realtime: true,
       hierarchicalAgents: true,
@@ -96,16 +96,6 @@ const plans: Plan[] = [
     },
   },
 ];
-
-const featureDescriptions: Record<string, string> = {
-  storage: "Cloud storage for your documents, files, and media",
-  aiCalls: "Daily AI interactions with built-in models (Claude, GPT-4)",
-  proSessions: "Extended AI sessions with Opus/o1 models for complex reasoning",
-  byok: "Bring Your Own Key - use your own API keys for unlimited AI calls",
-  realtime: "Real-time collaboration with your team on any document",
-  hierarchicalAgents: "Create AI agents at any level of your workspace hierarchy",
-  prioritySupport: "Get help faster with priority email and chat support",
-};
 
 export default function PricingPage() {
   return (
@@ -165,12 +155,12 @@ export default function PricingPage() {
                       <span className="font-medium">{plan.features.storage}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">AI calls</span>
+                      <span className="text-muted-foreground">Standard AI calls</span>
                       <span className="font-medium">{plan.features.aiCalls}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Pro sessions</span>
-                      <span className="font-medium">{plan.features.proSessions}</span>
+                      <span className="text-muted-foreground">Pro AI calls</span>
+                      <span className="font-medium">{plan.features.proAiCalls}</span>
                     </div>
                   </div>
 
@@ -237,8 +227,8 @@ export default function PricingPage() {
               <tbody>
                 {[
                   { key: "storage", label: "Storage" },
-                  { key: "aiCalls", label: "Daily AI Calls" },
-                  { key: "proSessions", label: "Pro AI Sessions" },
+                  { key: "aiCalls", label: "Standard AI calls" },
+                  { key: "proAiCalls", label: "Pro AI calls" },
                   { key: "byok", label: "BYOK (Unlimited)" },
                   { key: "realtime", label: "Real-time Collaboration" },
                   { key: "hierarchicalAgents", label: "Hierarchical AI Agents" },
@@ -246,12 +236,7 @@ export default function PricingPage() {
                 ].map((row) => (
                   <tr key={row.key} className="hover:bg-muted/50">
                     <td className="p-4 border-b border-border">
-                      <div className="flex items-center gap-2">
-                        {row.label}
-                        <span title={featureDescriptions[row.key]}>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </span>
-                      </div>
+                      {row.label}
                     </td>
                     {plans.map((plan) => {
                       const value = plan.features[row.key as keyof typeof plan.features];
