@@ -288,6 +288,7 @@ Your coding agent just got a memory. Use it.
       "The Undo Button for AI: How Three Layers of Versioning Make Full Agent Access Safe",
     description:
       "AI needs write access to be useful, but write access without a safety net is reckless. PageSpace builds versioning and rollback so deep that any AI change can be reversed instantly — at the page, conversation, or entire workspace level.",
+    image: "/blog/ai-versioning-safety.png",
     content: `
 ## The Access Dilemma
 
