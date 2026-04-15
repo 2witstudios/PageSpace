@@ -185,7 +185,6 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
             />
           </div>
 
-          {/* Trigger Type Toggle */}
           <div className="space-y-2">
             <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
             <Input
