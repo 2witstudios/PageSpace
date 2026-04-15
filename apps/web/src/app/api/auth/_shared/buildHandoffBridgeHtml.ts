@@ -39,14 +39,6 @@ export function buildHandoffBridgeHtml({
     justify-content: center;
     min-height: 100vh;
   }
-  @media (prefers-color-scheme: dark) {
-    body {
-      background: linear-gradient(135deg, #020617 0%, #0c1f3d 50%, #0f172a 100%);
-      color: #e2e8f0;
-    }
-    .card { background: rgba(15, 23, 42, 0.7); border-color: rgba(148, 163, 184, 0.18); }
-    .body-text { color: #94a3b8; }
-  }
   .card {
     max-width: 420px;
     width: calc(100% - 48px);
@@ -63,11 +55,20 @@ export function buildHandoffBridgeHtml({
     margin: 0 auto 16px;
     color: #10b981;
   }
-  .title { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  .title { font-size: 18px; font-weight: 600; margin: 0 0 8px; color: #0f172a; }
   .body-text { font-size: 14px; color: #475569; margin: 0 0 20px; line-height: 1.5; }
   .fallback { font-size: 12px; margin-top: 16px; }
   .fallback a { color: #2563eb; text-decoration: none; }
   .fallback a:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) {
+    body {
+      background: linear-gradient(135deg, #020617 0%, #0c1f3d 50%, #0f172a 100%);
+      color: #e2e8f0;
+    }
+    .card { background: rgba(15, 23, 42, 0.7); border-color: rgba(148, 163, 184, 0.18); }
+    .title { color: #e2e8f0; }
+    .body-text { color: #94a3b8; }
+  }
 </style>
 </head>
 <body>
