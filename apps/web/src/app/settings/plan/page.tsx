@@ -410,19 +410,19 @@ export default function PlanPage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">AI Calls per Day</td>
+                    <td className="py-4 pr-6">Standard AI calls</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                        {plan.limits.aiCalls}
+                        {plan.limits.aiCalls}/day
                       </td>
                     ))}
                   </tr>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">Pro AI Calls</td>
+                    <td className="py-4 pr-6">Pro AI calls</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4">
                         {plan.limits.pro > 0 ? (
-                          <span className="font-semibold">{plan.limits.pro}</span>
+                          <span className="font-semibold">{plan.limits.pro}/day</span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
