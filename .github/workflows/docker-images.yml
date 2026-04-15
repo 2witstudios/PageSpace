@@ -30,18 +30,37 @@ jobs:
           - service: web
             dockerfile: apps/web/Dockerfile
             context: .
+            build_args: |
+              NEXT_PUBLIC_APP_URL=https://pagespace.ai
+              NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
+              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
+              NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+              NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
+          - service: marketing
+            dockerfile: apps/marketing/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_MARKETING_URL=https://pagespace.ai
+              NEXT_PUBLIC_APP_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+              NEXT_PUBLIC_GOOGLE_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+              NEXT_PUBLIC_ENABLE_ONE_TAP=true
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
+            build_args: ""
           - service: realtime
             dockerfile: apps/realtime/Dockerfile
             context: .
+            build_args: ""
           - service: processor
             dockerfile: apps/processor/Dockerfile
             context: .
+            build_args: ""
           - service: cron
             dockerfile: docker/cron/Dockerfile
             context: docker/cron
+            build_args: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -76,9 +95,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            NEXT_PUBLIC_APP_URL=https://pagespace.ai
-            NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
-            NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
-            NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
-            NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
+          build-args: ${{ matrix.build_args }}
