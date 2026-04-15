@@ -6,6 +6,7 @@ import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 // POST /api/workflows/[workflowId]/run - Manual trigger
 export async function POST(
@@ -22,7 +23,7 @@ export async function POST(
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow) {
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE) {
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
@@ -59,7 +60,7 @@ export async function POST(
   }
 
   // Update status — only compute nextRunAt for cron workflows
-  const nextRunAt = (workflow.triggerType === 'cron' && workflow.isEnabled && workflow.cronExpression)
+  const nextRunAt = (workflow.isEnabled && workflow.cronExpression)
     ? getNextRunDate(workflow.cronExpression, workflow.timezone)
     : null;
 

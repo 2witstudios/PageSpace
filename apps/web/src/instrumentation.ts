@@ -14,14 +14,11 @@ export async function register() {
     console.log('[Instrumentation] Environment validation passed');
 
     // Initialize activity broadcast hook for real-time updates
-    const { setActivityBroadcastHook, setWorkflowTriggerHook } = await import('@pagespace/lib');
+    const { setActivityBroadcastHook } = await import('@pagespace/lib');
     const { broadcastActivityEvent } = await import('@/lib/websocket/socket-utils');
-    const { emitWorkflowEvent } = await import('@/lib/workflows/event-trigger');
 
     setActivityBroadcastHook(broadcastActivityEvent);
-    setWorkflowTriggerHook(emitWorkflowEvent);
 
     console.log('[Instrumentation] Activity broadcast hook initialized');
-    console.log('[Instrumentation] Workflow trigger hook initialized');
   }
 }

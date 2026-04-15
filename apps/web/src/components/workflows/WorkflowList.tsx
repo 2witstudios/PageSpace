@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Play, Pencil, Trash2, Loader2, Clock, Zap } from 'lucide-react';
+import { Play, Pencil, Trash2, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -82,19 +82,10 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
             <TableRow key={workflow.id}>
               <TableCell className="font-medium">{workflow.name}</TableCell>
               <TableCell className="text-muted-foreground text-sm">
-                {workflow.triggerType === 'event' ? (
-                  <div className="flex items-center gap-1.5">
-                    <Zap className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
-                    <span className="text-xs">
-                      {(workflow.eventTriggers ?? []).map(t => `${t.operation}:${t.resourceType}`).join(', ') || 'Event'}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="font-mono">{workflow.cronExpression}</span>
-                  </div>
-                )}
+                <div className="flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="font-mono">{workflow.cronExpression ?? '-'}</span>
+                </div>
               </TableCell>
               <TableCell>
                 <Tooltip>

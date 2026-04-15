@@ -7,25 +7,17 @@ import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-const eventTriggerSchema = z.object({
-  operation: z.string().min(1),
-  resourceType: z.string().min(1),
-});
+const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 const updateWorkflowSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   agentPageId: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
   contextPageIds: z.array(z.string()).optional(),
-  triggerType: z.enum(['cron', 'event']).optional(),
   cronExpression: z.string().min(1).optional().nullable(),
   timezone: z.string().optional(),
   isEnabled: z.boolean().optional(),
-  eventTriggers: z.array(eventTriggerSchema).optional().nullable(),
-  watchedFolderIds: z.array(z.string()).optional().nullable(),
-  eventDebounceSecs: z.number().int().min(5).max(3600).optional().nullable(),
-});
+}).strict();
 
 async function getWorkflowWithAuth(workflowId: string, userId: string) {
   const [workflow] = await db
@@ -33,7 +25,9 @@ async function getWorkflowWithAuth(workflowId: string, userId: string) {
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow) return { error: NextResponse.json({ error: 'Workflow not found' }, { status: 404 }) };
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE) {
+    return { error: NextResponse.json({ error: 'Workflow not found' }, { status: 404 }) };
+  }
 
   const access = await checkDriveAccess(workflow.driveId, userId);
   if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
@@ -95,9 +89,6 @@ export async function PATCH(
     }
   }
 
-  // Determine effective trigger type
-  const triggerType = data.triggerType ?? workflow.triggerType;
-
   // Validate timezone
   const effectiveTimezone = data.timezone ?? workflow.timezone;
   const tzValidation = validateTimezone(effectiveTimezone);
@@ -113,31 +104,16 @@ export async function PATCH(
     }
   }
 
-  // Validate: cron workflows need a cron expression, event workflows need triggers
-  if (triggerType === 'cron') {
-    // Resolve effective cronExpression: explicit null from payload means "clear it"
-    const cronExpr = data.cronExpression !== undefined ? data.cronExpression : workflow.cronExpression;
-    if (!cronExpr) {
-      return NextResponse.json({ error: 'Cron workflows require a cron expression' }, { status: 400 });
-    }
-  }
-  if (triggerType === 'event') {
-    const triggers = data.eventTriggers !== undefined
-      ? data.eventTriggers
-      : (workflow.eventTriggers as Array<{ operation: string; resourceType: string }> | null);
-    if (!triggers || triggers.length === 0) {
-      return NextResponse.json({ error: 'Event workflows require at least one event trigger' }, { status: 400 });
-    }
+  // Resolve effective cronExpression: explicit null from payload means "clear it"
+  const cronExpr = data.cronExpression !== undefined ? data.cronExpression : workflow.cronExpression;
+  if (!cronExpr) {
+    return NextResponse.json({ error: 'Cron workflows require a cron expression' }, { status: 400 });
   }
 
   // Compute nextRunAt based on updated fields (only for cron workflows)
   const isEnabled = data.isEnabled ?? workflow.isEnabled;
-  let nextRunAt: Date | null = null;
-  if (triggerType === 'cron') {
-    const cronExpression = data.cronExpression ?? workflow.cronExpression;
-    const timezone = data.timezone ?? workflow.timezone;
-    nextRunAt = isEnabled && cronExpression ? getNextRunDate(cronExpression, timezone) : null;
-  }
+  const timezone = data.timezone ?? workflow.timezone;
+  const nextRunAt = isEnabled ? getNextRunDate(cronExpr, timezone) : null;
 
   const [updated] = await db
     .update(workflows)

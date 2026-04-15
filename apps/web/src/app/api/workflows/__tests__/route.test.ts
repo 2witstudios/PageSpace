@@ -239,6 +239,23 @@ describe('POST /api/workflows', () => {
     expect(body.error).toBe('Invalid input');
   });
 
+  it('should reject legacy event workflow fields', async () => {
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...validBody,
+        triggerType: 'event',
+        eventTriggers: [{ operation: 'upload', resourceType: 'file' }],
+      }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid input');
+  });
+
   it('should return 404 when drive not found', async () => {
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
 

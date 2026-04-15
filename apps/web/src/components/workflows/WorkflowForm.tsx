@@ -22,20 +22,15 @@ import {
 } from '@/components/ui/select';
 import { fetchJSON } from '@/lib/auth/auth-fetch';
 import { getHumanReadableCron } from '@/lib/workflows/cron-utils';
-import type { EventTrigger } from './types';
 
 interface WorkflowFormData {
   name: string;
   agentPageId: string;
   prompt: string;
   contextPageIds: string[];
-  triggerType: 'cron' | 'event';
-  cronExpression?: string;
+  cronExpression: string;
   timezone: string;
   isEnabled: boolean;
-  eventTriggers?: EventTrigger[];
-  watchedFolderIds?: string[];
-  eventDebounceSecs?: number;
 }
 
 interface AgentPage {
@@ -61,25 +56,15 @@ const CRON_PRESETS = [
   { label: 'Monthly on 1st', value: '0 9 1 * *' },
 ];
 
-const EVENT_TRIGGER_PRESETS: { label: string; description: string; operation: string; resourceType: string }[] = [
-  { label: 'Page created', description: 'When a new page is created', operation: 'create', resourceType: 'page' },
-  { label: 'File uploaded', description: 'When a file is uploaded', operation: 'upload', resourceType: 'file' },
-  { label: 'Page moved', description: 'When a page is moved to a folder', operation: 'move', resourceType: 'page' },
-  { label: 'Member added', description: 'When a new member joins the drive', operation: 'member_add', resourceType: 'member' },
-];
-
 const fetcher = <T = unknown>(url: string) => fetchJSON<T>(url);
 
 export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmit }: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');
   const [agentPageId, setAgentPageId] = useState(initialData?.agentPageId ?? '');
   const [prompt, setPrompt] = useState(initialData?.prompt ?? '');
-  const [triggerType, setTriggerType] = useState<'cron' | 'event'>(initialData?.triggerType ?? 'cron');
   const [cronExpression, setCronExpression] = useState(initialData?.cronExpression ?? '0 9 * * 1-5');
   const [timezone, setTimezone] = useState(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [isEnabled, setIsEnabled] = useState(initialData?.isEnabled ?? true);
-  const [eventTriggers, setEventTriggers] = useState<EventTrigger[]>(initialData?.eventTriggers ?? []);
-  const [eventDebounceSecs, setEventDebounceSecs] = useState(initialData?.eventDebounceSecs ?? 30);
   const [cronPreview, setCronPreview] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -107,29 +92,12 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
       setName(initialData?.name ?? '');
       setAgentPageId(initialData?.agentPageId ?? '');
       setPrompt(initialData?.prompt ?? '');
-      setTriggerType(initialData?.triggerType ?? 'cron');
       setCronExpression(initialData?.cronExpression ?? '0 9 * * 1-5');
       setTimezone(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
       setIsEnabled(initialData?.isEnabled ?? true);
-      setEventTriggers(initialData?.eventTriggers ?? []);
-      setEventDebounceSecs(initialData?.eventDebounceSecs ?? 30);
       setError('');
     }
   }, [open, initialData]);
-
-  const toggleEventTrigger = (operation: string, resourceType: string) => {
-    setEventTriggers(prev => {
-      const exists = prev.some(t => t.operation === operation && t.resourceType === resourceType);
-      if (exists) {
-        return prev.filter(t => !(t.operation === operation && t.resourceType === resourceType));
-      }
-      return [...prev, { operation, resourceType }];
-    });
-  };
-
-  const isEventTriggerSelected = (operation: string, resourceType: string) => {
-    return eventTriggers.some(t => t.operation === operation && t.resourceType === resourceType);
-  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -142,12 +110,9 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
         agentPageId,
         prompt,
         contextPageIds: [],
-        triggerType,
-        cronExpression: triggerType === 'cron' ? cronExpression : undefined,
+        cronExpression,
         timezone,
         isEnabled,
-        eventTriggers: triggerType === 'event' ? eventTriggers : undefined,
-        eventDebounceSecs: triggerType === 'event' ? eventDebounceSecs : undefined,
       });
       onOpenChange(false);
     } catch (err) {
@@ -166,9 +131,7 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
     }
   })();
 
-  const isValid = name && agentPageId && prompt && isTimezoneValid && (
-    triggerType === 'cron' ? !!cronExpression : eventTriggers.length > 0
-  );
+  const isValid = name && agentPageId && prompt && isTimezoneValid && !!cronExpression;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,111 +185,33 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
             />
           </div>
 
-          {/* Trigger Type Toggle */}
           <div className="space-y-2">
-            <Label>Trigger Type</Label>
-            <div className="flex rounded-md border overflow-hidden">
-              <button
-                type="button"
-                className={`flex-1 px-3 py-2 text-sm font-medium transition-colors ${
-                  triggerType === 'cron'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/50 hover:bg-muted'
-                }`}
-                onClick={() => setTriggerType('cron')}
-              >
-                Schedule (Cron)
-              </button>
-              <button
-                type="button"
-                className={`flex-1 px-3 py-2 text-sm font-medium transition-colors ${
-                  triggerType === 'event'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/50 hover:bg-muted'
-                }`}
-                onClick={() => setTriggerType('event')}
-              >
-                Event Trigger
-              </button>
+            <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
+            <Input
+              id="wf-cron"
+              value={cronExpression}
+              onChange={e => setCronExpression(e.target.value)}
+              placeholder="0 9 * * 1-5"
+              required
+            />
+            {cronPreview && (
+              <p className="text-xs text-muted-foreground">{cronPreview}</p>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {CRON_PRESETS.map(preset => (
+                <Button
+                  key={preset.value}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-2"
+                  onClick={() => setCronExpression(preset.value)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
             </div>
           </div>
-
-          {/* Cron Schedule Fields */}
-          {triggerType === 'cron' && (
-            <div className="space-y-2">
-              <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
-              <Input
-                id="wf-cron"
-                value={cronExpression}
-                onChange={e => setCronExpression(e.target.value)}
-                placeholder="0 9 * * 1-5"
-                required
-              />
-              {cronPreview && (
-                <p className="text-xs text-muted-foreground">{cronPreview}</p>
-              )}
-              <div className="flex flex-wrap gap-1.5">
-                {CRON_PRESETS.map(preset => (
-                  <Button
-                    key={preset.value}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-xs px-2"
-                    onClick={() => setCronExpression(preset.value)}
-                  >
-                    {preset.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Event Trigger Fields */}
-          {triggerType === 'event' && (
-            <>
-              <div className="space-y-2">
-                <Label>When these events happen</Label>
-                <div className="space-y-1.5">
-                  {EVENT_TRIGGER_PRESETS.map(preset => (
-                    <label
-                      key={`${preset.operation}-${preset.resourceType}`}
-                      className="flex items-start gap-2 p-2 rounded-md border cursor-pointer hover:bg-muted/50 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isEventTriggerSelected(preset.operation, preset.resourceType)}
-                        onChange={() => toggleEventTrigger(preset.operation, preset.resourceType)}
-                        className="mt-0.5 rounded"
-                      />
-                      <div>
-                        <div className="text-sm font-medium">{preset.label}</div>
-                        <div className="text-xs text-muted-foreground">{preset.description}</div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-                {eventTriggers.length === 0 && (
-                  <p className="text-xs text-destructive">Select at least one event trigger</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="wf-debounce">Debounce (seconds)</Label>
-                <Input
-                  id="wf-debounce"
-                  type="number"
-                  min={5}
-                  max={3600}
-                  value={eventDebounceSecs}
-                  onChange={e => setEventDebounceSecs(Number(e.target.value))}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Wait this long after the first event before running. Coalesces rapid events (e.g., bulk uploads) into a single run.
-                </p>
-              </div>
-            </>
-          )}
 
           <div className="space-y-2">
             <Label htmlFor="wf-tz">Timezone</Label>

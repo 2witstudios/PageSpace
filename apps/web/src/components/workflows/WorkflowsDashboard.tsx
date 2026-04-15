@@ -16,43 +16,29 @@ interface WorkflowsDashboardProps {
   driveName: string;
 }
 
+interface WorkflowFormData {
+  name: string;
+  agentPageId: string;
+  prompt: string;
+  contextPageIds: string[];
+  cronExpression: string;
+  timezone: string;
+  isEnabled: boolean;
+}
+
 export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardProps) {
   const { workflows, isLoading, mutate, runWorkflow, toggleWorkflow, deleteWorkflow } = useWorkflows(driveId);
   const [formOpen, setFormOpen] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
 
-  const handleCreate = async (data: {
-    name: string;
-    agentPageId: string;
-    prompt: string;
-    contextPageIds: string[];
-    triggerType: 'cron' | 'event';
-    cronExpression?: string;
-    timezone: string;
-    isEnabled: boolean;
-    eventTriggers?: { operation: string; resourceType: string }[];
-    watchedFolderIds?: string[];
-    eventDebounceSecs?: number;
-  }) => {
+  const handleCreate = async (data: WorkflowFormData) => {
     await post('/api/workflows', { ...data, driveId });
     mutate();
     toast.success('Workflow created');
   };
 
-  const handleUpdate = async (data: {
-    name: string;
-    agentPageId: string;
-    prompt: string;
-    contextPageIds: string[];
-    triggerType: 'cron' | 'event';
-    cronExpression?: string;
-    timezone: string;
-    isEnabled: boolean;
-    eventTriggers?: { operation: string; resourceType: string }[];
-    watchedFolderIds?: string[];
-    eventDebounceSecs?: number;
-  }) => {
+  const handleUpdate = async (data: WorkflowFormData) => {
     if (!editingWorkflow) return;
     await patch(`/api/workflows/${editingWorkflow.id}`, data);
     mutate();
@@ -123,7 +109,7 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
           </div>
 
           <p className="text-muted-foreground text-sm">
-            Automate AI agents with scheduled cron jobs or event triggers. Each workflow executes an agent with a prompt — on a schedule or when something happens in your drive.
+            Automate AI agents with scheduled cron jobs. Event-driven workflows have been removed while folder-centric automation is redesigned.
           </p>
 
           {isLoading ? (
@@ -150,13 +136,9 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
           agentPageId: editingWorkflow.agentPageId,
           prompt: editingWorkflow.prompt,
           contextPageIds: editingWorkflow.contextPageIds ?? [],
-          triggerType: editingWorkflow.triggerType ?? 'cron',
-          cronExpression: editingWorkflow.cronExpression ?? undefined,
+          cronExpression: editingWorkflow.cronExpression ?? '0 9 * * 1-5',
           timezone: editingWorkflow.timezone,
           isEnabled: editingWorkflow.isEnabled,
-          eventTriggers: editingWorkflow.eventTriggers ?? undefined,
-          watchedFolderIds: editingWorkflow.watchedFolderIds ?? undefined,
-          eventDebounceSecs: editingWorkflow.eventDebounceSecs ?? undefined,
         } : undefined}
         onSubmit={editingWorkflow ? handleUpdate : handleCreate}
       />

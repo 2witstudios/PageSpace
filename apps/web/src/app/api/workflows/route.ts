@@ -6,11 +6,7 @@ import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
-
-const eventTriggerSchema = z.object({
-  operation: z.string().min(1),
-  resourceType: z.string().min(1),
-});
+const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 const createWorkflowSchema = z.object({
   driveId: z.string().min(1),
@@ -18,20 +14,12 @@ const createWorkflowSchema = z.object({
   agentPageId: z.string().min(1),
   prompt: z.string().min(1),
   contextPageIds: z.array(z.string()).default([]),
-  triggerType: z.enum(['cron', 'event']).default('cron'),
-  cronExpression: z.string().min(1).optional(),
+  cronExpression: z.string().min(1),
   timezone: z.string().default('UTC'),
   isEnabled: z.boolean().default(true),
-  eventTriggers: z.array(eventTriggerSchema).optional(),
-  watchedFolderIds: z.array(z.string()).optional(),
-  eventDebounceSecs: z.number().int().min(5).max(3600).default(30),
-}).refine(data => {
-  if (data.triggerType === 'cron') return !!data.cronExpression;
-  if (data.triggerType === 'event') return data.eventTriggers && data.eventTriggers.length > 0;
-  return true;
-}, { message: 'Cron workflows need cronExpression; event workflows need eventTriggers' });
+}).strict();
 
-// GET /api/workflows?driveId=xxx - List workflows for a drive
+// GET /api/workflows?driveId=xxx - List scheduled workflows for a drive
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: false });
   if (isAuthError(auth)) return auth.error;
@@ -55,7 +43,7 @@ export async function GET(request: Request) {
   const results = await db
     .select()
     .from(workflows)
-    .where(eq(workflows.driveId, driveId))
+    .where(and(eq(workflows.driveId, driveId), eq(workflows.triggerType, MANAGEABLE_TRIGGER_TYPE)))
     .orderBy(workflows.createdAt);
 
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'workflow', resourceId: driveId, details: { count: results.length } });
@@ -63,7 +51,7 @@ export async function GET(request: Request) {
   return NextResponse.json(results);
 }
 
-// POST /api/workflows - Create a new workflow
+// POST /api/workflows - Create a new scheduled workflow
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -108,13 +96,11 @@ export async function POST(request: Request) {
 
   // Validate cron expression for cron-type workflows
   let nextRunAt: Date | null = null;
-  if (data.triggerType === 'cron') {
-    const cronValidation = validateCronExpression(data.cronExpression!);
-    if (!cronValidation.valid) {
-      return NextResponse.json({ error: `Invalid cron expression: ${cronValidation.error}` }, { status: 400 });
-    }
-    nextRunAt = data.isEnabled ? getNextRunDate(data.cronExpression!, data.timezone) : null;
+  const cronValidation = validateCronExpression(data.cronExpression);
+  if (!cronValidation.valid) {
+    return NextResponse.json({ error: `Invalid cron expression: ${cronValidation.error}` }, { status: 400 });
   }
+  nextRunAt = data.isEnabled ? getNextRunDate(data.cronExpression, data.timezone) : null;
 
   const [workflow] = await db.insert(workflows).values({
     driveId: data.driveId,
@@ -123,18 +109,18 @@ export async function POST(request: Request) {
     agentPageId: data.agentPageId,
     prompt: data.prompt,
     contextPageIds: data.contextPageIds,
-    triggerType: data.triggerType,
-    cronExpression: data.triggerType === 'cron' ? data.cronExpression! : null,
+    triggerType: MANAGEABLE_TRIGGER_TYPE,
+    cronExpression: data.cronExpression,
     timezone: data.timezone,
     isEnabled: data.isEnabled,
-    eventTriggers: data.triggerType === 'event' ? data.eventTriggers : null,
-    watchedFolderIds: data.triggerType === 'event' ? (data.watchedFolderIds ?? null) : null,
-    eventDebounceSecs: data.triggerType === 'event' ? data.eventDebounceSecs : null,
+    eventTriggers: null,
+    watchedFolderIds: null,
+    eventDebounceSecs: null,
     nextRunAt,
     updatedAt: new Date(),
   }).returning();
 
-  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'workflow', resourceId: workflow.id, details: { driveId: data.driveId, triggerType: data.triggerType } });
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'workflow', resourceId: workflow.id, details: { driveId: data.driveId, triggerType: MANAGEABLE_TRIGGER_TYPE } });
 
   return NextResponse.json(workflow, { status: 201 });
 }
