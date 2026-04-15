@@ -248,6 +248,20 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(body.error).toContain('Invalid tools');
       expect(body.error).toContain('invalid_tool');
     });
+
+    it('should return 400 when enabledTools is not an array, null, or undefined', async () => {
+      const request = createRequest(mockAgentId, {
+        enabledTools: 'read_page',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('enabledTools');
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
   });
 
   describe('authorization', () => {
@@ -268,6 +282,51 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
   });
 
   describe('successful updates', () => {
+    it('should scrub removed tool names from submitted enabledTools', async () => {
+      const request = createRequest(mockAgentId, {
+        enabledTools: ['import_from_github', 'read_page'],
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            enabledTools: ['read_page'],
+          }),
+          updatedFields: expect.arrayContaining(['enabledTools']),
+        })
+      );
+      expect(body.agentConfig.enabledTools).toEqual(['read_page']);
+    });
+
+    it('should scrub removed tool names from persisted enabledTools when updating other fields', async () => {
+      vi.mocked(pageAgentRepository.getAgentById).mockResolvedValue(
+        mockAgent({ enabledTools: ['import_from_github', 'read_page'] })
+      );
+
+      const request = createRequest(mockAgentId, { systemPrompt: 'New prompt' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            enabledTools: ['read_page'],
+          }),
+          updatedFields: expect.arrayContaining(['systemPrompt', 'enabledTools']),
+        })
+      );
+      expect(body.agentConfig.enabledTools).toEqual(['read_page']);
+      expect(body.updatedFields).toEqual(expect.arrayContaining(['systemPrompt', 'enabledTools']));
+    });
+
     it('should update systemPrompt and return success', async () => {
       const request = createRequest(mockAgentId, { systemPrompt: 'New prompt' });
       const context = createContext(mockAgentId);

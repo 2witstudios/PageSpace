@@ -33,8 +33,6 @@ const WRITE_TOOLS = new Set([
   'rsvp_calendar_event',
   'invite_calendar_attendees',
   'remove_calendar_attendee',
-  // GitHub import (creates pages)
-  'import_from_github',
 ]);
 
 // Web search tools (excluded when web search is disabled)

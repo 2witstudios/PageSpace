@@ -10,6 +10,46 @@ import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
+const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((toolName) => typeof toolName === 'string');
+}
+
+function parseEnabledToolsInput(value: unknown): {
+  value: string[] | null | undefined;
+  isValid: boolean;
+} {
+  if (value === undefined || value === null) {
+    return { value, isValid: true };
+  }
+
+  if (isStringArray(value)) {
+    return { value, isValid: true };
+  }
+
+  return { value: undefined, isValid: false };
+}
+
+function sanitizeRemovedToolNames(enabledTools: string[] | null | undefined): {
+  sanitized: string[] | null | undefined;
+  removed: string[];
+} {
+  if (!isStringArray(enabledTools)) {
+    return { sanitized: enabledTools, removed: [] };
+  }
+
+  const removed = enabledTools.filter((toolName) => REMOVED_TOOL_NAMES.has(toolName));
+  if (removed.length === 0) {
+    return { sanitized: enabledTools, removed };
+  }
+
+  return {
+    sanitized: enabledTools.filter((toolName) => !REMOVED_TOOL_NAMES.has(toolName)),
+    removed,
+  };
+}
+
 /**
  * PUT /api/ai/page-agents/{agentId}/config
  * Update the configuration of an existing AI agent
@@ -73,10 +113,25 @@ export async function PUT(
       );
     }
 
+    const parsedEnabledTools = parseEnabledToolsInput(enabledTools);
+    if (!parsedEnabledTools.isValid) {
+      return NextResponse.json(
+        { error: 'enabledTools must be an array of strings, null, or undefined' },
+        { status: 400 }
+      );
+    }
+
+    const requestedEnabledTools = sanitizeRemovedToolNames(parsedEnabledTools.value);
+    const persistedEnabledTools = sanitizeRemovedToolNames(
+      parseEnabledToolsInput(agent.enabledTools).value
+    );
+
     // Validate enabled tools if provided
-    if (enabledTools && enabledTools.length > 0) {
+    if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
       const availableToolNames = Object.keys(pageSpaceTools);
-      const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
+      const invalidTools = requestedEnabledTools.sanitized.filter(
+        (toolName: string) => !availableToolNames.includes(toolName)
+      );
       if (invalidTools.length > 0) {
         return NextResponse.json(
           { error: `Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}` },
@@ -94,7 +149,10 @@ export async function PUT(
       updatedFields.push('systemPrompt');
     }
     if (enabledTools !== undefined) {
-      updateData.enabledTools = enabledTools;
+      updateData.enabledTools = requestedEnabledTools.sanitized;
+      updatedFields.push('enabledTools');
+    } else if (persistedEnabledTools.removed.length > 0) {
+      updateData.enabledTools = persistedEnabledTools.sanitized;
       updatedFields.push('enabledTools');
     }
     if (aiProvider !== undefined) {
@@ -152,6 +210,10 @@ export async function PUT(
       throw error;
     }
 
+    const responseEnabledTools = Array.isArray(updatedAgent.enabledTools)
+      ? updatedAgent.enabledTools
+      : [];
+
     // Broadcast agent update event
     await broadcastPageEvent(
       createPageEventPayload(updatedAgent.driveId, updatedAgent.id, 'updated', {
@@ -188,8 +250,8 @@ export async function PUT(
       updatedFields,
       agentConfig: {
         systemPrompt: systemPrompt ? (systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : '')) : undefined,
-        enabledToolsCount: enabledTools?.length || (Array.isArray(agent.enabledTools) ? agent.enabledTools.length : 0),
-        enabledTools: enabledTools || (Array.isArray(agent.enabledTools) ? agent.enabledTools : []),
+        enabledToolsCount: responseEnabledTools.length,
+        enabledTools: responseEnabledTools,
         aiProvider: aiProvider || agent.aiProvider || 'default',
         aiModel: aiModel || agent.aiModel || 'default',
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt)
@@ -197,7 +259,7 @@ export async function PUT(
       stats: {
         pageType: 'AI_CHAT',
         updatedFields: updatedFields.length,
-        configuredTools: enabledTools?.length || (Array.isArray(agent.enabledTools) ? agent.enabledTools.length : 0),
+        configuredTools: responseEnabledTools.length,
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt)
       },
       nextSteps: [

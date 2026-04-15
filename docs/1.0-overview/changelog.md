@@ -1,5 +1,14 @@
 ## 2026-04-14
 
+### GitHub Import Tool Removed From AI Chat
+
+The broken `import_from_github` AI tool is no longer exposed in page chat or the Global Assistant. GitHub integrations remain connected, but the import action itself has been removed while the broader GitHub capability model is rethought.
+
+#### Changed
+
+- **Removed `import_from_github` from PageSpace AI tools**: page agents and the Global Assistant no longer advertise or execute the broken GitHub import path.
+- **Old agent configs are cleaned up automatically**: if an agent still has `import_from_github` in its saved `enabledTools`, config updates now strip that obsolete entry instead of failing valid changes.
+
 ### Passkey Desktop Handoff: Register Rate-Limit + Replay Hardening
 
 Fixes a production incident where desktop-v1.0.22 users were blocked from adding a second passkey in the same 15-minute window: the post-#1012 ceremony burned three tokens from the per-user `PASSKEY_REGISTER` bucket (mint + options + verify) against a bucket sized for two. Also closes a correctness gap that two independent review bots (CodeRabbit, Codex) caught during PR review: because `/register/options` uses non-destructive `peek`, a minted handoff token could drive unbounded `generateRegistrationOptions` calls within its 300s TTL.
