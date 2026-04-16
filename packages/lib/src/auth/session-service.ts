@@ -97,8 +97,10 @@ export class SessionService {
     }
 
     // HIPAA idle timeout: revoke session if idle too long
-    if (IDLE_TIMEOUT_MS > 0 && session.lastUsedAt) {
-      const lastUsed = session.lastUsedAt instanceof Date ? session.lastUsedAt : new Date(session.lastUsedAt);
+    // Falls back to createdAt when lastUsedAt is NULL (new session or failed touchSession)
+    if (IDLE_TIMEOUT_MS > 0) {
+      const lastActivity = session.lastUsedAt ?? session.createdAt;
+      const lastUsed = lastActivity instanceof Date ? lastActivity : new Date(lastActivity);
       const idleDuration = Date.now() - lastUsed.getTime();
       if (idleDuration > IDLE_TIMEOUT_MS) {
         await this.revokeSession(token, 'idle_timeout');
