@@ -79,7 +79,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
               <StreamingMarkdown
                 content={content}
                 isStreaming={isStreaming}
-                escapeHtml={role === 'user'}
+                renderHtmlAsText={role === 'user'}
               />
             </div>
           </div>

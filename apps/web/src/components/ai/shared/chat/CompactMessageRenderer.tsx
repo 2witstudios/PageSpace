@@ -82,7 +82,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
             <StreamingMarkdown
               content={content}
               isStreaming={isStreaming}
-              escapeHtml={role === 'user'}
+              renderHtmlAsText={role === 'user'}
             />
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
