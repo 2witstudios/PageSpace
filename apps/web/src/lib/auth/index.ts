@@ -377,6 +377,13 @@ export async function authenticateWithEnforcedContext(
     return { ctx: EnforcedAuthContext.fromSession(sessionClaims) };
   }
 
+  // Reject unknown Bearer token formats — prevents CSRF bypass where an attacker
+  // sends `Authorization: Bearer <garbage>` to skip CSRF validation while still
+  // authenticating via the victim's session cookie.
+  if (bearerToken) {
+    return { error: unauthorized('Invalid token format') };
+  }
+
   // Try session cookie (web browsers)
   const cookieHeader = request.headers.get('cookie');
   const sessionToken = getSessionFromCookies(cookieHeader);
@@ -399,8 +406,8 @@ export async function authenticateWithEnforcedContext(
     }
   }
 
-  // Apply CSRF validation for session-based auth (skip for Bearer token)
-  if (requireCSRF && !bearerToken) {
+  // Apply CSRF validation for cookie-based session auth
+  if (requireCSRF) {
     const { validateCSRF } = await import('./csrf-validation');
     const csrfError = await validateCSRF(request);
     if (csrfError) {
