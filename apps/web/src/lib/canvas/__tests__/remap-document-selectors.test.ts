@@ -94,4 +94,64 @@ body * { color: inherit; }
     const result = remapDocumentSelectors(input);
     expect(result).toContain('.canvas-root { padding: 16px; }');
   });
+
+  // ID selectors (#) — previously missed from all lookaheads
+  it('remaps body#id selector', () => {
+    expect(remapDocumentSelectors('body#main { background: red; }'))
+      .toBe('.canvas-root#main { background: red; }');
+  });
+
+  it('remaps html#id selector', () => {
+    expect(remapDocumentSelectors('html#app { margin: 0; }'))
+      .toBe('.canvas-root#app { margin: 0; }');
+  });
+
+  it('remaps :root#id selector', () => {
+    expect(remapDocumentSelectors(':root#theme { --bg: #000; }'))
+      .toBe('.canvas-root#theme { --bg: #000; }');
+  });
+
+  // :root with attribute, class, and pseudo selectors —
+  // previously missed because :root had a narrower lookahead
+  it('remaps :root with attribute selector', () => {
+    expect(remapDocumentSelectors(':root[data-theme="dark"] { color: #fff; }'))
+      .toBe('.canvas-root[data-theme="dark"] { color: #fff; }');
+  });
+
+  it('remaps :root with class', () => {
+    expect(remapDocumentSelectors(':root.dark { background: #000; }'))
+      .toBe('.canvas-root.dark { background: #000; }');
+  });
+
+  it('remaps :root with pseudo-selector', () => {
+    expect(remapDocumentSelectors(':root::before { content: ""; }'))
+      .toBe('.canvas-root::before { content: ""; }');
+  });
+
+  // Compound html+body selectors — collapse to single .canvas-root
+  // to prevent .canvas-root .canvas-root (which matches nothing)
+  it('collapses html body descendant into single .canvas-root', () => {
+    expect(remapDocumentSelectors('html body { margin: 0; }'))
+      .toBe('.canvas-root { margin: 0; }');
+  });
+
+  it('collapses html > body child combinator into single .canvas-root', () => {
+    expect(remapDocumentSelectors('html > body { margin: 0; }'))
+      .toBe('.canvas-root { margin: 0; }');
+  });
+
+  it('collapses html body with class into .canvas-root.class', () => {
+    expect(remapDocumentSelectors('html body.dark { color: #fff; }'))
+      .toBe('.canvas-root.dark { color: #fff; }');
+  });
+
+  it('collapses html > body with descendant', () => {
+    expect(remapDocumentSelectors('html > body > .wrap { padding: 10px; }'))
+      .toBe('.canvas-root > .wrap { padding: 10px; }');
+  });
+
+  it('keeps html, body comma-separated as two .canvas-root', () => {
+    expect(remapDocumentSelectors('html, body { margin: 0; }'))
+      .toBe('.canvas-root, .canvas-root { margin: 0; }');
+  });
 });
