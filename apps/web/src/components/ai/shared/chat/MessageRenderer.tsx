@@ -76,7 +76,11 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
         <>
           <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
             <div className="[overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]">
-              <StreamingMarkdown content={content} isStreaming={isStreaming} />
+              <StreamingMarkdown
+                content={content}
+                isStreaming={isStreaming}
+                renderHtmlAsText={role === 'user'}
+              />
             </div>
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}

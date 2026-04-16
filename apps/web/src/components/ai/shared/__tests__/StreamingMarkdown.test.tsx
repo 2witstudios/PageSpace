@@ -2,15 +2,58 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
+const { streamdownSpy } = vi.hoisted(() => ({
+  streamdownSpy: vi.fn(),
+}));
+
 // Mock Streamdown with a simple implementation that passes children through
 vi.mock('streamdown', () => ({
-  Streamdown: ({ children, mode, className }: { children: string; mode: string; className?: string }) => (
-    React.createElement('div', { 'data-testid': 'streamdown', 'data-mode': mode, className }, children)
-  ),
+  defaultRemarkPlugins: {
+    gfm: () => undefined,
+  },
+  Streamdown: ({
+    children,
+    mode,
+    className,
+    remarkPlugins,
+  }: {
+    children: string;
+    mode: string;
+    className?: string;
+    remarkPlugins?: unknown[];
+  }) => {
+    streamdownSpy({ children, mode, className, remarkPlugins });
+    return React.createElement('div', { 'data-testid': 'streamdown', 'data-mode': mode, className }, children);
+  },
 }));
 
 // Import after mocking
 import { StreamingMarkdown } from '../chat/StreamingMarkdown';
+
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: MarkdownNode[];
+}
+
+type RemarkTransformer = (tree: MarkdownNode) => void;
+type RemarkPlugin = () => RemarkTransformer;
+
+function getLastRemarkPlugins(): RemarkPlugin[] {
+  const lastCall = streamdownSpy.mock.lastCall as [{ remarkPlugins?: RemarkPlugin[] }] | undefined;
+  return lastCall?.[0].remarkPlugins ?? [];
+}
+
+function applyUserHtmlTextPlugin(tree: MarkdownNode): void {
+  const remarkPlugins = getLastRemarkPlugins();
+  const rawHtmlTextPlugin = remarkPlugins[remarkPlugins.length - 1];
+
+  expect(rawHtmlTextPlugin).toBeTypeOf('function');
+
+  const transform = rawHtmlTextPlugin();
+  transform(tree);
+}
 
 /**
  * Tests for StreamingMarkdown component
@@ -127,6 +170,100 @@ describe('preprocessMentions', () => {
   });
 });
 
+describe('raw HTML rendering', () => {
+  it('should keep raw user markdown source intact while installing an HTML-to-text remark plugin', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: 'Write a <style> block inside <html>',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe('Write a <style> block inside <html>');
+
+    const tree: MarkdownNode = {
+      type: 'root',
+      children: [
+        { type: 'text', value: 'Write a ' },
+        { type: 'html', value: '<style>' },
+        { type: 'text', value: ' block inside ' },
+        { type: 'html', value: '<html>' },
+      ],
+    };
+
+    applyUserHtmlTextPlugin(tree);
+
+    expect(tree.children).toEqual([
+      { type: 'text', value: 'Write a ' },
+      { type: 'text', value: '<style>' },
+      { type: 'text', value: ' block inside ' },
+      { type: 'text', value: '<html>' },
+    ]);
+  });
+
+  it('should preserve mention preprocessing without escaping the raw markdown source', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: 'See <style> and @[Project](proj123:page)',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe(
+      'See <style> and [mention:Project](mention://proj123/page)'
+    );
+  });
+
+  it('should leave inline code and autolink nodes untouched when converting raw HTML nodes to text', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        {
+          content: '`<div>` <https://example.com> <style>',
+          renderHtmlAsText: true,
+        }
+      )
+    );
+
+    const tree: MarkdownNode = {
+      type: 'root',
+      children: [
+        { type: 'inlineCode', value: '<div>' },
+        { type: 'text', value: ' ' },
+        {
+          type: 'link',
+          url: 'https://example.com',
+          children: [{ type: 'text', value: 'https://example.com' }],
+        },
+        { type: 'text', value: ' ' },
+        { type: 'html', value: '<style>' },
+      ],
+    };
+
+    applyUserHtmlTextPlugin(tree);
+
+    expect(tree.children).toEqual([
+      { type: 'inlineCode', value: '<div>' },
+      { type: 'text', value: ' ' },
+      {
+        type: 'link',
+        url: 'https://example.com',
+        children: [{ type: 'text', value: 'https://example.com' }],
+      },
+      { type: 'text', value: ' ' },
+      { type: 'text', value: '<style>' },
+    ]);
+  });
+});
+
 describe('memoization', () => {
   it('should re-render when content changes', () => {
     const { rerender } = render(<StreamingMarkdown content="First" />);
@@ -142,5 +279,23 @@ describe('memoization', () => {
 
     rerender(<StreamingMarkdown content="Test" isStreaming={true} />);
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'streaming');
+  });
+
+  it('should re-render when renderHtmlAsText changes', () => {
+    const { rerender } = render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        { content: 'Test', renderHtmlAsText: false }
+      )
+    );
+    expect(getLastRemarkPlugins()).toHaveLength(0);
+
+    rerender(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; renderHtmlAsText?: boolean }>,
+        { content: 'Test', renderHtmlAsText: true }
+      )
+    );
+    expect(getLastRemarkPlugins().length).toBeGreaterThan(0);
   });
 });

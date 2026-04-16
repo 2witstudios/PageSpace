@@ -12,7 +12,7 @@
 'use client';
 
 import { memo, useMemo, useState, useRef, useEffect, useCallback, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode, MouseEvent } from 'react';
-import { Streamdown } from 'streamdown';
+import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { useRouter } from 'next/navigation';
 import { isInternalUrl, openExternalUrl } from '@/lib/navigation/app-navigation';
 import { CheckIcon, CopyIcon } from 'lucide-react';
@@ -32,6 +32,41 @@ function preprocessMentions(content: string): string {
   return content.replace(/@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g, (_, label, id, type) => {
     return `[mention:${label}](mention://${id}/${type})`;
   });
+}
+
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  children?: MarkdownNode[];
+  [key: string]: unknown;
+}
+
+function isMarkdownParent(node: MarkdownNode): node is MarkdownNode & { children: MarkdownNode[] } {
+  return Array.isArray(node.children);
+}
+
+function renderRawHtmlNodesAsText(tree: MarkdownNode): void {
+  if (!isMarkdownParent(tree)) {
+    return;
+  }
+
+  tree.children = tree.children.map((child) => {
+    if (child.type === 'html') {
+      return {
+        ...child,
+        type: 'text',
+      };
+    }
+
+    renderRawHtmlNodesAsText(child);
+    return child;
+  });
+}
+
+function renderHtmlAsTextRemarkPlugin() {
+  return (tree: MarkdownNode) => {
+    renderRawHtmlNodesAsText(tree);
+  };
 }
 
 /**
@@ -266,6 +301,8 @@ interface StreamingMarkdownProps {
   content: string;
   /** Whether to use streaming mode (progressive formatting) or static mode */
   isStreaming?: boolean;
+  /** Render parsed raw HTML nodes as literal text while preserving markdown syntax */
+  renderHtmlAsText?: boolean;
   /** Additional CSS class */
   className?: string;
 }
@@ -281,7 +318,7 @@ interface StreamingMarkdownProps {
  * - Mobile-aware link handling (internal links use router.push on Capacitor)
  */
 export const StreamingMarkdown = memo(
-  ({ content, isStreaming = false, className }: StreamingMarkdownProps) => {
+  ({ content, isStreaming = false, renderHtmlAsText = false, className }: StreamingMarkdownProps) => {
     const router = useRouter();
 
     // Pre-process mentions before rendering
@@ -290,11 +327,19 @@ export const StreamingMarkdown = memo(
     // Create components with router for mobile-aware navigation
     // Memoize to avoid recreating on every render
     const streamdownComponents = useMemo(() => createStreamdownComponents(router), [router]);
+    const remarkPlugins = useMemo(() => {
+      if (!renderHtmlAsText) {
+        return undefined;
+      }
+
+      return [...Object.values(defaultRemarkPlugins), renderHtmlAsTextRemarkPlugin];
+    }, [renderHtmlAsText]);
 
     return (
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
         components={streamdownComponents}
+        remarkPlugins={remarkPlugins}
         className={className}
         // Disable controls for chat messages (copy/download buttons on code blocks)
         controls={false}
@@ -307,6 +352,7 @@ export const StreamingMarkdown = memo(
     // Custom equality check for better memoization
     return prevProps.content === nextProps.content &&
            prevProps.isStreaming === nextProps.isStreaming &&
+           prevProps.renderHtmlAsText === nextProps.renderHtmlAsText &&
            prevProps.className === nextProps.className;
   }
 );
