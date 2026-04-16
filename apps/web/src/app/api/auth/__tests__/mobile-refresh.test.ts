@@ -517,6 +517,7 @@ describe('/api/auth/mobile/refresh', () => {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        deviceId: 'ios-device-123',
         createdByService: 'mobile-refresh',
         createdByIp: '192.168.1.1',
       });

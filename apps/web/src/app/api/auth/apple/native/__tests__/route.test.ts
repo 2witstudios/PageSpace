@@ -500,6 +500,7 @@ describe('POST /api/auth/apple/native', () => {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        deviceId: 'device-123',
         createdByIp: '192.168.1.1',
       });
     });
@@ -514,6 +515,7 @@ describe('POST /api/auth/apple/native', () => {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        deviceId: 'device-123',
         createdByIp: undefined,
       });
     });
