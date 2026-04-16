@@ -79,7 +79,11 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
       ) : (
         <>
           <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert min-w-0 max-w-full break-words ${styles.compactProseContent}`}>
-            <StreamingMarkdown content={content} isStreaming={isStreaming} />
+            <StreamingMarkdown
+              content={content}
+              isStreaming={isStreaming}
+              escapeHtml={role === 'user'}
+            />
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">

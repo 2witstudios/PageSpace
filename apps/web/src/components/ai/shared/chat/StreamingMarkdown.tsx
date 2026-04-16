@@ -34,6 +34,13 @@ function preprocessMentions(content: string): string {
   });
 }
 
+function escapeHtmlChars(content: string): string {
+  return content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /**
  * Extract text content from React children recursively
  * Used to get the code content for copy functionality
@@ -266,6 +273,8 @@ interface StreamingMarkdownProps {
   content: string;
   /** Whether to use streaming mode (progressive formatting) or static mode */
   isStreaming?: boolean;
+  /** Escape HTML-shaped text before markdown processing */
+  escapeHtml?: boolean;
   /** Additional CSS class */
   className?: string;
 }
@@ -281,11 +290,14 @@ interface StreamingMarkdownProps {
  * - Mobile-aware link handling (internal links use router.push on Capacitor)
  */
 export const StreamingMarkdown = memo(
-  ({ content, isStreaming = false, className }: StreamingMarkdownProps) => {
+  ({ content, isStreaming = false, escapeHtml = false, className }: StreamingMarkdownProps) => {
     const router = useRouter();
 
     // Pre-process mentions before rendering
-    const processedContent = useMemo(() => preprocessMentions(content), [content]);
+    const processedContent = useMemo(() => {
+      const safeContent = escapeHtml ? escapeHtmlChars(content) : content;
+      return preprocessMentions(safeContent);
+    }, [content, escapeHtml]);
 
     // Create components with router for mobile-aware navigation
     // Memoize to avoid recreating on every render
@@ -307,6 +319,7 @@ export const StreamingMarkdown = memo(
     // Custom equality check for better memoization
     return prevProps.content === nextProps.content &&
            prevProps.isStreaming === nextProps.isStreaming &&
+           prevProps.escapeHtml === nextProps.escapeHtml &&
            prevProps.className === nextProps.className;
   }
 );

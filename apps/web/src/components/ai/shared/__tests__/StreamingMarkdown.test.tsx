@@ -127,6 +127,40 @@ describe('preprocessMentions', () => {
   });
 });
 
+describe('HTML escaping', () => {
+  it('should escape HTML-like user content before passing it to Streamdown', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; escapeHtml?: boolean }>,
+        {
+          content: 'Write a <style> block inside <html>',
+          escapeHtml: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe('Write a &lt;style&gt; block inside &lt;html&gt;');
+  });
+
+  it('should preserve mention preprocessing when HTML escaping is enabled', () => {
+    render(
+      React.createElement(
+        StreamingMarkdown as React.ComponentType<{ content: string; escapeHtml?: boolean }>,
+        {
+          content: 'See <style> and @[Project](proj123:page)',
+          escapeHtml: true,
+        }
+      )
+    );
+
+    const streamdown = screen.getByTestId('streamdown');
+    expect(streamdown.textContent).toBe(
+      'See &lt;style&gt; and [mention:Project](mention://proj123/page)'
+    );
+  });
+});
+
 describe('memoization', () => {
   it('should re-render when content changes', () => {
     const { rerender } = render(<StreamingMarkdown content="First" />);
