@@ -2,6 +2,7 @@
   "name": "@pagespace/processor",
   "version": "1.0.0",
   "private": true,
+  "license": "CC-BY-NC-SA-4.0",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",

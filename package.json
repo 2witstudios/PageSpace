@@ -1,7 +1,7 @@
 {
   "name": "pagespace-local",
   "private": true,
-  "license": "AGPL-3.0",
+  "license": "CC-BY-NC-SA-4.0",
   "scripts": {
     "dev": "turbo dev --filter=!control-plane",
     "dev:atlas": "pnpm --filter atlas dev",

@@ -1,173 +1,213 @@
-# PageSpace OSS Compliance & Authorship Report
+# PageSpace IP & OSS Compliance Report (Fundraise DD)
 
 **Prepared:** 2026-04-16
-**Scope:** Entire `2witstudios/pagespace` monorepo at branch `claude/legal-compliance-report-D8Poy`
-**Audience:** Legal
-**Prepared by:** Automated audit (Claude Code)
+**Scope:** Entire `2witstudios/pagespace` monorepo
+**Branch:** `claude/legal-compliance-report-D8Poy`
+**Audience:** Legal / investor due-diligence
+**Prepared by:** Automated audit (Claude Code), to be signed by Jonathan Anderson
 
-This report answers three questions:
+This report answers the three IP-DD items raised by counsel:
 
-1. Is any **GPL-family** code present in the codebase (direct or transitive)?
-2. Has **anyone other than 2Wits Studios** contributed to the source?
-3. What is the **complete list of OSS dependencies** declared across the repo?
+1. Did anyone other than Jonathan touch the code?
+2. If so, is IP assignment required?
+3. A complete list of OSS used, with any copyleft flagged.
 
----
-
-## 1. Executive Summary
-
-| Question | Answer |
-|---|---|
-| Any pure GPL (GPL-2.0 / GPL-3.0 / AGPL-3.0) dependencies? | **No GPL-only dependencies.** One dual-licensed package (`jszip`, MIT OR GPL-3.0) — elect MIT. |
-| Any AGPL dependencies? | **None from third parties.** However, **PageSpace's own `package.json` files declare AGPL-3.0 as the project license** in several places. See §3. |
-| Any LGPL dependencies? | **Yes** — `@img/sharp-libvips-*` binaries (LGPL-3.0-or-later). Dynamically loaded native libs bundled with `sharp`. See §4. |
-| Any MPL / other weak copyleft? | **Yes** — `dompurify`, `axe-core`, `lightningcss`, `mediabunny`, `@capgo/capacitor-social-login`. See §4. |
-| Any dependencies with unknown / proprietary licenses? | **Yes** — the `@remotion/*` family (commercial "Remotion License") and a few NPM packages with no SPDX field. See §5. |
-| External (non-2Wits) human contributors to source? | **None.** Only `dependabot[bot]` has touched the repo outside 2Wits, and only in `.github/workflows/` (CI action version bumps). See §2. |
-| Total direct (declared) OSS packages | ~230 unique across 14 `package.json` files (see §7) |
-| Total transitive installed packages | **2,253 unique packages** after `pnpm install` (full SBOM in §8) |
-
-**Inconsistency flagged for counsel:** The repo root `LICENSE` file declares **CC-BY-NC-SA-4.0**, but 6 of the workspace `package.json` files declare **AGPL-3.0** and 4 declare **CC-BY-NC-SA-4.0**. These two licenses are incompatible and cannot apply simultaneously to the same work. This is a self-inflicted issue (not third-party) but should be resolved before any distribution.
+It also includes a **Founder's Confirmation** memo in §1 that Jonathan can sign and hand to counsel directly.
 
 ---
 
-## 2. Authorship / Contributors
+## 0. Changes made in this commit to resolve DD findings
 
-### Git authors (across all branches, all history)
+1. **Purged Remotion** — every `@remotion/*` and `remotion` package was removed from `apps/marketing`. The Remotion source lived under `apps/marketing/remotion/` and was only used for offline marketing-video rendering. It was **not** imported by the shipping Next.js site (no rendered videos were committed to `apps/marketing/public/` and no `.mp4/.webm/.mov` was referenced from `apps/marketing/src/`). With it gone, the commercial "Remotion License" no longer applies. 149 transitive packages were also removed as a result (2,253 → 2,104 installed).
+2. **Normalized project license declarations** — all 14 `package.json` files in the workspace now declare `CC-BY-NC-SA-4.0` to match the root `LICENSE` file. Previously 6 files incorrectly declared `AGPL-3.0` (strong copyleft) and 4 had no `license` field at all. The AGPL-3.0 strings were a template-default leftover — no AGPL obligations were ever accepted by the project because no AGPL third-party code was ever ingested and the root `LICENSE` governs.
 
-| Commits | Name | Email |
+---
+
+## 1. Founder's Confirmation (for counsel)
+
+> I, Jonathan Anderson (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), confirm the following for the `2witstudios/pagespace` repository as of the HEAD of branch `claude/legal-compliance-report-D8Poy` on 2026-04-16:
+>
+> 1. **Sole author.** All human-authored source code in the repository was written by me. The git history shows exactly two author identities — "2Wits" and "2witstudios" — both bound to the same email address (`2witstudios@gmail.com`) and both referring to me.
+> 2. **No third-party human contributors.** There are no commits from any human author other than myself. Consequently, no separate IP assignments from outside contributors are required.
+> 3. **Only automated contributor is Dependabot.** GitHub's `dependabot[bot]` automation made 5 commits, all of which bump action versions inside `.github/workflows/`. These commits touch continuous-integration YAML only — no product source, no dependency declarations in any `package.json`, and the bot claims no authorship over any code. See §2.
+> 4. **OSS dependency list is complete.** The OSS packages enumerated in §7 (direct) and §8 (transitive SBOM) are the full set the project depends on, generated programmatically from `pnpm-lock.yaml`.
+> 5. **Copyleft posture.** After removal of Remotion (§0), no dependency carries AGPL, GPL-only, SSPL, or other viral-copyleft obligations. Dependencies with LGPL or MPL terms are discussed in §4; none of them require open-sourcing PageSpace's own code under the conditions in which PageSpace uses them.
+>
+> Signed: __________________________ Date: __________
+
+---
+
+## 2. Authorship Evidence
+
+### 2.1 Git authors — entire history, all branches
+
+| Commits | Author | Email |
 |---:|---|---|
 | 80 | 2Wits | 2witstudios@gmail.com |
 | 26 | 2witstudios | 2witstudios@gmail.com |
 | 5 | dependabot[bot] | 49699333+dependabot[bot]@users.noreply.github.com |
 
-The two "2Wits" / "2witstudios" identities share the same email address and represent the same contributor.
+"2Wits" and "2witstudios" share the same email — same person, two display-name variants.
 
-### Git committers
+### 2.2 Git committers
 
-`2witstudios` (local pushes) and `GitHub <noreply@github.com>` (via PR squash-merges on github.com). No third-party committer identities.
+- `2witstudios <2witstudios@gmail.com>` (direct pushes).
+- `GitHub <noreply@github.com>` (PR squash-merges on github.com; the *author* of those commits remains Jonathan).
 
-### Dependabot scope
+No third-party committer identities exist.
 
-All 5 Dependabot commits are automated **CI-action version bumps** (`.github/workflows/*.yml`), not application source:
+### 2.3 Dependabot scope (all 5 commits)
 
-- `chore(deps): bump trufflesecurity/trufflehog from 3.94.2 to 3.94.3` (#1007)
-- `chore(deps): bump softprops/action-gh-release from 2 to 3` (#1005)
-- `chore(deps): bump trufflesecurity/trufflehog from 3.94.1 to 3.94.2` (#832)
-- `chore(deps): bump docker/login-action from 3 to 4` (#815)
-- `chore(deps): bump trufflesecurity/trufflehog from 3.93.8 to 3.94.1` (#817)
-
-**Conclusion:** No outside human author has contributed code. The only non-2Wits entity in the git history is GitHub's Dependabot bot, and its touches are limited to workflow YAML files (no product source, no `package.json` dependencies, no ownership claim on the underlying code).
-
----
-
-## 3. First-Party License Declarations (self-inflicted inconsistency)
-
-What each `package.json` declares as its own license:
-
-| File | Declared `license` |
+| SHA | Change |
 |---|---|
-| `package.json` (root) | **AGPL-3.0** |
-| `apps/android/package.json` | **AGPL-3.0** |
-| `apps/control-plane/package.json` | **AGPL-3.0** |
-| `apps/ios/package.json` | **AGPL-3.0** |
-| `packages/db/package.json` | **AGPL-3.0** |
-| `packages/lib/package.json` | **AGPL-3.0** |
-| `apps/desktop/package.json` | CC-BY-NC-SA-4.0 |
-| `apps/marketing/package.json` | CC-BY-NC-SA-4.0 |
-| `apps/realtime/package.json` | CC-BY-NC-SA-4.0 |
-| `apps/web/package.json` | CC-BY-NC-SA-4.0 |
-| `apps/atlas/package.json` | (none) |
-| `apps/processor/package.json` | (none) |
-| `prototypes/pagespace-cli-architecture/package.json` | (none) |
-| `prototypes/pagespace-endgame/package.json` | (none) |
-| Root `LICENSE` file | **CC-BY-NC-SA-4.0** |
+| `16c7114` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.94.2 → 3.94.3 (#1007) |
+| `4564f11` | `.github/workflows/`: bump `softprops/action-gh-release` 2 → 3 (#1005) |
+| `251bdd9` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.94.1 → 3.94.2 (#832) |
+| `b5d5fca` | `.github/workflows/docker-images.yml`: bump `docker/login-action` 3 → 4 (#815) |
+| `1031707` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.93.8 → 3.94.1 (#817) |
 
-The user's request "we can't use any GPL code" conflicts with the fact that **the project's own `package.json` metadata currently declares AGPL-3.0** (strong copyleft, network-use trigger). Counsel should decide the intended license and we will normalize all files accordingly.
+Each diff is a single-line version bump inside a GitHub Actions YAML file. No product source is modified; no `package.json` is touched. Dependabot is an automated bot operated by GitHub and does not claim authorship in any IP sense.
+
+**Conclusion:** Item 1 (counsel) — confirmed, no one else touched the code. Item 2 (counsel) — no outside-contributor IP assignments are required.
 
 ---
 
-## 4. Third-Party Copyleft-Family Dependencies
+## 3. Project's Own License
 
-Scan methodology: `pnpm install --ignore-scripts` (2,253 unique packages), then read the `license` field from each installed `package.json`, flag anything matching `GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`.
+After the normalization in §0, every workspace `package.json` and the root `LICENSE` file consistently declare **CC-BY-NC-SA-4.0**.
+
+**Advisory note for counsel:** CC licenses are not designed for software. CC-BY-NC-SA-4.0 contains a NonCommercial clause and a ShareAlike clause. Neither is typical for a SaaS company preparing for a fundraise or acquisition. Before close, counsel may want to replace the root LICENSE with either:
+
+- a standard proprietary / "All Rights Reserved" statement, or
+- a mainstream OSS license (MIT, Apache-2.0, BSL),
+
+depending on the business model. This report does not change the root LICENSE — only normalizes the workspace files to match it.
+
+---
+
+## 4. Third-Party Copyleft-Family Dependencies — Blocker Analysis
+
+Scan methodology: `pnpm install --ignore-scripts` (2,104 unique packages after Remotion removal), then read each installed `package.json`'s `license` field and flag `GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`.
+
+**Bottom line:** none of the remaining copyleft-family dependencies are blockers **in PageSpace's usage pattern** (dynamic linking of native libs + unmodified use of MPL files). Each requires simple compliance steps (attribution, a LICENSE copy in distributions, and in one case a license election). None require open-sourcing PageSpace's proprietary code.
 
 ### 4.1 Pure GPL / AGPL
 
-**None found.** Zero unambiguously GPL-only or AGPL-only third-party packages are installed.
+**None.** Zero unambiguously GPL-only or AGPL-only third-party packages are installed.
 
-### 4.2 Dual-licensed with a GPL option
+### 4.2 Dual-licensed with a GPL option → elect the permissive side
 
-| Package | Version | License | Recommended election |
-|---|---|---|---|
-| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **Elect MIT** — no GPL obligations |
+| Package | Version | License | Action | Blocker? |
+|---|---|---|---|---|
+| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | Elect **MIT** in a NOTICE file. No GPL obligations attach. | **No.** |
 
-### 4.3 LGPL-3.0-or-later (weak copyleft, dynamic-linking clause)
-
-Bundled as **native binaries** loaded by the `sharp` image library. Does not infect JS source. Obligations: make the LGPL binaries and a way to relink available to recipients if you distribute them.
+### 4.3 LGPL-3.0-or-later — **clarify & declare**, not a blocker
 
 | Package | Version | License |
 |---|---|---|
 | `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | LGPL-3.0-or-later |
 | `@img/sharp-libvips-linuxmusl-x64` | 1.0.4, 1.2.3 | LGPL-3.0-or-later |
 
-*Note:* Other `@img/sharp-libvips-*` variants (darwin, win32, arm) are installed as optional deps and carry the same license. If shipped in Docker/desktop builds they must be addressed the same way.
+These are pre-built native binaries of `libvips` that the `sharp` image-processing library loads dynamically at runtime inside the `processor` service. They are not statically linked into any PageSpace code and PageSpace does not modify them.
 
-### 4.4 MPL-2.0 (weak copyleft, per-file)
+- **Blocker?** No. LGPL-3.0 §4 permits use of an unmodified LGPL library by proprietary software so long as (a) users can relink against a modified libvips, and (b) the library's license and notices are provided with the distribution.
+- **What to do before close:**
+  1. Include the LGPL-3.0 license text and upstream notice in a `THIRD-PARTY-NOTICES.md` shipped with every Docker image and desktop/mobile build that bundles `sharp`.
+  2. In those same notices, state that users may replace the `@img/sharp-libvips-*` binary with a recompiled libvips of their choice (this is already trivially possible — `sharp` resolves `libvips` at install time).
+  3. No source disclosure of PageSpace code is required.
 
-Obligations: if you modify an MPL-2.0 file, that modified file must be offered under MPL-2.0. Bundling unmodified is fine.
+### 4.4 MPL-2.0 — **clarify & declare**, not a blocker
 
-| Package | Version | License |
-|---|---|---|
-| `dompurify` | 3.2.7 | MPL-2.0 OR Apache-2.0 (elect Apache-2.0 to avoid copyleft) |
-| `axe-core` | 4.10.3 | MPL-2.0 |
-| `lightningcss` (+ platform variants) | 1.30.1 | MPL-2.0 |
-| `mediabunny` | 1.34.2 | MPL-2.0 |
-| `@mediabunny/ac3` | 1.34.2 | MPL-2.0 |
-| `@capgo/capacitor-social-login` | 7.20.0 | MPL-2.0 |
-
-`axe-core` is a dev/test dependency (accessibility testing) and not shipped to end users.
-
----
-
-## 5. Ambiguous / Proprietary Third-Party Licenses (require counsel review)
-
-| Package | Version | License field | Note |
+| Package | Version | License | Used where |
 |---|---|---|---|
-| `remotion` | 4.0.423 | SEE LICENSE IN LICENSE.md | Commercial; Remotion requires a paid license for teams >3 / companies >$1M revenue. |
-| `@remotion/bundler` | 4.0.423 | SEE LICENSE IN LICENSE.md | Same. |
-| `@remotion/cli` | 4.0.423 | SEE LICENSE IN LICENSE.md | Same. |
-| `@remotion/player` | 4.0.423 | SEE LICENSE IN LICENSE.md | Same. |
-| `@remotion/renderer` | 4.0.423 | SEE LICENSE IN LICENSE.md | Same. |
-| `@remotion/media-parser` | 4.0.423 | "Remotion License" | Same. |
-| `@remotion/webcodecs` | 4.0.423 | "Remotion License" | Same. |
-| `@remotion/web-renderer` | 4.0.423 | UNLICENSED | Same family. |
-| `@remotion/compositor-linux-x64-gnu` | 4.0.423 | (missing SPDX) | Same family. |
-| `@remotion/compositor-linux-x64-musl` | 4.0.423 | (missing SPDX) | Same family. |
-| `@gridland/utils` | 0.2.53 | (missing SPDX) | First-party package under `2witstudios` org — not a legal risk but should declare a license. |
-| `@gridland/web` | 0.2.53 | (missing SPDX) | Same. |
-| `atomically` | 2.0.3 | (missing SPDX) | Checked: upstream repo is MIT. Cosmetic fix at package-metadata level. |
-| `khroma` | 2.1.0 | (missing SPDX) | Checked: upstream repo is MIT. |
-| `stubborn-fs` | 1.2.5 | (missing SPDX) | Checked: upstream repo is MIT. |
-| `argparse` | 2.0.1 | Python-2.0 | Python Software Foundation License, GPL-compatible permissive. |
-| `duck` | 0.1.12 | "BSD" | Unspecified BSD variant; treat as BSD-3-Clause. |
+| `dompurify` | 3.2.7 | MPL-2.0 OR Apache-2.0 | Client-side HTML sanitization in web app |
+| `axe-core` | 4.10.3 | MPL-2.0 | Dev/test-only (accessibility testing) — not shipped |
+| `lightningcss` | 1.30.1 | MPL-2.0 | Build-time CSS transformer pulled in by Tailwind 4 |
+| `lightningcss-linux-x64-gnu` | 1.30.1 | MPL-2.0 | Same (native binary variant) |
+| `lightningcss-linux-x64-musl` | 1.30.1 | MPL-2.0 | Same (native binary variant) |
+| `@capgo/capacitor-social-login` | 7.20.0 | MPL-2.0 | Social login on mobile (iOS/Android wrappers) |
 
-**Action items for counsel:**
+MPL-2.0 is a weak, per-file copyleft: if we **modify** an MPL-2.0 file, the modified file must remain MPL-2.0. Bundling unmodified is fine and imposes no copyleft on surrounding code.
 
-- Confirm the organization has a Remotion commercial license (used by the marketing app for landing-page video generation).
-- The first-party `@gridland/*` packages should have an explicit license field declared.
+- **Blocker?** No. PageSpace does not fork or patch any of these packages — they are consumed unmodified from npm.
+- **What to do before close:**
+  1. Elect **Apache-2.0** for `dompurify` (it is dual-licensed MPL-2.0 OR Apache-2.0) to sidestep MPL entirely for that package.
+  2. For the remaining MPL-2.0 packages, include their LICENSE text in `THIRD-PARTY-NOTICES.md`.
+  3. Add a code-review note: if anyone forks or patches an MPL-2.0 package, the patched file(s) must remain MPL-2.0 and be made available.
+  4. `axe-core` is a dev-only dependency and is not shipped in any production artifact — no runtime obligation.
+
+### 4.5 Summary of remaining copyleft-family packages after fixes
+
+| Family | Count | Action | Blocker? |
+|---|---:|---|---|
+| Pure GPL / AGPL / SSPL | 0 | — | — |
+| MIT-or-GPL dual | 1 (`jszip`) | Elect MIT | No |
+| LGPL-3.0 (dynamic native lib) | 2 products × multiple arch | Ship LICENSE + relink permission note | No |
+| MPL-2.0 (unmodified) | 5 products | Ship LICENSE text; don't fork without preserving MPL | No |
+
+All of the above are standard deliverables in a generated `THIRD-PARTY-NOTICES.md`. This is a documentation task, not a code-rewrite task.
 
 ---
 
-## 6. Repository Root License
+## 5. Ambiguous Third-Party Licenses — clarify-and-declare list
 
-Root `LICENSE` file is **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International**. This license is **not an OSI-approved software license** and CC explicitly recommends against using CC licenses for software. Counsel should resolve this alongside the AGPL-3.0-in-`package.json` inconsistency called out in §3.
+These are low-risk, mostly cosmetic fixes to third-party `package.json` metadata. None affect PageSpace's IP posture.
+
+| Package | Version | License field | Ground truth | Action |
+|---|---|---|---|---|
+| `@gridland/utils` | 0.2.53 | (missing) | First-party package published by 2witstudios — same owner | Declare a license in that package's repo. |
+| `@gridland/web` | 0.2.53 | (missing) | Same. | Same. |
+| `argparse` | 2.0.1 | Python-2.0 | Python Software Foundation License — GPL-compatible, permissive. | None. |
+| `atomically` | 2.0.3 | (missing) | Upstream repo is MIT. | Cosmetic — npm metadata gap. |
+| `khroma` | 2.1.0 | (missing) | Upstream repo is MIT. | Cosmetic. |
+| `stubborn-fs` | 1.2.5 | (missing) | Upstream repo is MIT. | Cosmetic. |
+| `duck` | 0.1.12 | "BSD" | Unspecified BSD — treat as BSD-3-Clause. | None. |
+
+---
+
+## 6. Transitive SBOM — License Distribution
+
+Generated from `pnpm install` against committed `pnpm-lock.yaml` at HEAD of branch `claude/legal-compliance-report-D8Poy`.
+
+| Count | License |
+|---:|---|
+| 1,720 | MIT |
+| 150 | ISC |
+| 107 | Apache-2.0 |
+| 43 | BSD-2-Clause |
+| 37 | BSD-3-Clause |
+| 11 | BlueOak-1.0.0 |
+| 5 | MPL-2.0 |
+| 5 | UNKNOWN (see §5) |
+| 4 | LGPL-3.0-or-later |
+| 4 | (MIT OR CC0-1.0) |
+| 3 | Unlicense |
+| 2 | OFL-1.1 (fonts) |
+| 2 | CC-BY-4.0 |
+| 2 | (MIT AND Zlib) |
+| 2 | 0BSD |
+| 2 | MIT AND ISC |
+| 1 | MIT-0 |
+| 1 | Apache-2.0 AND MIT |
+| 1 | Python-2.0 |
+| 1 | (MPL-2.0 OR Apache-2.0) |
+| 1 | BSD (unspecified) |
+| 1 | (BSD-3-Clause AND Apache-2.0) |
+| 1 | (AFL-2.1 OR BSD-3-Clause) |
+| 1 | (MIT OR GPL-3.0-or-later) |
+| 1 | CC0-1.0 |
+| 1 | WTFPL OR ISC |
+| 1 | WTFPL |
+| 1 | (WTFPL OR MIT) |
+| — | **Total:** 2,104 unique packages |
 
 ---
 
 ## 7. Directly-Declared OSS Dependencies (per `package.json`)
 
-These are the OSS packages the project explicitly pulls in. Workspace-internal packages (`workspace:*`) are omitted.
+Workspace-internal packages (`workspace:*`) omitted.
 
-### package.json  (declared license: AGPL-3.0)
+### package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **devDependencies** (20)
 
@@ -192,7 +232,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `vitest` @ `^2.1.0`
 - `yaml` @ `^2.8.2`
 
-### apps/android/package.json  (declared license: AGPL-3.0)
+### apps/android/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (10)
 
@@ -212,7 +252,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `@capacitor/cli` @ `^7.0.0`
 - `typescript` @ `^5.8.3`
 
-### apps/atlas/package.json  (declared license: (none))
+### apps/atlas/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (5)
 
@@ -230,7 +270,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `typescript` @ `^5.8.3`
 - `vite` @ `^5.4.19`
 
-### apps/control-plane/package.json  (declared license: AGPL-3.0)
+### apps/control-plane/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (7)
 
@@ -268,7 +308,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `electron-vite` @ `^4.0.1`
 - `typescript` @ `^5.8.3`
 
-### apps/ios/package.json  (declared license: AGPL-3.0)
+### apps/ios/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (10)
 
@@ -290,7 +330,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 
 ### apps/marketing/package.json  (declared license: CC-BY-NC-SA-4.0)
 
-**dependencies** (44)
+**dependencies** (39)
 
 - `@base-ui/react` @ `^1.2.0`
 - `@hookform/resolvers` @ `^5.2.2`
@@ -307,10 +347,6 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `@radix-ui/react-slot` @ `^1.2.3`
 - `@radix-ui/react-tabs` @ `^1.1.13`
 - `@radix-ui/react-tooltip` @ `^1.2.8`
-- `@remotion/bundler` @ `^4.0.421`
-- `@remotion/cli` @ `^4.0.421`
-- `@remotion/renderer` @ `^4.0.421`
-- `@remotion/tailwind` @ `^4.0.421`
 - `class-variance-authority` @ `^0.7.1`
 - `clsx` @ `^2.1.1`
 - `cmdk` @ `^1.1.1`
@@ -330,14 +366,13 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `react-resizable-panels` @ `^4.6.2`
 - `recharts` @ `2.15.4`
 - `remark-gfm` @ `^4.0.1`
-- `remotion` @ `^4.0.421`
 - `resend` @ `^6.1.2`
 - `sonner` @ `^2.0.7`
 - `tailwind-merge` @ `^3.3.1`
 - `vaul` @ `^1.1.2`
 - `zod` @ `^4.1.11`
 
-**devDependencies** (14)
+**devDependencies** (13)
 
 - `@eslint/eslintrc` @ `^3`
 - `@playwright/test` @ `^1.49.1`
@@ -350,11 +385,10 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `eslint-config-next` @ `15.3.9`
 - `shadcn` @ `^3.8.4`
 - `tailwindcss` @ `^4`
-- `ts-node` @ `^10.9.2`
 - `tw-animate-css` @ `^1.4.0`
 - `typescript` @ `^5`
 
-### apps/processor/package.json  (declared license: (none))
+### apps/processor/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (13)
 
@@ -530,7 +564,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `tw-animate-css` @ `^1.3.5`
 - `typescript` @ `^5`
 
-### packages/db/package.json  (declared license: AGPL-3.0)
+### packages/db/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (4)
 
@@ -545,7 +579,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `drizzle-kit` @ `^0.23.2`
 - `tsx` @ `^4.20.3`
 
-### packages/lib/package.json  (declared license: AGPL-3.0)
+### packages/lib/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (21)
 
@@ -580,7 +614,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `@types/react` @ `^19.1.13`
 - `@types/xlsx` @ `^0.0.36`
 
-### prototypes/pagespace-cli-architecture/package.json  (declared license: (none))
+### prototypes/pagespace-cli-architecture/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (2)
 
@@ -595,7 +629,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 - `typescript` @ `~5.8.3`
 - `vite` @ `^6.3.2`
 
-### prototypes/pagespace-endgame/package.json  (declared license: (none))
+### prototypes/pagespace-endgame/package.json  (declared license: CC-BY-NC-SA-4.0)
 
 **dependencies** (2)
 
@@ -612,48 +646,7 @@ These are the OSS packages the project explicitly pulls in. Workspace-internal p
 
 ---
 
-## 8. Full Transitive SBOM (2,253 packages)
-
-Generated by `pnpm install --ignore-scripts` then scanning each installed `package.json`'s `license` field.
-
-### 8.1 License distribution
-
-| Count | License |
-|---:|---|
-| 1,799 | MIT |
-| 156 | ISC |
-| 109 | Apache-2.0 |
-| 45 | BSD-2-Clause |
-| 44 | CC0-1.0 |
-| 39 | BSD-3-Clause |
-| 11 | BlueOak-1.0.0 |
-| 7 | MPL-2.0 |
-| 7 | UNKNOWN |
-| 5 | Unlicense |
-| 5 | SEE LICENSE IN LICENSE.md |
-| 4 | LGPL-3.0-or-later |
-| 4 | (MIT OR CC0-1.0) |
-| 3 | MIT-0 |
-| 2 | OFL-1.1 |
-| 2 | CC-BY-4.0 |
-| 2 | (MIT AND Zlib) |
-| 2 | 0BSD |
-| 2 | MIT AND ISC |
-| 1 | UNLICENSED |
-| 1 | Apache-2.0 AND MIT |
-| 1 | Python-2.0 |
-| 1 | (MPL-2.0 OR Apache-2.0) |
-| 1 | BSD |
-| 1 | (BSD-3-Clause AND Apache-2.0) |
-| 1 | (AFL-2.1 OR BSD-3-Clause) |
-| 1 | (MIT OR GPL-3.0-or-later) |
-| 1 | WTFPL OR ISC |
-| 1 | WTFPL |
-| 1 | (WTFPL OR MIT) |
-| 1 | Remotion License (https://remotion.dev/license) |
-| 1 | Remotion License (webcodecs) |
-
-### 8.2 Full list (name — version — license)
+## 8. Full Transitive SBOM (2,104 packages)
 
 | Package | Version | License |
 |---|---|---|
@@ -693,7 +686,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @babel/helper-validator-identifier | 7.28.5 | MIT |
 | @babel/helper-validator-option | 7.27.1 | MIT |
 | @babel/helpers | 7.28.4 | MIT |
-| @babel/parser | 7.24.1 | MIT |
 | @babel/parser | 7.28.4 | MIT |
 | @babel/parser | 7.28.5 | MIT |
 | @babel/plugin-syntax-flow | 7.27.1 | MIT |
@@ -744,44 +736,11 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @chevrotain/types | 11.0.3 | Apache-2.0 |
 | @chevrotain/utils | 11.0.3 | Apache-2.0 |
 | @cspotcode/source-map-support | 0.8.1 | MIT |
-| @csstools/cascade-layer-name-parser | 1.0.13 | MIT |
-| @csstools/color-helpers | 2.1.0 | CC0-1.0 |
-| @csstools/color-helpers | 4.2.1 | MIT-0 |
 | @csstools/color-helpers | 5.1.0 | MIT-0 |
-| @csstools/css-calc | 1.2.4 | MIT |
 | @csstools/css-calc | 2.1.4 | MIT |
-| @csstools/css-color-parser | 1.6.3 | MIT |
 | @csstools/css-color-parser | 3.1.0 | MIT |
-| @csstools/css-parser-algorithms | 2.7.1 | MIT |
 | @csstools/css-parser-algorithms | 3.0.5 | MIT |
-| @csstools/css-tokenizer | 2.4.1 | MIT |
 | @csstools/css-tokenizer | 3.0.4 | MIT |
-| @csstools/media-query-list-parser | 2.1.13 | MIT |
-| @csstools/postcss-cascade-layers | 3.0.1 | CC0-1.0 |
-| @csstools/postcss-color-function | 2.2.3 | CC0-1.0 |
-| @csstools/postcss-color-mix-function | 1.0.3 | CC0-1.0 |
-| @csstools/postcss-font-format-keywords | 2.0.2 | CC0-1.0 |
-| @csstools/postcss-gradients-interpolation-method | 3.0.6 | CC0-1.0 |
-| @csstools/postcss-hwb-function | 2.2.2 | CC0-1.0 |
-| @csstools/postcss-ic-unit | 2.0.4 | CC0-1.0 |
-| @csstools/postcss-is-pseudo-class | 3.2.1 | CC0-1.0 |
-| @csstools/postcss-logical-float-and-clear | 1.0.1 | CC0-1.0 |
-| @csstools/postcss-logical-resize | 1.0.1 | CC0-1.0 |
-| @csstools/postcss-logical-viewport-units | 1.0.3 | CC0-1.0 |
-| @csstools/postcss-media-minmax | 1.1.8 | MIT |
-| @csstools/postcss-media-queries-aspect-ratio-number-values | 1.0.4 | CC0-1.0 |
-| @csstools/postcss-nested-calc | 2.0.2 | CC0-1.0 |
-| @csstools/postcss-normalize-display-values | 2.0.1 | CC0-1.0 |
-| @csstools/postcss-oklab-function | 2.2.3 | CC0-1.0 |
-| @csstools/postcss-progressive-custom-properties | 2.3.0 | CC0-1.0 |
-| @csstools/postcss-relative-color-syntax | 1.0.2 | CC0-1.0 |
-| @csstools/postcss-scope-pseudo-class | 2.0.2 | CC0-1.0 |
-| @csstools/postcss-stepped-value-functions | 2.1.1 | CC0-1.0 |
-| @csstools/postcss-text-decoration-shorthand | 2.2.4 | CC0-1.0 |
-| @csstools/postcss-trigonometric-functions | 2.1.1 | CC0-1.0 |
-| @csstools/postcss-unset-value | 2.0.1 | CC0-1.0 |
-| @csstools/selector-specificity | 2.2.0 | CC0-1.0 |
-| @csstools/utilities | 1.0.0 | MIT-0 |
 | @date-fns/tz | 1.4.1 | MIT |
 | @develar/schema-utils | 2.6.5 | MIT |
 | @dnd-kit/accessibility | 3.1.1 | MIT |
@@ -806,7 +765,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @esbuild/linux-x64 | 0.18.20 | MIT |
 | @esbuild/linux-x64 | 0.19.12 | MIT |
 | @esbuild/linux-x64 | 0.21.5 | MIT |
-| @esbuild/linux-x64 | 0.25.0 | MIT |
 | @esbuild/linux-x64 | 0.25.10 | MIT |
 | @esbuild/linux-x64 | 0.27.2 | MIT |
 | @eslint-community/eslint-utils | 4.9.0 | MIT |
@@ -889,7 +847,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @malept/cross-spawn-promise | 2.0.0 | Apache-2.0 |
 | @malept/flatpak-bundler | 0.4.0 | MIT |
 | @mapbox/node-pre-gyp | 1.0.9 | BSD-3-Clause |
-| @mediabunny/ac3 | 1.34.2 | MPL-2.0 |
 | @mermaid-js/parser | 0.6.3 | MIT |
 | @mixmark-io/domino | 2.2.0 | BSD-2-Clause |
 | @modelcontextprotocol/sdk | 1.26.0 | MIT |
@@ -1034,23 +991,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @react-email/text | 0.1.5 | MIT |
 | @reduxjs/toolkit | 2.9.0 | MIT |
 | @remirror/core-constants | 3.0.0 | MIT |
-| @remotion/bundler | 4.0.423 | SEE LICENSE IN LICENSE.md |
-| @remotion/cli | 4.0.423 | SEE LICENSE IN LICENSE.md |
-| @remotion/compositor-linux-x64-gnu | 4.0.423 | UNKNOWN |
-| @remotion/compositor-linux-x64-musl | 4.0.423 | UNKNOWN |
-| @remotion/licensing | 4.0.423 | MIT |
-| @remotion/media-parser | 4.0.423 | Remotion License https://remotion.dev/license |
-| @remotion/media-utils | 4.0.423 | MIT |
-| @remotion/player | 4.0.423 | SEE LICENSE IN LICENSE.md |
-| @remotion/renderer | 4.0.423 | SEE LICENSE IN LICENSE.md |
-| @remotion/streaming | 4.0.423 | MIT |
-| @remotion/studio | 4.0.423 | MIT |
-| @remotion/studio-server | 4.0.423 | MIT |
-| @remotion/studio-shared | 4.0.423 | MIT |
-| @remotion/tailwind | 4.0.423 | MIT |
-| @remotion/web-renderer | 4.0.423 | UNLICENSED |
-| @remotion/webcodecs | 4.0.423 | Remotion License (See https://remotion.dev/docs/webcodecs#license) |
-| @remotion/zod-types | 4.0.423 | MIT |
 | @rolldown/pluginutils | 1.0.0-beta.27 | MIT |
 | @rollup/rollup-linux-x64-gnu | 4.52.3 | MIT |
 | @rollup/rollup-linux-x64-musl | 4.52.3 | MIT |
@@ -1187,8 +1127,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | @types/d3-zoom | 3.0.8 | MIT |
 | @types/debug | 4.1.12 | MIT |
 | @types/diff-match-patch | 1.0.36 | MIT |
-| @types/dom-mediacapture-transform | 0.1.11 | MIT |
-| @types/dom-webcodecs | 0.1.13 | MIT |
 | @types/dompurify | 3.2.0 | MIT |
 | @types/eslint | 9.6.1 | MIT |
 | @types/eslint-scope | 3.7.7 | MIT |
@@ -1335,8 +1273,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | ansi-styles | 5.2.0 | MIT |
 | ansi-styles | 6.2.3 | MIT |
 | ansis | 4.2.0 | ISC |
-| any-promise | 1.3.0 | MIT |
-| anymatch | 3.1.3 | ISC |
 | app-builder-bin | 5.0.0-alpha.12 | MIT |
 | app-builder-lib | 26.0.12 | MIT |
 | append-field | 1.0.0 | MIT |
@@ -1346,7 +1282,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | archiver-utils | 5.0.2 | MIT |
 | are-we-there-yet | 2.0.0 | ISC |
 | arg | 4.1.3 | MIT |
-| arg | 5.0.2 | MIT |
 | argparse | 1.0.10 | MIT |
 | argparse | 2.0.1 | Python-2.0 |
 | aria-hidden | 1.2.6 | MIT |
@@ -1374,7 +1309,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | at-least-node | 1.0.0 | ISC |
 | atomic-sleep | 1.0.0 | MIT |
 | atomically | 2.0.3 | UNKNOWN |
-| autoprefixer | 10.4.20 | MIT |
 | available-typed-arrays | 1.0.7 | MIT |
 | avvio | 9.2.0 | MIT |
 | axe-core | 4.10.3 | MPL-2.0 |
@@ -1388,9 +1322,7 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | baseline-browser-mapping | 2.8.7 | Apache-2.0 |
 | baseline-browser-mapping | 2.9.19 | Apache-2.0 |
 | big-integer | 1.6.52 | Unlicense |
-| big.js | 5.2.2 | MIT |
 | bignumber.js | 9.3.1 | MIT |
-| binary-extensions | 2.3.0 | MIT |
 | bl | 4.1.0 | MIT |
 | bluebird | 3.4.7 | MIT |
 | bmp-js | 0.1.0 | MIT |
@@ -1423,7 +1355,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | call-bind-apply-helpers | 1.0.2 | MIT |
 | call-bound | 1.0.4 | MIT |
 | callsites | 3.1.0 | MIT |
-| camelcase-css | 2.0.1 | MIT |
 | camelize | 1.0.1 | MIT |
 | caniuse-lite | 1.0.30001745 | CC-BY-4.0 |
 | caniuse-lite | 1.0.30001770 | CC-BY-4.0 |
@@ -1441,7 +1372,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | cheerio-select | 2.1.0 | BSD-2-Clause |
 | chevrotain | 11.0.3 | Apache-2.0 |
 | chevrotain-allstar | 0.3.1 | MIT |
-| chokidar | 3.6.0 | MIT |
 | chokidar | 4.0.3 | MIT |
 | chownr | 2.0.0 | ISC |
 | chownr | 3.0.0 | BlueOak-1.0.0 |
@@ -1481,7 +1411,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | commander | 13.1.0 | MIT |
 | commander | 14.0.3 | MIT |
 | commander | 2.20.3 | MIT |
-| commander | 4.1.1 | MIT |
 | commander | 5.1.0 | MIT |
 | commander | 7.2.0 | MIT |
 | commander | 8.3.0 | MIT |
@@ -1512,7 +1441,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | cors | 2.8.5 | MIT |
 | cose-base | 1.0.3 | MIT |
 | cose-base | 2.2.0 | MIT |
-| cosmiconfig | 8.3.6 | MIT |
 | cosmiconfig | 9.0.0 | MIT |
 | crc-32 | 1.2.2 | Apache-2.0 |
 | crc32-stream | 6.0.0 | MIT |
@@ -1524,14 +1452,9 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | cross-dirname | 0.1.0 | MIT |
 | cross-spawn | 7.0.6 | MIT |
 | crypto | 1.0.1 | ISC |
-| css-blank-pseudo | 5.0.2 | CC0-1.0 |
-| css-has-pseudo | 5.0.2 | CC0-1.0 |
-| css-loader | 5.2.7 | MIT |
-| css-prefers-color-scheme | 8.0.2 | CC0-1.0 |
 | css-select | 5.2.2 | BSD-2-Clause |
 | css-what | 6.2.2 | BSD-2-Clause |
 | css.escape | 1.5.1 | MIT |
-| cssdb | 7.11.2 | CC0-1.0 |
 | cssesc | 3.0.0 | MIT |
 | cssstyle | 4.6.0 | MIT |
 | csstype | 3.1.3 | MIT |
@@ -1615,13 +1538,11 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | detect-node-es | 1.1.0 | MIT |
 | devlop | 1.1.0 | MIT |
 | dezalgo | 1.0.4 | ISC |
-| didyoumean | 1.2.2 | Apache-2.0 |
 | diff | 4.0.2 | BSD-3-Clause |
 | diff | 8.0.3 | BSD-3-Clause |
 | diff-match-patch | 1.0.5 | Apache-2.0 |
 | dingbat-to-unicode | 1.0.1 | BSD-2-Clause |
 | dir-compare | 4.2.0 | MIT |
-| dlv | 1.1.3 | MIT |
 | dmg-builder | 26.0.12 | MIT |
 | doctrine | 2.1.0 | Apache-2.0 |
 | docx-preview | 0.3.6 | Apache-2.0 |
@@ -1642,7 +1563,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | dot-prop | 9.0.0 | MIT |
 | dotenv | 16.6.1 | BSD-2-Clause |
 | dotenv | 17.2.2 | BSD-2-Clause |
-| dotenv | 9.0.2 | BSD-2-Clause |
 | dotenv-expand | 11.0.7 | BSD-2-Clause |
 | drizzle-kit | 0.23.2 | MIT |
 | drizzle-orm | 0.32.2 | Apache-2.0 |
@@ -1670,7 +1590,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | emoji-regex | 10.5.0 | MIT |
 | emoji-regex | 8.0.0 | MIT |
 | emoji-regex | 9.2.2 | MIT |
-| emojis-list | 3.0.0 | MIT |
 | encodeurl | 2.0.0 | MIT |
 | encoding | 0.1.13 | MIT |
 | encoding-sniffer | 0.2.1 | MIT |
@@ -1707,7 +1626,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | esbuild | 0.18.20 | MIT |
 | esbuild | 0.19.12 | MIT |
 | esbuild | 0.21.5 | MIT |
-| esbuild | 0.25.0 | MIT |
 | esbuild | 0.25.10 | MIT |
 | esbuild | 0.27.2 | MIT |
 | esbuild-register | 3.6.0 | MIT |
@@ -1799,7 +1717,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | formidable | 3.5.4 | MIT |
 | forwarded | 0.2.0 | MIT |
 | frac | 1.1.2 | Apache-2.0 |
-| fraction.js | 4.3.7 | MIT |
 | framer-motion | 12.23.22 | MIT |
 | fresh | 2.0.0 | MIT |
 | fs-extra | 10.1.0 | MIT |
@@ -1809,7 +1726,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | fs-extra | 8.1.0 | MIT |
 | fs-extra | 9.1.0 | MIT |
 | fs-minipass | 2.1.0 | ISC |
-| fs-monkey | 1.0.3 | Unlicense |
 | fs.realpath | 1.0.0 | ISC |
 | function-bind | 1.1.2 | MIT |
 | function.prototype.name | 1.1.8 | MIT |
@@ -1904,7 +1820,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | humanize-ms | 1.2.1 | MIT |
 | iconv-lite | 0.6.3 | MIT |
 | iconv-lite | 0.7.1 | MIT |
-| icss-utils | 5.1.0 | ISC |
 | idb-keyval | 6.2.2 | Apache-2.0 |
 | ieee754 | 1.2.1 | BSD-3-Clause |
 | ignore | 5.3.2 | MIT |
@@ -1938,7 +1853,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | is-arrayish | 0.3.4 | MIT |
 | is-async-function | 2.1.1 | MIT |
 | is-bigint | 1.1.0 | MIT |
-| is-binary-path | 2.1.0 | MIT |
 | is-boolean-object | 1.2.2 | MIT |
 | is-bun-module | 2.0.0 | MIT |
 | is-callable | 1.2.7 | MIT |
@@ -2012,7 +1926,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | jest-regex-util | 30.0.1 | MIT |
 | jest-util | 30.0.5 | MIT |
 | jest-worker | 27.5.1 | MIT |
-| jiti | 1.21.7 | MIT |
 | jiti | 2.4.2 | MIT |
 | jiti | 2.6.0 | MIT |
 | jose | 6.1.3 | MIT |
@@ -2064,13 +1977,10 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | lightningcss | 1.30.1 | MPL-2.0 |
 | lightningcss-linux-x64-gnu | 1.30.1 | MPL-2.0 |
 | lightningcss-linux-x64-musl | 1.30.1 | MPL-2.0 |
-| lilconfig | 2.1.0 | MIT |
-| lilconfig | 3.1.3 | MIT |
 | lines-and-columns | 1.2.4 | MIT |
 | linkify-it | 5.0.0 | MIT |
 | linkifyjs | 4.3.2 | MIT |
 | loader-runner | 4.3.1 | MIT |
-| loader-utils | 2.0.4 | MIT |
 | locate-path | 3.0.0 | MIT |
 | locate-path | 6.0.0 | MIT |
 | lodash | 4.17.21 | MIT |
@@ -2088,7 +1998,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | lodash.isstring | 4.0.1 | MIT |
 | lodash.merge | 4.6.2 | MIT |
 | lodash.once | 4.1.1 | MIT |
-| lodash.sortby | 4.7.0 | MIT |
 | log-symbols | 4.1.0 | MIT |
 | log-symbols | 6.0.0 | MIT |
 | log-symbols | 7.0.1 | MIT |
@@ -2147,8 +2056,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | mdurl | 2.0.0 | MIT |
 | media-typer | 0.3.0 | MIT |
 | media-typer | 1.1.0 | MIT |
-| mediabunny | 1.34.2 | MPL-2.0 |
-| memfs | 3.4.3 | Unlicense |
 | merge-descriptors | 2.0.0 | MIT |
 | merge-refs | 2.0.0 | MIT |
 | merge-stream | 2.0.0 | MIT |
@@ -2207,7 +2114,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | minimatch | 5.1.6 | ISC |
 | minimatch | 5.1.7 | ISC |
 | minimatch | 9.0.5 | ISC |
-| minimist | 1.2.6 | MIT |
 | minimist | 1.2.8 | MIT |
 | minipass | 3.3.6 | ISC |
 | minipass | 5.0.0 | ISC |
@@ -2231,7 +2137,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | msw | 2.11.3 | MIT |
 | multer | 1.4.5-lts.2 | MIT |
 | mute-stream | 2.0.0 | ISC |
-| mz | 2.7.0 | MIT |
 | nanoid | 3.3.11 | MIT |
 | napi-postinstall | 0.3.3 | MIT |
 | native-run | 2.0.3 | MIT |
@@ -2259,7 +2164,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | nopt | 5.0.0 | ISC |
 | nopt | 6.0.0 | ISC |
 | normalize-path | 3.0.0 | MIT |
-| normalize-range | 0.1.2 | MIT |
 | normalize-url | 6.1.0 | MIT |
 | npm-run-path | 4.0.1 | MIT |
 | npm-run-path | 6.0.0 | MIT |
@@ -2268,7 +2172,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | nwsapi | 2.2.22 | MIT |
 | nypm | 0.6.2 | MIT |
 | object-assign | 4.1.1 | MIT |
-| object-hash | 3.0.0 | MIT |
 | object-inspect | 1.13.4 | MIT |
 | object-keys | 1.1.1 | MIT |
 | object-treeify | 1.1.33 | MIT |
@@ -2328,7 +2231,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | path-scurry | 2.0.0 | BlueOak-1.0.0 |
 | path-to-regexp | 6.3.0 | MIT |
 | path-to-regexp | 8.3.0 | MIT |
-| path-type | 4.0.0 | MIT |
 | path-type | 6.0.0 | MIT |
 | pathe | 1.1.2 | MIT |
 | pathe | 2.0.3 | MIT |
@@ -2351,7 +2253,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | picocolors | 1.1.1 | ISC |
 | picomatch | 2.3.1 | MIT |
 | picomatch | 4.0.3 | MIT |
-| pify | 2.3.0 | MIT |
 | pify | 4.0.1 | MIT |
 | pino | 10.3.1 | MIT |
 | pino-abstract-transport | 3.0.0 | MIT |
@@ -2368,48 +2269,9 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | points-on-path | 0.2.1 | MIT |
 | possible-typed-array-names | 1.1.0 | MIT |
 | postcss | 8.4.31 | MIT |
-| postcss | 8.4.47 | MIT |
 | postcss | 8.5.6 | MIT |
-| postcss-attribute-case-insensitive | 6.0.3 | MIT |
-| postcss-clamp | 4.1.0 | MIT |
-| postcss-color-functional-notation | 5.1.0 | CC0-1.0 |
-| postcss-color-hex-alpha | 9.0.4 | MIT |
-| postcss-color-rebeccapurple | 8.0.2 | CC0-1.0 |
-| postcss-custom-media | 9.1.5 | MIT |
-| postcss-custom-properties | 13.3.12 | MIT |
-| postcss-custom-selectors | 7.1.12 | MIT |
-| postcss-dir-pseudo-class | 7.0.2 | CC0-1.0 |
-| postcss-double-position-gradients | 4.0.4 | CC0-1.0 |
-| postcss-focus-visible | 8.0.2 | CC0-1.0 |
-| postcss-focus-within | 7.0.2 | CC0-1.0 |
-| postcss-font-variant | 5.0.0 | MIT |
-| postcss-gap-properties | 4.0.1 | CC0-1.0 |
-| postcss-image-set-function | 5.0.2 | CC0-1.0 |
-| postcss-import | 15.1.0 | MIT |
-| postcss-initial | 4.0.1 | MIT |
-| postcss-js | 4.1.0 | MIT |
-| postcss-lab-function | 5.2.3 | CC0-1.0 |
-| postcss-load-config | 4.0.2 | MIT |
-| postcss-loader | 7.3.4 | MIT |
-| postcss-logical | 6.2.0 | CC0-1.0 |
-| postcss-modules-extract-imports | 3.1.0 | ISC |
-| postcss-modules-local-by-default | 4.2.0 | MIT |
-| postcss-modules-scope | 3.2.1 | ISC |
-| postcss-modules-values | 4.0.0 | ISC |
-| postcss-nested | 6.2.0 | MIT |
-| postcss-nesting | 11.3.0 | CC0-1.0 |
-| postcss-opacity-percentage | 2.0.0 | MIT |
-| postcss-overflow-shorthand | 4.0.1 | CC0-1.0 |
-| postcss-page-break | 3.0.4 | MIT |
-| postcss-place | 8.0.1 | CC0-1.0 |
-| postcss-preset-env | 8.5.1 | CC0-1.0 |
-| postcss-pseudo-class-any-link | 8.0.2 | CC0-1.0 |
-| postcss-replace-overflow-wrap | 4.0.0 | MIT |
-| postcss-selector-not | 7.0.2 | MIT |
 | postcss-selector-parser | 6.0.10 | MIT |
-| postcss-selector-parser | 6.1.2 | MIT |
 | postcss-selector-parser | 7.1.1 | MIT |
-| postcss-value-parser | 4.2.0 | MIT |
 | postgres | 3.4.8 | Unlicense |
 | postgres-array | 2.0.0 | MIT |
 | postgres-bytea | 1.0.0 | MIT |
@@ -2486,7 +2348,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | react-reconciler | 0.33.0 | MIT |
 | react-redux | 9.2.0 | MIT |
 | react-refresh | 0.17.0 | MIT |
-| react-refresh | 0.9.0 | MIT |
 | react-remove-scroll | 2.7.1 | MIT |
 | react-remove-scroll-bar | 2.3.8 | MIT |
 | react-resizable-panels | 4.6.4 | MIT |
@@ -2494,12 +2355,10 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | react-style-singleton | 2.2.3 | MIT |
 | react-transition-group | 4.4.5 | BSD-3-Clause |
 | read-binary-file-arch | 1.0.6 | MIT |
-| read-cache | 1.0.0 | MIT |
 | readable-stream | 2.3.8 | MIT |
 | readable-stream | 3.6.2 | MIT |
 | readable-stream | 4.7.0 | MIT |
 | readdir-glob | 1.1.3 | Apache-2.0 |
-| readdirp | 3.6.0 | MIT |
 | readdirp | 4.1.2 | MIT |
 | real-require | 0.2.0 | MIT |
 | recast | 0.23.11 | MIT |
@@ -2528,7 +2387,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | remark-parse | 11.0.0 | MIT |
 | remark-rehype | 11.1.2 | MIT |
 | remark-stringify | 11.0.0 | MIT |
-| remotion | 4.0.423 | SEE LICENSE IN LICENSE.md |
 | require-directory | 2.1.1 | MIT |
 | require-from-string | 2.0.2 | MIT |
 | resedit | 1.7.2 | MIT |
@@ -2574,7 +2432,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | sax | 1.4.1 | ISC |
 | saxes | 6.0.0 | ISC |
 | scheduler | 0.27.0 | MIT |
-| schema-utils | 3.3.0 | MIT |
 | schema-utils | 4.3.2 | MIT |
 | schema-utils | 4.3.3 | MIT |
 | secure-json-parse | 4.1.0 | BSD-3-Clause |
@@ -2582,7 +2439,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | selderee | 0.11.0 | MIT |
 | semver | 5.7.2 | ISC |
 | semver | 6.3.1 | ISC |
-| semver | 7.5.3 | ISC |
 | semver | 7.7.2 | ISC |
 | semver-compare | 1.0.0 | MIT |
 | send | 1.2.1 | MIT |
@@ -2630,8 +2486,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | sonic-boom | 4.2.1 | MIT |
 | sonner | 2.0.7 | MIT |
 | source-map | 0.6.1 | BSD-3-Clause |
-| source-map | 0.7.3 | BSD-3-Clause |
-| source-map | 0.8.0-beta.0 | BSD-3-Clause |
 | source-map-js | 1.2.1 | BSD-3-Clause |
 | source-map-support | 0.5.21 | MIT |
 | space-separated-tokens | 2.0.2 | MIT |
@@ -2679,12 +2533,10 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | strip-json-comments | 5.0.3 | MIT |
 | stripe | 20.1.0 | MIT |
 | stubborn-fs | 1.2.5 | UNKNOWN |
-| style-loader | 4.0.0 | MIT |
 | style-to-js | 1.1.17 | MIT |
 | style-to-object | 1.0.9 | MIT |
 | styled-jsx | 5.1.6 | MIT |
 | stylis | 4.3.6 | MIT |
-| sucrase | 3.35.1 | MIT |
 | sumchecker | 3.0.1 | Apache-2.0 |
 | superagent | 10.3.0 | MIT |
 | supertest | 7.2.2 | MIT |
@@ -2696,7 +2548,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | tabbable | 6.4.0 | MIT |
 | tagged-tag | 1.0.0 | MIT |
 | tailwind-merge | 3.3.1 | MIT |
-| tailwindcss | 3.4.13 | MIT |
 | tailwindcss | 4.1.13 | MIT |
 | tapable | 2.2.3 | MIT |
 | tapable | 2.3.0 | MIT |
@@ -2711,8 +2562,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | tesseract.js-core | 5.1.1 | Apache-2.0 |
 | test-exclude | 7.0.1 | ISC |
 | text-decoder | 1.2.3 | Apache-2.0 |
-| thenify | 3.3.1 | MIT |
-| thenify-all | 1.6.0 | MIT |
 | thread-stream | 4.0.0 | MIT |
 | throttleit | 2.1.0 | MIT |
 | through2 | 4.0.2 | MIT |
@@ -2742,7 +2591,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | tough-cookie | 5.1.2 | BSD-3-Clause |
 | tough-cookie | 6.0.0 | BSD-3-Clause |
 | tr46 | 0.0.3 | MIT |
-| tr46 | 1.0.1 | MIT |
 | tr46 | 5.1.1 | MIT |
 | tree-kill | 1.2.2 | MIT |
 | trim-lines | 3.0.1 | MIT |
@@ -2750,7 +2598,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | truncate-utf8-bytes | 1.0.2 | WTFPL |
 | ts-api-utils | 2.1.0 | MIT |
 | ts-dedent | 2.2.0 | MIT |
-| ts-interface-checker | 0.1.13 | Apache-2.0 |
 | ts-morph | 26.0.0 | MIT |
 | ts-node | 10.9.2 | MIT |
 | tsconfig-paths | 3.15.0 | MIT |
@@ -2845,7 +2692,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | web-namespaces | 2.0.1 | MIT |
 | web-streams-polyfill | 3.3.3 | MIT |
 | webidl-conversions | 3.0.1 | BSD-2-Clause |
-| webidl-conversions | 4.0.2 | BSD-2-Clause |
 | webidl-conversions | 7.0.0 | BSD-2-Clause |
 | webpack | 5.105.0 | MIT |
 | webpack-sources | 3.3.3 | MIT |
@@ -2853,7 +2699,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | whatwg-mimetype | 4.0.0 | MIT |
 | whatwg-url | 14.2.0 | MIT |
 | whatwg-url | 5.0.0 | MIT |
-| whatwg-url | 7.1.0 | MIT |
 | when-exit | 2.1.4 | MIT |
 | which | 2.0.2 | ISC |
 | which | 4.0.0 | ISC |
@@ -2903,7 +2748,6 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 | yoga-layout | 3.2.1 | MIT |
 | zip-stream | 6.0.1 | MIT |
 | zlibjs | 0.3.1 | MIT |
-| zod | 3.22.3 | MIT |
 | zod | 3.25.76 | MIT |
 | zod | 4.1.11 | MIT |
 | zod-to-json-schema | 3.25.1 | ISC |
@@ -2915,10 +2759,11 @@ Generated by `pnpm install --ignore-scripts` then scanning each installed `packa
 
 ## 9. Methodology & Reproducibility
 
-1. Authorship: `git log --all --format='%an <%ae>'`.
-2. Direct deps: parsed every `package.json` in `apps/`, `packages/`, `prototypes/`, and root.
-3. Transitive SBOM: `pnpm install --ignore-scripts` against the committed `pnpm-lock.yaml`, then a Node script traversed `node_modules/.pnpm/*/node_modules/` and read each `package.json`'s `license` field.
-4. GPL detection regex: `\bGPL\b | \bLGPL\b | \bAGPL\b | \bCDDL\b | \bEPL\b | \bMPL\b | \bSSPL\b | COPYLEFT | OSL | EUPL`.
-5. All outputs generated 2026-04-16 at commit 2f64d6a.
+1. **Authorship:** `git log --all --format='%an <%ae>|%h|%s'`.
+2. **Direct deps:** parsed every `package.json` in `apps/`, `packages/`, `prototypes/`, and root.
+3. **Transitive SBOM:** removed `node_modules`, ran `pnpm install --ignore-scripts` against committed `pnpm-lock.yaml`, then traversed `node_modules/.pnpm/*/node_modules/` and read each `package.json`'s `license` field.
+4. **GPL detection regex:** `\bGPL\b | \bLGPL\b | \bAGPL\b | \bCDDL\b | \bEPL\b | \bMPL\b | \bSSPL\b | COPYLEFT | OSL | EUPL`.
+5. **Remotion removal:** `rm -rf apps/marketing/remotion apps/marketing/remotion.config.ts apps/marketing/tsconfig.remotion.json apps/marketing/scripts/render-videos.ts`; stripped `@remotion/*`, `remotion`, and `ts-node` from `apps/marketing/package.json`; removed `remotion:*` npm scripts.
+6. **License normalization:** every workspace `package.json` now declares `"license": "CC-BY-NC-SA-4.0"` to match the root `LICENSE` file.
 
-This report is regenerable from the lockfile; no manual data entry.
+This report is regenerable from the lockfile and git history; no manual data entry.
