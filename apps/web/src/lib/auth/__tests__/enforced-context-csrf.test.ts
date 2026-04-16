@@ -57,6 +57,7 @@ vi.mock('../cookie-config', () => ({
 
 import { authenticateWithEnforcedContext, isEnforcedAuthError } from '../index';
 import { sessionService } from '@pagespace/lib/auth';
+import { logSecurityEvent } from '@pagespace/lib/server';
 import { validateCSRF } from '../csrf-validation';
 import { getSessionFromCookies } from '../cookie-config';
 
@@ -100,6 +101,9 @@ describe('authenticateWithEnforcedContext CSRF bypass regression', () => {
     if (isEnforcedAuthError(result)) {
       expect(result.error.status).toBe(401);
     }
+    expect(logSecurityEvent).toHaveBeenCalledWith('unauthorized', expect.objectContaining({
+      reason: 'unknown_bearer_format',
+    }));
   });
 
   it('rejects MCP tokens — EnforcedAuthContext requires full session claims', async () => {
@@ -169,6 +173,28 @@ describe('authenticateWithEnforcedContext CSRF bypass regression', () => {
     const request = new Request('https://example.com/api/pages/123/permissions', {
       method: 'POST',
       headers: {
+        cookie: 'session=ps_sess_valid',
+        'x-csrf-token': 'valid-csrf-token',
+      },
+    });
+
+    const result = await authenticateWithEnforcedContext(request);
+
+    expect(isEnforcedAuthError(result)).toBe(false);
+    expect(validateCSRF).toHaveBeenCalledWith(request);
+  });
+
+  it('treats empty Bearer token as no token and falls through to cookie auth', async () => {
+    // `Authorization: Bearer ` (trailing space, no token) — getBearerToken returns ""
+    // which is falsy, so the request should fall through to cookie-based auth + CSRF.
+    vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+    vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
+    vi.mocked(validateCSRF).mockResolvedValue(null);
+
+    const request = new Request('https://example.com/api/pages/123/permissions', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ',
         cookie: 'session=ps_sess_valid',
         'x-csrf-token': 'valid-csrf-token',
       },

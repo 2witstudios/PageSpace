@@ -381,6 +381,11 @@ export async function authenticateWithEnforcedContext(
   // sends `Authorization: Bearer <garbage>` to skip CSRF validation while still
   // authenticating via the victim's session cookie.
   if (bearerToken) {
+    logSecurityEvent('unauthorized', {
+      reason: 'unknown_bearer_format',
+      authType: 'bearer',
+      action: 'deny',
+    });
     return { error: unauthorized('Invalid token format') };
   }
 
