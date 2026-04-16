@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 // Mock database and dependencies
 vi.mock('@pagespace/db', () => ({
@@ -65,6 +66,19 @@ describe('task-management-tools', () => {
   });
 
   describe('update_task', () => {
+    it('normalizes incomplete agentTrigger input to undefined', () => {
+      const parsed = (taskManagementTools.update_task.inputSchema as z.ZodTypeAny).parse({
+        taskId: 'task-1',
+        agentTrigger: {
+          agentPageId: 'agent-1',
+        },
+      }) as {
+        agentTrigger?: unknown;
+      };
+
+      expect(parsed.agentTrigger).toBeUndefined();
+    });
+
     it('has correct tool definition', () => {
       expect(taskManagementTools.update_task).toBeDefined();
       expect(taskManagementTools.update_task.description).toContain('task');

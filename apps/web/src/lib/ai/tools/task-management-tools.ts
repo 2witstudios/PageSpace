@@ -5,7 +5,36 @@ import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
-import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
+import {
+  syncTaskDueDateTrigger,
+  cancelTaskDueDateTrigger,
+  fireCompletionTrigger,
+  createTaskTriggerWorkflow,
+} from '@/lib/workflows/task-trigger-helpers';
+
+function normalizeTaskAgentTriggerInput(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  const candidate = value as {
+    prompt?: unknown;
+    instructionPageId?: unknown;
+  };
+
+  const prompt = typeof candidate.prompt === 'string' ? candidate.prompt.trim() : '';
+  const instructionPageId = typeof candidate.instructionPageId === 'string' ? candidate.instructionPageId.trim() : '';
+
+  if (!prompt && !instructionPageId) {
+    return undefined;
+  }
+
+  return {
+    ...candidate,
+    ...(prompt ? { prompt } : {}),
+    ...(instructionPageId ? { instructionPageId } : {}),
+  };
+}
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -85,13 +114,16 @@ Agent Triggers:
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
       position: z.number().optional().describe('Position in the list (for new tasks, defaults to end)'),
-      agentTrigger: z.object({
-        agentPageId: z.string().describe('ID of the AI agent page to execute'),
-        prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-        instructionPageId: z.string().optional().describe('Page ID containing detailed instructions'),
-        contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
-        triggerType: z.enum(['due_date', 'completion']).default('due_date').describe('When to trigger: at due date or on completion'),
-      }).optional().describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
+      agentTrigger: z.preprocess(
+        normalizeTaskAgentTriggerInput,
+        z.object({
+          agentPageId: z.string().describe('ID of the AI agent page to execute'),
+          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
+          instructionPageId: z.string().optional().describe('Page ID containing detailed instructions'),
+          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+          triggerType: z.enum(['due_date', 'completion']).default('due_date').describe('When to trigger: at due date or on completion'),
+        }).optional()
+      ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
       const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
