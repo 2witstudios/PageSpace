@@ -99,7 +99,7 @@ describe('device refresh deviceId propagation', () => {
     );
   });
 
-  it('given device refresh for mobile/desktop platform, should pass deviceId to createSession', async () => {
+  it('given device refresh for non-web platform, should pass deviceId to createSession', async () => {
     vi.mocked(validateDeviceToken).mockResolvedValueOnce({
       id: 'dt_1',
       userId: 'user_1',

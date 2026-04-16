@@ -98,6 +98,7 @@ export async function GET(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
+      deviceId: desktopMeta?.deviceId,
       createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 

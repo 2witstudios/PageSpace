@@ -22,4 +22,8 @@ describe('getSessionFromCookies (cookie parser)', () => {
   it('given empty string cookie header, should return null', () => {
     expect(getSessionFromCookies('')).toBeNull();
   });
+
+  it('given session token containing "=" like "session=ps_sess_abc123=", should return full value including "="', () => {
+    expect(getSessionFromCookies('session=ps_sess_abc123=')).toBe('ps_sess_abc123=');
+  });
 });

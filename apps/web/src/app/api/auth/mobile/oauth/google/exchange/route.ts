@@ -250,6 +250,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      deviceId,
       createdByService: 'mobile-oauth-google',
       createdByIp: clientIP,
     });
