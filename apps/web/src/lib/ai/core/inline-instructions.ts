@@ -48,7 +48,7 @@ PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
 • DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
-• CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
+• CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
 • AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
 • CHANNEL: Team discussion thread with real-time messaging.
@@ -98,7 +98,7 @@ PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
 • DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
-• CANVAS: Raw HTML/CSS for dashboards and custom visual layouts. Edit as HTML.
+• CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
 • AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
 • CHANNEL: Team discussion thread with real-time messaging.
