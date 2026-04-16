@@ -287,6 +287,7 @@ Your coding agent just got a memory. Use it.
     title: "How to Connect Google Calendar and Let AI See Your Schedule",
     description:
       "A step-by-step guide to connecting Google Calendar with PageSpace. Two-way sync, calendar selection, and how to use AI agents that can actually check your availability and schedule meetings.",
+    image: "/blog/google-calendar-sync-setup.png",
     content: `
 ## Why This Matters
 
