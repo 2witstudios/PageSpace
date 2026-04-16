@@ -2,7 +2,7 @@
   "name": "atlas",
   "private": true,
   "version": "0.1.0",
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 4178",

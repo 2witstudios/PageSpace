@@ -2,7 +2,7 @@
   "name": "control-plane",
   "version": "0.1.0",
   "private": true,
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "UNLICENSED",
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",

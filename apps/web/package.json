@@ -1,7 +1,7 @@
 {
   "name": "web",
   "version": "0.1.0",
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "UNLICENSED",
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' next dev --hostname 0.0.0.0",
     "build": "next build",

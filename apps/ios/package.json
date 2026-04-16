@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "PageSpace iOS App - Native wrapper for PageSpace using Capacitor",
   "private": true,
-  "license": "CC-BY-NC-SA-4.0",
+  "license": "UNLICENSED",
   "scripts": {
     "build": "pnpm exec cap sync ios",
     "build:full": "pnpm --filter web build && pnpm exec cap sync ios",
