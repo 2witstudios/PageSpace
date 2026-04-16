@@ -188,6 +188,7 @@ export async function POST(req: Request) {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+        deviceId,
         createdByService: 'device-refresh',
         createdByIp: normalizedIP,
       });
@@ -217,6 +218,7 @@ export async function POST(req: Request) {
       type: 'user',
       scopes: ['*'],
       expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile/desktop
+      deviceId,
       createdByService: 'device-refresh',
       createdByIp: normalizedIP,
     });

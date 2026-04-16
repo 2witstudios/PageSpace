@@ -13,7 +13,7 @@
  * @module @pagespace/web/lib/auth/cookie-config
  */
 
-import { serialize } from 'cookie';
+import { serialize, parse } from 'cookie';
 
 /**
  * Session duration: 7 days in seconds
@@ -153,12 +153,6 @@ export function appendClearCookies(headers: Headers): void {
  */
 export function getSessionFromCookies(cookieHeader: string | null): string | null {
   if (!cookieHeader) return null;
-
-  const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-    const [key, value] = cookie.trim().split('=');
-    if (key && value) acc[key] = value;
-    return acc;
-  }, {} as Record<string, string>);
-
+  const cookies = parse(cookieHeader);
   return cookies[COOKIE_CONFIG.session.name] ?? null;
 }
