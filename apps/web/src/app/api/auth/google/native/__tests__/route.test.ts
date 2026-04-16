@@ -299,6 +299,7 @@ describe('POST /api/auth/google/native', () => {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        deviceId: 'device-123',
         createdByIp: '127.0.0.1',
       });
     });

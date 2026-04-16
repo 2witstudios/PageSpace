@@ -635,6 +635,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         type: 'user',
         scopes: ['*'],
         expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        deviceId: 'ios-device-789',
         createdByService: 'mobile-oauth-google',
         createdByIp: '192.168.1.1',
       });
