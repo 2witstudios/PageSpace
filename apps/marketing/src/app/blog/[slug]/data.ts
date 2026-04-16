@@ -282,6 +282,107 @@ Your coding agent just got a memory. Use it.
     readTime: "8 min read",
     category: "Guide",
   },
+  "google-calendar-sync-setup": {
+    slug: "google-calendar-sync-setup",
+    title: "How to Connect Google Calendar and Let AI See Your Schedule",
+    description:
+      "A step-by-step guide to connecting Google Calendar with PageSpace. Two-way sync, calendar selection, and how to use AI agents that can actually check your availability and schedule meetings.",
+    content: `
+## Why This Matters
+
+Your AI agent can read your documents, search your workspace, write content, and manage tasks. It has no idea what's on your calendar.
+
+Every scheduling suggestion is a guess. Every prioritization ignores the meeting you have in 30 minutes. Every "when should we do this?" turns into an alt-tab to Google Calendar and a manual relay back.
+
+Connecting Google Calendar to PageSpace fixes that. Your events sync in, your AI agents get real tools to query your schedule and create events that push back to Google. This guide walks through setup.
+
+## Step 1: Connect Your Google Account
+
+Open **Settings** in PageSpace. Under integrations, find **Google Calendar** and click **Connect Google Calendar**.
+
+You'll be redirected to Google's consent screen. PageSpace requests read and write access to your calendars. Write access is needed so AI-created events can push back to Google.
+
+Grant the permissions. Google redirects you back to PageSpace. You'll see a green "Connected" badge with your Google email on the settings page.
+
+If the flow fails, PageSpace tells you why. Most common: you clicked cancel ("Access denied") or waited too long to complete it ("State expired"). Click Connect again.
+
+## Step 2: Pick Your Calendars
+
+Once connected, PageSpace fetches your available Google calendars and displays them as a checklist. Your primary calendar is selected by default.
+
+You'll see every calendar on your Google account. Primary, work, holidays, shared team calendars, that "Birthdays" calendar you forgot you had. Each one shows its color dot and name.
+
+Check the ones you want to sync. Uncheck the ones you don't. Changes save immediately, and PageSpace triggers a sync for any newly selected calendar so events appear right away.
+
+You need at least one calendar selected. If you try to uncheck all of them, PageSpace blocks it.
+
+## Step 3: First Sync
+
+After connecting, PageSpace runs an initial sync automatically. It pulls events from the past 30 days through the next 90 days. This gives your AI agents enough historical context for patterns and enough future context for scheduling.
+
+The first sync might take a few seconds depending on how many events you have. After that, sync is incremental. Only changed events transfer. Google sends push notifications to PageSpace in real time when events change, and a background job polls every 15 minutes as a fallback. Between the two, your PageSpace calendar stays current without you doing anything.
+
+You can always hit **Sync Now** on the settings page to force an immediate sync. The page shows your last sync time and how many events are currently synced.
+
+## Two-Way Sync
+
+Events from Google appear in your PageSpace calendar. Events created in PageSpace push back to Google. A colleague reschedules through Google, PageSpace picks it up. Your AI agent creates a "Project Review" event, it shows up on your phone.
+
+When an agent schedules a meeting, it's not creating a PageSpace-only event nobody else can see. It's a real calendar event that lands in Google Calendar for every attendee.
+
+## What Your AI Can Do With Your Calendar
+
+Once connected, your AI agents get calendar tools. Not a read-only view. Real tools with real parameters.
+
+**See your schedule.** The agent lists events in any date range across all synced calendars. "What do I have this week?" gets a real answer.
+
+**Check availability.** The agent queries a date range and gets back free time slots. It respects working hours. It merges overlapping events. A meeting from 2:00 to 3:00 and a call from 2:30 to 3:30 show as one busy block, not two.
+
+**Schedule meetings.** The agent creates events with title, time, duration, location, recurrence, attendees, and visibility. The event pushes to Google Calendar automatically.
+
+**Manage the full lifecycle.** Update events, cancel them, RSVP on your behalf, add or remove attendees.
+
+These are the tools an executive assistant would need.
+
+## Scheduling Example
+
+You're in a PageSpace AI chat working on a project, and you type:
+
+*"Schedule a 30-minute project review with the team for sometime Thursday afternoon. Find a slot that works."*
+
+The agent calls \`check_calendar_availability\` for Thursday afternoon. Finds 2:00 to 2:30 open. Calls \`create_calendar_event\` with the title, time slot, and your workspace members as attendees. The event syncs to Google Calendar. Everyone sees it on their phone. You never left the chat.
+
+That's the difference between a calendar display widget and calendar tools.
+
+## Time-Triggered Agents
+
+Calendar events can trigger AI agents to run at event time.
+
+When you create an event in PageSpace, you can attach an AI agent page and a prompt. When the event arrives, the agent wakes up with full event context and executes.
+
+Practical example: create a recurring event, "Weekly Metrics Review," every Monday at 9am. Attach your analytics agent with instructions to read the latest data pages in your workspace and write a summary document. Every Monday morning, the agent runs. It reads live data. It writes the report. No human involvement. The summary is always current because the agent reads what exists now, not a cached snapshot.
+
+Another one. Project deadline is Friday. Create an event, "Pre-deadline check," Thursday at 4pm. Attach a project agent with instructions to review the open tasks and post a status summary. Thursday afternoon, the agent runs a check for you while you're still in meetings.
+
+The trigger system checks drive access, agent page existence, and your daily AI usage limit before executing. If any check fails, nothing runs and nothing breaks.
+
+The calendar becomes a scheduler for AI work.
+
+## Security and Permissions
+
+AI calendar tools go through the exact same permission system as every other tool in PageSpace. If you can't see an event, your AI agent can't either. If you're not a member of a drive, calendar queries for that drive return nothing.
+
+Tokens are encrypted at rest. Webhook authentication is cryptographically signed. Token refresh happens automatically before expiration so sync never fails mid-request.
+
+Your calendar data is encrypted, never shared with third parties, and you can disconnect at any time from the settings page. Disconnecting revokes your token on Google's side and stops all sync.
+
+Connect your calendar. Let your AI see your schedule.
+    `,
+    author: "Jono",
+    date: "2026-04-15",
+    readTime: "5 min read",
+    category: "Guide",
+  },
   "ai-versioning-safety": {
     slug: "ai-versioning-safety",
     title:
