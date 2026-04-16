@@ -22,6 +22,7 @@ export interface SessionRecord {
   scopes: string[];
   expiresAt: Date;
   lastUsedAt: Date | null;
+  createdAt: Date;
   resourceType: string | null;
   resourceId: string | null;
   driveId: string | null;
@@ -65,7 +66,7 @@ export const sessionRepository = {
     db.update(sessions)
       .set({ lastUsedAt: new Date() })
       .where(eq(sessions.tokenHash, tokenHash))
-      .catch(() => {});
+      .catch((err) => { console.error('[auth] Failed to update session lastUsedAt', err); });
   },
 
   revokeByHash: async (tokenHash: string, reason: string): Promise<void> => {

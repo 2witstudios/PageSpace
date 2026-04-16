@@ -149,7 +149,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
         id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
         adminRoleVersion: 0, type: 'user', scopes: ['read'],
-        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
         user: null,
       });
@@ -164,7 +164,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
         id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
         adminRoleVersion: 0, type: 'user', scopes: ['read'],
-        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: new Date() },
       });
@@ -184,7 +184,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
         id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
         adminRoleVersion: 0, type: 'user', scopes: ['read'],
-        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 2, role: 'user', adminRoleVersion: 0, suspendedAt: null },
       });
@@ -205,7 +205,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
         id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
         adminRoleVersion: 0, type: 'user', scopes: ['read', 'write'],
-        expiresAt, lastUsedAt: null,
+        expiresAt, lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'admin', adminRoleVersion: 0, suspendedAt: null },
       });
