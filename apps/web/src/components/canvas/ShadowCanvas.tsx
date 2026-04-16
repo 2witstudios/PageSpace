@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
 import { sanitizeCSS } from '@/lib/canvas/css-sanitizer';
+import { remapDocumentSelectors } from '@/lib/canvas/remap-document-selectors';
 
 interface ShadowCanvasProps {
   html: string;
@@ -13,24 +14,23 @@ export function ShadowCanvas({ html, onNavigate }: ShadowCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const shadowRef = useRef<ShadowRoot | null>(null);
 
-  // Extract styles from HTML
   const extractStylesFromHTML = (htmlContent: string): { html: string; css: string } => {
-    // Create a temporary container to parse HTML
     const temp = document.createElement('div');
     temp.innerHTML = htmlContent;
 
-    // Find all style tags
     const styleTags = temp.querySelectorAll('style');
     let extractedCSS = '';
 
-    // Extract CSS content and remove style tags from HTML
     styleTags.forEach(styleTag => {
       extractedCSS += styleTag.textContent || '';
       styleTag.remove();
     });
 
+    const body = temp.querySelector('body');
+    const content = body ? body.innerHTML : temp.innerHTML;
+
     return {
-      html: temp.innerHTML,
+      html: content,
       css: extractedCSS
     };
   };
@@ -56,51 +56,31 @@ export function ShadowCanvas({ html, onNavigate }: ShadowCanvasProps) {
       ADD_ATTR: ['target', 'data-href', 'data-navigate'], // Allow navigation attributes
     });
 
-    // Sanitize CSS - remove JavaScript execution
-    const sanitizedCSS = sanitizeCSS(extractedCSS);
+    const sanitizedCSS = remapDocumentSelectors(sanitizeCSS(extractedCSS));
 
     // Build shadow DOM content with extracted styles
     shadow.innerHTML = `
       <style>
-        /* Reset styles for complete theme independence */
         :host {
           display: block;
           width: 100%;
           height: 100%;
-          /* Isolate from parent theme */
-          color-scheme: light;
         }
 
-        /* Canvas root with explicit defaults */
         .canvas-root {
-          /* Always white background unless user overrides */
-          background: white;
-          color: black;
+          background: transparent;
+          color: inherit;
           min-height: 100%;
           width: 100%;
-
-          /* Standard font stack */
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
           line-height: 1.6;
-
-          /* Ensure no bleed-through from parent */
           isolation: isolate;
         }
 
-        /* Reset common elements to predictable defaults */
-        .canvas-root * {
-          /* Ensure inheritance from canvas-root, not parent page */
-          color: inherit;
-          font-family: inherit;
-          line-height: inherit;
-        }
-
-        /* Box sizing for all elements */
         *, *::before, *::after {
           box-sizing: border-box;
         }
 
-        /* User styles come after reset */
         ${sanitizedCSS}
       </style>
       <div class="canvas-root">
