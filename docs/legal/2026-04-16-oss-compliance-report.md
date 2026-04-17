@@ -68,47 +68,58 @@ This disclosure answers counsel's three questions:
 
 ## 2. Authorship Evidence
 
-### Git authors — all branches, entire history
+### Git authors — `master` branch (production / shipping)
 
-Counts are across every branch in the repository (not only `master`),
-since long-lived feature branches in active use contain substantial
-work that will transfer with the sale.
+Counts below are for the `master` branch, which is the protected,
+default branch of the repository and represents the shipping
+codebase. The feature branches listed in the "Predecessor repositories"
+subsection below carry similar author distributions since they are
+branched from `master`.
 
 | Commits | Author | Email | Identity |
 |---:|---|---|---|
-| 632 | 2Wits | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
-| 528 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
-| 296 | DaisyDebate | `2witstudios@gmail.com` | Jonathan (earlier local display-name variant from when I was committing under my personal GitHub account) |
-| 103 | Claude | `noreply@anthropic.com` | Jonathan via Anthropic's Claude Code CLI (see "AI coding-tool attribution" below) |
-| 18 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
+| 683 | 2Wits | `2witstudios@gmail.com` | Jonathan (current local git display-name variant) |
+| 531 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
+| 286 | DaisyDebate | `2witstudios@gmail.com` | Jonathan (earlier local display-name variant from when he committed under his personal GitHub account; appears through November 2025) |
+| 101 | Claude | `noreply@anthropic.com` | Jonathan via Anthropic's Claude Code CLI under his personal Anthropic account (see "AI coding-tool attribution" below) |
+| 23 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
 
-All four non-bot author identities — "2Wits", "2witstudios",
-"DaisyDebate", and "Claude" — represent commits authored by Jonathan
-Woodall. The first three share `2witstudios@gmail.com` and differ
-only in local git display-name configuration at the time the commits
-were made. "Claude" identifies commits authored via the Claude Code
-CLI under Jonathan's personal Anthropic account. Committers on
-"2Wits" rows include `GitHub <noreply@github.com>` (PR squash-merges
-on github.com; authorship remains Jonathan's).
+Total: 1,624 commits on `master`. All four non-bot author identities
+— "2Wits", "2witstudios", "DaisyDebate", and "Claude" — represent
+commits authored by Jonathan Woodall. The first three share
+`2witstudios@gmail.com` and differ only in local git display-name
+configuration at the time the commits were made; "DaisyDebate" is the
+earliest display name (from when Jonathan committed under his personal
+GitHub account), "2witstudios" appears throughout, and "2Wits" is the
+current variant. "Claude" identifies commits authored via the Claude
+Code CLI under Jonathan's personal Anthropic account. Committers on
+"2Wits" rows are typically `GitHub <noreply@github.com>` (PR
+squash-merges on github.com; authorship remains Jonathan's).
 
-For reference, `master` (the production-shipping branch) alone shows
-43 "2Wits", 16 "2witstudios", and 2 dependabot commits. No
-"DaisyDebate" or "Claude" primary-author commits appear on `master`;
-those identities appear only on active long-lived feature branches.
+Earliest commit on `master`: 2025-08-21 (DaisyDebate). Earliest commit
+in the wider project (across the predecessor repositories listed in
+the "Predecessor repositories" subsection below) is 2025-04-08.
 
-### Dependabot scope (all 5 commits, all CI-only)
+### Dependabot scope (23 commits on `master`, all CI-only)
 
-| SHA | File touched | Change |
-|---|---|---|
-| `16c7114` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.94.2 → 3.94.3 |
-| `4564f11` | `.github/workflows/*` | bump `softprops/action-gh-release` 2 → 3 |
-| `251bdd9` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.94.1 → 3.94.2 |
-| `b5d5fca` | `.github/workflows/docker-images.yml` | bump `docker/login-action` 3 → 4 |
-| `1031707` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.93.8 → 3.94.1 |
+All Dependabot commits on `master` are automated version bumps to
+GitHub Actions entries in `.github/workflows/*.yml`. Every one is a
+single-line YAML edit; no product source or `package.json` is touched.
+Dependabot is an automated GitHub bot and claims no authorship over
+any code.
 
-Each is a one-line version bump in a GitHub Actions YAML file. No
-product source or `package.json` touched; the bot claims no authorship
-of any code it generates.
+Representative subjects (complete list regenerable via
+`git log origin/master --author=dependabot --format='%h | %s'`):
+
+- `trufflesecurity/trufflehog` action version bumps (multiple)
+- `docker/login-action`, `docker/build-push-action`,
+  `docker/metadata-action`, `docker/setup-buildx-action` version bumps
+- `softprops/action-gh-release`, `pnpm/action-setup`,
+  `actions/checkout`, `actions/setup-node`,
+  `actions/upload-artifact`, `actions/download-artifact`,
+  `github/codeql-action` version bumps
+
+No Dependabot commit touches product source.
 
 ### AI coding-tool attribution
 
@@ -122,16 +133,15 @@ The tools appear in git history in two ways:
 
 1. **Commits with `Co-Authored-By: Claude` trailers.** The Claude Code
    CLI adds this trailer automatically to commits it assists with.
-   Approximately 763 of the 1,577 commits in the repository (~48%)
-   include this trailer. The primary author on these commits is
-   Jonathan (under the "2Wits", "2witstudios", or "DaisyDebate"
-   display names).
+   On `master`, 828 of 1,624 commits (~51%) include this trailer. The
+   primary author on these commits is Jonathan (under the "2Wits",
+   "2witstudios", or "DaisyDebate" display names).
 2. **Commits primarily authored by "Claude"
    `<noreply@anthropic.com>`.** The Claude Code CLI sets the local git
-   author identity to `Claude` in some environments. 103 commits
-   across active feature branches carry this author identity. These
-   are all commits Jonathan made using Claude Code; no separate human
-   being is represented.
+   author identity to `Claude` in some environments. 101 commits on
+   `master` carry this author identity (dated October–December 2025).
+   These are all commits Jonathan made using Claude Code; no separate
+   human being is represented.
 
 Posture:
 
