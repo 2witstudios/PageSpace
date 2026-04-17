@@ -75,6 +75,33 @@ Each is a one-line version bump in a GitHub Actions YAML file. No
 product source or `package.json` touched; the bot claims no authorship
 of any code it generates.
 
+### AI coding-tool attribution
+
+PageSpace development made extensive use of Anthropic's Claude
+(specifically Claude Code) as an AI coding assistant. Approximately 86
+of the 124 commits in this repository (~70%) include a
+`Co-Authored-By: Claude <noreply@anthropic.com>` trailer automatically
+added by the tool. The trailer is a crediting convention and does not
+reflect third-party human authorship:
+
+- Anthropic's Consumer Terms of Service assign all rights in Claude's
+  output to the user: *"You own Content that you submit to and receive
+  from our Services. Subject to your compliance with these Terms,
+  Anthropic hereby assigns to you all its right, title and interest (if
+  any) in and to Outputs."*
+  (<https://www.anthropic.com/legal/consumer-terms>)
+- Every commit was reviewed, directed, and authored by Jonathan
+  Woodall; the creative and editorial decisions in the codebase are the
+  work of a human author.
+- No human being is represented by the "Claude" co-author trailer. It
+  refers to Anthropic's software product, not to a contributor who
+  would hold an independent IP claim.
+
+For these reasons, the sole-author representation in §1 remains
+accurate. No IP waiver or assignment from Anthropic is required. The
+same analysis would apply to any other AI coding tool (GitHub Copilot,
+Cursor, etc.) whose terms assign output rights to the user.
+
 ### Predecessor repositories
 
 The `2witstudios/pagespace` monorepo was created on 2026-04-11. Before
