@@ -28,13 +28,18 @@ This disclosure answers counsel's three questions:
 >    repositories listed in §2 (earliest commit 2025-04-08, including
 >    `DaisyDebate/214-team` which is disclosed in §2 and was not in the
 >    initial list provided to counsel), was written by me. The git
->    histories in this repository show two author identities — "2Wits"
->    and "2witstudios" — both bound to `2witstudios@gmail.com` and both
->    referring to me. The predecessor repositories also include commits
->    under my personal GitHub account `DaisyDebate`, which is likewise
->    me. Extensive use of AI coding assistants (Anthropic's Claude Code
->    and OpenAI's Codex CLI) is disclosed in §2 under my own accounts;
->    those tools do not represent a third-party human contributor.
+>    histories across all branches in this repository show four human
+>    author identities — "2Wits", "2witstudios", "DaisyDebate", and
+>    "Claude" — all bound to my accounts and all representing me:
+>    "2Wits", "2witstudios", and "DaisyDebate" are local
+>    display-name variants bound to `2witstudios@gmail.com` (the
+>    "DaisyDebate" identity is from when I used my personal GitHub
+>    account earlier in the project); "Claude"
+>    (`noreply@anthropic.com`) identifies commits made using
+>    Anthropic's Claude Code CLI under my personal Anthropic account,
+>    as disclosed in §2. OpenAI's Codex CLI was also used (commit
+>    subjects prefixed `[codex]`) under my personal OpenAI account.
+>    None of these tools represents a third-party human contributor.
 > 2. **No third-party human contributors.** I am not aware of any
 >    third-party human contributor whose work would require an IP
 >    assignment. The only non-me contributor in git history is GitHub's
@@ -63,19 +68,33 @@ This disclosure answers counsel's three questions:
 
 ## 2. Authorship Evidence
 
-### Git authors — entire history, all branches
+### Git authors — all branches, entire history
+
+Counts are across every branch in the repository (not only `master`),
+since long-lived feature branches in active use contain substantial
+work that will transfer with the sale.
 
 | Commits | Author | Email | Identity |
 |---:|---|---|---|
-| 80 | 2Wits | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
-| 42 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
-| 5 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
+| 632 | 2Wits | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
+| 528 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
+| 296 | DaisyDebate | `2witstudios@gmail.com` | Jonathan (earlier local display-name variant from when I was committing under my personal GitHub account) |
+| 103 | Claude | `noreply@anthropic.com` | Jonathan via Anthropic's Claude Code CLI (see "AI coding-tool attribution" below) |
+| 18 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
 
-Both non-bot author identities — "2Wits" and "2witstudios" — represent
-commits authored by Jonathan Woodall, differing only in local git
-display-name configuration. Committers on the "2Wits" rows are
-`GitHub <noreply@github.com>` (PR squash-merges on github.com;
-authorship remains Jonathan's).
+All four non-bot author identities — "2Wits", "2witstudios",
+"DaisyDebate", and "Claude" — represent commits authored by Jonathan
+Woodall. The first three share `2witstudios@gmail.com` and differ
+only in local git display-name configuration at the time the commits
+were made. "Claude" identifies commits authored via the Claude Code
+CLI under Jonathan's personal Anthropic account. Committers on
+"2Wits" rows include `GitHub <noreply@github.com>` (PR squash-merges
+on github.com; authorship remains Jonathan's).
+
+For reference, `master` (the production-shipping branch) alone shows
+43 "2Wits", 16 "2witstudios", and 2 dependabot commits. No
+"DaisyDebate" or "Claude" primary-author commits appear on `master`;
+those identities appear only on active long-lived feature branches.
 
 ### Dependabot scope (all 5 commits, all CI-only)
 
@@ -97,13 +116,22 @@ PageSpace development made extensive use of Anthropic's Claude
 (specifically Claude Code) as an AI coding assistant under Jonathan
 Woodall's personal Anthropic account. OpenAI's Codex CLI was also used
 for a smaller number of changes (commit subjects prefixed `[codex]`).
-Both tools are used by Jonathan under accounts he holds, with Jonathan
-as the git-recorded author.
+Both tools are used by Jonathan under accounts he holds personally.
 
-The Claude Code CLI automatically adds a
-`Co-Authored-By: Claude <noreply@anthropic.com>` trailer to commits it
-assists with. Approximately 87 of the 127 commits in this repository
-(~69%) include this trailer.
+The tools appear in git history in two ways:
+
+1. **Commits with `Co-Authored-By: Claude` trailers.** The Claude Code
+   CLI adds this trailer automatically to commits it assists with.
+   Approximately 763 of the 1,577 commits in the repository (~48%)
+   include this trailer. The primary author on these commits is
+   Jonathan (under the "2Wits", "2witstudios", or "DaisyDebate"
+   display names).
+2. **Commits primarily authored by "Claude"
+   `<noreply@anthropic.com>`.** The Claude Code CLI sets the local git
+   author identity to `Claude` in some environments. 103 commits
+   across active feature branches carry this author identity. These
+   are all commits Jonathan made using Claude Code; no separate human
+   being is represented.
 
 Posture:
 
@@ -117,9 +145,9 @@ Posture:
   Anthropic assigns to the user any rights Anthropic may have in
   outputs. OpenAI's terms contain a comparable assignment. No residual
   IP claim is retained by either vendor.
-- "Claude" in any Co-Authored-By trailer refers to Anthropic's
-  software product, not a separate human contributor; it does not
-  represent an independent IP claim.
+- "Claude" — whether as primary author or in a Co-Authored-By trailer
+  — refers to Anthropic's software product, not a separate human
+  contributor, and does not represent an independent IP claim.
 
 The same analysis applies to any other AI coding tool (GitHub Copilot,
 Cursor, etc.) whose terms assign output rights to the user.
