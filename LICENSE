@@ -1,4 +1,4 @@
-Copyright (c) 2025-2026 Jonathan [LAST NAME], d/b/a 2witstudios. All rights reserved.
+Copyright (c) 2025-2026 Jonathan Woodall, d/b/a 2witstudios. All rights reserved.
 
 PageSpace is proprietary software. No part of this repository — source code,
 compiled artifacts, documentation, assets, configuration, or any derivative
@@ -8,7 +8,10 @@ the prior written permission of the copyright holder.
 
 Access to this repository does not grant any license or right of use. Any
 third-party open-source components distributed with this software retain
-their own respective licenses; see THIRD-PARTY-NOTICES.md for those notices.
+their own respective licenses; see §5 of
+docs/legal/2026-04-16-oss-compliance-report.md for the full elections and
+attributions, and the LICENSES/ directory for the corresponding full
+license texts.
 
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
