@@ -1,3 +1,18 @@
+## 2026-04-17
+
+### Notification Item Redesign
+
+The notification dropdown and the full `/notifications` page now render through a single `NotificationItem` component on a real 3-column grid, use theme tokens only (no raw palette colors), and cover every type in the `NotificationType` enum with compile-time safety. Resolves Eric Elliott's feedback on the notifications UI being mismatched and misaligned.
+
+#### Changed
+
+- **Shared notification layout**: `apps/web/src/components/notifications/NotificationItem.tsx` is the single presentational component for both surfaces. The dropdown (`NotificationDropdown.tsx`) and the full-page list (`app/notifications/page.tsx`) delegate rendering to it, ending the prior drift where the two surfaces supported different subsets of notification types.
+- **Grid alignment**: each item uses `grid-cols-[0.5rem_auto_1fr_auto]` with a reserved unread-dot slot that stays in the DOM in both states, so marking a notification read no longer causes a layout shift. The dismiss control lives in a fixed slot that is keyboard-reachable and visible on focus, not only on pointer hover.
+- **Theme tokens only**: per-type hardcoded color classes (`text-blue-500`, `bg-amber-500/10`, etc.) are gone. Contrast is carried by `text-foreground` / `text-muted-foreground` / `bg-card` / `bg-accent` / `bg-primary` so the item themes correctly in light and dark mode and passes WCAG AA.
+- **Read/unread/hover distinction**: three cues instead of color alone — reserved unread dot, subtle `bg-accent/40` tint on unread rows, semibold title weight on unread. Survives a grayscale screenshot.
+- **Type coverage**: `apps/web/src/components/notifications/notificationIcons.tsx` types the icon map as `Record<NotificationType, LucideIcon>`, so adding a new enum value is a build error unless an icon is assigned, rather than a silent fallback to the generic document icon.
+- **Tests**: `apps/web/src/components/notifications/__tests__/NotificationItem.test.tsx` covers rendering for every notification type, unread vs. read slot stability, variant-scoped meta-row behavior, keyboard activation, connection-request inline actions, and a regex assertion that forbids raw palette color classes.
+
 ## 2026-04-14
 
 ### GitHub Import Tool Removed From AI Chat
