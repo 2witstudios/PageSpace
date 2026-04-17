@@ -62,6 +62,7 @@ export function NotificationItem({
       onClick={onSelect}
       onKeyDown={(event) => {
         if (!isInteractive) return;
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onSelect?.();

@@ -148,6 +148,41 @@ describe('NotificationItem', () => {
       expect(onSelect).toHaveBeenCalledTimes(1);
     });
 
+    it('does not invoke onSelect when Enter is pressed on a nested button (bubbled event)', () => {
+      const onSelect = vi.fn();
+      const onDismiss = vi.fn();
+      render(
+        <NotificationItem
+          notification={build()}
+          onSelect={onSelect}
+          onDismiss={onDismiss}
+        />,
+      );
+      const dismissButton = screen.getByRole('button', { name: /dismiss notification/i });
+      fireEvent.keyDown(dismissButton, { key: 'Enter', bubbles: true });
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('does not invoke onSelect when Space is pressed on a nested Accept button', () => {
+      const onSelect = vi.fn();
+      const onAccept = vi.fn();
+      const onDecline = vi.fn();
+      render(
+        <NotificationItem
+          notification={build({
+            type: 'CONNECTION_REQUEST',
+            metadata: { connectionId: 'c1', senderId: 's1' },
+          })}
+          onSelect={onSelect}
+          onAccept={onAccept}
+          onDecline={onDecline}
+        />,
+      );
+      const acceptButton = screen.getByRole('button', { name: 'Accept' });
+      fireEvent.keyDown(acceptButton, { key: ' ', bubbles: true });
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
     it('renders dismiss button when onDismiss is provided and does not bubble to onSelect', () => {
       const onSelect = vi.fn();
       const onDismiss = vi.fn();
