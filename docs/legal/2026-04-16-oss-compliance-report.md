@@ -23,10 +23,14 @@ This disclosure answers counsel's three questions:
 > with the pending sale of PageSpace confirm for the
 > `2witstudios/pagespace` repository as of 2026-04-16:
 >
-> 1. **Sole author.** All human-authored source code was written by me.
->    The git history shows two author identities, "2Wits" and
->    "2witstudios", both bound to `2witstudios@gmail.com` and both
->    referring to me.
+> 1. **Sole author.** All human-authored source code in the
+>    `2witstudios/pagespace` monorepo, and in the predecessor
+>    repositories listed in §2 (earliest commit 2025-04-08), was written
+>    by me. The git histories show two author identities in this
+>    repository, "2Wits" and "2witstudios", both bound to
+>    `2witstudios@gmail.com` and both referring to me; the predecessor
+>    repositories also include commits under my personal GitHub account
+>    `DaisyDebate`, which is likewise me.
 > 2. **No third-party human contributors, and therefore no outside IP
 >    assignments required.** The only non-me contributor in git history
 >    is GitHub's Dependabot bot, whose commits are limited to version
@@ -70,6 +74,49 @@ Committers are Jonathan (direct pushes) and `GitHub <noreply@github.com>`
 Each is a one-line version bump in a GitHub Actions YAML file. No
 product source or `package.json` touched; the bot claims no authorship
 of any code it generates.
+
+### Predecessor repositories
+
+The `2witstudios/pagespace` monorepo was created on 2026-04-11. Before
+that, the project evolved under multiple names (originally "TeamDoc",
+then "samepage", then "pagespace.team", then "PageSpace") and across
+several repositories — all authored solely by me, under either my
+personal GitHub account `DaisyDebate` (earlier work) or the organization
+account `2witstudios` (later work). Both accounts are operated by me.
+
+The earliest commit in the predecessor chain is dated **2025-04-08** in
+`github.com/DaisyDebate/214-team`.
+
+Predecessor repositories already shared with counsel:
+
+Under `DaisyDebate` (personal account):
+
+- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08)
+- `github.com/DaisyDebate/samepage`
+- `github.com/DaisyDebate/samepage-main`
+- `github.com/DaisyDebate/samepage-dev`
+- `github.com/DaisyDebate/samepage.team`
+
+Under `2witstudios` (organization account):
+
+- `github.com/2witstudios/samepage.team`
+- `github.com/2witstudios/pagespace.team-demo`
+- `github.com/2witstudios/pagespace.team-public`
+- `github.com/2witstudios/PageSpace.Team-dev`
+- `github.com/2witstudios/PageSpace-Cloud`
+- `github.com/2witstudios/pagespace-main`
+
+I am the sole human author across all of these repositories; no outside
+contributor appears in any of their git histories. Counsel has direct
+access to all eleven for verification.
+
+The predecessor-era tech stack (per the original 2025-04-08 product
+requirements document) was: Next.js, Tailwind, shadcn/ui, Tiptap,
+Clerk, Supabase, and custom OpenAI/Anthropic wrappers — all permissive
+licenses (MIT / Apache-2.0 / ISC) or SaaS services (Clerk, Supabase,
+OpenAI, Anthropic) that do not impose copyleft on client code. No
+GPL-family or commercial-restrictive dependency is identified in the
+predecessor tech stack.
 
 ---
 
