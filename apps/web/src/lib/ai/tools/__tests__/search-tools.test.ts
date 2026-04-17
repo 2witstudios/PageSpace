@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 // Mock only the boundary we actually test
 vi.mock('@pagespace/lib/server', () => ({
