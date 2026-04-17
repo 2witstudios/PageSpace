@@ -1,6 +1,6 @@
 # Settings Menu Contrast Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-04-17)
 **Goal**: Bring the Personal settings menu rows up to WCAG AA contrast in both selected (hover) and unselected states, light + dark mode.
 
 ## Overview
