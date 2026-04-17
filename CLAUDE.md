@@ -1,6 +1,15 @@
 # PageSpace
 
-PageSpace is an AI-native knowledge management and collaboration platform. Humans and AI agents work together in shared workspaces using 33+ real tools — AI can create, edit, organize, and search content directly, not just answer questions. The platform supports 9 page types (Document, Code, Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), 100+ AI models across multiple providers, and MCP protocol integration. Available as cloud SaaS (pagespace.ai), self-hosted, desktop (Electron), and mobile (Capacitor).
+> **License notice — internal developer/agent reference.** PageSpace is
+> proprietary software; no license is granted to copy, modify,
+> redistribute, or self-host the code without the prior written
+> permission of the copyright holder. See [LICENSE](./LICENSE) for full
+> terms and [README.md](./README.md) for the user-facing posture. This
+> file is an internal guide for developers and AI coding agents working
+> on the repository; it is not a description of available distribution
+> channels or a grant of rights to external readers.
+
+PageSpace is an AI-native knowledge management and collaboration platform. Humans and AI agents work together in shared workspaces using 33+ real tools — AI can create, edit, organize, and search content directly, not just answer questions. The platform supports 9 page types (Document, Code, Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), 100+ AI models across multiple providers, and MCP protocol integration. It is offered as cloud SaaS (pagespace.ai), desktop (Electron), and mobile (Capacitor). An `onprem` code path exists in the repository and is used for internal engineering and for licensees who have obtained explicit written permission; it is not a public self-service distribution mode.
 
 ## Monorepo Structure
 

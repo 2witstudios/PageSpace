@@ -1,5 +1,19 @@
 # PageSpace On-Premise Deployment Guide
 
+> **License notice — internal / reference use only.** PageSpace is
+> proprietary software. No license is granted to copy, modify,
+> redistribute, self-host, or otherwise use this code without the prior
+> written permission of the copyright holder. The procedures in this
+> document describe the `DEPLOYMENT_MODE=onprem` code path and the
+> hardening steps that accompany it; they are published for internal
+> engineering reference and for parties who have obtained explicit
+> written permission (e.g., executed on-premise licensees, enterprise
+> contracts, or regulated pilots). Acting on these steps without such
+> permission is not authorized.
+>
+> See [LICENSE](../LICENSE) for full terms. Licensing inquiries:
+> `2witstudios@gmail.com`.
+
 ## Overview
 
 PageSpace can be deployed on-premise for environments requiring data sovereignty, HIPAA compliance, or air-gapped operation. When `DEPLOYMENT_MODE=onprem` is set, the application automatically:

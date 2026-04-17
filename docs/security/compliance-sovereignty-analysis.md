@@ -1,5 +1,15 @@
 # Compliance & Data Sovereignty Analysis
 
+> **License notice — internal analysis.** PageSpace is proprietary
+> software; this document is an internal engineering analysis and is
+> not a public offering description. References to on-premise, air-
+> gapped, or self-hosted deployment discuss the `DEPLOYMENT_MODE=onprem`
+> code path that the codebase supports; the existence of this code path
+> does not grant any right to copy, modify, redistribute, or self-host
+> PageSpace without the prior written permission of the copyright
+> holder. See [LICENSE](../../LICENSE) for full terms and
+> [README.md](../../README.md) for the user-facing posture.
+
 > **Purpose**: Identify PageSpace features that are fundamentally incompatible with
 > specific compliance regimes and data sovereignty requirements, and catalog features
 > that would require modification under higher regulatory scrutiny.
