@@ -253,7 +253,7 @@ describe('Security Headers', () => {
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
 
       expect(response.headers.get('Permissions-Policy')).toBe(
-        'geolocation=(), microphone=(), camera=()'
+        'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")'
       );
     });
 
@@ -400,6 +400,9 @@ describe('Security Headers', () => {
       expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
       expect(response.headers.get('Referrer-Policy')).toBe(
         'strict-origin-when-cross-origin'
+      );
+      expect(response.headers.get('Permissions-Policy')).toBe(
+        'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")'
       );
     });
 
