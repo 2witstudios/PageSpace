@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable, Calendar } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable, Calendar, Scale } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -160,6 +160,18 @@ export default function SettingsPage() {
           href: "/settings/local-mcp",
           available: true,
           desktopOnly: true,
+        },
+      ]),
+    },
+    {
+      title: "Legal",
+      items: filterItems([
+        {
+          title: "Open-source licenses",
+          description: "Third-party OSS attribution notices",
+          icon: Scale,
+          href: "/settings/legal/oss-licenses",
+          available: true,
         },
       ]),
     },
