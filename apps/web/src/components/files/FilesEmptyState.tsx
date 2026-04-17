@@ -84,7 +84,11 @@ export function FilesEmptyState({ driveId, parentId, canWrite, onMutate }: Files
     setIsDropActive(true);
   };
 
-  const handleDragLeave = () => setIsDropActive(false);
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) return;
+    setIsDropActive(false);
+  };
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, createEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FilesEmptyState } from '../FilesEmptyState';
 
@@ -122,8 +122,26 @@ describe('FilesEmptyState', () => {
     fireEvent.dragOver(panel, { dataTransfer: { types: ['Files'] } });
     expect(panel.getAttribute('data-drop-active')).toBe('true');
 
-    fireEvent.dragLeave(panel);
+    fireEvent.dragLeave(panel, { relatedTarget: document.body });
     expect(panel.getAttribute('data-drop-active')).toBe('false');
+  });
+
+  it('keeps the drop-zone cue active when the drag moves to a child element', () => {
+    render(
+      <FilesEmptyState driveId="drive-1" parentId={null} canWrite={true} onMutate={vi.fn()} />
+    );
+
+    const panel = screen.getByTestId('files-empty-state');
+    const childButton = screen.getByRole('button', { name: /upload files/i });
+
+    fireEvent.dragEnter(panel, { dataTransfer: { types: ['Files'] } });
+    fireEvent.dragOver(panel, { dataTransfer: { types: ['Files'] } });
+    expect(panel.getAttribute('data-drop-active')).toBe('true');
+
+    const leaveEvent = createEvent.dragLeave(panel);
+    Object.defineProperty(leaveEvent, 'relatedTarget', { value: childButton });
+    fireEvent(panel, leaveEvent);
+    expect(panel.getAttribute('data-drop-active')).toBe('true');
   });
 
   it('uploads each dropped file via POST /api/upload with driveId and parentId', async () => {
