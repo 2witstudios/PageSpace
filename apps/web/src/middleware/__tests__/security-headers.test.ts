@@ -253,7 +253,7 @@ describe('Security Headers', () => {
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
 
       expect(response.headers.get('Permissions-Policy')).toBe(
-        'geolocation=(), microphone=(), camera=()'
+        'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")'
       );
     });
 

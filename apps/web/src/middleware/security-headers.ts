@@ -115,7 +115,7 @@ export const applySecurityHeaders = (
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set(
     'Permissions-Policy',
-    'geolocation=(), microphone=(), camera=()'
+    'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")'
   );
   // COEP 'credentialless' is set for all page routes except Stripe-dependent
   // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
