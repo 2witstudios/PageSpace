@@ -94,7 +94,12 @@ the original 214-team / TeamDoc prototype; the prototype's role here is
 as the earliest point of my authorship, not as a description of the
 current codebase.
 
-**Predecessor repositories already shared with counsel:**
+All predecessor repositories are **private**. Counsel has been given the
+URL list below; read access can be granted on request for independent
+verification. The sole-author representation in §1 is the primary
+evidence of the contributor posture across these repos.
+
+**Predecessor repositories previously listed to counsel:**
 
 Under `DaisyDebate` (personal account):
 
@@ -118,13 +123,14 @@ included in the earlier list to counsel):
 - `github.com/DaisyDebate/214-team` (earliest, 2025-04-08) — the origin
   prototype. Same sole-author posture as the other predecessor repos.
 
-The predecessor-era tech stack (per the original 2025-04-08 product
-requirements document) was: Next.js, Tailwind, shadcn/ui, Tiptap,
-Clerk, Supabase, and custom OpenAI/Anthropic wrappers — all permissive
-licenses (MIT / Apache-2.0 / ISC) or SaaS services (Clerk, Supabase,
-OpenAI, Anthropic) that do not impose copyleft on client code. No
-GPL-family or commercial-restrictive dependency is identified in the
-predecessor tech stack.
+The predecessor-era tech stack — per the origin product requirements
+document dated 2025-04-08, which I have retained and can provide to
+counsel on request — was: Next.js, Tailwind, shadcn/ui, Tiptap, Clerk,
+Supabase, and custom OpenAI/Anthropic wrappers. These are all
+permissive licenses (MIT / Apache-2.0 / ISC) or SaaS services (Clerk,
+Supabase, OpenAI, Anthropic) that do not impose copyleft on client
+code. No GPL-family or commercial-restrictive dependency is identified
+in the predecessor tech stack.
 
 ---
 
