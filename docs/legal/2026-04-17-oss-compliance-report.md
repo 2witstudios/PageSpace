@@ -1,6 +1,6 @@
 # PageSpace — IP & OSS Due Diligence Disclosure
 
-**Prepared:** 2026-04-16
+**Prepared:** 2026-04-17
 **For:** Pending sale of PageSpace
 **Repository:** `2witstudios/pagespace` (entire monorepo)
 **Branch:** `claude/legal-compliance-report-D8Poy`
@@ -21,14 +21,14 @@ This disclosure answers counsel's three questions:
 > I, Jonathan Woodall, sole proprietor operating as 2witstudios
 > (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), in connection
 > with the pending sale of PageSpace confirm for the
-> `2witstudios/pagespace` repository as of 2026-04-16:
+> `2witstudios/pagespace` repository as of 2026-04-17:
 >
 > 1. **Sole author.** To my knowledge, all human-authored source code
 >    in the `2witstudios/pagespace` monorepo and in the predecessor
 >    repositories listed in §2 (earliest commit 2025-04-08) was
 >    written by me.
 >
->    Git history across all branches shows four human author
+>    Git history across all branches shows four non-bot author
 >    identities — "2Wits", "2witstudios", "DaisyDebate", and "Claude"
 >    — all bound to my accounts and all representing me. "2Wits",
 >    "2witstudios", and "DaisyDebate" are local display-name variants
@@ -56,7 +56,7 @@ This disclosure answers counsel's three questions:
 >    GPL, AGPL, or SSPL dependencies were identified. One package
 >    (`jszip`) is dual-licensed MIT-or-GPL; PageSpace elects MIT.
 >    LGPL-3.0 and MPL-2.0 dependencies are present and are enumerated
->    and analyzed in §3.
+>    in §3.
 > 4. **OSS inventory scope.** The complete OSS inventory in §5 covers
 >    the npm / pnpm dependency graph (the web, realtime, processor,
 >    control-plane, marketing, desktop, and shared-library packages).
@@ -81,9 +81,7 @@ This disclosure answers counsel's three questions:
 
 Counts below are for the `master` branch, which is the protected,
 default branch of the repository and represents the shipping
-codebase. The feature branches listed in the "Predecessor repositories"
-subsection below carry similar author distributions since they are
-branched from `master`.
+codebase.
 
 | Commits | Author | Email | Identity |
 |---:|---|---|---|
@@ -153,8 +151,7 @@ Posture:
   — refers to Anthropic's software product, not a separate human
   contributor, and does not represent an independent IP claim.
 
-The same analysis applies to any other AI coding tool (GitHub Copilot,
-Cursor, etc.) whose terms assign output rights to the user.
+No other AI coding tools were used in this project.
 
 ### Predecessor repositories
 
@@ -171,9 +168,7 @@ prototyped there under the working name "TeamDoc" (per the
 2025-04-08 product requirements document), and subsequently evolved and
 was renamed through "samepage", "pagespace.team", and finally
 "PageSpace". The current PageSpace product is materially different from
-the original 214-team / TeamDoc prototype; the prototype's role here is
-as the earliest point of my authorship, not as a description of the
-current codebase.
+the original 214-team / TeamDoc prototype.
 
 All predecessor repositories are **private**. Counsel has been given the
 URL list below; read access can be granted on request for independent
@@ -200,7 +195,7 @@ Under `2witstudios` (organization account):
 - `github.com/2witstudios/PageSpace-Cloud`
 - `github.com/2witstudios/pagespace-main`
 
-This list is complete as of 2026-04-16. `DaisyDebate/214-team` is the
+This list is complete as of 2026-04-17. `DaisyDebate/214-team` is the
 earliest (2025-04-08). Read access to any of these private repositories
 is available on request.
 
@@ -283,9 +278,8 @@ modified-file disclosure obligation in MPL-2.0 §3.1–§3.2 only attaches
 to Modifications of the Covered Software itself. PageSpace ships each
 of the packages below unmodified.
 
-(`dompurify` was previously evaluated under this section and is
-omitted here: it is dual-licensed **MPL-2.0 OR Apache-2.0**, and
-PageSpace formally elects Apache-2.0. See §3.5 below.)
+`dompurify` is dual-licensed **MPL-2.0 OR Apache-2.0** and is handled
+in §3.5.
 
 | Package | Version | Role | Shipped? |
 |---|---|---|---|
@@ -455,8 +449,9 @@ the parties to choose from:
 - (c) **Null the column** — require users to re-enter their BYOK keys at
   first buyer-infrastructure login.
 
-Default recommendation from the seller: **(b) rotate** — cleanest security
-posture and zero end-user disruption.
+Default recommendation from the seller: **(b) rotate** — minimizes
+continued key-material exposure to seller systems and requires no end-user
+action.
 
 **DPA assignment.** Existing customer Data Processing Agreements are assigned
 to buyer at closing via an APA schedule; buyer becomes data controller /
@@ -500,7 +495,7 @@ reproduction command so any entry can be independently re-verified.
 | Fonts | `@fontsource/ibm-plex-mono`, `@fontsource/space-grotesk` | OFL-1.1 (see rows in §5 inventory) |
 | Icons | `lucide-react` (only icon library imported by product code) | ISC (see rows in §5 inventory) |
 | Logos / app icons / splash screens | `apps/web/public/`, `apps/marketing/public/`, `apps/ios/ios/App/App/Assets.xcassets/` | Created by or for the seller; original work |
-| Blog hero images | `apps/marketing/public/blog/*.png` | AI-generated by seller; rights held by seller and transferred to buyer |
+| Blog hero images | `apps/marketing/public/blog/*.png` | Generated by the seller using Google image generation (Imagen via the Gemini app) under the seller's personal Google account. Under the Gemini Apps Additional Terms of Service in effect at the time of generation, Google does not claim ownership of generated content; ownership / rights in the outputs vest with the generating account-holder (subject to Google's limited license back for service provision and its generation policies). The seller transfers its rights in these images to the buyer as part of the sale. |
 | Demo media / marketing video | None bundled | n/a |
 
 No stock-photography licenses from Unsplash, Pexels, Getty, Shutterstock, or
@@ -2730,8 +2725,6 @@ package's `package.json` `license` field.
 | zustand | 5.0.8 | MIT |
 | zwitch | 2.0.4 | MIT |
 
-No `UNKNOWN`-license packages remain in the dependency tree.
-
 ---
 
 ## 6. Trademarks and marks
@@ -2743,7 +2736,7 @@ disclosed in §2 but is not separately asserted as a mark.
 
 No pending, published, or registered trademark filings with the USPTO or any
 other trademark office exist for `PageSpace` or `PageSpace.ai` as of
-2026-04-16.
+2026-04-17.
 
 Transfer of the common-law marks is covered by the APA trademark schedule.
 Buyer is responsible for any subsequent registration filings.
