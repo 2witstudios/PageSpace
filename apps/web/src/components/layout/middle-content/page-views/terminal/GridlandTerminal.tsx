@@ -91,12 +91,14 @@ function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: Gr
   const [historyIndex, setHistoryIndex] = useState(-1);
   const theme = isDark ? themes.dark : themes.light;
 
-  // Derive input from historyIndex — keeps updaters pure (no side effects)
+  // Clear draft only when leaving history-browse mode, not when session.history mutates.
+  // Remote collaborators' commands arriving mid-typing must not wipe the local draft.
   useEffect(() => {
-    if (historyIndex < 0) {
-      setInput('');
-      return;
-    }
+    if (historyIndex < 0) setInput('');
+  }, [historyIndex]);
+
+  useEffect(() => {
+    if (historyIndex < 0) return;
     const commands = session.history.map(h => h.command);
     const idx = commands.length - 1 - historyIndex;
     if (idx >= 0 && idx < commands.length) {
@@ -148,6 +150,8 @@ function TerminalContent({ session, onCommand, onClear, isDark, isReadOnly }: Gr
 
     if (key.name === 'l' && key.ctrl) {
       onClear();
+      setInput('');
+      setHistoryIndex(-1);
       return;
     }
 
