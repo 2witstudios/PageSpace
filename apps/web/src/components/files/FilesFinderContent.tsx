@@ -10,8 +10,8 @@ import { FolderViewHeader } from '@/components/layout/middle-content/page-views/
 import { FilesBreadcrumbs } from './FilesBreadcrumbs';
 import { FilesGridView } from './FilesGridView';
 import { FilesListView } from './FilesListView';
+import { FilesEmptyState } from './FilesEmptyState';
 import type { ViewMode, SortKey, SortDirection } from '@/components/layout/middle-content/page-views/folder/types';
-import { FolderOpen } from 'lucide-react';
 
 interface FilesFinderContentProps {
   driveId: string;
@@ -23,6 +23,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   const drives = useDriveStore((state) => state.drives);
   const drive = drives.find((d) => d.id === driveId);
   const driveName = drive?.name ?? 'Files';
+  const canWrite = drive?.role === 'OWNER' || drive?.role === 'ADMIN';
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [sortKey, setSortKey] = useState<SortKey>('title');
@@ -110,12 +111,12 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
         <FolderViewHeader viewMode={viewMode} onViewChange={setViewMode} />
 
         {sortedItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <FolderOpen className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p className="text-muted-foreground">
-              {currentPageId ? 'No child pages' : 'No pages in this drive'}
-            </p>
-          </div>
+          <FilesEmptyState
+            driveId={driveId}
+            parentId={currentPageId}
+            canWrite={canWrite}
+            onMutate={handleMutate}
+          />
         ) : viewMode === 'grid' ? (
           <FilesGridView items={sortedItems} driveId={driveId} onMutate={handleMutate} />
         ) : (
