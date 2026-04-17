@@ -4,33 +4,28 @@
 **Scope:** Entire `2witstudios/pagespace` monorepo
 **Branch:** `claude/legal-compliance-report-D8Poy`
 **Audience:** Legal / investor due-diligence
-**Prepared by:** Automated audit (Claude Code), to be reviewed and signed by Jonathan Anderson
 
-This report answers the three IP-DD items raised by counsel:
+This report answers counsel's three IP-DD items:
 
 1. Did anyone other than Jonathan touch the code?
 2. If so, is IP assignment required?
-3. A complete list of OSS used, with any copyleft flagged.
+3. Full OSS inventory, with copyleft flagged.
 
-A **Founder's Confirmation** memo is in §1, ready to sign.
+A **Founder's Confirmation** memo ready for signature is in §1.
 
 ---
 
 ## 0. Cleanups landed in this branch
 
-1. **License model flipped to proprietary.** The root `LICENSE` now reads
-   "All rights reserved" (copyright 2Wit Studios, LLC) and every workspace
-   `package.json` declares `"license": "UNLICENSED"` (the npm/SPDX
-   convention for proprietary). Previous state was an inconsistent mix of
-   CC-BY-NC-SA-4.0 and template-default AGPL-3.0 strings.
-2. **Remotion purged.** Unused offline video-rendering code deleted from
-   `apps/marketing`. The commercial "Remotion License" no longer applies.
-   Transitive package count dropped 2,253 → 2,104.
+1. **License model flipped to proprietary.** Root `LICENSE` now reads
+   "All rights reserved" (copyright 2Wit Studios, LLC). Every workspace
+   `package.json` declares `"license": "UNLICENSED"`. Prior state was an
+   inconsistent mix of CC-BY-NC-SA-4.0 and template-default AGPL-3.0.
+2. **Remotion purged.** Unused offline video-rendering code removed from
+   `apps/marketing`. Transitive package count: 2,253 → 2,104.
 3. **`THIRD-PARTY-NOTICES.md` created** at the repo root. Records the
-   formal license elections for `dompurify` (→ Apache-2.0) and `jszip`
-   (→ MIT), and the LGPL/MPL attributions required for the remaining
-   non-permissive components. This is the DD-grade compliance artifact
-   that accompanies any distribution.
+   formal license elections (`dompurify` → Apache-2.0; `jszip` → MIT) and
+   the LGPL/MPL attributions for the remaining non-permissive components.
 
 ---
 
@@ -40,29 +35,21 @@ A **Founder's Confirmation** memo is in §1, ready to sign.
 > confirm the following for the `2witstudios/pagespace` repository as of the
 > HEAD of branch `claude/legal-compliance-report-D8Poy` on 2026-04-16:
 >
-> 1. **Sole author.** All human-authored source code in the repository was
->    written by me. The git history shows exactly two author identities —
->    "2Wits" and "2witstudios" — both bound to the same email address
->    (`2witstudios@gmail.com`) and both referring to me.
-> 2. **No third-party human contributors.** There are no commits from any
->    human author other than myself. Consequently, no separate IP
->    assignments from outside contributors are required.
-> 3. **Only automated contributor is Dependabot.** GitHub's `dependabot[bot]`
->    made 5 commits, all of which bump action versions inside
->    `.github/workflows/`. These commits touch continuous-integration YAML
->    only — no product source, no dependency declarations in any
->    `package.json`, and the bot claims no authorship over any code.
->    See §2.
-> 4. **OSS dependency list is complete.** The OSS packages enumerated in §7
->    (direct) and §8 (transitive SBOM) are the full set the project depends
->    on, generated programmatically from `pnpm-lock.yaml`.
+> 1. **Sole author.** All human-authored source code was written by me. The
+>    git history shows two author identities — "2Wits" and "2witstudios" —
+>    both bound to `2witstudios@gmail.com` and both referring to me.
+> 2. **No third-party human contributors.** No outside IP assignments are
+>    required.
+> 3. **Only automated contributor is Dependabot.** 5 commits, all bumping
+>    GitHub Actions versions inside `.github/workflows/`. No product source
+>    or `package.json` touched; the bot claims no authorship. See §2.
+> 4. **OSS dependency list is complete.** §7 (direct) and §8 (transitive
+>    SBOM) are generated programmatically from `pnpm-lock.yaml`.
 > 5. **Copyleft posture.** No dependency imposes copyleft obligations on
->    PageSpace's proprietary code in its current usage pattern. The detailed
->    per-package analysis in §4 shows that every non-permissive dependency
->    is either (a) not shipped to production, (b) dual-licensed with a
->    permissive option which we formally elect, or (c) used unmodified in a
->    way expressly permitted by its license without triggering a copyleft
->    disclosure obligation.
+>    PageSpace's proprietary code. Every non-permissive dependency is
+>    either (a) not shipped to production, (b) dual-licensed with a
+>    permissive option we formally elect, or (c) used unmodified in a way
+>    the license expressly permits. See §4.
 >
 > Signed: __________________________  Date: __________
 
@@ -78,18 +65,11 @@ A **Founder's Confirmation** memo is in §1, ready to sign.
 | 26 | 2witstudios | 2witstudios@gmail.com |
 | 5 | dependabot[bot] | 49699333+dependabot[bot]@users.noreply.github.com |
 
-"2Wits" and "2witstudios" share the same email — same person, two
-display-name variants.
+"2Wits" and "2witstudios" share one email — same person, two display-name
+variants. Committers are Jonathan (direct pushes) and `GitHub <noreply@github.com>`
+(PR squash-merges; authorship remains Jonathan's).
 
-### 2.2 Git committers
-
-- `2witstudios <2witstudios@gmail.com>` (direct pushes).
-- `GitHub <noreply@github.com>` (PR squash-merges; the *author* of those
-  commits remains Jonathan).
-
-No third-party committer identities exist.
-
-### 2.3 Dependabot scope (all 5 commits)
+### 2.2 Dependabot scope (all 5 commits)
 
 | SHA | Change |
 |---|---|
@@ -100,42 +80,37 @@ No third-party committer identities exist.
 | `1031707` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.93.8 → 3.94.1 (#817) |
 
 Each diff is a single-line version bump in a GitHub Actions YAML file. No
-product source modified; no `package.json` touched. Dependabot is an
-automated bot operated by GitHub and does not claim authorship in any IP
-sense.
+product source, no `package.json`, no authorship claim.
 
-**Conclusion:** Counsel item 1 — confirmed, no one else touched the code.
-Counsel item 2 — no outside-contributor IP assignments are required.
+**Conclusion:** Counsel item 1 confirmed; counsel item 2 — no outside-contributor
+IP assignments required.
 
 ---
 
 ## 3. Project's Own License
 
-- **Root `LICENSE` file:** proprietary "All Rights Reserved" (copyright
-  2Wit Studios, LLC). See that file for full terms.
+- **Root `LICENSE`:** proprietary "All Rights Reserved" (copyright 2Wit
+  Studios, LLC).
 - **Every workspace `package.json`:** `"license": "UNLICENSED"` (npm/SPDX
   convention for proprietary).
 
-The CC-BY-NC-SA-4.0 and stray AGPL-3.0 strings found in the earlier audit
-pass have all been removed. PageSpace's own IP is now unambiguously
-proprietary.
+The prior CC-BY-NC-SA-4.0 and stray AGPL-3.0 strings have been removed.
 
 ---
 
 ## 4. Third-Party Copyleft-Family Dependencies — per-package analysis
 
-Scan methodology: `pnpm install --ignore-scripts` (2,104 unique packages
-after Remotion removal), then read each installed `package.json`'s
-`license` field and flag `GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`.
-Provenance (`pnpm why <pkg>`) determines whether each is direct /
-transitive and production / dev / build-time.
+Method: `pnpm install --ignore-scripts` (2,104 unique packages), read each
+installed `package.json`'s `license` field, flag
+`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. `pnpm why <pkg>` establishes
+provenance (direct/transitive, prod/dev/build).
 
-**Bottom line:** **none** of the remaining copyleft-family dependencies
-impose copyleft obligations on PageSpace's proprietary code.
+**Bottom line:** no copyleft-family dependency imposes copyleft obligations
+on PageSpace's code.
 
 ### 4.1 Pure GPL / AGPL / SSPL
 
-**Zero.** None found in the tree.
+**Zero.**
 
 ### 4.2 Dual-licensed with a GPL option — elect permissive
 
@@ -143,95 +118,74 @@ impose copyleft obligations on PageSpace's proprietary code.
 |---|---|---|---|---|---|
 | `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | Transitive (web app) via `mammoth`, `html-to-docx`, `docx-preview` | **MIT** (recorded in `THIRD-PARTY-NOTICES.md`) | Zero copyleft. |
 
-### 4.3 LGPL-3.0-or-later — dynamic-linking, standard proprietary-safe use
+### 4.3 LGPL-3.0-or-later — dynamic linking, proprietary-safe
 
 | Package | Version | Provenance |
 |---|---|---|
 | `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | Native binary loaded by `sharp` in the processor service |
 | `@img/sharp-libvips-linuxmusl-x64` | 1.0.4, 1.2.3 | Same, musl variant |
 
-**Usage:** `sharp` is imported at `apps/processor/src/workers/image-processor.ts`
-to resize, convert, and EXIF-rotate uploaded images. The LGPL-licensed
-`libvips` binaries are loaded dynamically at runtime. PageSpace does not
-statically link them and does not modify them.
+`sharp` is imported at `apps/processor/src/workers/image-processor.ts` for
+image resize/convert/EXIF-rotate. The `libvips` binaries load dynamically
+at runtime and are unmodified.
 
-**Obligation:** LGPL-3.0 §4 expressly permits this use by proprietary
-software so long as (a) the library's license text is provided to recipients
-of the combined work and (b) recipients can replace the library with a
-modified build. Both are satisfied:
+LGPL-3.0 §4 permits this use by proprietary software given (a) the library
+license text is provided to recipients and (b) users can swap in a modified
+build. Both satisfied via `THIRD-PARTY-NOTICES.md` and `sharp`'s built-in
+custom-libvips install path.
 
-1. The LGPL-3.0 text and the libvips source URL are listed in
-   `THIRD-PARTY-NOTICES.md`.
-2. `sharp` supports installing a user-compiled libvips out of the box
-   (<https://sharp.pixelplumbing.com/install#custom-libvips>).
-
-**PageSpace source disclosure: not required.**
+**No source disclosure required.**
 
 ### 4.4 MPL-2.0 — per-package classification
 
-MPL-2.0 is a weak, per-file copyleft. It only attaches to files we
-**modify**. Unmodified use imposes no obligation on surrounding proprietary
-code.
+MPL-2.0 is a per-file copyleft that attaches only to files we modify.
+Unmodified use imposes nothing on surrounding code.
 
-| Package | Version | Provenance | Shipped in prod? | PageSpace modifies it? | Obligation |
+| Package | Version | Provenance | Shipped? | Modified? | Obligation |
 |---|---|---|---|---|---|
-| `dompurify` | 3.2.7 | Direct prod dep in `apps/web`; sanitizes AI/tool-call HTML output | Yes (web) | No | Dual-licensed **MPL-2.0 OR Apache-2.0**. **Elect Apache-2.0** (recorded in `THIRD-PARTY-NOTICES.md`) — removes MPL entirely. |
-| `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep in `apps/ios` + `apps/android`; provides Apple/Google sign-in | Yes (mobile only) | No | Used unmodified → no source disclosure required. Include LICENSE text in mobile app licenses screen (standard Capacitor plugin boilerplate). |
-| `lightningcss` | 1.30.1 | Transitive dev-only dep via `@tailwindcss/postcss` and `vite` (build-time CSS compiler) | **No** — build tool; output CSS is ours and not MPL-licensed | No | None. Not shipped. |
-| `lightningcss-linux-x64-gnu` | 1.30.1 | Same; native binary for the above | No | No | None. |
-| `lightningcss-linux-x64-musl` | 1.30.1 | Same; musl binary | No | No | None. |
-| `axe-core` | 4.10.3 | Transitive dev-only dep via `eslint-plugin-jsx-a11y` (pulled by `eslint-config-next`) | **No** — lint-time only | No | None. Not in any production artifact. |
+| `dompurify` | 3.2.7 | Direct prod dep in `apps/web`; sanitizes AI tool-call HTML | Yes | No | Dual **MPL-2.0 OR Apache-2.0** — elect Apache-2.0 (recorded in `THIRD-PARTY-NOTICES.md`). MPL removed. |
+| `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep in `apps/ios` + `apps/android`; Apple/Google sign-in | Mobile only | No | Ship LICENSE text in mobile licenses screen. |
+| `lightningcss` (+ linux-gnu, linux-musl) | 1.30.1 | Transitive dev-only via `@tailwindcss/postcss` + `vite` | No — build-time | No | None. |
+| `axe-core` | 4.10.3 | Transitive dev-only via `eslint-plugin-jsx-a11y` | No — lint-time | No | None. |
 
-**PageSpace source disclosure: not required** for any MPL-2.0 dependency.
+**No source disclosure required** for any MPL-2.0 dependency.
 
-### 4.5 Why "LGPL-3.0 dynamic" and "MPL-2.0 unmodified" are not blockers
+### 4.5 Removal cost if counsel wants zero LGPL/MPL
 
-The term "copyleft" covers a wide spectrum. Strong copyleft (GPL, AGPL,
-SSPL) propagates to any linked or networked code — that is what the lawyer
-is trying to avoid and what PageSpace does **not** contain.
+Strong copyleft (GPL, AGPL, SSPL) is what usually triggers DD concern and
+is absent from this tree. LGPL-3.0-dynamic and MPL-2.0-unmodified do not
+propagate copyleft to PageSpace's code. If counsel nonetheless wants them
+gone:
 
-Weak copyleft (LGPL-3.0, MPL-2.0) is narrower. LGPL's relink clause and
-MPL's file-level copyleft are specifically designed so that proprietary
-software can link or bundle these libraries without becoming copyleft
-itself. These licenses appear in the dependency trees of essentially every
-modern SaaS — Stripe, Vercel, Linear, Notion, Figma, etc. They are DD-safe
-when handled as above (unmodified use + attribution in a
-`THIRD-PARTY-NOTICES.md`).
-
-If counsel prefers zero MPL/LGPL even under unmodified-use terms, the
-removal cost is:
-
-- `dompurify`: already solved by electing Apache-2.0; zero code change.
-- `axe-core`, `lightningcss`: dev-only transitive; not shipped — no
-  removal needed. They could be swapped by changing ESLint config / CSS
-  build tool, but that changes *nothing* about the shipped product.
-- `@capgo/capacitor-social-login`: swap to the official
+- `dompurify` — solved by the Apache-2.0 election; zero code change.
+- `axe-core`, `lightningcss` — dev/build-time transitive; not shipped, no
+  removal needed.
+- `@capgo/capacitor-social-login` — swap to
   `@capacitor-community/apple-sign-in` + `@codetrix-studio/capacitor-google-auth`
   (both MIT). ~1 day of mobile work.
-- `sharp` / `libvips`: replace with `jimp` (MIT, pure JS, ~5x slower)
-  or move image processing to a hosted API. **Not recommended.** `sharp`
-  is the industry standard; LGPL-3.0-dynamic is a textbook-safe pattern.
+- `sharp` / `libvips` — replace with `jimp` (MIT, pure JS, ~5× slower) or
+  a hosted image API. Not recommended; `sharp` is the industry standard
+  and LGPL-3.0-dynamic is a textbook-safe pattern.
 
 ---
 
-## 5. Ambiguous Third-Party Licenses — cosmetic
+## 5. Ambiguous Third-Party Licenses — cosmetic only
 
-Unchanged from the prior audit pass; none affect PageSpace's IP posture.
+None affect PageSpace's IP posture.
 
 | Package | Version | License field | Ground truth | Action |
 |---|---|---|---|---|
 | `@gridland/utils` | 0.2.53 | (missing) | First-party (2witstudios) | Declare a license in that package's repo. |
 | `@gridland/web` | 0.2.53 | (missing) | Same. | Same. |
 | `argparse` | 2.0.1 | Python-2.0 | PSF License — GPL-compatible permissive. | None. |
-| `atomically`, `khroma`, `stubborn-fs` | — | (missing) | Upstream repos are MIT. | Cosmetic npm-metadata gap. |
+| `atomically`, `khroma`, `stubborn-fs` | — | (missing) | Upstream repos are MIT. | Cosmetic metadata gap. |
 | `duck` | 0.1.12 | "BSD" | Unspecified BSD — treat as BSD-3-Clause. | None. |
 
 ---
 
 ## 6. Transitive SBOM — License Distribution
 
-Generated from `pnpm install` against the committed `pnpm-lock.yaml` at
-HEAD of branch `claude/legal-compliance-report-D8Poy`.
+Generated from `pnpm install` against the committed `pnpm-lock.yaml`.
 
 | Count | License |
 |---:|---|
@@ -2826,20 +2780,11 @@ Workspace-internal packages (`workspace:*`) omitted.
 1. **Authorship:** `git log --all --format='%an <%ae>|%h|%s'`.
 2. **Direct deps:** parsed every `package.json` in `apps/`, `packages/`,
    `prototypes/`, and root.
-3. **Transitive SBOM:** removed `node_modules`, ran `pnpm install
-   --ignore-scripts` against committed `pnpm-lock.yaml`, then traversed
-   `node_modules/.pnpm/*/node_modules/` and read each `package.json`'s
-   `license` field.
+3. **Transitive SBOM:** clean `pnpm install --ignore-scripts`, then
+   traverse `node_modules/.pnpm/*/node_modules/` reading each
+   `package.json`'s `license` field.
 4. **Provenance:** `pnpm why <package>` and `pnpm --filter <app> why <package>`.
-5. **GPL/copyleft detection regex:** `\bGPL\b | \bLGPL\b | \bAGPL\b | \bCDDL\b | \bEPL\b | \bMPL\b | \bSSPL\b | COPYLEFT | OSL | EUPL`.
-6. **Remotion removal:** `rm -rf apps/marketing/remotion
-   apps/marketing/remotion.config.ts apps/marketing/tsconfig.remotion.json
-   apps/marketing/scripts/render-videos.ts`; stripped `@remotion/*`,
-   `remotion`, and `ts-node` from `apps/marketing/package.json`;
-   removed `remotion:*` npm scripts.
-7. **License normalization:** every workspace `package.json` now declares
-   `"license": "UNLICENSED"`; root `LICENSE` is proprietary "All Rights
-   Reserved".
+5. **Copyleft detection:** regex `\bGPL\b|\bLGPL\b|\bAGPL\b|\bCDDL\b|\bEPL\b|\bMPL\b|\bSSPL\b|COPYLEFT|OSL|EUPL`.
 
-This report, along with `THIRD-PARTY-NOTICES.md`, is regenerable from the
-lockfile and git history; no manual data entry.
+This report and `THIRD-PARTY-NOTICES.md` are regenerable from the lockfile
+and git history — no manual data entry.
