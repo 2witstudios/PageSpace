@@ -23,7 +23,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   const drives = useDriveStore((state) => state.drives);
   const drive = drives.find((d) => d.id === driveId);
   const driveName = drive?.name ?? 'Files';
-  const canWrite = Boolean(drive?.role);
+  const canWrite = drive?.role === 'OWNER' || drive?.role === 'ADMIN';
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [sortKey, setSortKey] = useState<SortKey>('title');
