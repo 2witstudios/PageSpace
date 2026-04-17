@@ -18,9 +18,10 @@ A **Founder's Confirmation** memo ready for signature is in §1.
 ## 0. Cleanups landed in this branch
 
 1. **License model flipped to proprietary.** Root `LICENSE` now reads
-   "All rights reserved" (copyright 2Wit Studios, LLC). Every workspace
-   `package.json` declares `"license": "UNLICENSED"`. Prior state was an
-   inconsistent mix of CC-BY-NC-SA-4.0 and template-default AGPL-3.0.
+   "All rights reserved" (copyright Jonathan, d/b/a 2witstudios — sole
+   proprietorship). Every workspace `package.json` declares
+   `"license": "UNLICENSED"`. Prior state was an inconsistent mix of
+   CC-BY-NC-SA-4.0 and template-default AGPL-3.0.
 2. **Remotion purged.** Unused offline video-rendering code removed from
    `apps/marketing`. Transitive package count: 2,253 → 2,104.
 3. **`THIRD-PARTY-NOTICES.md` created** at the repo root. Records the
@@ -31,9 +32,10 @@ A **Founder's Confirmation** memo ready for signature is in §1.
 
 ## 1. Founder's Confirmation (hand this to counsel)
 
-> I, Jonathan Anderson (GitHub: `2witstudios`, email: `2witstudios@gmail.com`),
-> confirm the following for the `2witstudios/pagespace` repository as of the
-> HEAD of branch `claude/legal-compliance-report-D8Poy` on 2026-04-16:
+> I, Jonathan [LAST NAME], sole proprietor operating as 2witstudios
+> (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), confirm the
+> following for the `2witstudios/pagespace` repository as of the HEAD of
+> branch `claude/legal-compliance-report-D8Poy` on 2026-04-16:
 >
 > 1. **Sole author.** All human-authored source code was written by me. The
 >    git history shows two author identities — "2Wits" and "2witstudios" —
@@ -89,8 +91,8 @@ IP assignments required.
 
 ## 3. Project's Own License
 
-- **Root `LICENSE`:** proprietary "All Rights Reserved" (copyright 2Wit
-  Studios, LLC).
+- **Root `LICENSE`:** proprietary "All Rights Reserved" (copyright
+  Jonathan, d/b/a 2witstudios — sole proprietorship).
 - **Every workspace `package.json`:** `"license": "UNLICENSED"` (npm/SPDX
   convention for proprietary).
 
