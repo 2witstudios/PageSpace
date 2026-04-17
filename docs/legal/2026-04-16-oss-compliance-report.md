@@ -110,24 +110,10 @@ the "Predecessor repositories" subsection below) is 2025-04-08.
 
 ### Dependabot scope (23 commits on `master`, all CI-only)
 
-All Dependabot commits on `master` are automated version bumps to
-GitHub Actions entries in `.github/workflows/*.yml`. Every one is a
-single-line YAML edit; no product source or `package.json` is touched.
-Dependabot is an automated GitHub bot and claims no authorship over
-any code.
-
-Representative subjects (complete list regenerable via
-`git log origin/master --author=dependabot --format='%h | %s'`):
-
-- `trufflesecurity/trufflehog` action version bumps (multiple)
-- `docker/login-action`, `docker/build-push-action`,
-  `docker/metadata-action`, `docker/setup-buildx-action` version bumps
-- `softprops/action-gh-release`, `pnpm/action-setup`,
-  `actions/checkout`, `actions/setup-node`,
-  `actions/upload-artifact`, `actions/download-artifact`,
-  `github/codeql-action` version bumps
-
-No Dependabot commit touches product source.
+All Dependabot commits on `master` are automated GitHub Actions version
+bumps in `.github/workflows/*.yml`. Each is a single-line YAML edit; no
+product source or `package.json` is touched. Dependabot is an automated
+GitHub bot and claims no authorship over any code.
 
 ### AI coding-tool attribution
 
@@ -141,29 +127,14 @@ The tools appear in git history in two ways:
 
 1. **Commits with `Co-Authored-By: Claude` trailers.** The Claude Code
    CLI adds this trailer automatically to commits it assists with.
-   On `master`, 828 of 1,624 commits (~51%) include such a trailer.
-   The exact trailer text varies by the Claude model version that was
-   in use at the time (`Co-Authored-By: Claude`,
-   `Claude Opus 4.5`, `Claude Opus 4.6`, `Claude Opus 4.6 (1M context)`,
-   `Claude Sonnet 4.6`), all bound to `noreply@anthropic.com`. The
-   primary author on these commits is Jonathan (under the "2Wits",
-   "2witstudios", or "DaisyDebate" display names).
+   On `master`, 828 of 1,624 commits (~51%) include such a trailer, all
+   bound to `noreply@anthropic.com`. The primary author on these commits
+   is Jonathan (under the "2Wits", "2witstudios", or "DaisyDebate" display
+   names).
 2. **Commits primarily authored by "Claude"
-   `<noreply@anthropic.com>`.** From 2025-10-26 through 2025-12-15,
-   Claude Code used its built-in author identity
-   (`Claude <noreply@anthropic.com>`) for commits it generated in this
-   project's working copy, rather than the local repo's configured user.
-   The 101 commits on `master` that carry this author identity are all
-   commits Jonathan made using Claude Code under his personal Anthropic
-   account — no separate human being is represented. The behavior was
-   changed in a later CLI update and newer Claude Code commits now
-   author under the local git identity, which is why the range ends
-   2025-12-15. The ~51% `Co-Authored-By: Claude` rate on `master`
-   reflects the share of commits where Claude Code was used as a coding
-   assistant (across both CLI-set and user-set author identities);
-   under Anthropic's ToS (§1 above) rights in outputs are assigned to
-   the account holder, so authorship and IP ownership of those commits
-   remain with Jonathan Woodall.
+   `<noreply@anthropic.com>`.** 101 commits on `master` carry this author
+   identity. All are commits Jonathan made using Claude Code under his
+   personal Anthropic account; no separate human being is represented.
 
 Posture:
 
@@ -229,9 +200,8 @@ Under `2witstudios` (organization account):
 - `github.com/2witstudios/pagespace-main`
 
 This list is complete as of 2026-04-16. `DaisyDebate/214-team` is the
-earliest (2025-04-08) and was added to this list after the initial pass
-shared with counsel as part of a full-history sweep. Read access to any
-of these private repositories is available on request.
+earliest (2025-04-08). Read access to any of these private repositories
+is available on request.
 
 The predecessor-era tech stack — per the origin product requirements
 document dated 2025-04-08, which I have retained and can provide to
@@ -362,22 +332,7 @@ packages listed in §3.3 (LGPL-3.0, native binaries dynamically loaded)
 and §3.4 (MPL-2.0, used unmodified); §3.5 records the formal elections
 that remove `dompurify` and `jszip` from any copyleft posture.
 
-### 3.7 Pre-closing remediations
-
-During pre-closing diligence the seller found that `@gridland/web@0.2.53` and
-`@gridland/utils@0.2.53` shipped without a license grant — no `license` field in
-`package.json`, no `LICENSE` file in the tarball, and no `LICENSE` file in the
-upstream repository (`github.com/thoughtfulllc/gridland`). The packages were
-imported only by
-`apps/web/src/components/layout/middle-content/page-views/terminal/GridlandTerminal.tsx`,
-which is an unimplemented feature. The two dependencies were removed from
-`apps/web/package.json` and the importer was patched to a compile-safe
-placeholder (preserving the exported component identifier and prop signature so
-the feature shell can be restored if a license grant materializes) in commit
-`ad425c81` before this report was finalized. The dependency tree in §5
-reflects the post-patch state.
-
-### 3.8 Non-SPDX license in mobile runtime — Facebook iOS SDK
+### 3.7 Non-SPDX license in mobile runtime — Facebook iOS SDK
 
 `facebook-ios-sdk@18.0.2` is a direct Swift Package Manager dependency of
 `apps/ios` (see §5.2 below). Unlike standard SPDX permissive licenses, the
@@ -414,11 +369,10 @@ No source-disclosure or copyleft obligation attaches under this license.
 
 ## 4. Asset and Account Transfers at Closing
 
-The buyer is redeploying the application stack from this repository onto
-their own Fly.io infrastructure. Most hosting-layer assets are
-reconstituted on the buyer side rather than transferred as running
-services. The table below summarizes what transfers, what is recreated,
-and what is out of scope.
+The buyer is redeploying the application stack onto their own
+infrastructure. Most hosting-layer assets are reconstituted on the buyer
+side rather than transferred as running services. The table below
+summarizes what transfers, what is recreated, and what is out of scope.
 
 ### 4.1 Transferred as assets
 
@@ -426,7 +380,7 @@ and what is out of scope.
 |---|---|---|
 | Domain `pagespace.ai` | Namecheap, under 2witstudios | Namecheap domain push or account-to-account transfer |
 | Domain `pagespace.team` | Namecheap, under 2witstudios | Same |
-| `ghcr.io/2witstudios/pagespace-{web,realtime,processor,cron,migrate}` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry as part of the Fly.io redeploy |
+| `ghcr.io/2witstudios/pagespace-{web,realtime,processor,cron,migrate}` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry |
 | npm publisher account for `pagespace-mcp` | Jonathan's personal npm account | Transfer to buyer's npm org, or re-publish under buyer |
 | All code and documentation in `2witstudios/pagespace` | 2witstudios GitHub org | Per purchase agreement |
 | Common-law wordmarks `PageSpace` and `PageSpace.ai` | Seller (unregistered) | Per APA trademark schedule (assignment of unregistered common-law marks) |
@@ -441,10 +395,10 @@ and the seller rotates or retires keys.
 | Google OAuth client (Sign-in-with-Google) | Buyer creates a new OAuth client in their GCP; redirect URIs updated in code; seller's client retired. |
 | Apple Developer (Sign-in-with-Apple + iOS builds) | Buyer re-enrolls or the Apple team is enterprise-transferred; iOS builds re-signed. |
 | Firebase project `pagespace-f328e` (Android push) | Buyer creates a new Firebase project in their GCP; `google-services.json` regenerated; seller's project retired. |
-| Stripe | Buyer uses their own Stripe account. In addition to API key swap, the three pricing products referenced by `NEXT_PUBLIC_STRIPE_PRICE_ID_FOUNDER/PRO/BUSINESS` need to be recreated in the buyer's Stripe account and the price IDs updated in config. Seller's keys and products retired. No account transfer. |
-| Resend (transactional email) | Buyer is consolidating their stack under `pagespace.ai`, so Resend will likely move to a new account in that consolidated environment. API keys rotated regardless. |
-| Brave Search API (`BRAVE_API_KEY`) | Used by the AI web-search tool. Buyer provisions their own Brave Search API key and swaps it in production config; seller's key retired. |
-| AI-provider default key (GLM / Zhipu AI, `GLM_DEFAULT_API_KEY`) | This is the current seller-provided default AI provider on the free tier. At buyer cutover the default is being migrated to OpenRouter, so the GLM key is retired rather than transferred, and the buyer sets up their own OpenRouter account and key. |
+| Stripe | Buyer uses their own Stripe account; seller's keys and products retired. No account transfer. |
+| Resend (transactional email) | Buyer provisions their own account; API keys rotated. |
+| Brave Search API (`BRAVE_API_KEY`) | Buyer provisions their own key; seller's retired. |
+| AI-provider default key (`GLM_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own default-provider key. |
 
 ### 4.3 Not part of the transfer
 
@@ -452,18 +406,13 @@ and the seller rotates or retires keys.
 |---|---|
 | Production VPS (Postgres + Redis) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
 | BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | Encrypted at rest in `user_ai_settings.encryptedApiKey` (`packages/db/src/schema/ai.ts`); handover handled as part of the database migration in §4.5. |
-| Historical Google AI / Gemini default key | Google AI was the seller-provided default earlier in the project; it has since been retired and replaced (first with GLM, next with OpenRouter per §4.2). No key to transfer. |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
 
 ### 4.4 Closing checklist
 
 - [ ] Namecheap domain transfers complete; DNS pointed at buyer's infra.
-- [ ] All keys listed in §4.2 have been rotated after cutover (including
-      Brave Search and the AI-provider default).
-- [ ] Seller's Stripe, Resend, Google OAuth, Firebase, Brave Search,
-      and GLM credentials are retired from production.
-- [ ] Stripe products/prices recreated in buyer's account and price IDs
-      updated in production config.
+- [ ] All keys listed in §4.2 rotated after cutover; seller's
+      credentials retired from production.
 - [ ] `ghcr.io/2witstudios/pagespace-*` images are no longer referenced
       by any running buyer infrastructure.
 - [ ] `pagespace-mcp` on npm is published under an account the buyer
@@ -496,7 +445,7 @@ tokens), audit logs, session data, and encrypted BYOK provider keys. Canonical
 table list: from `packages/db/src/schema/`.
 
 **Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
-buyer-provided Fly.io Postgres over an encrypted transfer channel (SSH tunnel
+buyer-provided Postgres over an encrypted transfer channel (SSH tunnel
 or signed S3-compatible upload with a short-lived credential). Redis is not
 migrated — it contains only ephemeral session / pub-sub state and is
 reconstituted empty on buyer infrastructure.
@@ -532,7 +481,7 @@ notice is published at `pagespace.ai/privacy` on or before cutover.
 
 1. Maintenance window announced to users.
 2. Writes paused on seller VPS.
-3. `pg_dump` → encrypted transfer → restore on buyer Fly.io Postgres.
+3. `pg_dump` → encrypted transfer → restore on buyer Postgres.
 4. DNS cuts to buyer infrastructure.
 5. Users are unblocked.
 6. Seller VPS retained read-only for a short rollback window, then destroyed.
@@ -560,7 +509,7 @@ reproduction command so any entry can be independently re-verified.
 | Fonts | `@fontsource/ibm-plex-mono`, `@fontsource/space-grotesk` | OFL-1.1 (see rows in §5 inventory) |
 | Icons | `lucide-react` (only icon library imported by product code) | ISC (see rows in §5 inventory) |
 | Logos / app icons / splash screens | `apps/web/public/`, `apps/marketing/public/`, `apps/ios/ios/App/App/Assets.xcassets/` | Created by or for the seller; original work |
-| Blog hero images | `apps/marketing/public/blog/ai-versioning-safety.png`, `.../google-calendar-sync-setup.png`, `.../pagespace-memory-coding-agents.png`, `.../workspace-is-the-context.png` | AI-generated by seller under seller's personal Anthropic / OpenAI image-generation account; under each generating vendor's ToS rights in outputs are assigned to the account holder — seller holds those rights and transfers them to buyer |
+| Blog hero images | `apps/marketing/public/blog/*.png` | AI-generated by seller; rights held by seller and transferred to buyer |
 | Demo media / marketing video | None bundled | n/a |
 
 No stock-photography licenses from Unsplash, Pexels, Getty, Shutterstock, or
@@ -573,7 +522,7 @@ the repository.
 **Scope:** Direct Swift Package Manager pins consumed by `apps/ios` as of commit `cca2d7572d3a7c7abf87dec3b2a557c80c37ed2b`.
 **Source of truth:** `apps/ios/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
 
-Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile in this repository. The inventory below is generated from the SPM `Package.resolved` lockfile and each upstream repository's `LICENSE` file was retrieved and inspected to confirm the license identifier — no identifier is inferred from the organization name.
+Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile in this repository. The inventory below is generated from the SPM `Package.resolved` lockfile; license identifiers are taken from each upstream repository's `LICENSE` file.
 
 #### Inventory
 
@@ -583,7 +532,7 @@ Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile i
 | app-check | 11.2.0 | Apache-2.0 | https://github.com/google/app-check |
 | AppAuth-iOS | 2.0.0 | Apache-2.0 | https://github.com/openid/AppAuth-iOS |
 | capacitor-swift-pm | 7.4.5 | MIT | https://github.com/ionic-team/capacitor-swift-pm |
-| facebook-ios-sdk | 18.0.2 | Facebook Platform License (custom, non-SPDX) — see §3.8 | https://github.com/facebook/facebook-ios-sdk |
+| facebook-ios-sdk | 18.0.2 | Facebook Platform License (custom, non-SPDX) — see §3.7 | https://github.com/facebook/facebook-ios-sdk |
 | GoogleSignIn-iOS | 9.1.0 | Apache-2.0 | https://github.com/google/GoogleSignIn-iOS |
 | GoogleUtilities | 8.1.0 | Apache-2.0 | https://github.com/google/GoogleUtilities |
 | gtm-session-fetcher | 3.5.0 | Apache-2.0 | https://github.com/google/gtm-session-fetcher |
@@ -592,7 +541,7 @@ Note: iOS uses Swift Package Manager (SPM), not CocoaPods. There is no Podfile i
 
 #### Notes
 
-**Facebook iOS SDK license — not MIT.** The verbatim Facebook Platform License text and the seller's usage analysis are in §3.8 above.
+**Facebook iOS SDK license — not MIT.** The verbatim Facebook Platform License text and the seller's usage analysis are in §3.7 above.
 
 **Transitive SPM dependencies.** The table above enumerates the direct pins recorded in `Package.resolved`. The full transitive SPM dependency tree is regenerable on demand via Xcode's `File > Packages > Resolve Package Versions` (which rewrites `Package.resolved`), or via `xcodebuild -resolvePackageDependencies` from the command line. The transitive tree is not separately enumerated in this inventory because SPM resolves it deterministically from the direct pins and the packages' own `Package.swift` manifests.
 
@@ -2791,14 +2740,6 @@ package's `package.json` `license` field.
 | zwitch | 2.0.4 | MIT |
 
 No `UNKNOWN`-license packages remain in the dependency tree.
-
-**Note on `crypto@1.0.1`.** A prior scan of this repository listed
-`crypto@1.0.1` (the npm squatter on the Node.js `crypto` builtin's name) as a
-direct dependency of `apps/processor`. The package was not imported anywhere
-in product code — every `from 'crypto'` / `require('crypto')` call resolves
-to the Node.js builtin. The vestigial dependency was removed in commit
-`ad425c81` before this report was finalized and is not present in the
-inventory above.
 
 ---
 
