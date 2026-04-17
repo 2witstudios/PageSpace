@@ -41,7 +41,7 @@ This disclosure answers counsel's three questions:
 >    Weak-copyleft dependencies (LGPL, MPL) are present but do not
 >    impose copyleft obligations on PageSpace's proprietary code under
 >    the conditions of use. See §3.
-> 4. The complete OSS inventory is in §4.
+> 4. The complete OSS inventory is in §5.
 >
 > Signed: __________________________  Date: __________
 
