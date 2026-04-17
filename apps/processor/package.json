@@ -16,7 +16,6 @@
     "@pagespace/lib": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "magika": "^1.0.0",
