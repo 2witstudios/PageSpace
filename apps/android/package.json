@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "PageSpace Android App - Native wrapper for PageSpace using Capacitor",
   "private": true,
-  "license": "AGPL-3.0",
+  "license": "UNLICENSED",
   "scripts": {
     "build": "pnpm exec cap sync android",
     "build:full": "pnpm --filter web build && pnpm exec cap sync android",
