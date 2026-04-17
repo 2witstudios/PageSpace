@@ -23,25 +23,39 @@ This disclosure answers counsel's three questions:
 > with the pending sale of PageSpace confirm for the
 > `2witstudios/pagespace` repository as of 2026-04-16:
 >
-> 1. **Sole author.** All human-authored source code in the
->    `2witstudios/pagespace` monorepo, and in the predecessor
->    repositories listed in §2 (earliest commit 2025-04-08), was written
->    by me. The git histories show two author identities in this
->    repository, "2Wits" and "2witstudios", both bound to
->    `2witstudios@gmail.com` and both referring to me; the predecessor
->    repositories also include commits under my personal GitHub account
->    `DaisyDebate`, which is likewise me.
-> 2. **No third-party human contributors, and therefore no outside IP
->    assignments required.** The only non-me contributor in git history
->    is GitHub's Dependabot bot, whose commits are limited to version
->    bumps in CI workflow YAML files (no product source, no dependency
+> 1. **Sole author.** To my knowledge, all human-authored source code
+>    in the `2witstudios/pagespace` monorepo, and in the predecessor
+>    repositories listed in §2 (earliest commit 2025-04-08, including
+>    `DaisyDebate/214-team` which is disclosed in §2 and was not in the
+>    initial list provided to counsel), was written by me. The git
+>    histories in this repository show two author identities — "2Wits"
+>    and "2witstudios" — both bound to `2witstudios@gmail.com` and both
+>    referring to me. The predecessor repositories also include commits
+>    under my personal GitHub account `DaisyDebate`, which is likewise
+>    me. Extensive use of AI coding assistants (Anthropic's Claude Code
+>    and OpenAI's Codex CLI) is disclosed in §2 under my own accounts;
+>    those tools do not represent a third-party human contributor.
+> 2. **No third-party human contributors.** I am not aware of any
+>    third-party human contributor whose work would require an IP
+>    assignment. The only non-me contributor in git history is GitHub's
+>    Dependabot bot, whose commits are limited to version bumps in CI
+>    workflow YAML files (no product source, no dependency
 >    declarations). See §2.
-> 3. **No GPL, AGPL, or SSPL dependencies** are used. One package
+> 3. **Copyleft posture.** Based on the scan described in §3, no
+>    GPL, AGPL, or SSPL dependencies were identified. One package
 >    (`jszip`) is dual-licensed MIT-or-GPL; PageSpace elects MIT.
->    Weak-copyleft dependencies (LGPL, MPL) are present but do not
->    impose copyleft obligations on PageSpace's proprietary code under
->    the conditions of use. See §3.
-> 4. The complete OSS inventory is in §5.
+>    LGPL-3.0 and MPL-2.0 dependencies are present and are enumerated
+>    and analyzed in §3.
+> 4. **OSS inventory scope.** The complete OSS inventory in §5 covers
+>    the npm / pnpm dependency graph (the web, realtime, processor,
+>    control-plane, marketing, desktop, and shared-library packages).
+>    Native iOS (CocoaPods) and Android (Gradle / Maven) dependencies
+>    for the Capacitor mobile wrappers are not enumerated in §5 and can
+>    be provided on request.
+> 5. **Scope of this confirmation.** This confirmation addresses source
+>    code authorship. Third-party assets bundled in the repository
+>    (fonts, icons, images, demo media) are governed by their own
+>    licenses; fonts licensed under OFL-1.1 are identifiable in §5.
 >
 > Signed: __________________________  Date: __________
 
@@ -51,15 +65,17 @@ This disclosure answers counsel's three questions:
 
 ### Git authors — entire history, all branches
 
-| Commits | Author | Email |
-|---:|---|---|
-| 80 | 2Wits | 2witstudios@gmail.com |
-| 26 | 2witstudios | 2witstudios@gmail.com |
-| 5 | dependabot[bot] | 49699333+dependabot[bot]@users.noreply.github.com |
+| Commits | Author | Email | Identity |
+|---:|---|---|---|
+| 80 | 2Wits | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
+| 42 | 2witstudios | `2witstudios@gmail.com` | Jonathan (local git display-name variant) |
+| 5 | dependabot[bot] | `49699333+dependabot[bot]@users.noreply.github.com` | GitHub automation bot (CI workflow YAML only; see "Dependabot scope") |
 
-"2Wits" and "2witstudios" share one email and refer to Jonathan.
-Committers are Jonathan (direct pushes) and `GitHub <noreply@github.com>`
-(PR squash-merges; authorship remains Jonathan's).
+Both non-bot author identities — "2Wits" and "2witstudios" — represent
+commits authored by Jonathan Woodall, differing only in local git
+display-name configuration. Committers on the "2Wits" rows are
+`GitHub <noreply@github.com>` (PR squash-merges on github.com;
+authorship remains Jonathan's).
 
 ### Dependabot scope (all 5 commits, all CI-only)
 
@@ -78,28 +94,34 @@ of any code it generates.
 ### AI coding-tool attribution
 
 PageSpace development made extensive use of Anthropic's Claude
-(specifically Claude Code) as an AI coding assistant. Approximately 86
-of the 124 commits in this repository (~70%) include a
-`Co-Authored-By: Claude <noreply@anthropic.com>` trailer automatically
-added by the tool. The trailer is a crediting convention and does not
-reflect third-party human authorship:
+(specifically Claude Code) as an AI coding assistant under Jonathan
+Woodall's personal Anthropic account. OpenAI's Codex CLI was also used
+for a smaller number of changes (commit subjects prefixed `[codex]`).
+Both tools are used by Jonathan under accounts he holds, with Jonathan
+as the git-recorded author.
 
-- Anthropic's Consumer Terms of Service assign all rights in Claude's
-  output to the user: *"You own Content that you submit to and receive
-  from our Services. Subject to your compliance with these Terms,
-  Anthropic hereby assigns to you all its right, title and interest (if
-  any) in and to Outputs."*
-  (<https://www.anthropic.com/legal/consumer-terms>)
-- Every commit was reviewed, directed, and authored by Jonathan
-  Woodall; the creative and editorial decisions in the codebase are the
-  work of a human author.
-- No human being is represented by the "Claude" co-author trailer. It
-  refers to Anthropic's software product, not to a contributor who
-  would hold an independent IP claim.
+The Claude Code CLI automatically adds a
+`Co-Authored-By: Claude <noreply@anthropic.com>` trailer to commits it
+assists with. Approximately 87 of the 127 commits in this repository
+(~69%) include this trailer.
 
-For these reasons, the sole-author representation in §1 remains
-accurate. No IP waiver or assignment from Anthropic is required. The
-same analysis would apply to any other AI coding tool (GitHub Copilot,
+Posture:
+
+- Jonathan Woodall is the author of each such commit. He is the
+  account holder on Anthropic and OpenAI, directed the prompts,
+  reviewed the output, and accepted it into the codebase. The creative
+  and editorial decisions reflected in the codebase are his.
+- Under Anthropic's applicable terms of service (both the Consumer
+  Terms at <https://www.anthropic.com/legal/consumer-terms> and the
+  Commercial Terms at <https://www.anthropic.com/legal/commercial-terms>),
+  Anthropic assigns to the user any rights Anthropic may have in
+  outputs. OpenAI's terms contain a comparable assignment. No residual
+  IP claim is retained by either vendor.
+- "Claude" in any Co-Authored-By trailer refers to Anthropic's
+  software product, not a separate human contributor; it does not
+  represent an independent IP claim.
+
+The same analysis applies to any other AI coding tool (GitHub Copilot,
 Cursor, etc.) whose terms assign output rights to the user.
 
 ### Predecessor repositories
@@ -166,12 +188,12 @@ in the predecessor tech stack.
 Scan method: `pnpm install --ignore-scripts` against the committed
 `pnpm-lock.yaml` (2,104 unique packages), read each installed
 `package.json`'s `license` field, flag any of
-`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. Each match was then manually
-classified.
+`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. Each match identified by
+the scan was then manually classified.
 
 ### 3.1 GPL / AGPL / SSPL (strong copyleft)
 
-**Zero packages.**
+No packages matching GPL, AGPL, or SSPL were identified by the scan.
 
 ### 3.2 Dual-licensed with a GPL option — permissive elected
 
@@ -179,7 +201,7 @@ classified.
 |---|---|---|---|
 | `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **MIT** |
 
-Elected in writing. No GPL obligation attaches.
+Election recorded in this report. No GPL obligation attaches.
 
 ### 3.3 LGPL-3.0-or-later (weak copyleft, dynamic linking)
 
@@ -188,42 +210,82 @@ Elected in writing. No GPL obligation attaches.
 | `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | Pre-compiled native image-processing binary, dynamically loaded by `sharp` |
 | `@img/sharp-libvips-linuxmusl-x64` | 1.0.4, 1.2.3 | Same, musl variant |
 
-PageSpace neither modifies nor statically links these binaries. LGPL-3.0
-§4 expressly permits this use by proprietary software when (a) the
-library's license text accompanies the distribution and (b) recipients
-can replace the library with a modified build. Both satisfied:
+PageSpace neither modifies nor statically links these binaries. The
+library is consumed as a Combined Work in the sense of LGPL-3.0 §4,
+which permits conveyance of the Combined Work under proprietary terms
+subject to the conditions in §4(a)–(e). Those conditions and how they
+are addressed:
 
-- Full LGPL-3.0 text committed at `LICENSES/LGPL-3.0.txt`.
-- Source available at <https://github.com/lovell/sharp-libvips>.
-- `sharp` supports user-compiled libvips via
-  <https://sharp.pixelplumbing.com/install#custom-libvips>.
+- **§4(a)** — give prominent notice that the Library is used and is
+  covered by the LGPL: covered by this section of the report and by
+  the attribution in `LICENSES/`.
+- **§4(b)** — accompany the Combined Work with a copy of the GNU GPL
+  and the LGPL: the GPL-3.0 text is committed at
+  [`LICENSES/GPL-3.0.txt`](../../LICENSES/GPL-3.0.txt) and the LGPL-3.0
+  text is committed at [`LICENSES/LGPL-3.0.txt`](../../LICENSES/LGPL-3.0.txt).
+- **§4(c)** — for Combined Works that display copyright notices,
+  include a reference to the copyright notices of the Library:
+  satisfied by the attribution in `LICENSES/` and in this subsection.
+- **§4(d)** — provide either (i) the Minimal Corresponding Source for
+  user-recombination with a modified Library, or (ii) a suitable
+  shared-library mechanism. Satisfied by (ii): the libvips binaries are
+  dynamically loaded by `sharp` at runtime, and `sharp` supports
+  installing a user-compiled libvips build
+  (<https://sharp.pixelplumbing.com/install#custom-libvips>).
+- **§4(e)** — installation information for user-modified libraries in
+  User Products: same mechanism as §4(d).
 
-**Does not obligate disclosure of PageSpace's source.**
+The libvips source is upstream at
+<https://github.com/lovell/sharp-libvips>.
+
+This arrangement does not obligate disclosure of PageSpace's
+proprietary source.
 
 ### 3.4 MPL-2.0 (weak copyleft, per-file)
 
-MPL-2.0 attaches only to files that are modified. All PageSpace uses
-are unmodified. The "Larger Work" (PageSpace's proprietary code) may be
-under different terms (§3.3).
+MPL-2.0 attaches to files that are Covered Software. Unmodified use
+does not trigger MPL's source-disclosure obligations on surrounding
+code: MPL-2.0 §3.3 expressly permits distribution of the Covered
+Software as part of a "Larger Work" under separate terms, and MPL's
+modified-file disclosure obligation in MPL-2.0 §3.1–§3.2 only attaches
+to Modifications of the Covered Software itself. PageSpace ships each
+of the packages below unmodified.
+
+(`dompurify` was previously evaluated under this section and is
+omitted here: it is dual-licensed **MPL-2.0 OR Apache-2.0**, and
+PageSpace formally elects Apache-2.0. See §3.5 below.)
 
 | Package | Version | Role | Shipped? |
 |---|---|---|---|
-| `dompurify` | 3.2.7 | Direct prod dep (web); HTML sanitization. **Dual MPL-2.0 OR Apache-2.0 — Apache-2.0 elected.** | Yes |
 | `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep (iOS + Android); Apple/Google sign-in | Mobile only |
 | `lightningcss` (+ linux-gnu, linux-musl variants) | 1.30.1 | Transitive dev-only; Tailwind v4 + Vite CSS compiler | No — build-time only |
 | `axe-core` | 4.10.3 | Transitive dev-only; accessibility linting via `eslint-plugin-jsx-a11y` | No — lint-time only |
 
-Full MPL-2.0 text committed at `LICENSES/MPL-2.0.txt`.
-**Does not obligate disclosure of PageSpace's source** for any of these.
+Full MPL-2.0 text committed at
+[`LICENSES/MPL-2.0.txt`](../../LICENSES/MPL-2.0.txt). No disclosure of
+PageSpace's proprietary source is required under MPL for any of these,
+given unmodified use.
 
-### 3.5 Bottom line
+### 3.5 Formal elections (dual-licensed packages)
 
-No dependency in the tree imposes a copyleft obligation on PageSpace's
-proprietary code. If "no copyleft" is read literally (zero LGPL or MPL
-of any kind, even weak-copyleft used unmodified), the 9 packages above
-are the full list to discuss with counsel. If "no copyleft" is read in
-the usual commercial sense (nothing that would force disclosure of
-PageSpace's source), the codebase is clean.
+Where a dependency is distributed under multiple licenses at the
+licensee's option, PageSpace elects the permissive option. Election
+recorded here:
+
+| Package | Version | Available | **Elected** |
+|---|---|---|---|
+| `dompurify` | 3.2.7 | MPL-2.0 **OR** Apache-2.0 | **Apache-2.0** |
+| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **MIT** (cross-reference §3.2) |
+
+### 3.6 Summary
+
+Based on the scan described at the top of §3, and in the seller's
+view, no dependency identified would require disclosure of PageSpace's
+proprietary source code under the conditions in which PageSpace uses
+them. The copyleft-family components present in the tree are the
+packages listed in §3.3 (LGPL-3.0, native binaries dynamically loaded)
+and §3.4 (MPL-2.0, used unmodified); §3.5 records the formal elections
+that remove `dompurify` and `jszip` from any copyleft posture.
 
 ---
 
@@ -263,7 +325,7 @@ and the seller rotates or retires keys.
 | Item | Reason |
 |---|---|
 | Production VPS (Postgres + Redis) | Buyer is redeploying the repo to their own Fly.io; the VPS is decommissioned at cutover. No data migration from a managed provider is required. |
-| BYOK provider keys (OpenAI, Anthropic, xAI, OpenRouter, etc.) | Per-user app credentials, not infrastructure assets. Each user brings their own keys into the app at runtime. |
+| BYOK provider keys (OpenAI, Anthropic, xAI, OpenRouter, etc.) | User-supplied credentials entered into the application by each end user; held in the application database rather than in seller's infrastructure. Each user brings their own keys at runtime. |
 | Historical Gemini / Google AI API keys | Gemini is no longer used by the product; keys can be retired without replacement. |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller; not part of the sale asset schedule. |
 
