@@ -1,6 +1,6 @@
 # PageSpace: Where AI Can Actually Work
 
-**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • Self-Host • [Discord](https://discord.gg/yxDQkTHXT5)
+**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • [Discord](https://discord.gg/yxDQkTHXT5)
 
 > PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
 
@@ -50,78 +50,38 @@ Claude: "Update all meeting notes in my PageSpace"
 
 ---
 
-## Quick Start
+## Get Started
 
-### Cloud (Recommended)
-The fastest way to get started - no setup required:
+### Cloud
+The fastest way to get started — no setup required:
+
 1. Visit **[www.pagespace.ai](https://www.pagespace.ai)**
 2. Sign up for free
 3. Start building with AI immediately
 
-**Cloud features**: Automatic updates, zero maintenance, built-in AI models, team collaboration, and built-in security controls.
+Automatic updates, zero maintenance, built-in AI models, team collaboration, and enterprise-grade security controls.
 
 ### Desktop Apps
-Native desktop apps that connect to your PageSpace cloud workspace:
+Native desktop apps that connect to your PageSpace cloud workspace.
 
 **macOS** (Signed & Notarized)
-- [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) - Universal (Intel & Apple Silicon)
-- [Download ZIP](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.zip) - Universal archive
+- [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) — Universal (Intel & Apple Silicon)
+- [Download ZIP](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.zip) — Universal archive
 
 **Windows** ⚠️ *Unsigned software - security warning expected*
-- [Download EXE](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe) - Current Windows release artifact
+- [Download EXE](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.exe)
 
 **Linux**
-- [Download AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) - Universal (no installation)
-- [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) - Debian/Ubuntu
-- [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) - Fedora/RHEL
+- [Download AppImage](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.AppImage) — Universal (no installation)
+- [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) — Debian/Ubuntu
+- [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) — Fedora/RHEL
 
 **Features:**
 - Native desktop integration with system tray
 - Minimize to tray, deep linking support
-- Automatic updates (macOS only - signed builds)
-- Works with your cloud PageSpace instance
+- Automatic updates (macOS only — signed builds)
+- Works with your cloud PageSpace workspace
 - **Local MCP server support** (desktop-only): Run MCP servers on your own machine, using the same local trust-boundary model as Claude Desktop (Context7, Figma, Notion, etc.)
-
-**Build from source:**
-```bash
-git clone https://github.com/2witstudios/PageSpace.git
-cd PageSpace
-pnpm install
-pnpm build:desktop
-pnpm package:desktop
-```
-
-See [apps/desktop/README.md](apps/desktop/README.md) for detailed instructions.
-
-### Self-Host (Advanced)
-For complete data sovereignty and custom deployments:
-```bash
-# Clone and setup
-git clone https://github.com/2witstudios/PageSpace.git
-cd PageSpace
-pnpm install
-
-# Configure environment
-cp .env.example .env
-cp apps/web/.env.example apps/web/.env
-# Add your ENCRYPTION_KEY to .env (use: openssl rand -base64 32)
-
-# Launch database
-docker-compose up -d
-
-# Run database migrations
-pnpm db:generate
-pnpm db:migrate
-
-# Start development server
-pnpm dev
-
-# Visit http://localhost:3000
-```
-
-**When to self-host**: Air-gapped environments, compliance requirements, or when you need to run local AI models exclusively.
-
-**Cloud-first reality**: Local/self-host setup is more advanced than earlier versions because cloud integrations (for example Stripe billing and OAuth provider flows) are now first-class parts of the platform.
 
 ---
 
@@ -189,7 +149,7 @@ Each item in a drive is a typed page with a specific role:
 - **Built-in models** via PageSpace (no API key needed)
 - **Bring your own key**: OpenAI, Anthropic, Google, OpenRouter, xAI, and more
 - **100+ models** including Claude Opus 4.5, GPT-5, Gemini 3, Grok 4, and open-source alternatives
-- **Local models**: Connect Ollama or LM Studio for air-gapped deployments
+- **Local models**: Connect Ollama or LM Studio on the desktop app for local inference
 
 ### Unified Messaging & Inbox
 - **Unified inbox**: DMs and channels in one view across dashboard and drives
@@ -214,11 +174,9 @@ Each item in a drive is a typed page with a specific role:
 - **Vision input**: Image attachments for multimodal AI conversations
 
 ### Security Architecture
-PageSpace is actively moving toward a zero-trust architecture for cloud deployment.
-One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
-Remaining non-zero-trust hardening work is tracked in GitHub issues (for example [Zero Trust P1](https://github.com/2witstudios/PageSpace/issues/588)).
+PageSpace is built around a zero-trust model for cloud deployment. One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
 
-- **Opaque session tokens**: Server-validated tokens with SHA-256 hash-only storage - raw tokens never persisted
+- **Opaque session tokens**: Server-validated tokens with SHA-256 hash-only storage — raw tokens never persisted
 - **Per-event authorization**: Every sensitive operation re-validates permissions against the database
 - **Instant token revocation**: Token versioning enables immediate session invalidation across all devices
 - **Device fingerprinting**: Trust scoring detects token theft via IP/User-Agent anomalies
@@ -226,44 +184,6 @@ Remaining non-zero-trust hardening work is tracked in GitHub issues (for example
 - **Scoped external access**: MCP tokens enforce drive/page scope with strict auth validation
 - **Defense-in-depth**: SameSite cookies + CSRF tokens + origin validation + rate limiting
 - **Comprehensive security headers**: CSP with nonces, HSTS, X-Frame-Options, and more
-
-[Security architecture details →](./docs/3.0-guides-and-tools/cloud-security-analysis.md)
-
----
-
-## Architecture
-
-PageSpace is a cloud-native monorepo designed for scalability and security:
-
-```
-apps/
-├── web/          # Next.js 15 App Router (main application)
-├── realtime/     # Socket.IO server (real-time collaboration)
-├── processor/    # File processing service (uploads, optimization)
-├── desktop/      # Electron desktop wrapper
-├── ios/          # Capacitor iOS app
-├── android/      # Capacitor Android app
-└── marketing/    # Marketing site
-
-packages/
-├── db/           # Drizzle ORM + PostgreSQL schema
-└── lib/          # Shared auth, permissions, utilities
-```
-
-### Tech Stack
-- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS 4, shadcn/ui
-- **Backend**: Next.js API routes, PostgreSQL, Drizzle ORM, Redis
-- **AI**: Vercel AI SDK, 10+ provider integrations
-- **Real-time**: Socket.IO with Redis pub/sub for horizontal scaling
-- **Desktop/Mobile**: Electron + Capacitor wrappers (macOS, Windows, Linux, iOS, Android)
-- **Auth**: Opaque session tokens, OAuth (Google, Apple), MCP tokens
-- **Build**: pnpm workspaces, Turbo, Docker
-
-### Cloud Infrastructure
-- **Database**: Any PostgreSQL (Neon, Supabase, RDS, or self-hosted)
-- **Cache**: Redis for sessions, rate limiting, and distributed state
-- **Storage**: Content-addressed file storage with optimization pipeline
-- **Deployment**: Docker containers, CI/CD via GitHub Actions
 
 ---
 
@@ -303,7 +223,6 @@ PageSpace provides comprehensive data protection so you never lose work:
 - **Complete audit trail**: Every operation logged with who/what/when for compliance
 - **Retention lifecycle controls**: Automated cleanup for sessions, logs, backups, versions, and tokens
 - **GDPR support**: Self-service data export and deletion lifecycle tooling
-- **Self-host option**: Run entirely on your infrastructure for complete sovereignty
 
 ---
 
@@ -320,25 +239,18 @@ PageSpace provides comprehensive data protection so you never lose work:
 
 ## Community & Support
 
-- **[Discord](https://discord.gg/yxDQkTHXT5)**: Join our community for support and discussions
-- **[Documentation](./docs/1.0-overview/1.1-table-of-contents.md)**: Deep dive into architecture and guides
-- **[GitHub Issues](https://github.com/2witstudios/PageSpace/issues)**: Report bugs and request features
-
----
-
-## Contributing
-
-We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md) for details.
-
-PageSpace is built in public. Our roadmap, documentation, and development all happen in the open.
+- **[Discord](https://discord.gg/yxDQkTHXT5)** — community support and discussion
+- **[GitHub Issues](https://github.com/2witstudios/PageSpace/issues)** — bug reports and feature requests
 
 ---
 
 ## License
 
-CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International) - see [LICENSE](./LICENSE) for details.
+PageSpace is proprietary software. Copyright © 2025-2026 Jonathan Woodall, d/b/a 2witstudios. All rights reserved. See [LICENSE](./LICENSE) for full terms.
 
-This means you can use, modify, and share PageSpace for non-commercial purposes.
+This repository is public for transparency and issue tracking. The source code is **not** open-source: no license is granted to copy, modify, redistribute, self-host, or otherwise use the code without the prior written permission of the copyright holder. External contributions are not currently accepted.
+
+Third-party open-source components retained in the dependency tree remain under their own licenses; see the [`LICENSES/`](./LICENSES/) directory for the full texts of those where attribution is required.
 
 ---
 
