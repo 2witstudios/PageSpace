@@ -1,70 +1,43 @@
-# PageSpace — IP & OSS Disclosure for Sale Due Diligence
+# PageSpace — IP & OSS Due Diligence Disclosure
 
 **Prepared:** 2026-04-16
-**Scope:** Entire `2witstudios/pagespace` monorepo
+**For:** Pending sale of PageSpace
+**Repository:** `2witstudios/pagespace` (entire monorepo)
 **Branch:** `claude/legal-compliance-report-D8Poy`
-**Purpose:** Due-diligence disclosure for the pending sale of PageSpace.
-**Audience:** Buyer's counsel and seller's counsel.
+**Seller:** Jonathan Woodall, sole proprietor operating as 2witstudios
 
-This is a single consolidated disclosure package. It answers the three
-IP-DD items raised by counsel:
+This disclosure answers counsel's three questions:
 
-1. Did anyone other than Jonathan Woodall touch the code?
-2. If anyone else contributed, is IP assignment required?
-3. Full OSS inventory, with every copyleft-family dependency flagged and
-   its compliance posture documented.
-
-The document is self-contained: a **Seller's Confirmation** memo is in
-§1 (ready for signature); the formal license elections and third-party
-attributions required for distribution are in §5; the complete SBOM is
-in §9.
+1. Has anyone other than Jonathan Woodall touched the code? If so, are
+   IP assignments required?
+2. Is any GPL-licensed (or otherwise contaminating copyleft) software
+   present in the dependency tree?
+3. What is the complete list of OSS used?
 
 ---
 
-## 0. Cleanups landed in this branch
-
-1. **License model flipped to proprietary.** Root `LICENSE` now reads
-   "All rights reserved" (copyright Jonathan Woodall, d/b/a 2witstudios —
-   sole proprietorship). Every workspace `package.json` declares
-   `"license": "UNLICENSED"`. Prior state was an inconsistent mix of
-   CC-BY-NC-SA-4.0 and template-default AGPL-3.0.
-2. **Remotion purged.** Unused offline video-rendering code removed from
-   `apps/marketing`. Transitive package count: 2,253 → 2,104.
-3. **License elections and attributions consolidated into §5.** Formal
-   election of the permissive side of dual-licensed packages
-   (`dompurify` → Apache-2.0, `jszip` → MIT) plus LGPL/MPL attribution
-   language. Full license texts committed at `LICENSES/LGPL-3.0.txt` and
-   `LICENSES/MPL-2.0.txt`.
-
----
-
-## 1. Seller's Confirmation (ready for signature)
+## 1. Seller's Confirmation
 
 > I, Jonathan Woodall, sole proprietor operating as 2witstudios
 > (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), in connection
-> with the pending sale of PageSpace confirm the following for the
-> `2witstudios/pagespace` repository as of the HEAD of branch
-> `claude/legal-compliance-report-D8Poy` on 2026-04-16:
+> with the pending sale of PageSpace confirm for the
+> `2witstudios/pagespace` repository as of 2026-04-16:
 >
 > 1. **Sole author.** All human-authored source code was written by me.
->    The git history shows two author identities — "2Wits" and
->    "2witstudios" — both bound to `2witstudios@gmail.com` and both
+>    The git history shows two author identities, "2Wits" and
+>    "2witstudios", both bound to `2witstudios@gmail.com` and both
 >    referring to me.
-> 2. **No third-party human contributors.** No outside IP assignments
->    are required for the sale.
-> 3. **Only automated contributor is Dependabot.** 5 commits, all
->    bumping GitHub Actions versions inside `.github/workflows/`. No
->    product source or `package.json` touched; the bot claims no
->    authorship. See §2.
-> 4. **OSS dependency list is complete.** §8 (direct) and §9
->    (transitive SBOM) are generated programmatically from
->    `pnpm-lock.yaml`.
-> 5. **Copyleft posture.** No dependency imposes copyleft obligations on
->    PageSpace's proprietary code. Every non-permissive dependency is
->    either (a) not shipped to production, (b) dual-licensed with a
->    permissive option we formally elect (§5.1), or (c) used unmodified
->    in a way the license expressly permits (§5.2, §5.3). See §4 for
->    per-package analysis.
+> 2. **No third-party human contributors, and therefore no outside IP
+>    assignments required.** The only non-me contributor in git history
+>    is GitHub's Dependabot bot, whose commits are limited to version
+>    bumps in CI workflow YAML files (no product source, no dependency
+>    declarations). See §2.
+> 3. **No GPL, AGPL, or SSPL dependencies** are used. One package
+>    (`jszip`) is dual-licensed MIT-or-GPL; PageSpace elects MIT.
+>    Weak-copyleft dependencies (LGPL, MPL) are present but do not
+>    impose copyleft obligations on PageSpace's proprietary code under
+>    the conditions of use. See §3.
+> 4. The complete OSS inventory is in §4.
 >
 > Signed: __________________________  Date: __________
 
@@ -72,7 +45,7 @@ in §9.
 
 ## 2. Authorship Evidence
 
-### 2.1 Git authors — entire history, all branches
+### Git authors — entire history, all branches
 
 | Commits | Author | Email |
 |---:|---|---|
@@ -80,701 +53,98 @@ in §9.
 | 26 | 2witstudios | 2witstudios@gmail.com |
 | 5 | dependabot[bot] | 49699333+dependabot[bot]@users.noreply.github.com |
 
-"2Wits" and "2witstudios" share one email — same person, two display-name
-variants. Committers are Jonathan (direct pushes) and `GitHub <noreply@github.com>`
+"2Wits" and "2witstudios" share one email and refer to Jonathan.
+Committers are Jonathan (direct pushes) and `GitHub <noreply@github.com>`
 (PR squash-merges; authorship remains Jonathan's).
 
-### 2.2 Dependabot scope (all 5 commits)
+### Dependabot scope (all 5 commits, all CI-only)
 
-| SHA | Change |
-|---|---|
-| `16c7114` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.94.2 → 3.94.3 (#1007) |
-| `4564f11` | `.github/workflows/`: bump `softprops/action-gh-release` 2 → 3 (#1005) |
-| `251bdd9` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.94.1 → 3.94.2 (#832) |
-| `b5d5fca` | `.github/workflows/docker-images.yml`: bump `docker/login-action` 3 → 4 (#815) |
-| `1031707` | `.github/workflows/security.yml`: bump `trufflesecurity/trufflehog` 3.93.8 → 3.94.1 (#817) |
-
-Each diff is a single-line version bump in a GitHub Actions YAML file. No
-product source, no `package.json`, no authorship claim.
-
-**Conclusion:** Counsel item 1 confirmed; counsel item 2 — no outside-contributor
-IP assignments required.
-
----
-
-## 3. Project's Own License
-
-- **Root `LICENSE`:** proprietary "All Rights Reserved" (copyright
-  Jonathan, d/b/a 2witstudios — sole proprietorship).
-- **Every workspace `package.json`:** `"license": "UNLICENSED"` (npm/SPDX
-  convention for proprietary).
-
-The prior CC-BY-NC-SA-4.0 and stray AGPL-3.0 strings have been removed.
-
----
-
-## 4. Third-Party Copyleft-Family Dependencies — per-package analysis
-
-Method: `pnpm install --ignore-scripts` (2,104 unique packages), read each
-installed `package.json`'s `license` field, flag
-`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. `pnpm why <pkg>` establishes
-provenance (direct/transitive, prod/dev/build).
-
-**Bottom line:** no copyleft-family dependency imposes copyleft obligations
-on PageSpace's code.
-
-### 4.1 Pure GPL / AGPL / SSPL
-
-**Zero.**
-
-### 4.2 Dual-licensed with a GPL option — elect permissive
-
-| Package | Version | Licenses | Provenance | Election | Impact |
-|---|---|---|---|---|---|
-| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | Transitive (web app) via `mammoth`, `html-to-docx`, `docx-preview` | **MIT** (formal election in §5.1) | Zero copyleft. |
-
-### 4.3 LGPL-3.0-or-later — dynamic linking, proprietary-safe
-
-| Package | Version | Provenance |
+| SHA | File touched | Change |
 |---|---|---|
-| `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | Native binary loaded by `sharp` in the processor service |
+| `16c7114` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.94.2 → 3.94.3 |
+| `4564f11` | `.github/workflows/*` | bump `softprops/action-gh-release` 2 → 3 |
+| `251bdd9` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.94.1 → 3.94.2 |
+| `b5d5fca` | `.github/workflows/docker-images.yml` | bump `docker/login-action` 3 → 4 |
+| `1031707` | `.github/workflows/security.yml` | bump `trufflesecurity/trufflehog` 3.93.8 → 3.94.1 |
+
+Each is a one-line version bump in a GitHub Actions YAML file. No
+product source or `package.json` touched; the bot claims no authorship
+of any code it generates.
+
+---
+
+## 3. Copyleft Posture
+
+Scan method: `pnpm install --ignore-scripts` against the committed
+`pnpm-lock.yaml` (2,104 unique packages), read each installed
+`package.json`'s `license` field, flag any of
+`GPL|LGPL|AGPL|MPL|EPL|CDDL|SSPL|OSL|EUPL`. Each match was then manually
+classified.
+
+### 3.1 GPL / AGPL / SSPL (strong copyleft)
+
+**Zero packages.**
+
+### 3.2 Dual-licensed with a GPL option — permissive elected
+
+| Package | Version | Available | **Elected** |
+|---|---|---|---|
+| `jszip` | 3.10.1 | MIT **OR** GPL-3.0-or-later | **MIT** |
+
+Elected in writing. No GPL obligation attaches.
+
+### 3.3 LGPL-3.0-or-later (weak copyleft, dynamic linking)
+
+| Package | Version | Role |
+|---|---|---|
+| `@img/sharp-libvips-linux-x64` | 1.0.4, 1.2.3 | Pre-compiled native image-processing binary, dynamically loaded by `sharp` |
 | `@img/sharp-libvips-linuxmusl-x64` | 1.0.4, 1.2.3 | Same, musl variant |
 
-`sharp` is imported at `apps/processor/src/workers/image-processor.ts` for
-image resize/convert/EXIF-rotate. The `libvips` binaries load dynamically
-at runtime and are unmodified.
+PageSpace neither modifies nor statically links these binaries. LGPL-3.0
+§4 expressly permits this use by proprietary software when (a) the
+library's license text accompanies the distribution and (b) recipients
+can replace the library with a modified build. Both satisfied:
 
-LGPL-3.0 §4 permits this use by proprietary software given (a) the library
-license text is provided to recipients and (b) users can swap in a modified
-build. Both satisfied — see §5.2 for the formal attribution and
-`LICENSES/LGPL-3.0.txt` for the full text.
+- Full LGPL-3.0 text committed at `LICENSES/LGPL-3.0.txt`.
+- Source available at <https://github.com/lovell/sharp-libvips>.
+- `sharp` supports user-compiled libvips via
+  <https://sharp.pixelplumbing.com/install#custom-libvips>.
 
-**No source disclosure required.**
+**Does not obligate disclosure of PageSpace's source.**
 
-### 4.4 MPL-2.0 — per-package classification
+### 3.4 MPL-2.0 (weak copyleft, per-file)
 
-MPL-2.0 is a per-file copyleft that attaches only to files we modify.
-Unmodified use imposes nothing on surrounding code.
+MPL-2.0 attaches only to files that are modified. All PageSpace uses
+are unmodified. The "Larger Work" (PageSpace's proprietary code) may be
+under different terms (§3.3).
 
-| Package | Version | Provenance | Shipped? | Modified? | Obligation |
-|---|---|---|---|---|---|
-| `dompurify` | 3.2.7 | Direct prod dep in `apps/web`; sanitizes AI tool-call HTML | Yes | No | Dual **MPL-2.0 OR Apache-2.0** — formal Apache-2.0 election in §5.1. MPL removed. |
-| `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep in `apps/ios` + `apps/android`; Apple/Google sign-in | Mobile only | No | Ship LICENSE text in mobile licenses screen. |
-| `lightningcss` (+ linux-gnu, linux-musl) | 1.30.1 | Transitive dev-only via `@tailwindcss/postcss` + `vite` | No — build-time | No | None. |
-| `axe-core` | 4.10.3 | Transitive dev-only via `eslint-plugin-jsx-a11y` | No — lint-time | No | None. |
+| Package | Version | Role | Shipped? |
+|---|---|---|---|
+| `dompurify` | 3.2.7 | Direct prod dep (web); HTML sanitization. **Dual MPL-2.0 OR Apache-2.0 — Apache-2.0 elected.** | Yes |
+| `@capgo/capacitor-social-login` | 7.20.0 | Direct prod dep (iOS + Android); Apple/Google sign-in | Mobile only |
+| `lightningcss` (+ linux-gnu, linux-musl variants) | 1.30.1 | Transitive dev-only; Tailwind v4 + Vite CSS compiler | No — build-time only |
+| `axe-core` | 4.10.3 | Transitive dev-only; accessibility linting via `eslint-plugin-jsx-a11y` | No — lint-time only |
 
-**No source disclosure required** for any MPL-2.0 dependency.
+Full MPL-2.0 text committed at `LICENSES/MPL-2.0.txt`.
+**Does not obligate disclosure of PageSpace's source** for any of these.
 
-### 4.5 Removal cost if counsel wants zero LGPL/MPL
+### 3.5 Bottom line
 
-Strong copyleft (GPL, AGPL, SSPL) is what usually triggers DD concern and
-is absent from this tree. LGPL-3.0-dynamic and MPL-2.0-unmodified do not
-propagate copyleft to PageSpace's code. If counsel nonetheless wants them
-gone:
-
-- `dompurify` — solved by the Apache-2.0 election; zero code change.
-- `axe-core`, `lightningcss` — dev/build-time transitive; not shipped, no
-  removal needed.
-- `@capgo/capacitor-social-login` — swap to
-  `@capacitor-community/apple-sign-in` + `@codetrix-studio/capacitor-google-auth`
-  (both MIT). ~1 day of mobile work.
-- `sharp` / `libvips` — replace with `jimp` (MIT, pure JS, ~5× slower) or
-  a hosted image API. Not recommended; `sharp` is the industry standard
-  and LGPL-3.0-dynamic is a textbook-safe pattern.
+No dependency in the tree imposes a copyleft obligation on PageSpace's
+proprietary code. If "no copyleft" is read literally (zero LGPL or MPL
+of any kind, even weak-copyleft used unmodified), the 9 packages above
+are the full list to discuss with counsel. If "no copyleft" is read in
+the usual commercial sense (nothing that would force disclosure of
+PageSpace's source), the codebase is clean.
 
 ---
 
-## 5. License Elections and Attributions (distribution-facing)
-
-This section is the formal record of PageSpace's license elections and
-the attributions required under LGPL-3.0 and MPL-2.0. It is extractable
-as-is for inclusion with any distribution of the software.
-
-### 5.1 Elections for dual-licensed packages
-
-PageSpace elects the permissive option for each:
-
-| Package | Available licenses | **Elected** |
-|---|---|---|
-| `dompurify` | MPL-2.0 **OR** Apache-2.0 | **Apache-2.0** |
-| `jszip` | MIT **OR** GPL-3.0-or-later | **MIT** |
-
-These elections remove any copyleft obligation from the respective
-dependencies.
-
-### 5.2 LGPL-3.0-or-later attribution
-
-The following packages are distributed under LGPL-3.0-or-later and are
-consumed by PageSpace as **pre-compiled dynamically-loaded native
-libraries** used by the `sharp` image-processing package. PageSpace
-neither modifies nor statically links these libraries. LGPL-3.0 §4
-expressly permits this use by proprietary software.
-
-- `@img/sharp-libvips-darwin-arm64`
-- `@img/sharp-libvips-darwin-x64`
-- `@img/sharp-libvips-linux-arm`
-- `@img/sharp-libvips-linux-arm64`
-- `@img/sharp-libvips-linux-x64`
-- `@img/sharp-libvips-linuxmusl-x64`
-- `@img/sharp-libvips-linuxmusl-arm64`
-
-**Obligations satisfied:**
-
-1. The complete LGPL-3.0 license text is committed at
-   [`LICENSES/LGPL-3.0.txt`](../../LICENSES/LGPL-3.0.txt) and must
-   accompany any distribution that bundles these binaries (LGPL-3.0
-   §4(d)(1), §6).
-2. The binaries are downloaded from the upstream package registry at
-   install time; source is available at
-   <https://github.com/lovell/sharp-libvips>.
-3. Users may replace the pre-compiled `libvips` with a modified build.
-   `sharp`'s install-from-source flow supports this; see
-   <https://sharp.pixelplumbing.com/install#custom-libvips>.
-
-### 5.3 MPL-2.0 attribution
-
-The following packages are distributed under MPL-2.0. PageSpace uses
-them unmodified. **Obligations under MPL-2.0 §3 apply regardless of
-modification:**
-
-- MPL-covered files must retain their existing MPL-2.0 notices and
-  attribution (§3.2).
-- The source form of the MPL-covered files must be made available to
-  recipients under MPL-2.0, either shipped alongside the distribution or
-  by directing recipients to the upstream source (§3.1 and §3.2). In
-  PageSpace's case this is satisfied by the npm registry and each
-  package's public source repository.
-- A copy of the MPL-2.0 license text must accompany any distribution;
-  committed at [`LICENSES/MPL-2.0.txt`](../../LICENSES/MPL-2.0.txt).
-
-PageSpace's own proprietary code — the surrounding "Larger Work" — may
-be licensed under different terms (§3.3). Unmodified use does **not**
-require disclosure of PageSpace's proprietary source.
-
-If any MPL-covered file is ever forked or patched in-tree, the modified
-file must remain under MPL-2.0 and its source made available.
-
-| Package | Role | Shipped in production? |
-|---|---|---|
-| `@capgo/capacitor-social-login` | Apple/Google sign-in plugin for iOS/Android wrappers | Yes (mobile only) |
-| `lightningcss` (+ `lightningcss-linux-x64-gnu`, `lightningcss-linux-x64-musl`) | Build-time CSS compiler used by Tailwind v4's PostCSS plugin | No — build-time only; compiled CSS is not MPL-licensed |
-| `axe-core` | Accessibility testing, pulled transitively by `eslint-plugin-jsx-a11y` | No — dev-only (lint-time) |
-
-Production-shipped copyleft components for counsel's review:
-`@img/sharp-libvips-*` (LGPL, §5.2) and `@capgo/capacitor-social-login`
-(MPL). `lightningcss` and `axe-core` are build/dev-only and are not in
-any shipped artifact.
-
-### 5.4 Full license texts
-
-Committed in the repository root's `LICENSES/` directory:
-
-- [`LICENSES/LGPL-3.0.txt`](../../LICENSES/LGPL-3.0.txt) — full LGPL-3.0
-  text applicable to `@img/sharp-libvips-*`.
-- [`LICENSES/MPL-2.0.txt`](../../LICENSES/MPL-2.0.txt) — full MPL-2.0
-  text applicable to the MPL-2.0 packages above.
-
-Both files are the canonical SPDX-published texts (source:
-<https://github.com/spdx/license-list-data>).
-
----
-
-## 6. Ambiguous Third-Party Licenses — cosmetic only
-
-None affect PageSpace's IP posture.
-
-| Package | Version | License field | Ground truth | Action |
-|---|---|---|---|---|
-| `@gridland/utils` | 0.2.53 | (missing) | First-party (2witstudios) | Declare a license in that package's repo. |
-| `@gridland/web` | 0.2.53 | (missing) | Same. | Same. |
-| `argparse` | 2.0.1 | Python-2.0 | PSF License — GPL-compatible permissive. | None. |
-| `atomically`, `khroma`, `stubborn-fs` | — | (missing) | Upstream repos are MIT. | Cosmetic metadata gap. |
-| `duck` | 0.1.12 | "BSD" | Unspecified BSD — treat as BSD-3-Clause. | None. |
-
----
-
-## 7. Transitive SBOM — License Distribution
-
-Generated from `pnpm install` against the committed `pnpm-lock.yaml`.
-
-| Count | License |
-|---:|---|
-| 1,720 | MIT |
-| 150 | ISC |
-| 107 | Apache-2.0 |
-| 43 | BSD-2-Clause |
-| 37 | BSD-3-Clause |
-| 11 | BlueOak-1.0.0 |
-| 5 | MPL-2.0 |
-| 5 | UNKNOWN (see §6) |
-| 4 | LGPL-3.0-or-later |
-| 4 | (MIT OR CC0-1.0) |
-| 3 | Unlicense |
-| 2 | OFL-1.1 (fonts) |
-| 2 | CC-BY-4.0 |
-| 2 | (MIT AND Zlib) |
-| 2 | 0BSD |
-| 2 | MIT AND ISC |
-| 1 | MIT-0 |
-| 1 | Apache-2.0 AND MIT |
-| 1 | Python-2.0 |
-| 1 | (MPL-2.0 OR Apache-2.0) |
-| 1 | BSD (unspecified) |
-| 1 | (BSD-3-Clause AND Apache-2.0) |
-| 1 | (AFL-2.1 OR BSD-3-Clause) |
-| 1 | (MIT OR GPL-3.0-or-later) |
-| 1 | CC0-1.0 |
-| 1 | WTFPL OR ISC |
-| 1 | WTFPL |
-| 1 | (WTFPL OR MIT) |
-| — | **Total:** 2,104 unique packages |
-
----
-
-## 8. Directly-Declared OSS Dependencies (per `package.json`)
-
-Workspace-internal packages (`workspace:*`) omitted.
-
-### package.json  (declared license: UNLICENSED)
-
-**devDependencies** (20)
-
-- `@faker-js/faker` @ `^9.3.0`
-- `@testing-library/jest-dom` @ `^6.6.3`
-- `@testing-library/react` @ `^16.1.0`
-- `@testing-library/user-event` @ `^14.5.2`
-- `@types/jest` @ `^30.0.0`
-- `@types/node` @ `^24.0.13`
-- `@typescript-eslint/typescript-estree` @ `^8.46.0`
-- `@vitejs/plugin-react` @ `^4.3.4`
-- `@vitest/coverage-v8` @ `^2.1.0`
-- `@vitest/ui` @ `^2.1.0`
-- `dotenv` @ `^17.2.0`
-- `drizzle-kit` @ `^0.23.2`
-- `jsdom` @ `^25.0.1`
-- `knip` @ `^5.70.2`
-- `msw` @ `^2.6.8`
-- `tsx` @ `^4.21.0`
-- `turbo` @ `^2.5.5`
-- `typescript` @ `^5.8.3`
-- `vitest` @ `^2.1.0`
-- `yaml` @ `^2.8.2`
-
-### apps/android/package.json  (declared license: UNLICENSED)
-
-**dependencies** (10)
-
-- `@capacitor/android` @ `^7.0.3`
-- `@capacitor/app` @ `^7.0.3`
-- `@capacitor/browser` @ `^7.0.3`
-- `@capacitor/core` @ `^7.4.5`
-- `@capacitor/keyboard` @ `^7.0.3`
-- `@capacitor/preferences` @ `^7.0.3`
-- `@capacitor/push-notifications` @ `^7.0.0`
-- `@capacitor/splash-screen` @ `^7.0.3`
-- `@capacitor/status-bar` @ `^7.0.3`
-- `@capgo/capacitor-social-login` @ `^7.20.0`
-
-**devDependencies** (2)
-
-- `@capacitor/cli` @ `^7.0.0`
-- `typescript` @ `^5.8.3`
-
-### apps/atlas/package.json  (declared license: UNLICENSED)
-
-**dependencies** (5)
-
-- `@fontsource/ibm-plex-mono` @ `^5.1.1`
-- `@fontsource/space-grotesk` @ `^5.1.1`
-- `@xyflow/react` @ `^12.10.0`
-- `react` @ `^19.1.2`
-- `react-dom` @ `^19.1.2`
-
-**devDependencies** (5)
-
-- `@types/react` @ `^19.1.13`
-- `@types/react-dom` @ `^19.1.9`
-- `@vitejs/plugin-react` @ `^4.3.4`
-- `typescript` @ `^5.8.3`
-- `vite` @ `^5.4.19`
-
-### apps/control-plane/package.json  (declared license: UNLICENSED)
-
-**dependencies** (7)
-
-- `@paralleldrive/cuid2` @ `^2.2.2`
-- `dotenv` @ `^17.2.0`
-- `drizzle-orm` @ `^0.32.2`
-- `fastify` @ `^5.3.3`
-- `fastify-plugin` @ `^5.1.0`
-- `postgres` @ `^3.4.5`
-- `stripe` @ `^20.1.0`
-
-**devDependencies** (4)
-
-- `drizzle-kit` @ `^0.23.2`
-- `tsx` @ `^4.16.2`
-- `typescript` @ `^5.8.3`
-- `vitest` @ `^2.1.0`
-
-### apps/desktop/package.json  (declared license: UNLICENSED)
-
-**dependencies** (5)
-
-- `electron-store` @ `^10.0.0`
-- `electron-updater` @ `^6.6.2`
-- `node-machine-id` @ `^1.1.12`
-- `ws` @ `^8.18.3`
-- `zod` @ `^4.0.16`
-
-**devDependencies** (6)
-
-- `@types/node` @ `^20.17.12`
-- `@types/ws` @ `^8.18.1`
-- `electron` @ `^33.3.1`
-- `electron-builder` @ `^26.0.8`
-- `electron-vite` @ `^4.0.1`
-- `typescript` @ `^5.8.3`
-
-### apps/ios/package.json  (declared license: UNLICENSED)
-
-**dependencies** (10)
-
-- `@capacitor/app` @ `^7.0.3`
-- `@capacitor/browser` @ `^7.0.3`
-- `@capacitor/core` @ `^7.4.5`
-- `@capacitor/ios` @ `^7.0.3`
-- `@capacitor/keyboard` @ `^7.0.3`
-- `@capacitor/preferences` @ `^7.0.3`
-- `@capacitor/push-notifications` @ `^7.0.0`
-- `@capacitor/splash-screen` @ `^7.0.3`
-- `@capacitor/status-bar` @ `^7.0.3`
-- `@capgo/capacitor-social-login` @ `^7.20.0`
-
-**devDependencies** (2)
-
-- `@capacitor/cli` @ `^7.0.0`
-- `typescript` @ `^5.8.3`
-
-### apps/marketing/package.json  (declared license: UNLICENSED)
-
-**dependencies** (39)
-
-- `@base-ui/react` @ `^1.2.0`
-- `@hookform/resolvers` @ `^5.2.2`
-- `@radix-ui/react-accordion` @ `^1.2.12`
-- `@radix-ui/react-avatar` @ `^1.1.10`
-- `@radix-ui/react-checkbox` @ `^1.3.3`
-- `@radix-ui/react-dialog` @ `^1.1.15`
-- `@radix-ui/react-dropdown-menu` @ `^2.1.16`
-- `@radix-ui/react-label` @ `^2.1.7`
-- `@radix-ui/react-navigation-menu` @ `^1.2.14`
-- `@radix-ui/react-scroll-area` @ `^1.2.10`
-- `@radix-ui/react-select` @ `^2.2.6`
-- `@radix-ui/react-separator` @ `^1.1.7`
-- `@radix-ui/react-slot` @ `^1.2.3`
-- `@radix-ui/react-tabs` @ `^1.1.13`
-- `@radix-ui/react-tooltip` @ `^1.2.8`
-- `class-variance-authority` @ `^0.7.1`
-- `clsx` @ `^2.1.1`
-- `cmdk` @ `^1.1.1`
-- `date-fns` @ `^4.1.0`
-- `embla-carousel-react` @ `^8.6.0`
-- `input-otp` @ `^1.4.2`
-- `lucide-react` @ `^0.525.0`
-- `motion` @ `^12.23.22`
-- `next` @ `15.3.9`
-- `next-themes` @ `^0.4.6`
-- `radix-ui` @ `^1.4.3`
-- `react` @ `^19.1.2`
-- `react-day-picker` @ `^9.13.2`
-- `react-dom` @ `^19.1.2`
-- `react-hook-form` @ `^7.63.0`
-- `react-markdown` @ `^10.1.0`
-- `react-resizable-panels` @ `^4.6.2`
-- `recharts` @ `2.15.4`
-- `remark-gfm` @ `^4.0.1`
-- `resend` @ `^6.1.2`
-- `sonner` @ `^2.0.7`
-- `tailwind-merge` @ `^3.3.1`
-- `vaul` @ `^1.1.2`
-- `zod` @ `^4.1.11`
-
-**devDependencies** (13)
-
-- `@eslint/eslintrc` @ `^3`
-- `@playwright/test` @ `^1.49.1`
-- `@tailwindcss/postcss` @ `^4`
-- `@tailwindcss/typography` @ `^0.5.19`
-- `@types/node` @ `^20`
-- `@types/react` @ `^19`
-- `@types/react-dom` @ `^19`
-- `eslint` @ `^9`
-- `eslint-config-next` @ `15.3.9`
-- `shadcn` @ `^3.8.4`
-- `tailwindcss` @ `^4`
-- `tw-animate-css` @ `^1.4.0`
-- `typescript` @ `^5`
-
-### apps/processor/package.json  (declared license: UNLICENSED)
-
-**dependencies** (13)
-
-- `@paralleldrive/cuid2` @ `^2.2.2`
-- `cors` @ `^2.8.5`
-- `crypto` @ `^1.0.1`
-- `dotenv` @ `^16.4.7`
-- `express` @ `^5.2.1`
-- `magika` @ `^1.0.0`
-- `mammoth` @ `^1.8.0`
-- `multer` @ `^1.4.5-lts.1`
-- `pdfjs-dist` @ `^4.9.155`
-- `pg` @ `^8.16.3`
-- `pg-boss` @ `^10.1.6`
-- `sharp` @ `^0.33.5`
-- `tesseract.js` @ `^5.1.1`
-
-**devDependencies** (9)
-
-- `@types/cors` @ `^2.8.17`
-- `@types/express` @ `^5.0.1`
-- `@types/multer` @ `^1.4.12`
-- `@types/node` @ `^22.10.6`
-- `@types/supertest` @ `^6.0.3`
-- `supertest` @ `^7.2.2`
-- `ts-node` @ `^10.9.2`
-- `tsx` @ `^4.19.2`
-- `typescript` @ `^5.8.3`
-
-### apps/realtime/package.json  (declared license: UNLICENSED)
-
-**dependencies** (3)
-
-- `cookie` @ `1.0.2`
-- `dotenv` @ `^17.2.0`
-- `socket.io` @ `^4.7.5`
-
-**devDependencies** (2)
-
-- `tsx` @ `^4.16.2`
-- `typescript` @ `^5.5.2`
-
-### apps/web/package.json  (declared license: UNLICENSED)
-
-**dependencies** (104)
-
-- `@ai-sdk/anthropic` @ `^2.0.4`
-- `@ai-sdk/google` @ `^2.0.6`
-- `@ai-sdk/openai` @ `^2.0.15`
-- `@ai-sdk/openai-compatible` @ `^1.0.18`
-- `@ai-sdk/react` @ `^2.0.12`
-- `@ai-sdk/xai` @ `^2.0.8`
-- `@capacitor/browser` @ `^7.0.3`
-- `@capacitor/haptics` @ `^7.0.3`
-- `@capacitor/keyboard` @ `^7.0.4`
-- `@capacitor/push-notifications` @ `^7.0.4`
-- `@dnd-kit/core` @ `^6.3.1`
-- `@dnd-kit/sortable` @ `^10.0.0`
-- `@dnd-kit/utilities` @ `^3.2.2`
-- `@gridland/utils` @ `^0.2.53`
-- `@gridland/web` @ `^0.2.53`
-- `@monaco-editor/react` @ `^4.7.0`
-- `@openrouter/ai-sdk-provider` @ `^1.1.2`
-- `@paralleldrive/cuid2` @ `^2.2.2`
-- `@radix-ui/react-accordion` @ `^1.2.11`
-- `@radix-ui/react-alert-dialog` @ `^1.1.14`
-- `@radix-ui/react-avatar` @ `^1.1.10`
-- `@radix-ui/react-checkbox` @ `^1.3.2`
-- `@radix-ui/react-collapsible` @ `^1.1.12`
-- `@radix-ui/react-context-menu` @ `^2.2.16`
-- `@radix-ui/react-dialog` @ `^1.1.15`
-- `@radix-ui/react-dropdown-menu` @ `^2.1.16`
-- `@radix-ui/react-hover-card` @ `^1.1.15`
-- `@radix-ui/react-label` @ `^2.1.7`
-- `@radix-ui/react-navigation-menu` @ `^1.2.13`
-- `@radix-ui/react-popover` @ `^1.1.14`
-- `@radix-ui/react-progress` @ `^1.1.7`
-- `@radix-ui/react-radio-group` @ `^1.3.8`
-- `@radix-ui/react-scroll-area` @ `^1.2.10`
-- `@radix-ui/react-select` @ `^2.2.6`
-- `@radix-ui/react-separator` @ `^1.1.7`
-- `@radix-ui/react-slider` @ `^1.3.5`
-- `@radix-ui/react-slot` @ `^1.2.3`
-- `@radix-ui/react-switch` @ `^1.2.5`
-- `@radix-ui/react-tabs` @ `^1.1.12`
-- `@radix-ui/react-toggle` @ `^1.1.10`
-- `@radix-ui/react-tooltip` @ `^1.2.8`
-- `@radix-ui/react-use-controllable-state` @ `^1.2.2`
-- `@simplewebauthn/browser` @ `^13.2.2`
-- `@stripe/react-stripe-js` @ `^5.4.1`
-- `@stripe/stripe-js` @ `^8.5.3`
-- `@tanstack/react-virtual` @ `^3.13.18`
-- `@tiptap/core` @ `^3.7.2`
-- `@tiptap/extension-code-block` @ `^3.6.1`
-- `@tiptap/extension-mention` @ `^3.0.7`
-- `@tiptap/extension-table` @ `^3.0.7`
-- `@tiptap/extension-text-style` @ `^3.0.7`
-- `@tiptap/extensions` @ `^3.0.7`
-- `@tiptap/pm` @ `^3.7.2`
-- `@tiptap/react` @ `^3.0.7`
-- `@tiptap/starter-kit` @ `^3.0.7`
-- `@types/archiver` @ `^7.0.0`
-- `@xyflow/react` @ `^12.10.0`
-- `ai` @ `^5.0.54`
-- `archiver` @ `^7.0.1`
-- `cheerio` @ `^1.1.2`
-- `chrono-node` @ `^2.9.0`
-- `class-variance-authority` @ `^0.7.1`
-- `clsx` @ `^2.1.1`
-- `cmdk` @ `^1.1.1`
-- `cookie` @ `1.0.2`
-- `cron-parser` @ `^5.5.0`
-- `cronstrue` @ `^3.12.0`
-- `date-fns` @ `^4.1.0`
-- `docx-preview` @ `^0.3.6`
-- `dompurify` @ `^3.2.6`
-- `embla-carousel-react` @ `^8.6.0`
-- `google-auth-library` @ `^10.2.1`
-- `lucide-react` @ `^0.525.0`
-- `mammoth` @ `^1.10.0`
-- `marked` @ `^17.0.1`
-- `monaco-editor` @ `^0.52.2`
-- `motion` @ `^12.23.22`
-- `next` @ `15.3.9`
-- `next-themes` @ `^0.4.6`
-- `next-ws` @ `^2.1.5`
-- `ollama-ai-provider-v2` @ `^1.3.1`
-- `react` @ `^19.1.2`
-- `react-day-picker` @ `^9.11.3`
-- `react-dom` @ `^19.1.2`
-- `react-hook-form` @ `^7.62.0`
-- `react-image-crop` @ `^11.0.10`
-- `react-pdf` @ `^10.1.0`
-- `recharts` @ `^3.1.2`
-- `shiki` @ `^3.22.0`
-- `socket.io-client` @ `^4.8.1`
-- `sonner` @ `^2.0.6`
-- `streamdown` @ `^1.6.9`
-- `stripe` @ `^20.1.0`
-- `swr` @ `^2.3.4`
-- `tailwind-merge` @ `^3.3.1`
-- `tippy.js` @ `^6.3.7`
-- `tiptap-markdown` @ `^0.8.10`
-- `tokenlens` @ `^1.3.1`
-- `turndown` @ `^7.2.2`
-- `use-debounce` @ `^10.0.5`
-- `use-stick-to-bottom` @ `^1.1.1`
-- `ws` @ `^8.18.3`
-- `zod` @ `^4.0.16`
-- `zustand` @ `^5.0.6`
-
-**devDependencies** (21)
-
-- `@capacitor/app` @ `^7.1.1`
-- `@capacitor/browser` @ `^7.0.3`
-- `@capacitor/core` @ `^7.0.0`
-- `@capacitor/preferences` @ `^7.0.0`
-- `@capgo/capacitor-social-login` @ `^7.0.5`
-- `@eslint/eslintrc` @ `^3`
-- `@next/eslint-plugin-next` @ `15.3.9`
-- `@tailwindcss/postcss` @ `^4`
-- `@types/dompurify` @ `^3.2.0`
-- `@types/node` @ `^20`
-- `@types/react` @ `^19`
-- `@types/react-dom` @ `^19`
-- `@types/turndown` @ `^5.0.6`
-- `@types/ws` @ `^8.18.1`
-- `copy-webpack-plugin` @ `^12.0.2`
-- `eslint` @ `^9`
-- `eslint-config-next` @ `15.3.9`
-- `eslint-plugin-react-hooks` @ `^5.2.0`
-- `tailwindcss` @ `^4`
-- `tw-animate-css` @ `^1.3.5`
-- `typescript` @ `^5`
-
-### packages/db/package.json  (declared license: UNLICENSED)
-
-**dependencies** (4)
-
-- `@paralleldrive/cuid2` @ `^2.2.2`
-- `dotenv` @ `^17.2.0`
-- `drizzle-orm` @ `^0.32.2`
-- `pg` @ `^8.16.3`
-
-**devDependencies** (3)
-
-- `@types/pg` @ `^8.15.4`
-- `drizzle-kit` @ `^0.23.2`
-- `tsx` @ `^4.20.3`
-
-### packages/lib/package.json  (declared license: UNLICENSED)
-
-**dependencies** (21)
-
-- `@iarna/toml` @ `^2.2.5`
-- `@paralleldrive/cuid2` @ `^2.2.2`
-- `@react-email/components` @ `^0.5.5`
-- `@simplewebauthn/server` @ `^13.2.2`
-- `apple-signin-auth` @ `^2.0.0`
-- `diff-match-patch` @ `^1.0.5`
-- `drizzle-orm` @ `^0.32.2`
-- `google-auth-library` @ `^10.3.0`
-- `html-to-docx` @ `^1.8.0`
-- `ioredis` @ `^5.8.0`
-- `mammoth` @ `^1.10.0`
-- `pako` @ `^2.1.0`
-- `pdf-parse-debugging-disabled` @ `^1.1.1`
-- `react` @ `^19.1.2`
-- `react-dom` @ `^19.1.2`
-- `react-email` @ `^5.1.1`
-- `resend` @ `^6.1.2`
-- `server-only` @ `^0.0.1`
-- `xlsx` @ `^0.18.5`
-- `yaml` @ `^2.8.2`
-- `zod` @ `^4.0.16`
-
-**devDependencies** (6)
-
-- `@react-email/preview-server` @ `5.1.1`
-- `@types/diff-match-patch` @ `^1.0.36`
-- `@types/html-to-docx` @ `^1.8.0`
-- `@types/pako` @ `^2.0.3`
-- `@types/react` @ `^19.1.13`
-- `@types/xlsx` @ `^0.0.36`
-
-### prototypes/pagespace-cli-architecture/package.json  (declared license: UNLICENSED)
-
-**dependencies** (2)
-
-- `react` @ `^19.1.0`
-- `react-dom` @ `^19.1.0`
-
-**devDependencies** (5)
-
-- `@types/react` @ `^19.1.2`
-- `@types/react-dom` @ `^19.1.2`
-- `@vitejs/plugin-react` @ `^4.4.1`
-- `typescript` @ `~5.8.3`
-- `vite` @ `^6.3.2`
-
-### prototypes/pagespace-endgame/package.json  (declared license: UNLICENSED)
-
-**dependencies** (2)
-
-- `react` @ `^19.1.0`
-- `react-dom` @ `^19.1.0`
-
-**devDependencies** (5)
-
-- `@types/react` @ `^19.1.2`
-- `@types/react-dom` @ `^19.1.2`
-- `@vitejs/plugin-react` @ `^4.4.1`
-- `typescript` @ `~5.8.3`
-- `vite` @ `^6.3.2`
-
----
-
-## 9. Full Transitive SBOM (2,104 packages)
+## 4. Full OSS Inventory (2,104 packages)
+
+Generated by traversing `node_modules/.pnpm/*/node_modules/` after a
+clean `pnpm install --ignore-scripts` against the committed
+`pnpm-lock.yaml`. License column is verbatim from each installed
+package's `package.json` `license` field.
 
 | Package | Version | License |
 |---|---|---|
@@ -2882,26 +2252,3 @@ Workspace-internal packages (`workspace:*`) omitted.
 | zustand | 4.5.7 | MIT |
 | zustand | 5.0.8 | MIT |
 | zwitch | 2.0.4 | MIT |
-
----
-
-## 10. Methodology & Reproducibility
-
-1. **Authorship:** `git log --all --format='%an <%ae>|%h|%s'`.
-2. **Direct deps:** parsed every `package.json` in `apps/`, `packages/`,
-   `prototypes/`, and root.
-3. **Transitive SBOM:** clean `pnpm install --ignore-scripts`, then
-   traverse `node_modules/.pnpm/*/node_modules/` reading each
-   `package.json`'s `license` field.
-4. **Provenance:** `pnpm why <package>` and `pnpm --filter <app> why <package>`.
-5. **Copyleft detection:** regex
-   `\bGPL\b|\bLGPL\b|\bAGPL\b|\bCDDL\b|\bEPL\b|\bMPL\b|\bSSPL\b|COPYLEFT|OSL|EUPL`
-   against the `license` string. This is a pre-filter, not an SPDX parser;
-   every matched package is listed by name in §4 and its SPDX expression
-   (including `OR` / `AND` composites) manually classified. Upgrading to a
-   full SPDX expression parser (e.g. `spdx-expression-parse`) would be
-   appropriate if this audit were embedded in CI; for a one-off DD
-   artifact it adds no signal.
-
-This report is regenerable from the lockfile and git history — no manual
-data entry.
