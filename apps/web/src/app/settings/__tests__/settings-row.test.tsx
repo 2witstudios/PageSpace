@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { User } from 'lucide-react';
-import { SettingsRow } from '../page';
+import { SettingsRow } from '../SettingsRow';
 
 const baseItem = {
   title: 'Account',
