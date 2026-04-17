@@ -306,10 +306,6 @@ disclosure, and (b) the application's third-party licenses screen at
 links to the upstream `@capgo/capacitor-social-login` repository at
 `https://github.com/Cap-go/capacitor-social-login`.
 
-**Pre-closing commitment.** The in-app third-party licenses screen
-referenced above is not yet shipped. Seller will add this screen before
-closing; this is tracked as a closing-checklist item in §4.4.
-
 ### 3.5 Formal elections (dual-licensed packages)
 
 Where a dependency is distributed under multiple licenses at the
@@ -417,8 +413,6 @@ and the seller rotates or retires keys.
 - [ ] `pagespace-mcp` on npm is published under an account the buyer
       controls (or explicitly retained by the seller if the parties
       agree).
-- [ ] In-app third-party OSS licenses screen shipped with attribution to
-      `@capgo/capacitor-social-login` and a link to its upstream source.
 - [ ] User-data migration per §4.5 completed; buyer confirms data
       integrity.
 - [ ] Encryption-key handover or BYOK-column rotation decision recorded
