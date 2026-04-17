@@ -24,23 +24,24 @@ This disclosure answers counsel's three questions:
 > `2witstudios/pagespace` repository as of 2026-04-16:
 >
 > 1. **Sole author.** To my knowledge, all human-authored source code
->    in the `2witstudios/pagespace` monorepo, and in the predecessor
->    repositories listed in §2 (earliest commit 2025-04-08, including
->    `DaisyDebate/214-team` which is disclosed in §2 and was not in the
->    initial list provided to counsel), was written by me. The git
->    histories across all branches in this repository show four human
->    author identities — "2Wits", "2witstudios", "DaisyDebate", and
->    "Claude" — all bound to my accounts and all representing me:
->    "2Wits", "2witstudios", and "DaisyDebate" are local
->    display-name variants bound to `2witstudios@gmail.com` (the
->    "DaisyDebate" identity is from when I used my personal GitHub
->    account earlier in the project); "Claude"
->    (`noreply@anthropic.com`) identifies commits made using
->    Anthropic's Claude Code CLI under my personal Anthropic account,
->    as disclosed in §2. OpenAI's Codex CLI was also used (commit
->    subjects prefixed `[codex]`) under my personal OpenAI account.
->    None of these tools represents a third-party human contributor.
->    This list is, to the best of my knowledge, complete; I am not
+>    in the `2witstudios/pagespace` monorepo and in the predecessor
+>    repositories listed in §2 (earliest commit 2025-04-08) was
+>    written by me.
+>
+>    Git history across all branches shows four human author
+>    identities — "2Wits", "2witstudios", "DaisyDebate", and "Claude"
+>    — all bound to my accounts and all representing me. "2Wits",
+>    "2witstudios", and "DaisyDebate" are local display-name variants
+>    bound to `2witstudios@gmail.com`; "DaisyDebate" is the earliest,
+>    from when I committed under my personal GitHub account earlier
+>    in the project. "Claude" (`noreply@anthropic.com`) identifies
+>    commits made using Anthropic's Claude Code CLI under my personal
+>    Anthropic account, as disclosed in §2. OpenAI's Codex CLI was
+>    also used (commit subjects prefixed `[codex]`) under my personal
+>    OpenAI account. Neither tool represents a third-party human
+>    contributor.
+>
+>    This list of repositories is, to my knowledge, complete; I am not
 >    aware of any other repository, location, or system containing
 >    human-authored product source code. Read access to any
 >    predecessor repository can be granted on request for independent
@@ -305,11 +306,9 @@ disclosure, and (b) the application's third-party licenses screen at
 links to the upstream `@capgo/capacitor-social-login` repository at
 `https://github.com/Cap-go/capacitor-social-login`.
 
-**Open item before closing.** The in-app third-party licenses screen
+**Pre-closing commitment.** The in-app third-party licenses screen
 referenced above is not yet shipped. Seller will add this screen before
-closing, or the parties may agree that the notice in this disclosure
-together with the committed `LICENSES/MPL-2.0.txt` is sufficient
-MPL-2.0 §3.2 notice given the current user base.
+closing; this is tracked as a closing-checklist item in §4.4.
 
 ### 3.5 Formal elections (dual-licensed packages)
 
@@ -419,9 +418,7 @@ and the seller rotates or retires keys.
       controls (or explicitly retained by the seller if the parties
       agree).
 - [ ] In-app third-party OSS licenses screen shipped with attribution to
-      `@capgo/capacitor-social-login` and a link to its upstream source
-      — or parties acknowledge the notice in this disclosure is
-      sufficient.
+      `@capgo/capacitor-social-login` and a link to its upstream source.
 - [ ] User-data migration per §4.5 completed; buyer confirms data
       integrity.
 - [ ] Encryption-key handover or BYOK-column rotation decision recorded
