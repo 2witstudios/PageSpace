@@ -401,6 +401,9 @@ describe('Security Headers', () => {
       expect(response.headers.get('Referrer-Policy')).toBe(
         'strict-origin-when-cross-origin'
       );
+      expect(response.headers.get('Permissions-Policy')).toBe(
+        'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")'
+      );
     });
 
     it('includes HSTS in production', () => {
