@@ -1,6 +1,6 @@
 # PageSpace — IP & OSS Due Diligence Disclosure
 
-**Prepared:** 2026-04-16
+**Prepared:** 2026-04-17
 **For:** Pending sale of PageSpace
 **Repository:** `2witstudios/pagespace` (entire monorepo)
 **Branch:** `claude/legal-compliance-report-D8Poy`
@@ -21,7 +21,7 @@ This disclosure answers counsel's three questions:
 > I, Jonathan Woodall, sole proprietor operating as 2witstudios
 > (GitHub: `2witstudios`, email: `2witstudios@gmail.com`), in connection
 > with the pending sale of PageSpace confirm for the
-> `2witstudios/pagespace` repository as of 2026-04-16:
+> `2witstudios/pagespace` repository as of 2026-04-17:
 >
 > 1. **Sole author.** To my knowledge, all human-authored source code
 >    in the `2witstudios/pagespace` monorepo and in the predecessor
@@ -195,7 +195,7 @@ Under `2witstudios` (organization account):
 - `github.com/2witstudios/PageSpace-Cloud`
 - `github.com/2witstudios/pagespace-main`
 
-This list is complete as of 2026-04-16. `DaisyDebate/214-team` is the
+This list is complete as of 2026-04-17. `DaisyDebate/214-team` is the
 earliest (2025-04-08). Read access to any of these private repositories
 is available on request.
 
@@ -2736,7 +2736,7 @@ disclosed in §2 but is not separately asserted as a mark.
 
 No pending, published, or registered trademark filings with the USPTO or any
 other trademark office exist for `PageSpace` or `PageSpace.ai` as of
-2026-04-16.
+2026-04-17.
 
 Transfer of the common-law marks is covered by the APA trademark schedule.
 Buyer is responsible for any subsequent registration filings.
