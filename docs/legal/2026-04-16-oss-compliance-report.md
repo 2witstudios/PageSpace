@@ -40,6 +40,11 @@ This disclosure answers counsel's three questions:
 >    as disclosed in §2. OpenAI's Codex CLI was also used (commit
 >    subjects prefixed `[codex]`) under my personal OpenAI account.
 >    None of these tools represents a third-party human contributor.
+>    This list is, to the best of my knowledge, complete; I am not
+>    aware of any other repository, location, or system containing
+>    human-authored product source code. Read access to any
+>    predecessor repository can be granted on request for independent
+>    verification.
 > 2. **No third-party human contributors.** I am not aware of any
 >    third-party human contributor whose work would require an IP
 >    assignment. The only non-me contributor in git history is GitHub's
@@ -54,13 +59,18 @@ This disclosure answers counsel's three questions:
 > 4. **OSS inventory scope.** The complete OSS inventory in §5 covers
 >    the npm / pnpm dependency graph (the web, realtime, processor,
 >    control-plane, marketing, desktop, and shared-library packages).
->    Native iOS (CocoaPods) and Android (Gradle / Maven) dependencies
->    for the Capacitor mobile wrappers are not enumerated in §5 and can
->    be provided on request.
+>    Native iOS (Swift Package Manager) and Android (Gradle / Maven)
+>    dependencies for the Capacitor mobile wrappers are inventoried in
+>    [`docs/legal/2026-04-16-mobile-native-deps-ios.md`](./2026-04-16-mobile-native-deps-ios.md)
+>    and
+>    [`docs/legal/2026-04-16-mobile-native-deps-android.md`](./2026-04-16-mobile-native-deps-android.md)
+>    respectively.
 > 5. **Scope of this confirmation.** This confirmation addresses source
->    code authorship. Third-party assets bundled in the repository
->    (fonts, icons, images, demo media) are governed by their own
->    licenses; fonts licensed under OFL-1.1 are identifiable in §5.
+>    code authorship. Non-code assets bundled in the repository (fonts,
+>    icons, logos, blog images, demo media) are inventoried in §5.1
+>    below. The only third-party-licensed non-code assets are the two
+>    OFL-1.1 fonts and the ISC-licensed `lucide-react` icon set; all
+>    other non-code assets are seller-created.
 >
 > Signed: __________________________  Date: __________
 
@@ -141,11 +151,21 @@ The tools appear in git history in two ways:
    primary author on these commits is Jonathan (under the "2Wits",
    "2witstudios", or "DaisyDebate" display names).
 2. **Commits primarily authored by "Claude"
-   `<noreply@anthropic.com>`.** The Claude Code CLI sets the local git
-   author identity to `Claude` in some environments. 101 commits on
-   `master` carry this author identity (dated October–December 2025).
-   These are all commits Jonathan made using Claude Code; no separate
-   human being is represented.
+   `<noreply@anthropic.com>`.** From 2025-10-26 through 2025-12-15,
+   Claude Code used its built-in author identity
+   (`Claude <noreply@anthropic.com>`) for commits it generated in this
+   project's working copy, rather than the local repo's configured user.
+   The 101 commits on `master` that carry this author identity are all
+   commits Jonathan made using Claude Code under his personal Anthropic
+   account — no separate human being is represented. The behavior was
+   changed in a later CLI update and newer Claude Code commits now
+   author under the local git identity, which is why the range ends
+   2025-12-15. The ~51% `Co-Authored-By: Claude` rate on `master`
+   reflects the share of commits where Claude Code was used as a coding
+   assistant (across both CLI-set and user-set author identities);
+   under Anthropic's ToS (§1 above) rights in outputs are assigned to
+   the account holder, so authorship and IP ownership of those commits
+   remain with Jonathan Woodall.
 
 Posture:
 
@@ -190,10 +210,12 @@ URL list below; read access can be granted on request for independent
 verification. The sole-author representation in §1 is the primary
 evidence of the contributor posture across these repos.
 
-**Predecessor repositories previously listed to counsel:**
+**Complete list.**
 
 Under `DaisyDebate` (personal account):
 
+- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08) — the origin
+  prototype. Same sole-author posture as the other predecessor repos.
 - `github.com/DaisyDebate/samepage`
 - `github.com/DaisyDebate/samepage-main`
 - `github.com/DaisyDebate/samepage-dev`
@@ -208,11 +230,10 @@ Under `2witstudios` (organization account):
 - `github.com/2witstudios/PageSpace-Cloud`
 - `github.com/2witstudios/pagespace-main`
 
-**Additional predecessor repository disclosed with this report** (not
-included in the earlier list to counsel):
-
-- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08) — the origin
-  prototype. Same sole-author posture as the other predecessor repos.
+This list is complete as of 2026-04-16. `DaisyDebate/214-team` is the
+earliest (2025-04-08) and was added to this list after the initial pass
+shared with counsel as part of a full-history sweep. Read access to any
+of these private repositories is available on request.
 
 The predecessor-era tech stack — per the origin product requirements
 document dated 2025-04-08, which I have retained and can provide to
@@ -308,6 +329,20 @@ Full MPL-2.0 text committed at
 PageSpace's proprietary source is required under MPL for any of these,
 given unmodified use.
 
+**MPL-2.0 §3.2 recipient-notice.** MPL-2.0 §3.2 requires that recipients
+of a Larger Work be informed that the source of the Covered Files is
+available. For PageSpace this notice is given in two places: (a) this
+disclosure, and (b) the application's third-party licenses screen at
+`/settings/legal/oss-licenses` in the web, desktop, and mobile UI, which
+links to the upstream `@capgo/capacitor-social-login` repository at
+`https://github.com/Cap-go/capacitor-social-login`.
+
+**Open item before closing.** The in-app third-party licenses screen
+referenced above is not yet shipped. Seller will add this screen before
+closing, or the parties may agree that the notice in this disclosure
+together with the committed `LICENSES/MPL-2.0.txt` is sufficient
+MPL-2.0 §3.2 notice given the current user base.
+
 ### 3.5 Formal elections (dual-licensed packages)
 
 Where a dependency is distributed under multiple licenses at the
@@ -329,6 +364,47 @@ packages listed in §3.3 (LGPL-3.0, native binaries dynamically loaded)
 and §3.4 (MPL-2.0, used unmodified); §3.5 records the formal elections
 that remove `dompurify` and `jszip` from any copyleft posture.
 
+### 3.7 Pre-closing remediations
+
+During pre-closing diligence the seller found that `@gridland/web@0.2.53` and
+`@gridland/utils@0.2.53` shipped without a license grant — no `license` field in
+`package.json`, no `LICENSE` file in the tarball, and no `LICENSE` file in the
+upstream repository (`github.com/thoughtfulllc/gridland`). The packages were
+imported only by
+`apps/web/src/components/layout/middle-content/page-views/terminal/GridlandTerminal.tsx`,
+which is an unimplemented feature. The two dependencies were removed from
+`apps/web/package.json` and the importer was patched to a compile-safe
+placeholder (preserving the exported component identifier and prop signature so
+the feature shell can be restored if a license grant materializes) in commit
+`ad425c81` before this report was finalized. The dependency tree in §5
+reflects the post-patch state.
+
+### 3.8 Non-SPDX license in mobile runtime — Facebook iOS SDK
+
+`facebook-ios-sdk@18.0.2` is a direct Swift Package Manager dependency of
+`apps/ios` (see
+[`docs/legal/2026-04-16-mobile-native-deps-ios.md`](./2026-04-16-mobile-native-deps-ios.md)).
+Unlike standard SPDX permissive licenses, the SDK ships under a custom
+Facebook Platform License that contains a **use-scope restriction**:
+
+> "You are hereby granted a non-exclusive, worldwide, royalty-free license to
+> use, copy, modify, and distribute this software in source code or binary
+> form **for use in connection with the web services and APIs provided by
+> Facebook**."
+
+The verbatim text is reproduced in
+[`docs/legal/2026-04-16-mobile-native-deps-ios.md`](./2026-04-16-mobile-native-deps-ios.md)
+for the avoidance of doubt.
+
+PageSpace's use of the SDK is limited to Sign-in-with-Facebook (via
+`@capgo/capacitor-social-login`) on the iOS build, which is "use in connection
+with the web services and APIs provided by Facebook." The use is therefore
+within scope. Counsel should be aware that the SDK license governs the SDK
+code itself and is distinct from the separate Meta / Facebook platform
+developer terms that govern runtime API usage; both apply independently.
+
+No source-disclosure or copyleft obligation attaches under this license.
+
 ---
 
 ## 4. Asset and Account Transfers at Closing
@@ -348,6 +424,7 @@ and what is out of scope.
 | `ghcr.io/2witstudios/pagespace-{web,realtime,processor,cron,migrate}` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry as part of the Fly.io redeploy |
 | npm publisher account for `pagespace-mcp` | Jonathan's personal npm account | Transfer to buyer's npm org, or re-publish under buyer |
 | All code and documentation in `2witstudios/pagespace` | 2witstudios GitHub org | Per purchase agreement |
+| Common-law wordmarks `PageSpace` and `PageSpace.ai` | Seller (unregistered) | Per APA trademark schedule (assignment of unregistered common-law marks) |
 
 ### 4.2 Recreated by buyer / key rotation
 
@@ -368,10 +445,10 @@ and the seller rotates or retires keys.
 
 | Item | Reason |
 |---|---|
-| Production VPS (Postgres + Redis) | Buyer is redeploying the repo to their own Fly.io; the VPS is decommissioned at cutover. No data migration from a managed provider is required. |
-| BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | User-supplied credentials entered into the application by each end user; held in the application database rather than in seller's infrastructure. Each user brings their own keys at runtime. |
+| Production VPS (Postgres + Redis) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
+| BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | Encrypted at rest in `user_ai_settings.encryptedApiKey` (`packages/db/src/schema/ai.ts`); handover handled as part of the database migration in §4.5. |
 | Historical Google AI / Gemini default key | Google AI was the seller-provided default earlier in the project; it has since been retired and replaced (first with GLM, next with OpenRouter per §4.2). No key to transfer. |
-| Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller; not part of the sale asset schedule. |
+| Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
 
 ### 4.4 Closing checklist
 
@@ -387,6 +464,77 @@ and the seller rotates or retires keys.
 - [ ] `pagespace-mcp` on npm is published under an account the buyer
       controls (or explicitly retained by the seller if the parties
       agree).
+- [ ] In-app third-party OSS licenses screen shipped with attribution to
+      `@capgo/capacitor-social-login` and a link to its upstream source
+      — or parties acknowledge the notice in this disclosure is
+      sufficient.
+- [ ] User-data migration per §4.5 completed; buyer confirms data
+      integrity.
+- [ ] Encryption-key handover or BYOK-column rotation decision recorded
+      (option a/b/c).
+- [ ] DPA assignment schedule executed.
+- [ ] Transfer-of-control email sent to all users; privacy notice
+      updated on `pagespace.ai`.
+- [ ] Seller VPS disk destroyed after rollback window; written
+      confirmation delivered to buyer.
+- [ ] Predecessor-repo archive (or read-only access) delivered per §4.3.
+
+### 4.5 User-data handover
+
+Because production users exist at cutover, §4.3's high-level handling for the
+VPS and BYOK keys is specified below.
+
+**Scope of user data.** Workspaces, pages (all page types — Document, Code,
+Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), uploaded files, AI
+chat history, integrations state (GitHub / Google Calendar / etc. OAuth
+tokens), audit logs, session data, and encrypted BYOK provider keys. Canonical
+table list: from `packages/db/src/schema/`.
+
+**Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
+buyer-provided Fly.io Postgres over an encrypted transfer channel (SSH tunnel
+or signed S3-compatible upload with a short-lived credential). Redis is not
+migrated — it contains only ephemeral session / pub-sub state and is
+reconstituted empty on buyer infrastructure.
+
+**BYOK keys — encryption at rest and handover options.** The
+`user_ai_settings.encryptedApiKey` column is encrypted with a symmetric key
+(see `packages/lib/src/encryption/encryption-utils.ts`). Handover options for
+the parties to choose from:
+
+- (a) **Inherit the existing encryption key** — transfer the key material to
+  buyer as part of the closing asset schedule so users' BYOK entries continue
+  to decrypt on buyer infrastructure without any end-user action.
+- (b) **Rotate at migration** — decrypt with the seller's key during migration
+  and re-encrypt with a new buyer-held key before write to buyer Postgres.
+  Users experience no visible change.
+- (c) **Null the column** — require users to re-enter their BYOK keys at
+  first buyer-infrastructure login.
+
+Default recommendation from the seller: **(b) rotate** — cleanest security
+posture and zero end-user disruption.
+
+**DPA assignment.** Existing customer Data Processing Agreements are assigned
+to buyer at closing via an APA schedule; buyer becomes data controller /
+processor (as applicable) from the cutover timestamp.
+
+**Privacy-notice update.** Before cutover, a transfer-of-control email is
+sent to all users from the `pagespace.ai` domain explaining the change of
+controller, pointing to the updated privacy notice, and offering data export
+or deletion during a defined window (default: 30 days). The updated privacy
+notice is published at `pagespace.ai/privacy` on or before cutover.
+
+**Cutover sequence.**
+
+1. Maintenance window announced to users.
+2. Writes paused on seller VPS.
+3. `pg_dump` → encrypted transfer → restore on buyer Fly.io Postgres.
+4. DNS cuts to buyer infrastructure.
+5. Users are unblocked.
+6. Seller VPS retained read-only for a short rollback window, then destroyed.
+
+**Data retention by seller post-cutover.** Zero. After the rollback window,
+seller destroys all backups and the VPS disk, and provides buyer with a
+written confirmation of destruction.
 
 ---
 
@@ -396,6 +544,23 @@ Generated by traversing `node_modules/.pnpm/*/node_modules/` after a
 clean `pnpm install --ignore-scripts` against the committed
 `pnpm-lock.yaml`. License column is verbatim from each installed
 package's `package.json` `license` field.
+
+### 5.1 Non-code assets
+
+| Category | Inventory | License / provenance |
+|---|---|---|
+| Fonts | `@fontsource/ibm-plex-mono`, `@fontsource/space-grotesk` | OFL-1.1 (see rows in §5 inventory) |
+| Icons | `lucide-react` (only icon library imported by product code) | ISC (see rows in §5 inventory) |
+| Logos / app icons / splash screens | `apps/web/public/`, `apps/marketing/public/`, `apps/ios/ios/App/App/Assets.xcassets/` | Created by or for the seller; original work |
+| Blog hero images | `apps/marketing/public/blog/ai-versioning-safety.png`, `.../google-calendar-sync-setup.png`, `.../pagespace-memory-coding-agents.png`, `.../workspace-is-the-context.png` | AI-generated by seller under seller's personal Anthropic / OpenAI image-generation account; under each generating vendor's ToS rights in outputs are assigned to the account holder — seller holds those rights and transfers them to buyer |
+| Demo media / marketing video | None bundled | n/a |
+
+No stock-photography licenses from Unsplash, Pexels, Getty, Shutterstock, or
+similar sources are used. No third-party logos or marks beyond the unmodified
+npm-distributed package icons referenced in the §5 inventory are present in
+the repository.
+
+### 5.2 npm / pnpm dependency inventory
 
 | Package | Version | License |
 |---|---|---|
@@ -539,8 +704,6 @@ package's `package.json` `license` field.
 | @fontsource/ibm-plex-mono | 5.2.7 | OFL-1.1 |
 | @fontsource/space-grotesk | 5.2.10 | OFL-1.1 |
 | @gar/promisify | 1.1.3 | MIT |
-| @gridland/utils | 0.2.53 | UNKNOWN |
-| @gridland/web | 0.2.53 | UNKNOWN |
 | @hexagon/base64 | 1.1.28 | MIT |
 | @hono/node-server | 1.19.9 | MIT |
 | @hookform/resolvers | 5.2.2 | MIT |
@@ -1057,7 +1220,7 @@ package's `package.json` `license` field.
 | asynckit | 0.4.0 | MIT |
 | at-least-node | 1.0.0 | ISC |
 | atomic-sleep | 1.0.0 | MIT |
-| atomically | 2.0.3 | UNKNOWN |
+| atomically | 2.0.3 | MIT |
 | available-typed-arrays | 1.0.7 | MIT |
 | avvio | 9.2.0 | MIT |
 | axe-core | 4.10.3 | MPL-2.0 |
@@ -1200,7 +1363,6 @@ package's `package.json` `license` field.
 | cronstrue | 3.12.0 | MIT |
 | cross-dirname | 0.1.0 | MIT |
 | cross-spawn | 7.0.6 | MIT |
-| crypto | 1.0.1 | ISC |
 | css-select | 5.2.2 | BSD-2-Clause |
 | css-what | 6.2.2 | BSD-2-Clause |
 | css.escape | 1.5.1 | MIT |
@@ -1707,7 +1869,7 @@ package's `package.json` `license` field.
 | jws | 4.0.1 | MIT |
 | katex | 0.16.25 | MIT |
 | keyv | 4.5.4 | MIT |
-| khroma | 2.1.0 | UNKNOWN |
+| khroma | 2.1.0 | MIT |
 | kind-of | 6.0.3 | MIT |
 | kleur | 3.0.3 | MIT |
 | kleur | 4.1.5 | MIT |
@@ -2281,7 +2443,7 @@ package's `package.json` `license` field.
 | strip-json-comments | 3.1.1 | MIT |
 | strip-json-comments | 5.0.3 | MIT |
 | stripe | 20.1.0 | MIT |
-| stubborn-fs | 1.2.5 | UNKNOWN |
+| stubborn-fs | 1.2.5 | MIT |
 | style-to-js | 1.1.17 | MIT |
 | style-to-object | 1.0.9 | MIT |
 | styled-jsx | 5.1.6 | MIT |
@@ -2503,3 +2665,31 @@ package's `package.json` `license` field.
 | zustand | 4.5.7 | MIT |
 | zustand | 5.0.8 | MIT |
 | zwitch | 2.0.4 | MIT |
+
+No `UNKNOWN`-license packages remain in the dependency tree.
+
+**Note on `crypto@1.0.1`.** A prior scan of this repository listed
+`crypto@1.0.1` (the npm squatter on the Node.js `crypto` builtin's name) as a
+direct dependency of `apps/processor`. The package was not imported anywhere
+in product code — every `from 'crypto'` / `require('crypto')` call resolves
+to the Node.js builtin. The vestigial dependency was removed in commit
+`ad425c81` before this report was finalized and is not present in the
+inventory above.
+
+---
+
+## 6. Trademarks and marks
+
+The `PageSpace` and `PageSpace.ai` wordmarks are unregistered common-law marks
+held by the seller, accrued through use in commerce since 2025. Predecessor
+use under the `pagespace.team`, `samepage`, and `TeamDoc` working names is
+disclosed in §2 but is not separately asserted as a mark.
+
+No pending, published, or registered trademark filings with the USPTO or any
+other trademark office exist for `PageSpace` or `PageSpace.ai` as of
+2026-04-16.
+
+Transfer of the common-law marks is covered by the APA trademark schedule.
+Buyer is responsible for any subsequent registration filings.
+
+The `2witstudios` wordmark is retained by the seller and is not transferring.
