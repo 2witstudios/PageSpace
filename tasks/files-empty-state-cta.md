@@ -1,6 +1,6 @@
 # Files Empty-State CTA Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-04-17)
 **Goal**: Give users a discoverable path to upload or create content when the Files view is empty.
 
 ## Overview
