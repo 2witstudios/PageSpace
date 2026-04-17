@@ -133,7 +133,11 @@ The tools appear in git history in two ways:
 
 1. **Commits with `Co-Authored-By: Claude` trailers.** The Claude Code
    CLI adds this trailer automatically to commits it assists with.
-   On `master`, 828 of 1,624 commits (~51%) include this trailer. The
+   On `master`, 828 of 1,624 commits (~51%) include such a trailer.
+   The exact trailer text varies by the Claude model version that was
+   in use at the time (`Co-Authored-By: Claude`,
+   `Claude Opus 4.5`, `Claude Opus 4.6`, `Claude Opus 4.6 (1M context)`,
+   `Claude Sonnet 4.6`), all bound to `noreply@anthropic.com`. The
    primary author on these commits is Jonathan (under the "2Wits",
    "2witstudios", or "DaisyDebate" display names).
 2. **Commits primarily authored by "Claude"
@@ -341,7 +345,7 @@ and what is out of scope.
 |---|---|---|
 | Domain `pagespace.ai` | Namecheap, under 2witstudios | Namecheap domain push or account-to-account transfer |
 | Domain `pagespace.team` | Namecheap, under 2witstudios | Same |
-| `ghcr.io/2witstudios/*` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry as part of the Fly.io redeploy |
+| `ghcr.io/2witstudios/pagespace-{web,realtime,processor,cron,migrate}` container images | 2witstudios GitHub org | Buyer re-publishes to their own registry as part of the Fly.io redeploy |
 | npm publisher account for `pagespace-mcp` | Jonathan's personal npm account | Transfer to buyer's npm org, or re-publish under buyer |
 | All code and documentation in `2witstudios/pagespace` | 2witstudios GitHub org | Per purchase agreement |
 
@@ -355,26 +359,31 @@ and the seller rotates or retires keys.
 | Google OAuth client (Sign-in-with-Google) | Buyer creates a new OAuth client in their GCP; redirect URIs updated in code; seller's client retired. |
 | Apple Developer (Sign-in-with-Apple + iOS builds) | Buyer re-enrolls or the Apple team is enterprise-transferred; iOS builds re-signed. |
 | Firebase project `pagespace-f328e` (Android push) | Buyer creates a new Firebase project in their GCP; `google-services.json` regenerated; seller's project retired. |
-| Stripe | Buyer uses their own Stripe account. Key swap in production config; seller's keys retired. No account transfer. |
+| Stripe | Buyer uses their own Stripe account. In addition to API key swap, the three pricing products referenced by `NEXT_PUBLIC_STRIPE_PRICE_ID_FOUNDER/PRO/BUSINESS` need to be recreated in the buyer's Stripe account and the price IDs updated in config. Seller's keys and products retired. No account transfer. |
 | Resend (transactional email) | Buyer is consolidating their stack under `pagespace.ai`, so Resend will likely move to a new account in that consolidated environment. API keys rotated regardless. |
+| Brave Search API (`BRAVE_API_KEY`) | Used by the AI web-search tool. Buyer provisions their own Brave Search API key and swaps it in production config; seller's key retired. |
+| AI-provider default key (GLM / Zhipu AI, `GLM_DEFAULT_API_KEY`) | This is the current seller-provided default AI provider on the free tier. At buyer cutover the default is being migrated to OpenRouter, so the GLM key is retired rather than transferred, and the buyer sets up their own OpenRouter account and key. |
 
 ### 4.3 Not part of the transfer
 
 | Item | Reason |
 |---|---|
 | Production VPS (Postgres + Redis) | Buyer is redeploying the repo to their own Fly.io; the VPS is decommissioned at cutover. No data migration from a managed provider is required. |
-| BYOK provider keys (OpenAI, Anthropic, xAI, OpenRouter, etc.) | User-supplied credentials entered into the application by each end user; held in the application database rather than in seller's infrastructure. Each user brings their own keys at runtime. |
-| Historical Gemini / Google AI API keys | Gemini is no longer used by the product; keys can be retired without replacement. |
+| BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | User-supplied credentials entered into the application by each end user; held in the application database rather than in seller's infrastructure. Each user brings their own keys at runtime. |
+| Historical Google AI / Gemini default key | Google AI was the seller-provided default earlier in the project; it has since been retired and replaced (first with GLM, next with OpenRouter per §4.2). No key to transfer. |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller; not part of the sale asset schedule. |
 
 ### 4.4 Closing checklist
 
 - [ ] Namecheap domain transfers complete; DNS pointed at buyer's infra.
-- [ ] All keys listed in §4.2 have been rotated after cutover.
-- [ ] Seller's Stripe, Resend, Google OAuth, and Firebase credentials
-      are retired from production.
-- [ ] `ghcr.io/2witstudios/*` images are no longer referenced by any
-      running buyer infrastructure.
+- [ ] All keys listed in §4.2 have been rotated after cutover (including
+      Brave Search and the AI-provider default).
+- [ ] Seller's Stripe, Resend, Google OAuth, Firebase, Brave Search,
+      and GLM credentials are retired from production.
+- [ ] Stripe products/prices recreated in buyer's account and price IDs
+      updated in production config.
+- [ ] `ghcr.io/2witstudios/pagespace-*` images are no longer referenced
+      by any running buyer infrastructure.
 - [ ] `pagespace-mcp` on npm is published under an account the buyer
       controls (or explicitly retained by the seller if the parties
       agree).
