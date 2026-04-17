@@ -2786,7 +2786,14 @@ Workspace-internal packages (`workspace:*`) omitted.
    traverse `node_modules/.pnpm/*/node_modules/` reading each
    `package.json`'s `license` field.
 4. **Provenance:** `pnpm why <package>` and `pnpm --filter <app> why <package>`.
-5. **Copyleft detection:** regex `\bGPL\b|\bLGPL\b|\bAGPL\b|\bCDDL\b|\bEPL\b|\bMPL\b|\bSSPL\b|COPYLEFT|OSL|EUPL`.
+5. **Copyleft detection:** regex
+   `\bGPL\b|\bLGPL\b|\bAGPL\b|\bCDDL\b|\bEPL\b|\bMPL\b|\bSSPL\b|COPYLEFT|OSL|EUPL`
+   against the `license` string. This is a pre-filter, not an SPDX parser;
+   every matched package is listed by name in §4 and its SPDX expression
+   (including `OR` / `AND` composites) manually classified. Upgrading to a
+   full SPDX expression parser (e.g. `spdx-expression-parse`) would be
+   appropriate if this audit were embedded in CI; for a one-off DD
+   artifact it adds no signal.
 
 This report and `THIRD-PARTY-NOTICES.md` are regenerable from the lockfile
 and git history — no manual data entry.
