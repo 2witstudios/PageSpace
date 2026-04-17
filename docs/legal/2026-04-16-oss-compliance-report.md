@@ -78,20 +78,26 @@ of any code it generates.
 ### Predecessor repositories
 
 The `2witstudios/pagespace` monorepo was created on 2026-04-11. Before
-that, the project evolved under multiple names (originally "TeamDoc",
-then "samepage", then "pagespace.team", then "PageSpace") and across
-several repositories — all authored solely by me, under either my
-personal GitHub account `DaisyDebate` (earlier work) or the organization
-account `2witstudios` (later work). Both accounts are operated by me.
+that, the project existed across several predecessor repositories under
+two of my own GitHub accounts — my personal `DaisyDebate` account
+(earlier work) and the organization account `2witstudios` (later work).
+Both accounts are operated by me. No outside contributor appears in any
+of their git histories; I am the sole human author across all of them.
 
-The earliest commit in the predecessor chain is dated **2025-04-08** in
-`github.com/DaisyDebate/214-team`.
+The earliest commit across the predecessor chain is dated **2025-04-08**
+in `github.com/DaisyDebate/214-team`. The project was initially
+prototyped there under the working name "TeamDoc" (per the
+2025-04-08 product requirements document), and subsequently evolved and
+was renamed through "samepage", "pagespace.team", and finally
+"PageSpace". The current PageSpace product is materially different from
+the original 214-team / TeamDoc prototype; the prototype's role here is
+as the earliest point of my authorship, not as a description of the
+current codebase.
 
-Predecessor repositories already shared with counsel:
+**Predecessor repositories already shared with counsel:**
 
 Under `DaisyDebate` (personal account):
 
-- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08)
 - `github.com/DaisyDebate/samepage`
 - `github.com/DaisyDebate/samepage-main`
 - `github.com/DaisyDebate/samepage-dev`
@@ -106,9 +112,11 @@ Under `2witstudios` (organization account):
 - `github.com/2witstudios/PageSpace-Cloud`
 - `github.com/2witstudios/pagespace-main`
 
-I am the sole human author across all of these repositories; no outside
-contributor appears in any of their git histories. Counsel has direct
-access to all eleven for verification.
+**Additional predecessor repository disclosed with this report** (not
+included in the earlier list to counsel):
+
+- `github.com/DaisyDebate/214-team` (earliest, 2025-04-08) — the origin
+  prototype. Same sole-author posture as the other predecessor repos.
 
 The predecessor-era tech stack (per the original 2025-04-08 product
 requirements document) was: Next.js, Tailwind, shadcn/ui, Tiptap,
