@@ -206,6 +206,22 @@ function currentWindowStart(windowMs: number, now: number = Date.now()): Date {
   return new Date(Math.floor(now / windowMs) * windowMs);
 }
 
+// Progressive block duration, clamped to the 30-minute ceiling and to the
+// time remaining in the current bucket. A fixed-window Postgres bucket resets
+// at windowStart + windowMs; any retryAfter beyond that is a promise we can't keep.
+function computeProgressiveBlockMs(
+  count: number,
+  config: RateLimitConfig,
+  windowStart: Date,
+  now: number,
+): number {
+  const excessAttempts = count - config.maxAttempts;
+  const baseBlock = config.blockDurationMs || config.windowMs;
+  const uncapped = baseBlock * Math.pow(2, Math.max(0, excessAttempts - 1));
+  const msUntilWindowEnd = Math.max(0, windowStart.getTime() + config.windowMs - now);
+  return Math.min(uncapped, 30 * 60 * 1000, msUntilWindowEnd);
+}
+
 /**
  * Check rate limit for an identifier.
  * Uses Postgres in production, falls back to in-memory in development when DB is down.
@@ -248,12 +264,7 @@ export async function checkDistributedRateLimit(
     }
 
     if (config.progressiveDelay) {
-      const excessAttempts = count - config.maxAttempts;
-      const baseBlock = config.blockDurationMs || config.windowMs;
-      const blockDuration = Math.min(
-        baseBlock * Math.pow(2, Math.max(0, excessAttempts - 1)),
-        30 * 60 * 1000
-      );
+      const blockDuration = computeProgressiveBlockMs(count, config, windowStart, now);
       return {
         allowed: false,
         retryAfter: Math.ceil(blockDuration / 1000),
@@ -322,9 +333,17 @@ export async function getDistributedRateLimitStatus(
     const count = rows[0]?.count ?? 0;
     const blocked = count >= config.maxAttempts;
 
+    let retryAfter: number | undefined;
+    if (blocked) {
+      const blockMs = config.progressiveDelay
+        ? computeProgressiveBlockMs(count, config, windowStart, now)
+        : config.windowMs;
+      retryAfter = Math.ceil(blockMs / 1000);
+    }
+
     return {
       blocked,
-      retryAfter: blocked ? Math.ceil(config.windowMs / 1000) : undefined,
+      retryAfter,
       attemptsRemaining: Math.max(0, config.maxAttempts - count),
     };
   } catch {

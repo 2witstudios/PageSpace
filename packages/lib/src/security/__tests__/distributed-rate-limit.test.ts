@@ -151,6 +151,32 @@ describe('distributed-rate-limit', () => {
         expect(result.allowed).toBe(false);
         expect(result.retryAfter).toBeLessThanOrEqual(1800);
       });
+
+      it('clamps progressive retryAfter to remaining window time', async () => {
+        // windowMs is 10s. Progressive formula at excess=5 gives 10000 * 2^4 = 160s.
+        // The bucket resets in <= 10s, so retryAfter must not exceed 10.
+        mockInsertReturning(10);
+        const result = await checkDistributedRateLimit('clamp-key', {
+          maxAttempts: 5,
+          windowMs: 10_000,
+          blockDurationMs: 10_000,
+          progressiveDelay: true,
+        });
+        expect(result.allowed).toBe(false);
+        expect(result.retryAfter).toBeGreaterThan(0);
+        expect(result.retryAfter).toBeLessThanOrEqual(10);
+      });
+
+      it('clamps non-progressive retryAfter to remaining window time', async () => {
+        // Non-progressive path also can't promise longer than the window resets.
+        mockInsertReturning(6);
+        const result = await checkDistributedRateLimit('clamp-non-progressive', {
+          maxAttempts: 5,
+          windowMs: 10_000,
+        });
+        expect(result.allowed).toBe(false);
+        expect(result.retryAfter).toBeLessThanOrEqual(10);
+      });
     });
 
     describe('with Postgres unavailable', () => {
@@ -269,6 +295,32 @@ describe('distributed-rate-limit', () => {
       expect(status.blocked).toBe(true);
       expect(status.retryAfter).toBe(60);
       expect(status.attemptsRemaining).toBe(0);
+    });
+
+    it('applies progressive delay formula in status, matching check', async () => {
+      mockSelectReturns(8); // 3 excess (limit 5)
+      const status = await getDistributedRateLimitStatus('progressive-status', {
+        maxAttempts: 5,
+        windowMs: 60_000,
+        blockDurationMs: 1_000,
+        progressiveDelay: true,
+      });
+      expect(status.blocked).toBe(true);
+      // 1000 * 2^(3-1) = 4000ms → 4s (within windowMs, no clamp)
+      expect(status.retryAfter).toBe(4);
+    });
+
+    it('clamps status retryAfter to remaining window time', async () => {
+      mockSelectReturns(10); // 5 excess
+      const status = await getDistributedRateLimitStatus('progressive-clamp', {
+        maxAttempts: 5,
+        windowMs: 10_000,
+        blockDurationMs: 10_000,
+        progressiveDelay: true,
+      });
+      expect(status.blocked).toBe(true);
+      expect(status.retryAfter).toBeGreaterThan(0);
+      expect(status.retryAfter).toBeLessThanOrEqual(10);
     });
   });
 

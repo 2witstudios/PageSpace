@@ -29,11 +29,12 @@ export async function GET(request: Request) {
   const results: Record<string, number | { error: string }> = {};
 
   try {
-    const deleted = await db
+    // Count via rowCount rather than .returning() — the latter would allocate
+    // one JS object per deleted row, which scales with traffic, not with value.
+    const result = await db
       .delete(rateLimitBuckets)
-      .where(sql`${rateLimitBuckets.expiresAt} < now()`)
-      .returning({ key: rateLimitBuckets.key });
-    results.rate_limit_buckets = deleted.length;
+      .where(sql`${rateLimitBuckets.expiresAt} < now()`);
+    results.rate_limit_buckets = (result as { rowCount?: number | null }).rowCount ?? 0;
   } catch (error) {
     results.rate_limit_buckets = {
       error: error instanceof Error ? error.message : 'Unknown error',
