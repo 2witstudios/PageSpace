@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers, auditRequest } from '@pagespace/lib/server';
@@ -129,9 +129,6 @@ export async function POST(request: Request) {
         type: newAgent.type
       })
     );
-
-    // Invalidate agent awareness cache for this drive
-    await agentAwarenessCache.invalidateDriveAgents(driveId);
 
     loggers.api.info('AI agent created', {
       agentId: newAgent.id,

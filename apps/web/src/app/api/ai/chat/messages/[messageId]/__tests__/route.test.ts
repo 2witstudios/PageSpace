@@ -27,17 +27,9 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
 }));
 
-// Hoisted mocks for cache invalidation testing
-const { mockInvalidateConversation } = vi.hoisted(() => ({
-  mockInvalidateConversation: vi.fn().mockResolvedValue(undefined),
-}));
-
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
-  conversationCache: {
-    invalidateConversation: mockInvalidateConversation,
-  },
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
   },
@@ -398,93 +390,6 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     });
   });
 
-  describe('cache invalidation', () => {
-    it('should invalidate conversation cache after successful edit', async () => {
-      const message = mockChatMessage();
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(message);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated content' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        message.pageId,
-        message.conversationId
-      );
-    });
-
-    it('should invalidate cache with correct pageId and conversationId', async () => {
-      const specificMessage = mockChatMessage({
-        pageId: 'specific_page_123',
-      });
-      // Override conversationId via full mock
-      const fullMessage = { ...specificMessage, conversationId: 'specific_conv_456' };
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(fullMessage);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        'specific_page_123',
-        'specific_conv_456'
-      );
-    });
-
-    it('should NOT invalidate cache when authentication fails', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when permission denied', async () => {
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should invalidate cache before activity logging', async () => {
-      const callOrder: string[] = [];
-      mockInvalidateConversation.mockImplementation(async () => {
-        callOrder.push('invalidate');
-      });
-      vi.mocked(logMessageActivity).mockImplementation(() => {
-        callOrder.push('logActivity');
-      });
-
-      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
-      const context = createContext(mockMessageId);
-
-      await PATCH(request, context);
-
-      expect(callOrder).toEqual(['invalidate', 'logActivity']);
-    });
-  });
-
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
       vi.mocked(chatMessageRepository.updateMessageContent).mockRejectedValue(
@@ -732,92 +637,6 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
           userId: '***_123',
         })
       );
-    });
-  });
-
-  describe('cache invalidation', () => {
-    it('should invalidate conversation cache after successful deletion', async () => {
-      const message = mockChatMessage();
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(message);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        message.pageId,
-        message.conversationId
-      );
-    });
-
-    it('should invalidate cache with correct pageId and conversationId', async () => {
-      const specificMessage = mockChatMessage({
-        pageId: 'delete_page_123',
-      });
-      const fullMessage = { ...specificMessage, conversationId: 'delete_conv_456' };
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(fullMessage);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).toHaveBeenCalledWith(
-        'delete_page_123',
-        'delete_conv_456'
-      );
-    });
-
-    it('should NOT invalidate cache when authentication fails', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when message not found', async () => {
-      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(null);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should NOT invalidate cache when permission denied', async () => {
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(mockInvalidateConversation).not.toHaveBeenCalled();
-    });
-
-    it('should invalidate cache before activity logging', async () => {
-      const callOrder: string[] = [];
-      mockInvalidateConversation.mockImplementation(async () => {
-        callOrder.push('invalidate');
-      });
-      vi.mocked(logMessageActivity).mockImplementation(() => {
-        callOrder.push('logActivity');
-      });
-
-      const request = createDeleteRequest(mockMessageId);
-      const context = createContext(mockMessageId);
-
-      await DELETE(request, context);
-
-      expect(callOrder).toEqual(['invalidate', 'logActivity']);
     });
   });
 

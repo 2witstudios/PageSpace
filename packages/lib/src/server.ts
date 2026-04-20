@@ -55,14 +55,6 @@ export * from './repositories';
 // Notifications
 export * from './notifications';
 
-// Agent awareness caching
-export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
-export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
-
-// Page tree caching
-export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
-export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
-
 // Re-export specific functions for backward compatibility
 export {
   getDriveIdsForUser,
@@ -91,7 +83,3 @@ export {
 
 // Enforced auth context
 export { EnforcedAuthContext } from './permissions/enforced-context';
-
-// Conversation caching (server-only)
-export { conversationCache, ConversationCache } from './services/conversation-cache';
-export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';

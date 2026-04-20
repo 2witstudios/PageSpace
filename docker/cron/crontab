@@ -46,3 +46,9 @@
 # Orphaned file cleanup - Weekly on Sundays at 5am UTC
 # Detects and deletes file records with zero references + physical files
 0 5 * * 0 cron-curl GET http://web:3000/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
+
+# Expired row sweep - Every 15 minutes
+# Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
+# rate_limit_buckets in PR3). Short cadence matches the 5-minute default
+# service-token lifetime so the table never grows more than a few cycles deep.
+*/15 * * * * cron-curl GET http://web:3000/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1

@@ -27,6 +27,8 @@ export * from './schema/personalization';
 export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
+export * from './schema/rate-limit-buckets';
+export * from './schema/revoked-service-tokens';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -57,6 +59,8 @@ import * as personalization from './schema/personalization';
 import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
+import * as rateLimitBuckets from './schema/rate-limit-buckets';
+import * as revokedServiceTokens from './schema/revoked-service-tokens';
 
 export const schema = {
   ...auth,
@@ -88,4 +92,6 @@ export const schema = {
   ...calendar,
   ...calendarTriggers,
   ...workflows,
+  ...rateLimitBuckets,
+  ...revokedServiceTokens,
 };
