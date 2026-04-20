@@ -708,6 +708,13 @@
       "when": 1776656052321,
       "tag": "0100_gray_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1776698272882,
+      "tag": "0101_stiff_mephistopheles",
+      "breakpoints": true
     }
   ]
 }

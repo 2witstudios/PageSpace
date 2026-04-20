@@ -34,6 +34,7 @@ export {
   getDistributedRateLimitStatus,
   initializeDistributedRateLimiting,
   shutdownRateLimiting,
+  sweepExpiredRateLimitBuckets,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
   type RateLimitResult,

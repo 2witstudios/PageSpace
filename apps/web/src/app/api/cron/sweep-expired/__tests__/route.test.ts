@@ -1,11 +1,14 @@
 /**
- * Contract tests for /api/cron/sweep-expired
- * Verifies security audit logging on successful expiry sweep.
+ * Contract tests for /api/cron/sweep-expired.
+ *
+ * Verifies auth, independent per-table sweep, and that audit logging
+ * captures the combined result (success OR partial failure).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockSweep, mockAudit } = vi.hoisted(() => ({
-  mockSweep: vi.fn(),
+const { mockSweepJTI, mockSweepRateLimit, mockAudit } = vi.hoisted(() => ({
+  mockSweepJTI: vi.fn(),
+  mockSweepRateLimit: vi.fn(),
   mockAudit: vi.fn(),
 }));
 
@@ -14,7 +17,8 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/security', () => ({
-  sweepExpiredRevokedJTIs: mockSweep,
+  sweepExpiredRevokedJTIs: mockSweepJTI,
+  sweepExpiredRateLimitBuckets: mockSweepRateLimit,
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -42,64 +46,116 @@ describe('/api/cron/sweep-expired', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockSweep.mockResolvedValue(3);
+    mockSweepJTI.mockResolvedValue(0);
+    mockSweepRateLimit.mockResolvedValue(0);
   });
 
-  it('logs audit event on successful sweep', async () => {
-    await GET(makeRequest());
+  describe('auth', () => {
+    it('short-circuits before any sweep or audit when auth fails', async () => {
+      const authResponse = new Response(
+        JSON.stringify({ error: 'Forbidden' }),
+        { status: 403 },
+      );
+      vi.mocked(validateSignedCronRequest).mockReturnValue(authResponse as never);
 
-    expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventType: 'data.delete',
-        userId: 'system',
-        resourceType: 'cron_job',
-        resourceId: 'sweep_expired',
-        details: { revokedServiceTokens: 3 },
-      })
-    );
-  });
+      await GET(makeRequest());
 
-  it('returns swept counts in response body', async () => {
-    const res = await GET(makeRequest());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body).toMatchObject({
-      success: true,
-      swept: { revokedServiceTokens: 3 },
+      expect(mockSweepJTI).not.toHaveBeenCalled();
+      expect(mockSweepRateLimit).not.toHaveBeenCalled();
+      expect(mockAudit).not.toHaveBeenCalled();
     });
-    expect(body.timestamp).toEqual(expect.any(String));
   });
 
-  it('does not sweep or audit when auth fails', async () => {
-    const authResponse = new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 });
-    vi.mocked(validateSignedCronRequest).mockReturnValue(authResponse as never);
+  describe('happy path', () => {
+    it('sweeps both tables and reports counts in results', async () => {
+      mockSweepJTI.mockResolvedValue(7);
+      mockSweepRateLimit.mockResolvedValue(42);
 
-    await GET(makeRequest());
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as {
+        success: boolean;
+        results: Record<string, number>;
+        timestamp: string;
+      };
 
-    expect(mockSweep).not.toHaveBeenCalled();
-    expect(mockAudit).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.results.revokedServiceTokens).toBe(7);
+      expect(body.results.rateLimitBuckets).toBe(42);
+      expect(body.timestamp).toEqual(expect.any(String));
+    });
+
+    it('emits exactly one audit event containing both counts', async () => {
+      mockSweepJTI.mockResolvedValue(3);
+      mockSweepRateLimit.mockResolvedValue(11);
+
+      await GET(makeRequest());
+
+      expect(mockAudit).toHaveBeenCalledTimes(1);
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'data.delete',
+          userId: 'system',
+          resourceType: 'cron_job',
+          resourceId: 'sweep_expired',
+          details: { revokedServiceTokens: 3, rateLimitBuckets: 11 },
+        }),
+      );
+    });
   });
 
-  it('does not log audit event when sweep throws', async () => {
-    mockSweep.mockRejectedValue(new Error('DB error'));
+  describe('partial failure (one table throws)', () => {
+    it('returns 500 with the error recorded in results, still emits audit', async () => {
+      mockSweepJTI.mockResolvedValue(5);
+      mockSweepRateLimit.mockRejectedValue(new Error('connection refused'));
 
-    const res = await GET(makeRequest());
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as {
+        success: boolean;
+        results: Record<string, number | { error: string }>;
+      };
 
-    expect(res.status).toBe(500);
-    expect(mockAudit).not.toHaveBeenCalled();
+      expect(res.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.results.revokedServiceTokens).toBe(5);
+      expect(body.results.rateLimitBuckets).toEqual({ error: 'connection refused' });
+      expect(mockAudit).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues sweeping the second table after the first throws (error isolation)', async () => {
+      mockSweepJTI.mockRejectedValue(new Error('jti-table unavailable'));
+      mockSweepRateLimit.mockResolvedValue(4);
+
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as {
+        results: Record<string, number | { error: string }>;
+      };
+
+      expect(res.status).toBe(500);
+      expect(mockSweepRateLimit).toHaveBeenCalledTimes(1);
+      expect(body.results.rateLimitBuckets).toBe(4);
+      expect(body.results.revokedServiceTokens).toEqual({
+        error: 'jti-table unavailable',
+      });
+    });
   });
 
-  it('returns 500 with error message when sweep throws', async () => {
-    mockSweep.mockRejectedValue(new Error('connection refused'));
+  describe('full failure (both tables throw)', () => {
+    it('returns 500 with both errors recorded, still emits audit', async () => {
+      mockSweepJTI.mockRejectedValue(new Error('jti down'));
+      mockSweepRateLimit.mockRejectedValue(new Error('rate-limit down'));
 
-    const res = await GET(makeRequest());
-    const body = await res.json();
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as {
+        success: boolean;
+        results: Record<string, { error: string }>;
+      };
 
-    expect(res.status).toBe(500);
-    expect(body).toMatchObject({
-      success: false,
-      error: 'connection refused',
+      expect(res.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.results.revokedServiceTokens).toEqual({ error: 'jti down' });
+      expect(body.results.rateLimitBuckets).toEqual({ error: 'rate-limit down' });
+      expect(mockAudit).toHaveBeenCalledTimes(1);
     });
   });
 });
