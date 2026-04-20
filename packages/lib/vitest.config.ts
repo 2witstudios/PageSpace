@@ -20,6 +20,8 @@ export default defineConfig({
       'src/permissions/__tests__/cache-trust-boundaries.test.ts',
       'src/permissions/__tests__/permission-mutations.test.ts',
       'src/permissions/__tests__/zero-trust-boundaries.test.ts',
+      'src/services/__tests__/app-shell-service.integration.test.ts',
+      'src/services/__tests__/page-payload-service.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
