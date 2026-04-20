@@ -98,7 +98,7 @@ describe('distributed-rate-limit integration (Postgres)', () => {
 
     const r3 = await checkDistributedRateLimit(key, cfg);
     expect(r3.allowed).toBe(true);
-  });
+  }, 15_000); // bucket alignment + 2 windows + DB round-trips exceed default 5s timeout
 
   it('boundary bursting is blocked by weighted sliding window', async () => {
     if (!dbAvailable) return;
@@ -124,7 +124,7 @@ describe('distributed-rate-limit integration (Postgres)', () => {
     await new Promise((r) => setTimeout(r, windowMs));
     const atBoundary = await checkDistributedRateLimit(key, cfg);
     expect(atBoundary.allowed).toBe(false);
-  });
+  }, 10_000); // bucket alignment + 1 window + DB round-trips can exceed default 5s
 
   it('fails closed in production when DB is unavailable', async () => {
     if (!dbAvailable) return;
