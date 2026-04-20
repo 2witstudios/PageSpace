@@ -3,21 +3,21 @@
  *
  * Builds a system prompt section that shows the workspace structure
  * to help AI agents understand navigation and organization.
- *
- * Uses per-drive caching to reduce database queries. Cache is invalidated
- * when pages are created, moved, deleted, or reordered.
  */
 
 import { db, pages, drives, eq, and, asc } from '@pagespace/db';
-import { getUserDriveAccess, pageTreeCache, loggers } from '@pagespace/lib/server';
+import { getUserDriveAccess, loggers } from '@pagespace/lib/server';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree } from '@pagespace/lib';
-import type { CachedTreeNode } from '@pagespace/lib/server';
 
-/**
- * Query page tree for a drive from the database
- * Returns flat list of page nodes (structure is built later)
- */
-async function queryDriveTree(driveId: string): Promise<CachedTreeNode[]> {
+interface TreeNode {
+  id: string;
+  title: string;
+  type: string;
+  parentId: string | null;
+  position?: number;
+}
+
+async function queryDriveTree(driveId: string): Promise<TreeNode[]> {
   const result = await db
     .select({
       id: pages.id,
@@ -33,20 +33,13 @@ async function queryDriveTree(driveId: string): Promise<CachedTreeNode[]> {
     ))
     .orderBy(asc(pages.position));
 
-  return result;
-}
-
-/**
- * Get the name of a drive
- */
-async function getDriveName(driveId: string): Promise<string | null> {
-  const [drive] = await db
-    .select({ name: drives.name })
-    .from(drives)
-    .where(eq(drives.id, driveId))
-    .limit(1);
-
-  return drive?.name || null;
+  return result.map(row => ({
+    id: row.id,
+    title: row.title ?? '',
+    type: row.type,
+    parentId: row.parentId,
+    position: row.position ?? undefined,
+  }));
 }
 
 interface PageTreeOptions {
@@ -77,25 +70,9 @@ export async function getPageTreeContext(
       return '';
     }
 
-    // Try cache first
-    let nodes: CachedTreeNode[];
-    const cached = await pageTreeCache.getDriveTree(driveId);
+    let nodes: TreeNode[] = await queryDriveTree(driveId);
+    loggers.ai.debug('Page tree queried from DB', { driveId, nodeCount: nodes.length });
 
-    if (cached) {
-      nodes = cached.nodes;
-      loggers.ai.debug('Page tree cache hit', { driveId, nodeCount: nodes.length });
-    } else {
-      // Cache miss - query DB
-      nodes = await queryDriveTree(driveId);
-      const driveName = await getDriveName(driveId);
-
-      if (driveName) {
-        await pageTreeCache.setDriveTree(driveId, driveName, nodes);
-      }
-      loggers.ai.debug('Page tree cache miss, queried DB', { driveId, nodeCount: nodes.length });
-    }
-
-    // Filter to subtree if scope is 'children'
     if (scope === 'children' && pageId) {
       nodes = filterToSubtree(nodes, pageId);
       loggers.ai.debug('Filtered to subtree', { pageId, nodeCount: nodes.length });

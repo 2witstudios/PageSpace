@@ -35,12 +35,6 @@ vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
-  agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
-  },
   auditRequest: vi.fn(),
   canUserDeletePage: vi.fn().mockResolvedValue(true),
 }));
@@ -86,7 +80,7 @@ vi.mock('@pagespace/db', () => {
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { pageTreeCache, agentAwarenessCache, canUserDeletePage, auditRequest } from '@pagespace/lib/server';
+import { canUserDeletePage, auditRequest } from '@pagespace/lib/server';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
@@ -150,10 +144,6 @@ function setupSuccessScenario() {
 
   // Permissions
   vi.mocked(canUserDeletePage).mockResolvedValue(true);
-
-  // Caches
-  vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
-  vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockResolvedValue(undefined);
 
   // Transaction mocks
   txUpdateWhere.mockResolvedValue(undefined);
@@ -353,78 +343,11 @@ describe('DELETE /api/pages/bulk-delete', () => {
       expect(body.trashedCount).toBe(2);
     });
 
-    it('detects AI_CHAT pages in source pages', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockPage({ type: 'AI_CHAT' }),
-      ] as never);
-
-      await DELETE(createRequest(validBody));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('detects AI_CHAT pages in children during recursive trash', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockPage({ type: 'DOCUMENT' }),
-      ] as never);
-      txQueryPagesFindMany
-        .mockResolvedValueOnce([
-          { id: 'child-1', type: 'AI_CHAT', parentId: 'page-1' },
-        ])
-        .mockResolvedValue([]);
-
-      await DELETE(createRequest(validBody));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('does not invalidate agent cache when no AI_CHAT pages', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockPage({ type: 'DOCUMENT' }),
-      ] as never);
-
-      await DELETE(createRequest({ pageIds: ['page-1'], trashChildren: false }));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
-    });
-
-    it('detects AI_CHAT in grandchildren during recursive trash', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockPage({ type: 'DOCUMENT' }),
-      ] as never);
-      txQueryPagesFindMany
-        .mockResolvedValueOnce([
-          { id: 'child-1', type: 'DOCUMENT', parentId: 'page-1' },
-        ])
-        .mockResolvedValueOnce([
-          { id: 'grandchild-1', type: 'AI_CHAT', parentId: 'child-1' },
-        ])
-        .mockResolvedValue([]);
-
-      await DELETE(createRequest(validBody));
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
   });
 
   // ── Side effects ────────────────────────────────────────────────────
 
   describe('side effects', () => {
-    it('invalidates page tree cache for each affected drive', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockPage({ id: 'page-1', driveId: 'drive-a' }),
-        mockPage({ id: 'page-2', driveId: 'drive-b' }),
-      ] as never);
-
-      await DELETE(createRequest({
-        pageIds: ['page-1', 'page-2'],
-        trashChildren: false,
-      }));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith('drive-a');
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith('drive-b');
-    });
-
     it('broadcasts trashed event for each affected drive', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         mockPage({ id: 'page-1', driveId: 'drive-a' }),

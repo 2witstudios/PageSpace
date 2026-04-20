@@ -40,9 +40,6 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
   loggers: {
     api: {
       info: vi.fn(),
@@ -72,7 +69,7 @@ vi.mock('@pagespace/db', () => ({
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageTreeCache, loggers, auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 
 // Test helpers
@@ -119,8 +116,6 @@ describe('PATCH /api/pages/reorder', () => {
     vi.mocked(pageReorderService.validateMove).mockResolvedValue({ valid: true });
     // Default: reorder succeeds
     vi.mocked(pageReorderService.reorderPage).mockResolvedValue(successResult);
-    // Re-set up cache, websocket, and audit mocks
-    vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
     vi.mocked(auditRequest).mockReturnValue(undefined);
     // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
@@ -275,7 +270,6 @@ describe('PATCH /api/pages/reorder', () => {
       expect(body.error).toMatch(/owner|admin|permission/i);
       // Side effects should NOT fire on failure
       expect(broadcastPageEvent).not.toHaveBeenCalled();
-      expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
     });
 
     it('returns 404 when page is not found', async () => {
@@ -406,17 +400,7 @@ describe('PATCH /api/pages/reorder', () => {
       );
     });
 
-    it('invalidates page tree cache for the drive', async () => {
-      await PATCH(createRequest({
-        pageId: mockPageId,
-        newParentId: null,
-        newPosition: 0,
-      }));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('does NOT broadcast or invalidate cache on service failure', async () => {
+    it('does NOT broadcast on service failure', async () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Page not found.',
@@ -430,7 +414,6 @@ describe('PATCH /api/pages/reorder', () => {
       }));
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
-      expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
     });
   });
 
@@ -527,38 +510,5 @@ describe('PATCH /api/pages/reorder', () => {
       expect(body.error).toBe('Failed to reorder page');
     });
 
-    it('logs warning when page tree cache invalidation fails with Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Redis down'));
-
-      await PATCH(createRequest({
-        pageId: mockPageId,
-        newParentId: null,
-        newPosition: 0,
-      }));
-
-      await new Promise(r => setTimeout(r, 0));
-
-      expect(loggers.api.warn).toHaveBeenCalledWith(
-        'Page tree cache invalidation failed',
-        expect.objectContaining({ error: 'Redis down', driveId: mockDriveId })
-      );
-    });
-
-    it('logs warning when page tree cache invalidation fails with non-Error', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce('string error');
-
-      await PATCH(createRequest({
-        pageId: mockPageId,
-        newParentId: null,
-        newPosition: 0,
-      }));
-
-      await new Promise(r => setTimeout(r, 0));
-
-      expect(loggers.api.warn).toHaveBeenCalledWith(
-        'Page tree cache invalidation failed',
-        expect.objectContaining({ error: 'string error' })
-      );
-    });
   });
 });

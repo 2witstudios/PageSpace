@@ -37,9 +37,6 @@ vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
   auditRequest: vi.fn(),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -96,7 +93,7 @@ vi.mock('@pagespace/db', () => {
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { pageTreeCache, canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
@@ -168,9 +165,6 @@ function setupSuccessScenario() {
   // Permissions
   vi.mocked(canUserEditPage).mockResolvedValue(true);
   vi.mocked(validatePageMove).mockResolvedValue({ valid: true });
-
-  // Caches
-  vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
 
   // Transaction mocks
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
@@ -541,23 +535,6 @@ describe('POST /api/pages/bulk-move', () => {
   // ── Side effects ────────────────────────────────────────────────────
 
   describe('side effects', () => {
-    it('invalidates page tree cache for target drive', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        mockSourcePage({ driveId: mockTargetDriveId }),
-      ] as never);
-
-      await POST(createRequest(validBody));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockTargetDriveId);
-    });
-
-    it('invalidates page tree cache for source drives too', async () => {
-      await POST(createRequest(validBody));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockTargetDriveId);
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockSourceDriveId);
-    });
-
     it('broadcasts moved event for each affected drive', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         mockSourcePage({ id: 'page-1', driveId: 'drive-a' }),
@@ -643,15 +620,6 @@ describe('POST /api/pages/bulk-move', () => {
       );
     });
 
-    it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
-
-      const response = await POST(createRequest(validBody));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-    });
   });
 
   // ── Error handling ──────────────────────────────────────────────────

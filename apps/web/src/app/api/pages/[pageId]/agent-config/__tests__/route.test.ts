@@ -23,7 +23,6 @@ const {
   mockIsAuthError,
   mockCheckMCPPageScope,
   mockCanUserEditPage,
-  mockAgentAwarenessCacheInvalidate,
   mockDbSelect,
   mockGetActorInfo,
   mockLoggers,
@@ -45,7 +44,6 @@ const {
     mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
     mockCheckMCPPageScope: vi.fn().mockResolvedValue(null),
     mockCanUserEditPage: vi.fn(),
-    mockAgentAwarenessCacheInvalidate: vi.fn().mockResolvedValue(undefined),
     mockDbSelect: vi.fn(),
     mockGetActorInfo: vi.fn().mockResolvedValue({
       actorEmail: 'test@example.com',
@@ -90,9 +88,6 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
-  agentAwarenessCache: {
-    invalidateDriveAgents: (...args: unknown[]) => mockAgentAwarenessCacheInvalidate(...args),
-  },
   loggers: mockLoggers,
   auditRequest: vi.fn(),
 }));
@@ -205,7 +200,6 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
     mockIsAuthError.mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     mockCheckMCPPageScope.mockResolvedValue(null);
     mockCanUserEditPage.mockResolvedValue(true);
-    mockAgentAwarenessCacheInvalidate.mockResolvedValue(undefined);
     mockGetActorInfo.mockResolvedValue({
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
@@ -366,7 +360,6 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     mockIsAuthError.mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     mockCheckMCPPageScope.mockResolvedValue(null);
     mockCanUserEditPage.mockResolvedValue(true);
-    mockAgentAwarenessCacheInvalidate.mockResolvedValue(undefined);
     mockGetActorInfo.mockResolvedValue({
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
@@ -729,62 +722,6 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
       expect(response.status).toBe(428);
       expect(body.currentRevision).toBe(10);
-    });
-  });
-
-  describe('agent awareness cache invalidation', () => {
-    it('invalidates agent cache for AI_CHAT pages when agentDefinition changes', async () => {
-      await PATCH(
-        createPatchRequest({ agentDefinition: 'new definition' }),
-        mockParams
-      );
-
-      expect(mockAgentAwarenessCacheInvalidate).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('invalidates agent cache for AI_CHAT pages when visibleToGlobalAssistant changes', async () => {
-      await PATCH(
-        createPatchRequest({ visibleToGlobalAssistant: false }),
-        mockParams
-      );
-
-      expect(mockAgentAwarenessCacheInvalidate).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('does not invalidate agent cache for non-AI_CHAT pages', async () => {
-      setupPatchSelectChain(
-        [{ ...mockPage, type: 'DOCUMENT' }],
-        [{ ...mockPage, type: 'DOCUMENT', systemPrompt: 'Updated' }]
-      );
-
-      await PATCH(
-        createPatchRequest({ agentDefinition: 'new definition' }),
-        mockParams
-      );
-
-      expect(mockAgentAwarenessCacheInvalidate).not.toHaveBeenCalled();
-    });
-
-    it('does not invalidate agent cache when non-agent fields change', async () => {
-      await PATCH(
-        createPatchRequest({ systemPrompt: 'updated prompt' }),
-        mockParams
-      );
-
-      expect(mockAgentAwarenessCacheInvalidate).not.toHaveBeenCalled();
-    });
-
-    it('handles agent cache invalidation failure gracefully', async () => {
-      mockAgentAwarenessCacheInvalidate.mockRejectedValueOnce(
-        new Error('Cache error')
-      );
-
-      const response = await PATCH(
-        createPatchRequest({ agentDefinition: 'new' }),
-        mockParams
-      );
-
-      expect(response.status).toBe(200);
     });
   });
 

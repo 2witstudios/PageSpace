@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { pageReorderService } from '@/services/api';
 
@@ -57,13 +57,6 @@ export async function PATCH(request: Request) {
         title: result.pageTitle || undefined,
       }),
     );
-
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
-      loggers.api.warn('Page tree cache invalidation failed', {
-        error: err instanceof Error ? err.message : String(err),
-        driveId: result.driveId,
-      });
-    });
 
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'page', resourceId: pageId, details: { operation: 'reorder' } });
 
