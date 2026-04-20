@@ -1,21 +1,15 @@
 /**
- * Security-Specific Redis Utilities
+ * Security-Specific Redis + Postgres Utilities
  *
- * Provides Redis operations for security features:
- * - JTI (JWT ID) tracking and revocation
- * - Distributed rate limiting
- * - Session management
- *
- * Uses key prefixes to namespace security data:
- * - `sec:jti:` - JWT ID tracking
- * - `sec:rate:` - Rate limiting
- * - `sec:session:` - Session data
+ * - JTI (JWT ID) tracking and revocation — Postgres (`revoked_service_tokens`)
+ * - Distributed rate limiting — Redis (`sec:rate:` prefix)
+ * - Session management — Redis (`sec:session:` prefix)
  */
 
 import Redis from 'ioredis';
 import { getSharedRedisClient, isSharedRedisAvailable } from '../services/shared-redis';
 import { loggers } from '../logging/logger-config';
-import { db, revokedServiceTokens, eq, lt, sql } from '@pagespace/db';
+import { db, revokedServiceTokens, and, eq, gt, lt, sql } from '@pagespace/db';
 
 const KEY_PREFIX = 'sec:';
 
@@ -257,36 +251,30 @@ export async function isJTIRevoked(jti: string): Promise<boolean> {
 /**
  * Revoke a specific JTI.
  *
- * Looks up the row inserted by `recordJTI`; if present and not yet expired,
- * upserts `revoked_at = now()` preserving the original `expires_at` so the
- * sweeper reaps it on schedule. Returns false when the JTI was never
- * recorded or has already expired (matching prior Redis semantics).
+ * Atomic single-statement UPDATE: sets `revoked_at = now()` only if the row
+ * exists and has not expired. Returns false when the JTI was never recorded
+ * or has already expired (matching prior Redis semantics). Idempotent —
+ * re-revoking an already-revoked JTI resets `revoked_at` to now().
  *
  * SECURITY: In production, throws if DB unavailable (fail-closed).
  */
 export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
   try {
-    const existing = await db
-      .select({ expiresAt: revokedServiceTokens.expiresAt })
-      .from(revokedServiceTokens)
-      .where(eq(revokedServiceTokens.jti, jti))
-      .limit(1);
+    const result = await db
+      .update(revokedServiceTokens)
+      .set({ revokedAt: sql`now()` })
+      .where(
+        and(
+          eq(revokedServiceTokens.jti, jti),
+          gt(revokedServiceTokens.expiresAt, sql`now()`),
+        ),
+      );
 
-    if (existing.length === 0 || existing[0].expiresAt.getTime() <= Date.now()) {
-      return false;
+    const updated = (result.rowCount ?? 0) > 0;
+    if (updated) {
+      loggers.api.info('JTI revoked', { jti: '[REDACTED]', reason });
     }
-
-    const now = new Date();
-    await db
-      .insert(revokedServiceTokens)
-      .values({ jti, revokedAt: now, expiresAt: existing[0].expiresAt })
-      .onConflictDoUpdate({
-        target: revokedServiceTokens.jti,
-        set: { revokedAt: now },
-      });
-
-    loggers.api.info('JTI revoked', { jti: '[REDACTED]', reason });
-    return true;
+    return updated;
   } catch (error) {
     if (process.env.NODE_ENV === 'production') {
       throw error;

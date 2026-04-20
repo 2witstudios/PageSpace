@@ -110,6 +110,23 @@ describe('JTI revocation (Postgres)', () => {
     expect(await isJTIRevoked(jti)).toBe(true);
   });
 
+  it('revokeJTI is atomic: issues no INSERT so a concurrent sweep cannot resurrect the row', async () => {
+    if (!dbAvailable) return;
+    const jti = 'test-jti-atomic';
+    await recordJTI(jti, 'user-atomic', 300);
+
+    const insertSpy = vi.spyOn(db, 'insert');
+    try {
+      const result = await revokeJTI(jti, 'atomicity-check');
+      expect(result).toBe(true);
+      expect(insertSpy).not.toHaveBeenCalled();
+    } finally {
+      insertSpy.mockRestore();
+    }
+
+    expect(await isJTIRevoked(jti)).toBe(true);
+  });
+
   it('sweepExpiredRevokedJTIs removes rows past their expires_at', async () => {
     if (!dbAvailable) return;
     await db.insert(revokedServiceTokens).values([
@@ -155,7 +172,7 @@ describe('JTI revocation (Postgres)', () => {
 
     it('revokeJTI throws when DB query fails in production', async () => {
       if (!dbAvailable) return;
-      const spy = vi.spyOn(db, 'select').mockImplementation(() => {
+      const spy = vi.spyOn(db, 'update').mockImplementation(() => {
         throw new Error('simulated DB failure');
       });
 
