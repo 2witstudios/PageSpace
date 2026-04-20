@@ -1,24 +1,25 @@
 /**
  * Distributed Rate Limiting
  *
- * Redis-based rate limiting for production deployments with multiple instances.
- * Replaces the in-memory rate limiter for distributed systems.
+ * Postgres-backed fixed-bucket rate limiter for production deployments with
+ * multiple instances.
+ *
+ * Storage: `rate_limit_buckets (key, window_start) → count`.
+ * Counter: `INSERT ... ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count`
+ * is a single atomic round-trip; concurrent requests against the same bucket
+ * serialize on the row lock Postgres takes during the UPDATE.
  *
  * Features:
- * - Sliding window algorithm for accurate rate limiting
- * - Works across multiple server instances
- * - Progressive blocking for repeated violations
- * - Graceful fallback to in-memory in development
+ * - Fixed window-start alignment so repeated calls within a window share a counter
+ * - Works across multiple server instances (Postgres is the source of truth)
+ * - Progressive blocking for repeated violations (computed at call time)
+ * - Graceful fallback to in-memory in development when DB is unreachable
+ * - Fail-closed in production: deny with Retry-After when DB is unreachable
  *
- * @see packages/lib/src/auth/rate-limit-utils.ts for in-memory version
+ * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
 
-import {
-  checkRateLimit as redisCheckRateLimit,
-  resetRateLimit as redisResetRateLimit,
-  getRateLimitStatus as redisGetRateLimitStatus,
-  tryGetRateLimitRedisClient,
-} from './security-redis';
+import { db, rateLimitBuckets, sql, eq } from '@pagespace/db';
 import { loggers } from '../logging/logger-config';
 
 // =============================================================================
@@ -61,7 +62,7 @@ function startCleanupInterval(): void {
 
   cleanupIntervalId = setInterval(() => {
     const now = Date.now();
-    const cutoff = now - 25 * 60 * 60 * 1000; // 25 hours (matches longest window — EXPORT_DATA 24h — plus buffer)
+    const cutoff = now - 25 * 60 * 60 * 1000;
 
     for (const [key, attempt] of inMemoryAttempts.entries()) {
       if (attempt.lastAttempt < cutoff) {
@@ -102,7 +103,6 @@ function inMemoryCheckRateLimit(
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
 
-  // Check if blocked
   if (attempt.blockedUntil && now < attempt.blockedUntil) {
     return {
       allowed: false,
@@ -110,7 +110,6 @@ function inMemoryCheckRateLimit(
     };
   }
 
-  // Block expired - reset
   if (attempt.blockedUntil && now >= attempt.blockedUntil) {
     attempt.count = 1;
     attempt.firstAttempt = now;
@@ -119,7 +118,6 @@ function inMemoryCheckRateLimit(
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
 
-  // Window expired - reset
   if (now - attempt.firstAttempt > config.windowMs) {
     attempt.count = 1;
     attempt.firstAttempt = now;
@@ -128,7 +126,6 @@ function inMemoryCheckRateLimit(
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
 
-  // Increment
   attempt.count++;
   attempt.lastAttempt = now;
 
@@ -139,14 +136,13 @@ function inMemoryCheckRateLimit(
     };
   }
 
-  // Rate limit exceeded - calculate block duration
   let blockDuration = config.blockDurationMs || config.windowMs;
 
   if (config.progressiveDelay) {
     const excessAttempts = attempt.count - config.maxAttempts;
     blockDuration = Math.min(
       blockDuration * Math.pow(2, excessAttempts - 1),
-      30 * 60 * 1000 // Max 30 minutes
+      30 * 60 * 1000
     );
   }
 
@@ -194,96 +190,107 @@ function inMemoryGetRateLimitStatus(
 // Distributed Rate Limiting (Main API)
 // =============================================================================
 
-let redisAvailableLogged = false;
+let postgresAvailableLogged = false;
+
+// Fail-closed response when DB is unavailable in production.
+function failClosedResponse(config: RateLimitConfig): RateLimitResult {
+  return {
+    allowed: false,
+    retryAfter: Math.ceil(config.windowMs / 1000),
+    attemptsRemaining: 0,
+  };
+}
+
+// Bucket-aligned window_start for the current time.
+function currentWindowStart(windowMs: number, now: number = Date.now()): Date {
+  return new Date(Math.floor(now / windowMs) * windowMs);
+}
 
 /**
  * Check rate limit for an identifier.
- * Uses Redis in production, falls back to in-memory in development.
+ * Uses Postgres in production, falls back to in-memory in development when DB is down.
  */
 export async function checkDistributedRateLimit(
   identifier: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
-  // Try rate limit Redis client (uses REDIS_RATE_LIMIT_URL)
-  const redis = await tryGetRateLimitRedisClient();
+  const now = Date.now();
+  const windowStart = currentWindowStart(config.windowMs, now);
+  const expiresAt = new Date(windowStart.getTime() + config.windowMs);
 
-  if (redis) {
-    if (!redisAvailableLogged) {
-      loggers.api.info('Distributed rate limiting enabled (Redis)');
-      redisAvailableLogged = true;
+  try {
+    const rows = await db
+      .insert(rateLimitBuckets)
+      .values({
+        key: identifier,
+        windowStart,
+        count: 1,
+        expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
+        set: { count: sql`${rateLimitBuckets.count} + 1` },
+      })
+      .returning({ count: rateLimitBuckets.count });
+
+    const count = rows[0]?.count ?? 0;
+
+    if (!postgresAvailableLogged) {
+      loggers.api.info('Distributed rate limiting enabled (Postgres)');
+      postgresAvailableLogged = true;
     }
 
-    try {
-      const result = await redisCheckRateLimit(
-        identifier,
-        config.maxAttempts,
-        config.windowMs
-      );
-
-      // Handle progressive delay if configured
-      if (!result.allowed && config.progressiveDelay) {
-        const excessAttempts = result.totalCount - config.maxAttempts;
-        const baseBlock = config.blockDurationMs || config.windowMs;
-        const blockDuration = Math.min(
-          baseBlock * Math.pow(2, Math.max(0, excessAttempts - 1)),
-          30 * 60 * 1000
-        );
-
-        return {
-          allowed: false,
-          retryAfter: Math.ceil(blockDuration / 1000),
-          attemptsRemaining: 0,
-        };
-      }
-
+    if (count <= config.maxAttempts) {
       return {
-        allowed: result.allowed,
-        retryAfter: result.allowed
-          ? undefined
-          : Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
-        attemptsRemaining: result.remaining,
+        allowed: true,
+        attemptsRemaining: config.maxAttempts - count,
       };
-    } catch (error) {
-      loggers.api.warn('Redis rate limit check failed, falling back to in-memory', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Fall through to in-memory
     }
-  }
 
-  // Production: FAIL CLOSED - deny request if we can't properly rate limit
-  if (process.env.NODE_ENV === 'production') {
-    // Safe truncation that won't throw on short/undefined identifiers
-    const safeId = String(identifier ?? '').slice(0, 20);
-    // Compute retryAfter from the actual rate-limit window for this request
-    const retryAfterSeconds = Math.ceil(config.windowMs / 1000);
+    if (config.progressiveDelay) {
+      const excessAttempts = count - config.maxAttempts;
+      const baseBlock = config.blockDurationMs || config.windowMs;
+      const blockDuration = Math.min(
+        baseBlock * Math.pow(2, Math.max(0, excessAttempts - 1)),
+        30 * 60 * 1000
+      );
+      return {
+        allowed: false,
+        retryAfter: Math.ceil(blockDuration / 1000),
+        attemptsRemaining: 0,
+      };
+    }
 
-    loggers.api.error('Redis unavailable in production - DENYING request (fail-closed)', {
-      identifier: safeId.length >= 20 ? `${safeId}...` : safeId,
-    });
     return {
       allowed: false,
-      retryAfter: retryAfterSeconds,
+      retryAfter: Math.ceil(config.windowMs / 1000),
       attemptsRemaining: 0,
     };
-  }
+  } catch (error) {
+    loggers.api.warn('Postgres rate limit check failed, falling back', {
+      error: error instanceof Error ? error.message : String(error),
+    });
 
-  // Development only: fall back to in-memory (acceptable for single-instance dev)
-  return inMemoryCheckRateLimit(identifier, config);
+    if (process.env.NODE_ENV === 'production') {
+      const safeId = String(identifier ?? '').slice(0, 20);
+      loggers.api.error('Postgres unavailable in production - DENYING request (fail-closed)', {
+        identifier: safeId.length >= 20 ? `${safeId}...` : safeId,
+      });
+      return failClosedResponse(config);
+    }
+
+    return inMemoryCheckRateLimit(identifier, config);
+  }
 }
 
 /**
  * Reset rate limit for an identifier (e.g., after successful auth).
  */
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
-  // Reset in both Redis and in-memory to be safe
   try {
-    const redis = await tryGetRateLimitRedisClient();
-    if (redis) {
-      await redisResetRateLimit(identifier);
-    }
+    await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
   } catch (error) {
-    loggers.api.debug('Redis rate limit reset failed', {
+    loggers.api.debug('Postgres rate limit reset failed', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -293,46 +300,44 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
 
 /**
  * Get rate limit status without incrementing.
- * In production, fails closed (reports blocked) when Redis is unavailable to avoid
- * returning potentially stale/incorrect in-memory status in distributed deployments.
+ * In production, fails closed (reports blocked) when DB is unavailable to avoid
+ * returning potentially stale in-memory status in distributed deployments.
  */
 export async function getDistributedRateLimitStatus(
   identifier: string,
   config: RateLimitConfig
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
-  try {
-    const redis = await tryGetRateLimitRedisClient();
-    if (redis) {
-      const result = await redisGetRateLimitStatus(
-        identifier,
-        config.maxAttempts,
-        config.windowMs
-      );
+  const now = Date.now();
+  const windowStart = currentWindowStart(config.windowMs, now);
 
+  try {
+    const rows = await db
+      .select({ count: rateLimitBuckets.count })
+      .from(rateLimitBuckets)
+      .where(
+        sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${windowStart}`
+      )
+      .limit(1);
+
+    const count = rows[0]?.count ?? 0;
+    const blocked = count >= config.maxAttempts;
+
+    return {
+      blocked,
+      retryAfter: blocked ? Math.ceil(config.windowMs / 1000) : undefined,
+      attemptsRemaining: Math.max(0, config.maxAttempts - count),
+    };
+  } catch {
+    if (process.env.NODE_ENV === 'production') {
       return {
-        blocked: !result.allowed,
-        retryAfter: result.allowed
-          ? undefined
-          : Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
-        attemptsRemaining: result.remaining,
+        blocked: true,
+        retryAfter: Math.ceil(config.windowMs / 1000),
+        attemptsRemaining: 0,
       };
     }
-  } catch {
-    // Fall through to fail-closed/in-memory handling below
-  }
 
-  // Production: FAIL CLOSED - report as blocked when Redis unavailable
-  // This prevents returning stale in-memory status in distributed deployments
-  if (process.env.NODE_ENV === 'production') {
-    return {
-      blocked: true,
-      retryAfter: Math.ceil(config.windowMs / 1000),
-      attemptsRemaining: 0,
-    };
+    return inMemoryGetRateLimitStatus(identifier, config);
   }
-
-  // Development only: fall back to in-memory status
-  return inMemoryGetRateLimitStatus(identifier, config);
 }
 
 // =============================================================================
@@ -342,103 +347,103 @@ export async function getDistributedRateLimitStatus(
 export const DISTRIBUTED_RATE_LIMITS = {
   LOGIN: {
     maxAttempts: 5,
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,
   },
   SIGNUP: {
     maxAttempts: 10,
-    windowMs: 60 * 60 * 1000, // 1 hour
+    windowMs: 60 * 60 * 1000,
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   PASSWORD_RESET: {
     maxAttempts: 3,
-    windowMs: 60 * 60 * 1000, // 1 hour
+    windowMs: 60 * 60 * 1000,
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   REFRESH: {
     maxAttempts: 10,
-    windowMs: 5 * 60 * 1000, // 5 minutes
+    windowMs: 5 * 60 * 1000,
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
   OAUTH_VERIFY: {
     maxAttempts: 10,
-    windowMs: 5 * 60 * 1000, // 5 minutes
+    windowMs: 5 * 60 * 1000,
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
   API: {
     maxAttempts: 100,
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
   FILE_UPLOAD: {
     maxAttempts: 20,
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
   SERVICE_TOKEN: {
     maxAttempts: 1000,
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
   CONTACT_FORM: {
     maxAttempts: 10,
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
   MARKETING_CONTACT_FORM: {
     maxAttempts: 5,
-    windowMs: 60 * 60 * 1000, // 1 hour
+    windowMs: 60 * 60 * 1000,
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   TRACKING: {
     maxAttempts: 100,
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
   EMAIL_RESEND: {
     maxAttempts: 3,
-    windowMs: 60 * 60 * 1000, // 1 hour
+    windowMs: 60 * 60 * 1000,
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
   EXPORT_DATA: {
     maxAttempts: 1,
-    windowMs: 24 * 60 * 60 * 1000, // 24 hours
+    windowMs: 24 * 60 * 60 * 1000,
     blockDurationMs: 24 * 60 * 60 * 1000,
     progressiveDelay: false,
   },
   MAGIC_LINK: {
     maxAttempts: 3,
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,
   },
   PASSKEY_REGISTER: {
     maxAttempts: 5,
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
   PASSKEY_AUTH: {
     maxAttempts: 10,
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
   PASSKEY_OPTIONS: {
     maxAttempts: 30,
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
@@ -450,38 +455,27 @@ export const DISTRIBUTED_RATE_LIMITS = {
 
 /**
  * Initialize distributed rate limiting.
- * In production, this validates Redis is available.
+ * Validates that Postgres is reachable; in production, throws if not.
  */
 export async function initializeDistributedRateLimiting(): Promise<{
-  mode: 'redis' | 'memory';
+  mode: 'postgres' | 'memory';
   error?: string;
 }> {
   try {
-    const redis = await tryGetRateLimitRedisClient();
-
-    if (redis) {
-      // Verify connection with a ping
-      await redis.ping();
-      loggers.api.info('Distributed rate limiting initialized with Redis');
-      return { mode: 'redis' };
-    }
-
-    if (process.env.NODE_ENV === 'production') {
-      const error = 'Redis required for distributed rate limiting in production';
-      loggers.api.error(error);
-      throw new Error(error);
-    }
-
-    loggers.api.warn('Distributed rate limiting using in-memory fallback (development only)');
-    return { mode: 'memory' };
+    await db.execute(sql`SELECT 1`);
+    loggers.api.info('Distributed rate limiting initialized with Postgres');
+    return { mode: 'postgres' };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     loggers.api.error('Failed to initialize distributed rate limiting', { error: message });
 
     if (process.env.NODE_ENV === 'production') {
-      throw error;
+      throw error instanceof Error
+        ? error
+        : new Error('Postgres required for distributed rate limiting in production');
     }
 
+    loggers.api.warn('Distributed rate limiting using in-memory fallback (development only)');
     return { mode: 'memory' };
   }
 }
