@@ -156,16 +156,23 @@ describe('distributed-rate-limit', () => {
       });
 
       it('applies progressive delay when configured', async () => {
-        mockInsertReturning(8); // 3 excess (limit 5)
-        const result = await checkDistributedRateLimit('progressive-key', {
-          maxAttempts: 5,
-          windowMs: 60000,
-          blockDurationMs: 1000,
-          progressiveDelay: true,
-        });
-        expect(result.allowed).toBe(false);
-        // 1000ms * 2^(3-1) = 4000ms → 4s
-        expect(result.retryAfter).toBe(4);
+        // Pin to start of bucket so msUntilWindowEnd = windowMs — the progressive
+        // block (4000ms) stays well below the remaining-window clamp.
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(60_000);
+        try {
+          mockInsertReturning(8); // 3 excess (limit 5)
+          const result = await checkDistributedRateLimit('progressive-key', {
+            maxAttempts: 5,
+            windowMs: 60000,
+            blockDurationMs: 1000,
+            progressiveDelay: true,
+          });
+          expect(result.allowed).toBe(false);
+          // 1000ms * 2^(3-1) = 4000ms → 4s
+          expect(result.retryAfter).toBe(4);
+        } finally {
+          nowSpy.mockRestore();
+        }
       });
 
       it('caps progressive delay at 30 minutes', async () => {
@@ -357,16 +364,22 @@ describe('distributed-rate-limit', () => {
     });
 
     it('applies progressive delay formula in status, matching check', async () => {
-      mockSelectSequence(8, 0); // 3 excess (limit 5), no prev contribution
-      const status = await getDistributedRateLimitStatus('progressive-status', {
-        maxAttempts: 5,
-        windowMs: 60_000,
-        blockDurationMs: 1_000,
-        progressiveDelay: true,
-      });
-      expect(status.blocked).toBe(true);
-      // 1000 * 2^(3-1) = 4000ms → 4s (within windowMs, no clamp)
-      expect(status.retryAfter).toBe(4);
+      // Pin to start of bucket so msUntilWindowEnd doesn't clamp below 4000ms.
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(60_000);
+      try {
+        mockSelectSequence(8, 0); // 3 excess (limit 5), no prev contribution
+        const status = await getDistributedRateLimitStatus('progressive-status', {
+          maxAttempts: 5,
+          windowMs: 60_000,
+          blockDurationMs: 1_000,
+          progressiveDelay: true,
+        });
+        expect(status.blocked).toBe(true);
+        // 1000 * 2^(3-1) = 4000ms → 4s (within windowMs, no clamp)
+        expect(status.retryAfter).toBe(4);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it('clamps status retryAfter to remaining window time', async () => {
