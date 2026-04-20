@@ -1,6 +1,7 @@
 import {
   sweepExpiredRevokedJTIs,
   sweepExpiredRateLimitBuckets,
+  sweepExpiredAuthHandoffTokens,
 } from '@pagespace/lib/security';
 import { audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
@@ -12,6 +13,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * Currently swept:
  * - `revoked_service_tokens` (JTI revocation tombstones)
  * - `rate_limit_buckets` (finished sliding-window counter buckets)
+ * - `auth_handoff_tokens` (PKCE, exchange-code, passkey-register handoff)
  *
  * Each table is swept inside its own try/catch so a failure on one does not
  * block the others. `rowCount` (via the helpers) is used instead of
@@ -45,6 +47,14 @@ export async function GET(request: Request) {
     results.rateLimitBuckets = await sweepExpiredRateLimitBuckets();
   } catch (error) {
     results.rateLimitBuckets = {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+
+  try {
+    results.authHandoffTokens = await sweepExpiredAuthHandoffTokens();
+  } catch (error) {
+    results.authHandoffTokens = {
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
