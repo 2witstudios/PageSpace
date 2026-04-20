@@ -60,7 +60,7 @@ import {
 } from '@/lib/ai/core';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, conversationCache, auditRequest, type CachedMessage } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
@@ -676,87 +676,41 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
-    // DATABASE-FIRST ARCHITECTURE WITH CACHING:
-    // PageSpace uses database as the single source of truth for all messages.
-    // Cache provides fast reads while invalidation ensures consistency on edits/deletes.
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
     });
 
-    // Try cache first (L1 memory -> L2 Redis -> DB fallback)
-    // Note: chatId is guaranteed to be defined here due to earlier validation
     const pageId = chatId as string;
-    let conversationHistory: UIMessage[];
-    const cachedConversation = await conversationCache.getConversation(pageId, conversationId);
+    const dbMessages = await db
+      .select()
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, pageId),
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.isActive, true)
+      ))
+      .orderBy(chatMessages.createdAt);
 
-    if (cachedConversation) {
-      // Cache hit - convert cached messages to UI format
-      conversationHistory = cachedConversation.messages.map(msg =>
-        convertDbMessageToUIMessage({
-          id: msg.id,
-          pageId,
-          userId: null,
-          role: msg.role,
-          content: msg.content,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          createdAt: new Date(msg.createdAt),
-          isActive: true,
-          editedAt: msg.editedAt ? new Date(msg.editedAt) : null,
-        })
-      );
-      loggers.ai.debug('AI Chat API: Loaded conversation from cache', {
-        messageCount: conversationHistory.length,
-        pageId
-      });
-    } else {
-      // Cache miss - read from database
-      const dbMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, pageId),
-          eq(chatMessages.conversationId, conversationId),
-          eq(chatMessages.isActive, true)
-        ))
-        .orderBy(chatMessages.createdAt);
-
-      // Convert database messages to UI format
-      conversationHistory = dbMessages.map(msg =>
-        convertDbMessageToUIMessage({
-          id: msg.id,
-          pageId: msg.pageId,
-          userId: msg.userId,
-          role: msg.role,
-          content: msg.content,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          createdAt: msg.createdAt,
-          isActive: msg.isActive,
-          editedAt: msg.editedAt,
-        })
-      );
-
-      // Populate cache with DB results (fire-and-forget)
-      const messagesToCache: CachedMessage[] = dbMessages.map(msg => ({
+    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
+      convertDbMessageToUIMessage({
         id: msg.id,
-        role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content ?? '',
-        toolCalls: (msg.toolCalls as string | null) ?? null,
-        toolResults: (msg.toolResults as string | null) ?? null,
-        createdAt: msg.createdAt.getTime(),
-        editedAt: msg.editedAt?.getTime() ?? null,
-        messageType: (msg.messageType as 'standard' | 'todo_list') ?? 'standard',
-      }));
-      conversationCache.setConversation(pageId, conversationId, messagesToCache).catch(err => {
-        loggers.ai.warn('Failed to populate conversation cache', { error: err });
-      });
+        pageId: msg.pageId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        editedAt: msg.editedAt,
+        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
+      })
+    );
 
-      loggers.ai.debug('AI Chat API: Loaded conversation from database', {
-        messageCount: conversationHistory.length,
-        pageId
-      });
-    }
+    loggers.ai.debug('AI Chat API: Loaded conversation from database', {
+      messageCount: conversationHistory.length,
+      pageId
+    });
 
     // Convert UIMessages to ModelMessages for the AI model
     // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)

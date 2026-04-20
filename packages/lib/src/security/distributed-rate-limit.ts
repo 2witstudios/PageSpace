@@ -30,7 +30,7 @@
  * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
 
-import { db, rateLimitBuckets, sql, eq } from '@pagespace/db';
+import { db, rateLimitBuckets, sql, eq, lt } from '@pagespace/db';
 import { loggers } from '../logging/logger-config';
 
 // =============================================================================
@@ -428,6 +428,30 @@ export async function getDistributedRateLimitStatus(
     }
 
     return inMemoryGetRateLimitStatus(identifier, config);
+  }
+}
+
+/**
+ * Delete expired rate-limit buckets (`expires_at < now()`).
+ *
+ * Best-effort cleanup. In production, rethrows so the cron handler surfaces a
+ * 500 and pages ops. Uses `rowCount` instead of `.returning()` so the return
+ * is constant-size regardless of how many rows were deleted.
+ *
+ * Mirrors `sweepExpiredRevokedJTIs` in `./security-redis.ts`.
+ */
+export async function sweepExpiredRateLimitBuckets(): Promise<number> {
+  try {
+    const result = await db
+      .delete(rateLimitBuckets)
+      .where(lt(rateLimitBuckets.expiresAt, sql`now()`));
+    return result.rowCount ?? 0;
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    loggers.api.warn('Rate-limit bucket sweep skipped: DB unavailable');
+    return 0;
   }
 }
 

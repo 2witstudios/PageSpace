@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, conversationCache, loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage, loggers, auditRequest } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
@@ -167,9 +167,6 @@ export async function DELETE(
 
     // Soft-delete all messages in the conversation
     await conversationRepository.softDeleteConversation(agentId, conversationId);
-
-    // Invalidate conversation cache
-    await conversationCache.invalidateConversation(agentId, conversationId);
 
     // Audit log the deletion for security and compliance
     await conversationRepository.logConversationDeletion({

@@ -493,20 +493,22 @@ describe('JTI Service', () => {
 ```
 
 **Acceptance Criteria:**
-- [x] JTI recorded on every service token creation
-- [x] JTI checked on every service token validation
-- [x] Revocation takes effect within 1 second
-- [x] Redis failure degrades gracefully (deny by default)
+- [ ] JTI recorded on every service token creation (API exists; call sites pending wire-in)
+- [ ] JTI checked on every service token validation (API exists; call sites pending wire-in)
+- [x] Revocation takes effect within 1 second (once wired)
+- [x] DB failure fails closed in production (throws), degrades gracefully in dev
 
 **Dependencies:** P0-T1
 
-**Status:** ✅ COMPLETED (2026-01-08)
+**Status:** 🚧 IN PROGRESS — API and storage complete; call sites land in PR3
 
 **Implementation Notes:**
-- Implemented in `packages/lib/src/security/security-redis.ts` (not jti-service.ts as originally planned)
-- Functions: `recordJTI()`, `isJTIRevoked()`, `revokeJTI()`, `revokeAllUserJTIs()`
-- Fail-closed security in production (missing JTIs treated as revoked)
-- 39+ JTI-related tests passing
+- Storage moved from Redis → Postgres table `revoked_service_tokens` (PR2, migration 0100)
+- Functions in `packages/lib/src/security/security-redis.ts`: `recordJTI()`, `isJTIRevoked()`, `revokeJTI()`, `revokeAllUserJTIs()`, `sweepExpiredRevokedJTIs()`
+- Sweeper: `apps/web/src/app/api/cron/sweep-expired/route.ts` reaps expired rows
+- `revokeJTI` is a single atomic `UPDATE ... WHERE expires_at > now()` — no race with the sweeper
+- Fail-closed in production: missing row ⇒ treated as revoked; DB errors re-throw
+- Wire-in gap: `packages/lib/src/services/validated-service-token.ts` does **not** yet call `recordJTI` / `isJTIRevoked`. PR3 must either (a) gate the wire-in behind a flag, or (b) accept a ≤5-min blast radius where in-flight tokens issued pre-cutover all fail validation
 
 ---
 

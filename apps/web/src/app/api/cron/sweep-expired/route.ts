@@ -1,17 +1,22 @@
-import { db, rateLimitBuckets, sql } from '@pagespace/db';
+import {
+  sweepExpiredRevokedJTIs,
+  sweepExpiredRateLimitBuckets,
+} from '@pagespace/lib/security';
 import { audit } from '@pagespace/lib/server';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
- * Cron endpoint to sweep expired security rows.
- *
- * Runs `DELETE ... WHERE expires_at < now()` against each table whose
- * expires_at column marks a row as stale. Tables are swept independently
- * so a failure on one does not block the others.
+ * Cron endpoint to sweep expired rows from append-only-with-TTL tables.
  *
  * Currently swept:
- * - rate_limit_buckets — finished sliding-window counter buckets
+ * - `revoked_service_tokens` (JTI revocation tombstones)
+ * - `rate_limit_buckets` (finished sliding-window counter buckets)
+ *
+ * Each table is swept inside its own try/catch so a failure on one does not
+ * block the others. `rowCount` (via the helpers) is used instead of
+ * `.returning()` so the response is constant-size regardless of how many
+ * rows were deleted.
  *
  * Authentication:
  * - Primary: HMAC-signed cron requests (via cron-curl)
@@ -29,21 +34,22 @@ export async function GET(request: Request) {
   const results: Record<string, number | { error: string }> = {};
 
   try {
-    // Count via rowCount rather than .returning() — the latter would allocate
-    // one JS object per deleted row, which scales with traffic, not with value.
-    const result = await db
-      .delete(rateLimitBuckets)
-      .where(sql`${rateLimitBuckets.expiresAt} < now()`);
-    results.rate_limit_buckets = (result as { rowCount?: number | null }).rowCount ?? 0;
+    results.revokedServiceTokens = await sweepExpiredRevokedJTIs();
   } catch (error) {
-    results.rate_limit_buckets = {
+    results.revokedServiceTokens = {
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 
-  const hadError = Object.values(results).some(
-    (v) => typeof v !== 'number',
-  );
+  try {
+    results.rateLimitBuckets = await sweepExpiredRateLimitBuckets();
+  } catch (error) {
+    results.rateLimitBuckets = {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+
+  const hadError = Object.values(results).some((v) => typeof v !== 'number');
 
   audit({
     eventType: 'data.delete',

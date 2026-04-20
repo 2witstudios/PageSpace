@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
@@ -143,7 +143,7 @@ export async function POST(request: Request) {
 
     let nextPosition = (lastPage?.position || 0) + 1;
 
-    // Track affected drives for cache invalidation
+    // Track affected drives for broadcast events
     const affectedDriveIds = new Set<string>();
     affectedDriveIds.add(targetDriveId);
 
@@ -196,14 +196,8 @@ export async function POST(request: Request) {
       });
     }
 
-    // Invalidate caches and broadcast events
+    // Broadcast events
     for (const driveId of affectedDriveIds) {
-      pageTreeCache.invalidateDriveTree(driveId).catch(err => {
-        loggers.api.warn('Page tree cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId,
-        });
-      });
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'moved')
       );

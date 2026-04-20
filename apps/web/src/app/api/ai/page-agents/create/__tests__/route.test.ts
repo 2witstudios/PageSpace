@@ -30,9 +30,6 @@ vi.mock('@/lib/auth', () => ({
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
-  agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn(),
-  },
   loggers: {
     api: {
       info: vi.fn(),
@@ -66,7 +63,7 @@ vi.mock('@/lib/ai/core', () => ({
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 // Test fixtures
@@ -399,17 +396,6 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
-    it('should invalidate agent awareness cache for the drive', async () => {
-      const request = createRequest({
-        driveId: mockDriveId,
-        title: 'Test Agent',
-        systemPrompt: 'You are helpful.',
-      });
-
-      await POST(request);
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
   });
 
   describe('error handling', () => {

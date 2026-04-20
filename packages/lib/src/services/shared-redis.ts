@@ -5,7 +5,7 @@ import { loggers } from '../logging/logger-config';
  * Shared Redis Client Utility
  *
  * Provides a single Redis connection shared across all cache services
- * (PermissionCache, AgentAwarenessCache, etc.) to avoid duplicate connections.
+ * to avoid duplicate connections.
  *
  * Features:
  * - Singleton Redis connection

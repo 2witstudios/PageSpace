@@ -25,7 +25,6 @@ const {
   mockPagesFindFirst,
   mockTransaction,
   mockTrackPageOperation,
-  mockPageTreeCacheInvalidate,
   mockGetActorInfo,
   mockCreateChangeGroupId,
   mockInferChangeGroupType,
@@ -43,7 +42,6 @@ const {
   mockPagesFindFirst: vi.fn(),
   mockTransaction: vi.fn(),
   mockTrackPageOperation: vi.fn(),
-  mockPageTreeCacheInvalidate: vi.fn().mockResolvedValue(undefined),
   mockGetActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
@@ -96,9 +94,6 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: mockLoggers,
-  pageTreeCache: {
-    invalidateDriveTree: (...args: unknown[]) => mockPageTreeCacheInvalidate(...args),
-  },
   getActorInfo: (...args: unknown[]) => mockGetActorInfo(...args),
   auditRequest: vi.fn(),
 }));
@@ -243,7 +238,6 @@ describe('POST /api/pages/[pageId]/restore', () => {
     mockCheckMCPPageScope.mockResolvedValue(null);
     mockPagesFindFirst.mockResolvedValue(mockTrashedPage);
     mockApplyPageMutation.mockResolvedValue({ deferredTrigger: null });
-    mockPageTreeCacheInvalidate.mockResolvedValue(undefined);
     mockGetActorInfo.mockResolvedValue({
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
@@ -403,12 +397,6 @@ describe('POST /api/pages/[pageId]/restore', () => {
       expect(mockBroadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('invalidates page tree cache when drive exists', async () => {
-      await POST(createRequest(), mockParams);
-
-      expect(mockPageTreeCacheInvalidate).toHaveBeenCalledWith(mockDriveId);
-    });
-
     it('does not broadcast when page has no drive', async () => {
       mockPagesFindFirst.mockResolvedValue({
         ...mockTrashedPage,
@@ -418,7 +406,6 @@ describe('POST /api/pages/[pageId]/restore', () => {
       await POST(createRequest(), mockParams);
 
       expect(mockBroadcastPageEvent).not.toHaveBeenCalled();
-      expect(mockPageTreeCacheInvalidate).not.toHaveBeenCalled();
     });
 
     it('tracks page operation', async () => {
@@ -435,14 +422,6 @@ describe('POST /api/pages/[pageId]/restore', () => {
       );
     });
 
-    it('handles page tree cache invalidation failure gracefully', async () => {
-      mockPageTreeCacheInvalidate.mockRejectedValueOnce(new Error('Cache error'));
-
-      const response = await POST(createRequest(), mockParams);
-
-      // Should still succeed
-      expect(response.status).toBe(200);
-    });
   });
 
   describe('error handling', () => {

@@ -129,9 +129,6 @@ import {
   getSecurityRedisClient,
   isSecurityRedisAvailable,
   tryGetSecurityRedisClient,
-  recordJTI,
-  isJTIRevoked,
-  revokeJTI,
   revokeAllUserJTIs,
   checkRateLimit,
   getRateLimitStatus,
@@ -219,105 +216,8 @@ describe('security-redis', () => {
   });
 
   describe('JTI Operations', () => {
-    describe('recordJTI', () => {
-      it('stores JTI with expiry and user ID', async () => {
-        await recordJTI('test-jti-123', 'user-456', 300);
-
-        expect(mockRedis.setex).toHaveBeenCalledWith(
-          'sec:jti:test-jti-123',
-          300,
-          expect.stringContaining('"status":"valid"')
-        );
-        expect(mockRedis.setex).toHaveBeenCalledWith(
-          'sec:jti:test-jti-123',
-          300,
-          expect.stringContaining('"userId":"user-456"')
-        );
-      });
-
-      it('includes creation timestamp', async () => {
-        const before = Date.now();
-        await recordJTI('jti-time', 'user-1', 300);
-        const after = Date.now();
-
-        const call = mockRedis.setex.mock.calls[0];
-        const stored = JSON.parse(call[2] as string);
-        expect(stored.createdAt).toBeGreaterThanOrEqual(before);
-        expect(stored.createdAt).toBeLessThanOrEqual(after);
-      });
-    });
-
-    describe('isJTIRevoked', () => {
-      it('returns false for valid JTI', async () => {
-        await recordJTI('valid-jti', 'user-1', 300);
-        const revoked = await isJTIRevoked('valid-jti');
-        expect(revoked).toBe(false);
-      });
-
-      it('returns true for non-existent JTI (fail closed)', async () => {
-        const revoked = await isJTIRevoked('nonexistent-jti');
-        expect(revoked).toBe(true);
-      });
-
-      it('returns true for revoked JTI', async () => {
-        await recordJTI('to-revoke', 'user-1', 300);
-        await revokeJTI('to-revoke', 'test revocation');
-        const revoked = await isJTIRevoked('to-revoke');
-        expect(revoked).toBe(true);
-      });
-
-      it('returns true for corrupted data (fail closed)', async () => {
-        mockRedis._store.set('sec:jti:corrupted', { value: 'not-json{{{' });
-        const revoked = await isJTIRevoked('corrupted');
-        expect(revoked).toBe(true);
-      });
-    });
-
-    describe('revokeJTI', () => {
-      it('marks JTI as revoked with reason', async () => {
-        await recordJTI('revoke-test', 'user-1', 300);
-        const result = await revokeJTI('revoke-test', 'suspicious activity');
-
-        expect(result).toBe(true);
-        const stored = JSON.parse(mockRedis._store.get('sec:jti:revoke-test')!.value);
-        expect(stored.status).toBe('revoked');
-        expect(stored.reason).toBe('suspicious activity');
-        expect(stored.revokedAt).toBeDefined();
-      });
-
-      it('logs revocation with JTI redacted for security', async () => {
-        const { loggers } = await import('../../logging/logger-config');
-        await recordJTI('sensitive-jti-12345', 'user-1', 300);
-        await revokeJTI('sensitive-jti-12345', 'test revocation');
-
-        expect(loggers.api.info).toHaveBeenCalledWith('JTI revoked', {
-          jti: '[REDACTED]',
-          reason: 'test revocation',
-        });
-      });
-
-      it('preserves original TTL on revocation', async () => {
-        await recordJTI('ttl-test', 'user-1', 300);
-        await revokeJTI('ttl-test', 'test');
-
-        // setex should be called twice - once for record, once for revoke
-        expect(mockRedis.setex).toHaveBeenCalledTimes(2);
-      });
-
-      it('returns false for expired/nonexistent JTI', async () => {
-        const result = await revokeJTI('nonexistent', 'test');
-        expect(result).toBe(false);
-      });
-
-      it('preserves userId in revocation record', async () => {
-        await recordJTI('user-preserve', 'original-user', 300);
-        await revokeJTI('user-preserve', 'test');
-
-        const stored = JSON.parse(mockRedis._store.get('sec:jti:user-preserve')!.value);
-        expect(stored.userId).toBe('original-user');
-      });
-    });
-
+    // recordJTI / isJTIRevoked / revokeJTI now live on Postgres — see
+    // jti-revocation.integration.test.ts for end-to-end coverage.
     describe('revokeAllUserJTIs', () => {
       it('logs message about token version bump', async () => {
         const { loggers } = await import('../../logging/logger-config');

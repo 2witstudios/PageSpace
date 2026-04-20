@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache, getCreatablePageTypes, auditRequest } from '@pagespace/lib/server';
+import { loggers, getCreatablePageTypes, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
@@ -81,24 +81,6 @@ export async function POST(request: Request) {
         type: result.page.type,
       }),
     );
-
-    // Invalidate agent awareness cache when an AI_CHAT page is created
-    if (result.isAIChatPage) {
-      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(err => {
-        loggers.api.warn('Agent awareness cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId: result.driveId,
-        });
-      });
-    }
-
-    // Invalidate page tree cache when structure changes
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
-      loggers.api.warn('Page tree cache invalidation failed', {
-        error: err instanceof Error ? err.message : String(err),
-        driveId: result.driveId,
-      });
-    });
 
     // Track page creation using result values
     trackPageOperation(userId, 'create', result.page.id, {

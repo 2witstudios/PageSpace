@@ -103,18 +103,6 @@ export { rateLimitCache } from './services/rate-limit-cache';
 export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';
 export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from './services/date-utils';
 
-// Agent awareness caching (server-only)
-export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
-export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
-
-// Page tree caching (server-only)
-export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
-export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
-
-// Conversation caching (server-only)
-export { conversationCache, ConversationCache } from './services/conversation-cache';
-export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';
-
 // File processing utilities (server-only)
 export * from './file-processing';
 

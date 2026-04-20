@@ -20,6 +20,7 @@ export {
   isJTIRevoked,
   revokeJTI,
   revokeAllUserJTIs,
+  sweepExpiredRevokedJTIs,
   // Session operations
   setSessionData,
   getSessionData,
@@ -33,6 +34,7 @@ export {
   getDistributedRateLimitStatus,
   initializeDistributedRateLimiting,
   shutdownRateLimiting,
+  sweepExpiredRateLimitBuckets,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
   type RateLimitResult,
