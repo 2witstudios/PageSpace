@@ -18,6 +18,7 @@ import {
   channelMessages,
   chatMessages,
   connections,
+  eq,
 } from '@pagespace/db';
 import { loadPagePayload } from '../page-payload-service';
 import { PageType } from '../../utils/enums';
@@ -123,6 +124,30 @@ describe('loadPagePayload (integration)', () => {
     });
 
     await expect(loadPagePayload(grantee.id, page.id)).rejects.toThrow(/not accessible/);
+  });
+
+  it('returns a bounded breadcrumb when the parentId chain contains a cycle', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const a = await factories.createPage(drive.id, { type: 'FOLDER', title: 'A' });
+    const b = await factories.createPage(drive.id, { type: 'FOLDER', title: 'B', parentId: a.id });
+    // Introduce a cycle: A.parent = B, while B.parent = A.
+    await db.update(pages).set({ parentId: b.id }).where(eq(pages.id, a.id));
+
+    // Race the fetcher against a short timeout — if depth is unbounded, the CTE
+    // runs until Postgres' internal recursion safeguards trip, which is far
+    // slower than a bounded walk.
+    const payload = await Promise.race([
+      loadPagePayload(owner.id, a.id),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('breadcrumb timed out')), 5_000),
+      ),
+    ]);
+
+    // Unbounded recursion would produce thousands of rows (or time out); the
+    // bounded walk tops out at the cap + 1 (seed row + cap recursive steps).
+    expect(payload.breadcrumb.length).toBeLessThanOrEqual(256);
+    expect(payload.breadcrumb[payload.breadcrumb.length - 1]?.id).toBe(a.id);
   });
 
   it('grants access to a user with a future-expiring view grant', async () => {

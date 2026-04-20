@@ -107,6 +107,8 @@ async function fetchPageRow(runner: Runner, pageId: string): Promise<Page> {
 async function fetchBreadcrumb(runner: Runner, pageId: string): Promise<BreadcrumbEntry[]> {
   // Walk from the requested page up to the drive root using a recursive CTE.
   // ORDER BY depth DESC produces root → child → ... → page (the natural reading order).
+  // Depth is capped so a malformed parentId cycle cannot cause runaway recursion —
+  // real page trees are never this deep.
   const result = await runner.execute<{
     id: string;
     title: string;
@@ -120,6 +122,7 @@ async function fetchBreadcrumb(runner: Runner, pageId: string): Promise<Breadcru
       SELECT parent.id, parent.title, parent.type, parent."parentId", c.depth + 1
       FROM pages parent
       JOIN crumb c ON c."parentId" = parent.id
+      WHERE c.depth < 128
     )
     SELECT id, title, type FROM crumb ORDER BY depth DESC
   `);
