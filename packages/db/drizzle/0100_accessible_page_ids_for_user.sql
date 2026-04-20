@@ -1,9 +1,20 @@
 -- Canonical "pages this user can view" function plus its supporting indexes.
--- Resolution rules (mirror getUserAccessLevel + getUserAccessiblePagesInDrive):
---   1. Drive owner — full visibility into every non-trashed page in their non-trashed drives.
---   2. Drive ADMIN member — same, via drive_members.
---   3. Explicit page_permissions row with canView=true and (expiresAt IS NULL OR expiresAt > now()).
--- Trashed drives and trashed pages are excluded.
+--
+-- Resolution rules (a user sees a page iff ANY of the following holds):
+--   1. They own the drive that contains the page.
+--   2. They are a drive_members row with role='ADMIN' on that drive.
+--   3. They have a page_permissions row with canView=true and either
+--      expiresAt IS NULL or expiresAt > now().
+--
+-- This function is STRICTER than the equivalent TS helpers it replaces
+-- (getUserAccessLevel / getUserAccessiblePagesInDrive): it excludes trashed
+-- pages and pages inside trashed drives. Those helpers return trashed rows
+-- and rely on callers to filter. The one-fetch payload assumes the DB has
+-- already filtered, which is why this tightening lives here.
+--
+-- SECURITY DEFINER is scoped by `SET search_path = pg_catalog, public` so a
+-- role with CREATE on another schema cannot shadow symbols like now().
+--
 -- DROP-then-CREATE keeps the migration safely re-runnable in dev/CI snapshots.
 
 DROP FUNCTION IF EXISTS accessible_page_ids_for_user(text);
@@ -14,6 +25,7 @@ LANGUAGE sql
 SECURITY DEFINER
 STABLE
 PARALLEL SAFE
+SET search_path = pg_catalog, public
 AS $$
   SELECT p.id
   FROM pages p

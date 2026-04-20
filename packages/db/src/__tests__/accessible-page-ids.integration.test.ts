@@ -27,6 +27,16 @@ function sorted(ids: string[]): string[] {
 }
 
 describe('accessible_page_ids_for_user (Postgres function)', () => {
+  it('pins search_path on the SECURITY DEFINER function to prevent search-path hijacking', async () => {
+    const result = await db.execute<{ proconfig: string[] | null }>(
+      sql`SELECT proconfig FROM pg_proc WHERE proname = 'accessible_page_ids_for_user'`,
+    );
+    const proconfig = result.rows[0]?.proconfig ?? null;
+    expect(proconfig, 'function should have a proconfig (search_path etc.) set').not.toBeNull();
+    const hasSearchPath = (proconfig ?? []).some((entry) => entry.startsWith('search_path='));
+    expect(hasSearchPath, 'search_path should be pinned on the function').toBe(true);
+  });
+
   beforeEach(async () => {
     // Delete in FK order to avoid cascade contention.
     await db.delete(pagePermissions);
