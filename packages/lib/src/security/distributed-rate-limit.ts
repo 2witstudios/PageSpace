@@ -1,16 +1,27 @@
 /**
  * Distributed Rate Limiting
  *
- * Postgres-backed fixed-bucket rate limiter for production deployments with
- * multiple instances.
+ * Postgres-backed weighted-sliding-window rate limiter for production
+ * deployments with multiple instances.
  *
  * Storage: `rate_limit_buckets (key, window_start) → count`.
- * Counter: `INSERT ... ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count`
- * is a single atomic round-trip; concurrent requests against the same bucket
- * serialize on the row lock Postgres takes during the UPDATE.
+ *
+ * Algorithm (two-bucket weighted sliding window):
+ * - Each check atomically increments the current bucket via
+ *   `INSERT ... ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count`
+ *   (single round-trip; concurrent writers serialize on the row lock).
+ * - In parallel it reads the previous bucket (windowStart - windowMs).
+ * - Effective count = currCount + prevCount * (1 - msIntoBucket / windowMs).
+ *   This is the Cloudflare/nginx sliding-window approximation: it smooths the
+ *   bucket boundary so an attacker cannot burst maxAttempts right before a
+ *   boundary and maxAttempts right after it.
+ *
+ * Rows live for 2×windowMs (expires_at = windowStart + 2*windowMs) so the
+ * previous bucket is still readable until it has rolled entirely out of the
+ * current window.
  *
  * Features:
- * - Fixed window-start alignment so repeated calls within a window share a counter
+ * - Weighted sliding window prevents boundary bursting (≈ Redis semantics)
  * - Works across multiple server instances (Postgres is the source of truth)
  * - Progressive blocking for repeated violations (computed at call time)
  * - Graceful fallback to in-memory in development when DB is unreachable
@@ -206,16 +217,33 @@ function currentWindowStart(windowMs: number, now: number = Date.now()): Date {
   return new Date(Math.floor(now / windowMs) * windowMs);
 }
 
+// Weighted sliding-window count: current bucket plus a decaying contribution
+// from the previous bucket. As `now` advances through the current bucket, the
+// previous bucket's weight drops linearly from 1 → 0.
+function computeEffectiveCount(
+  currCount: number,
+  prevCount: number,
+  windowStart: Date,
+  now: number,
+  windowMs: number,
+): number {
+  const msIntoBucket = Math.max(0, Math.min(windowMs, now - windowStart.getTime()));
+  const prevWeight = 1 - msIntoBucket / windowMs;
+  return currCount + prevCount * prevWeight;
+}
+
 // Progressive block duration, clamped to the 30-minute ceiling and to the
 // time remaining in the current bucket. A fixed-window Postgres bucket resets
 // at windowStart + windowMs; any retryAfter beyond that is a promise we can't keep.
 function computeProgressiveBlockMs(
-  count: number,
+  effectiveCount: number,
   config: RateLimitConfig,
   windowStart: Date,
   now: number,
 ): number {
-  const excessAttempts = count - config.maxAttempts;
+  // Fractional excess is possible (effective count includes a weighted prev
+  // bucket). Round up so any overage incurs at least the base penalty.
+  const excessAttempts = Math.max(0, Math.ceil(effectiveCount - config.maxAttempts));
   const baseBlock = config.blockDurationMs || config.windowMs;
   const uncapped = baseBlock * Math.pow(2, Math.max(0, excessAttempts - 1));
   const msUntilWindowEnd = Math.max(0, windowStart.getTime() + config.windowMs - now);
@@ -232,39 +260,62 @@ export async function checkDistributedRateLimit(
 ): Promise<RateLimitResult> {
   const now = Date.now();
   const windowStart = currentWindowStart(config.windowMs, now);
-  const expiresAt = new Date(windowStart.getTime() + config.windowMs);
+  const prevWindowStart = new Date(windowStart.getTime() - config.windowMs);
+  // expires_at covers 2 windows so the previous bucket survives long enough
+  // for the sliding-window read below to see it.
+  const expiresAt = new Date(windowStart.getTime() + 2 * config.windowMs);
 
   try {
-    const rows = await db
-      .insert(rateLimitBuckets)
-      .values({
-        key: identifier,
-        windowStart,
-        count: 1,
-        expiresAt,
-      })
-      .onConflictDoUpdate({
-        target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
-        set: { count: sql`${rateLimitBuckets.count} + 1` },
-      })
-      .returning({ count: rateLimitBuckets.count });
+    const [currRows, prevRows] = await Promise.all([
+      db
+        .insert(rateLimitBuckets)
+        .values({
+          key: identifier,
+          windowStart,
+          count: 1,
+          expiresAt,
+        })
+        .onConflictDoUpdate({
+          target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
+          set: { count: sql`${rateLimitBuckets.count} + 1` },
+        })
+        .returning({ count: rateLimitBuckets.count }),
+      db
+        .select({ count: rateLimitBuckets.count })
+        .from(rateLimitBuckets)
+        .where(
+          sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${prevWindowStart}`
+        )
+        .limit(1),
+    ]);
 
-    const count = rows[0]?.count ?? 0;
+    const currCount = currRows[0]?.count ?? 0;
+    const prevCount = prevRows[0]?.count ?? 0;
+    const effectiveCount = computeEffectiveCount(
+      currCount,
+      prevCount,
+      windowStart,
+      now,
+      config.windowMs,
+    );
 
     if (!postgresAvailableLogged) {
       loggers.api.info('Distributed rate limiting enabled (Postgres)');
       postgresAvailableLogged = true;
     }
 
-    if (count <= config.maxAttempts) {
+    if (effectiveCount <= config.maxAttempts) {
       return {
         allowed: true,
-        attemptsRemaining: config.maxAttempts - count,
+        attemptsRemaining: Math.max(
+          0,
+          Math.ceil(config.maxAttempts - effectiveCount),
+        ),
       };
     }
 
     if (config.progressiveDelay) {
-      const blockDuration = computeProgressiveBlockMs(count, config, windowStart, now);
+      const blockDuration = computeProgressiveBlockMs(effectiveCount, config, windowStart, now);
       return {
         allowed: false,
         retryAfter: Math.ceil(blockDuration / 1000),
@@ -320,23 +371,41 @@ export async function getDistributedRateLimitStatus(
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
   const now = Date.now();
   const windowStart = currentWindowStart(config.windowMs, now);
+  const prevWindowStart = new Date(windowStart.getTime() - config.windowMs);
 
   try {
-    const rows = await db
-      .select({ count: rateLimitBuckets.count })
-      .from(rateLimitBuckets)
-      .where(
-        sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${windowStart}`
-      )
-      .limit(1);
+    const [currRows, prevRows] = await Promise.all([
+      db
+        .select({ count: rateLimitBuckets.count })
+        .from(rateLimitBuckets)
+        .where(
+          sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${windowStart}`
+        )
+        .limit(1),
+      db
+        .select({ count: rateLimitBuckets.count })
+        .from(rateLimitBuckets)
+        .where(
+          sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${prevWindowStart}`
+        )
+        .limit(1),
+    ]);
 
-    const count = rows[0]?.count ?? 0;
-    const blocked = count >= config.maxAttempts;
+    const currCount = currRows[0]?.count ?? 0;
+    const prevCount = prevRows[0]?.count ?? 0;
+    const effectiveCount = computeEffectiveCount(
+      currCount,
+      prevCount,
+      windowStart,
+      now,
+      config.windowMs,
+    );
+    const blocked = effectiveCount >= config.maxAttempts;
 
     let retryAfter: number | undefined;
     if (blocked) {
       const blockMs = config.progressiveDelay
-        ? computeProgressiveBlockMs(count, config, windowStart, now)
+        ? computeProgressiveBlockMs(effectiveCount, config, windowStart, now)
         : config.windowMs;
       retryAfter = Math.ceil(blockMs / 1000);
     }
@@ -344,7 +413,10 @@ export async function getDistributedRateLimitStatus(
     return {
       blocked,
       retryAfter,
-      attemptsRemaining: Math.max(0, config.maxAttempts - count),
+      attemptsRemaining: Math.max(
+        0,
+        Math.ceil(config.maxAttempts - effectiveCount),
+      ),
     };
   } catch {
     if (process.env.NODE_ENV === 'production') {

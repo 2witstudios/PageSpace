@@ -72,10 +72,36 @@ function mockSelectReturns(count: number | null) {
   });
 }
 
+// Returns a different count for each sequential db.select(...) call in the
+// order issued. Used when the code-under-test issues the current-bucket and
+// previous-bucket reads in parallel (Promise.all) — they still execute in
+// declaration order, so index 0 maps to curr, index 1 to prev.
+function mockSelectSequence(...counts: (number | null)[]) {
+  let i = 0;
+  selectMock.mockImplementation(() => ({
+    from: () => ({
+      where: () => ({
+        limit: async () => {
+          const c = counts[Math.min(i, counts.length - 1)];
+          i += 1;
+          return c === null || c === undefined ? [] : [{ count: c }];
+        },
+      }),
+    }),
+  }));
+}
+
 function mockSelectThrows(err: Error) {
   selectMock.mockImplementation(() => {
     throw err;
   });
+}
+
+// Configures both reads a check() performs: the upserted current bucket (via
+// insert..returning) and the read-only previous bucket (via select).
+function mockCheckBuckets(currCount: number, prevCount: number = 0) {
+  mockInsertReturning(currCount);
+  mockSelectReturns(prevCount);
 }
 
 function mockDeleteResolves() {
@@ -92,6 +118,8 @@ describe('distributed-rate-limit', () => {
     process.env.NODE_ENV = 'test';
     shutdownRateLimiting();
     mockDeleteResolves();
+    // Default: no previous-bucket contribution unless a test overrides.
+    mockSelectReturns(0);
   });
 
   afterEach(() => {
@@ -177,6 +205,37 @@ describe('distributed-rate-limit', () => {
         expect(result.allowed).toBe(false);
         expect(result.retryAfter).toBeLessThanOrEqual(10);
       });
+
+      it('prevents boundary bursting by weighting the previous bucket', async () => {
+        // Classic fixed-window attack: prev bucket already at the limit, then
+        // cross the boundary and try again. curr=1, prev=5 — a pure fixed-window
+        // impl would allow this (new bucket, count=1 < 5). Weighted sliding
+        // window must treat the prev count as still in the window near the boundary.
+        //
+        // Pin Date.now to a bucket boundary so prevWeight = 1, making
+        // effective = 1 + 5*1 = 6 > 5 → blocked.
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(60_000);
+        try {
+          mockCheckBuckets(1, 5);
+          const result = await checkDistributedRateLimit('boundary-burst', {
+            maxAttempts: 5,
+            windowMs: 60_000,
+          });
+          expect(result.allowed).toBe(false);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      it('allows fresh requests when there is no previous bucket', async () => {
+        mockCheckBuckets(1, 0);
+        const result = await checkDistributedRateLimit('fresh-bucket', {
+          maxAttempts: 5,
+          windowMs: 60_000,
+        });
+        expect(result.allowed).toBe(true);
+        expect(result.attemptsRemaining).toBe(4);
+      });
     });
 
     describe('with Postgres unavailable', () => {
@@ -257,14 +316,14 @@ describe('distributed-rate-limit', () => {
     };
 
     it('returns unblocked status when count < limit', async () => {
-      mockSelectReturns(2);
+      mockSelectSequence(2, 0);
       const status = await getDistributedRateLimitStatus('status-key', testConfig);
       expect(status.blocked).toBe(false);
       expect(status.attemptsRemaining).toBe(3);
     });
 
     it('returns blocked status with retryAfter when count >= limit', async () => {
-      mockSelectReturns(6);
+      mockSelectSequence(6, 0);
       const status = await getDistributedRateLimitStatus('blocked-key', testConfig);
       expect(status.blocked).toBe(true);
       expect(status.retryAfter).toBe(60);
@@ -272,7 +331,7 @@ describe('distributed-rate-limit', () => {
     });
 
     it('reports unblocked and full remaining when no bucket yet', async () => {
-      mockSelectReturns(null);
+      mockSelectSequence(null, null);
       const status = await getDistributedRateLimitStatus('fresh-key', testConfig);
       expect(status.blocked).toBe(false);
       expect(status.attemptsRemaining).toBe(5);
@@ -298,7 +357,7 @@ describe('distributed-rate-limit', () => {
     });
 
     it('applies progressive delay formula in status, matching check', async () => {
-      mockSelectReturns(8); // 3 excess (limit 5)
+      mockSelectSequence(8, 0); // 3 excess (limit 5), no prev contribution
       const status = await getDistributedRateLimitStatus('progressive-status', {
         maxAttempts: 5,
         windowMs: 60_000,
@@ -311,7 +370,7 @@ describe('distributed-rate-limit', () => {
     });
 
     it('clamps status retryAfter to remaining window time', async () => {
-      mockSelectReturns(10); // 5 excess
+      mockSelectSequence(10, 0); // 5 excess
       const status = await getDistributedRateLimitStatus('progressive-clamp', {
         maxAttempts: 5,
         windowMs: 10_000,
@@ -321,6 +380,21 @@ describe('distributed-rate-limit', () => {
       expect(status.blocked).toBe(true);
       expect(status.retryAfter).toBeGreaterThan(0);
       expect(status.retryAfter).toBeLessThanOrEqual(10);
+    });
+
+    it('includes weighted contribution from previous bucket', async () => {
+      // Pin to bucket boundary: prevWeight = 1, effective = 1 + 10*1 = 11 → blocked.
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(60_000);
+      try {
+        mockSelectSequence(1, 10);
+        const status = await getDistributedRateLimitStatus('weighted-status', {
+          maxAttempts: 5,
+          windowMs: 60_000,
+        });
+        expect(status.blocked).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 
