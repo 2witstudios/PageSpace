@@ -63,11 +63,29 @@ describe('accessible_page_ids_for_user (Postgres function)', () => {
     const drive = await factories.createDrive(owner.id);
     const p1 = await factories.createPage(drive.id);
     const p2 = await factories.createPage(drive.id);
-    await factories.createDriveMember(drive.id, admin.id, { role: 'ADMIN' });
+    await factories.createDriveMember(drive.id, admin.id, {
+      role: 'ADMIN',
+      acceptedAt: new Date(),
+    });
 
     const accessible = await callFunction(admin.id);
 
     expect(accessible).toEqual(sorted([p1.id, p2.id]));
+  });
+
+  it('does NOT grant access to an ADMIN member whose invitation has not been accepted', async () => {
+    const owner = await factories.createUser();
+    const pending = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    await factories.createPage(drive.id);
+    await factories.createDriveMember(drive.id, pending.id, {
+      role: 'ADMIN',
+      acceptedAt: null,
+    });
+
+    const accessible = await callFunction(pending.id);
+
+    expect(accessible).toEqual([]);
   });
 
   it('does NOT grant regular MEMBER access to pages without explicit grants', async () => {

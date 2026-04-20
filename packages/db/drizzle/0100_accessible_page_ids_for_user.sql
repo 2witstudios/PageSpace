@@ -2,7 +2,8 @@
 --
 -- Resolution rules (a user sees a page iff ANY of the following holds):
 --   1. They own the drive that contains the page.
---   2. They are a drive_members row with role='ADMIN' on that drive.
+--   2. They are a drive_members row with role='ADMIN' AND acceptedAt IS NOT NULL
+--      (pending invites do NOT grant page visibility).
 --   3. They have a page_permissions row with canView=true and either
 --      expiresAt IS NULL or expiresAt > now().
 --
@@ -41,6 +42,7 @@ AS $$
             WHERE dm."driveId" = d.id
               AND dm."userId" = uid
               AND dm.role = 'ADMIN'
+              AND dm."acceptedAt" IS NOT NULL
           )
           OR EXISTS (
             SELECT 1 FROM page_permissions pp
