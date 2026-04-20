@@ -1,3 +1,20 @@
+## 2026-04-20
+
+### Auth Handoffs: Migrated From Redis to Postgres (Redis Deprecation PR 7)
+
+Three short-lived auth-handoff stores — PKCE verifier, OAuth exchange code, and desktop passkey register handoff (incl. the one-options-per-mint replay marker) — now live in the new `auth_handoff_tokens` Postgres table instead of Redis. Continues the Redis-deprecation series (PR 1 caches, PR 2 JTI revocation, PR 3 rate limits).
+
+#### Changed
+
+- **New table `auth_handoff_tokens`**: JSONB-keyed, TTL-backed, discriminated by a `kind` column (`pkce`, `exchange-code`, `passkey-register-handoff`, `passkey-options-marker`). Composite primary key `(token_hash, kind)` so a single minted token can host both a handoff row and its options-marker row without colliding.
+- **Atomic consume**: every consume path uses a single `DELETE … RETURNING payload` round-trip — no select-then-delete race window.
+- **Preserved fail semantics**: `generatePKCE` fail-open-null (OAuth still completes without PKCE), `createExchangeCode` / `createPasskeyRegisterHandoff` fail-closed-throw, all consume paths return `null` on DB error, `markPasskeyRegisterOptionsIssued` fails closed (`false`) so transient DB blips force a re-mint rather than opening the replay window.
+- **Cron sweep**: new `sweepExpiredAuthHandoffTokens` helper wired into `/api/cron/sweep-expired` as a third isolated try/catch block — one table's failure cannot block the others. Mirrors the JTI + rate-limit sweepers (`rowCount`-based, rethrows in production).
+
+#### Fixed
+
+- **Composite primary key on `auth_handoff_tokens`**: initial PR-7 draft made `token_hash` the sole PK, which caused `markPasskeyRegisterOptionsIssued` to return `false` on the first legitimate call after a mint (marker row collided with handoff row on the PK). Promoted to `(token_hash, kind)` before merge so the desktop passkey register flow actually completes.
+
 ## 2026-04-17
 
 ### Notification Item Redesign

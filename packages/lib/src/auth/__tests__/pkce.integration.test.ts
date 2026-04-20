@@ -157,7 +157,7 @@ describe('PKCE (Postgres-backed auth_handoff_tokens, kind=pkce)', () => {
 
     it('consumePKCEVerifier should return null rather than throw when the delete fails', async () => {
       if (!dbAvailable) return;
-      const spy = vi.spyOn(db, 'delete').mockImplementation(() => {
+      const spy = vi.spyOn(db, 'execute').mockImplementation(() => {
         throw new Error('simulated DB failure');
       });
 

@@ -210,6 +210,32 @@ describe('passkey-register-handoff (Postgres-backed auth_handoff_tokens)', () =>
     });
   });
 
+  describe('given a token minted via createPasskeyRegisterHandoff (real-flow composition)', () => {
+    it('the first markPasskeyRegisterOptionsIssued call must return true even though the handoff row shares the same tokenHash', async () => {
+      if (!dbAvailable) return;
+      const token = await createPasskeyRegisterHandoff({
+        userId: 'user-mark-after-mint',
+      });
+
+      const result = await markPasskeyRegisterOptionsIssued(token);
+
+      expect(result).toBe(true);
+    });
+
+    it('a second mark with the same minted token returns false (replay detected) while the handoff row survives for the verify step', async () => {
+      if (!dbAvailable) return;
+      const token = await createPasskeyRegisterHandoff({
+        userId: 'user-mark-replay',
+      });
+
+      expect(await markPasskeyRegisterOptionsIssued(token)).toBe(true);
+      expect(await markPasskeyRegisterOptionsIssued(token)).toBe(false);
+
+      const peeked = await peekPasskeyRegisterHandoff(token);
+      expect(peeked).toMatchObject({ userId: 'user-mark-replay' });
+    });
+  });
+
   describe('given a DB failure', () => {
     it('createPasskeyRegisterHandoff should throw in production', async () => {
       if (!dbAvailable) return;

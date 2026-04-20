@@ -226,7 +226,9 @@ export async function markPasskeyRegisterOptionsIssued(
         payload: {},
         expiresAt,
       })
-      .onConflictDoNothing({ target: authHandoffTokens.tokenHash })
+      .onConflictDoNothing({
+        target: [authHandoffTokens.tokenHash, authHandoffTokens.kind],
+      })
       .returning({ tokenHash: authHandoffTokens.tokenHash });
     return inserted.length > 0;
   } catch (error) {

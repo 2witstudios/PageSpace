@@ -54,11 +54,10 @@ export async function generatePKCE(stateParam: string): Promise<{
         expiresAt,
       })
       .onConflictDoUpdate({
-        target: authHandoffTokens.tokenHash,
+        target: [authHandoffTokens.tokenHash, authHandoffTokens.kind],
         set: {
           payload: { verifier: codeVerifier },
           expiresAt,
-          kind: PKCE_KIND,
         },
       });
   } catch (error) {
