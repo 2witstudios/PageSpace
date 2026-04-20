@@ -15,20 +15,30 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *
  * Request body:
  * {
- *   pageIds: string[]  // Array of page IDs to check
+ *   pageIds: string[]  // Array of page IDs to check (1..100)
  * }
  *
- * Response:
+ * Response shape (consistent across empty and non-empty input):
  * {
  *   permissions: {
+ *     // Only pages where canView === true are included. Pages the user
+ *     // cannot view are omitted from this map — the library-level
+ *     // getBatchPagePermissions returns every input pageId with all-false
+ *     // permissions, and this route filters those out. Callers therefore
+ *     // do NOT need to re-check canView on entries that appear here.
  *     [pageId: string]: {
- *       canView: boolean;
+ *       canView: true;            // always true for entries that appear
  *       canEdit: boolean;
  *       canShare: boolean;
  *       canDelete: boolean;
  *     }
  *   },
- *   stats: { total, accessible, denied, processingTimeMs }
+ *   stats: {
+ *     total: number;             // pageIds.length
+ *     accessible: number;        // count where canView === true
+ *     denied: number;            // total - accessible (omitted from permissions map)
+ *     processingTimeMs: number;  // 0 for the empty-input early return
+ *   }
  * }
  */
 export async function POST(request: NextRequest) {

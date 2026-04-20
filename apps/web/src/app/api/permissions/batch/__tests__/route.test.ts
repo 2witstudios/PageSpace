@@ -202,24 +202,29 @@ describe('POST /api/permissions/batch', () => {
     });
 
     it('should log warning when processing takes over 500ms', async () => {
-      mockGetBatchPagePermissions.mockImplementation(async () => {
-        const start = Date.now();
-        while (Date.now() - start < 510) {
-          // spin
-        }
-        return new Map();
-      });
+      // Drive the slow-path branch deterministically by stubbing Date.now for the
+      // two reads that bracket getBatchPagePermissions (startTime / endTime) —
+      // avoids a real 500ms+ busy-wait and the scheduler flakiness it introduces
+      // on CI.
+      const nowSpy = vi.spyOn(Date, 'now')
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(510);
+      mockGetBatchPagePermissions.mockResolvedValue(new Map());
 
-      const request = createPostRequest({ pageIds: ['page_1'] });
-      await POST(request as never);
+      try {
+        const request = createPostRequest({ pageIds: ['page_1'] });
+        await POST(request as never);
 
-      const warnCallArgs = vi.mocked(loggers.api.warn).mock.calls[0];
-      expect(warnCallArgs[0]).toBe('Slow batch permission check');
-      const warnPayload = warnCallArgs[1] as Record<string, unknown>;
-      expect(warnPayload.userId).toBe(mockUserId);
-      expect(warnPayload.pageCount).toBe(1);
-      expect(warnPayload).toHaveProperty('duration');
-      expect(warnPayload).toHaveProperty('stats');
+        const warnCallArgs = vi.mocked(loggers.api.warn).mock.calls[0];
+        expect(warnCallArgs[0]).toBe('Slow batch permission check');
+        const warnPayload = warnCallArgs[1] as Record<string, unknown>;
+        expect(warnPayload.userId).toBe(mockUserId);
+        expect(warnPayload.pageCount).toBe(1);
+        expect(warnPayload).toHaveProperty('duration');
+        expect(warnPayload).toHaveProperty('stats');
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 

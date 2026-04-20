@@ -51,6 +51,7 @@ vi.mock('../../validators', () => ({
 
 import { getBatchPagePermissions } from '../permissions';
 import { db, isNotNull } from '@pagespace/db';
+import { loggers } from '../../logging/logger-config';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -271,7 +272,7 @@ describe('getBatchPagePermissions', () => {
     expect(vi.mocked(isNotNull)).toHaveBeenCalledWith('acceptedAt');
   });
 
-  it('given a DB failure, should return the pre-seeded deny map (fail-closed)', async () => {
+  it('given a DB failure, should return the pre-seeded deny map (fail-closed) and log', async () => {
     const where = vi.fn().mockRejectedValue(new Error('DB down'));
     const leftJoin3 = vi.fn().mockReturnValue({ where });
     const leftJoin2 = vi.fn().mockReturnValue({ leftJoin: leftJoin3, where });
@@ -285,5 +286,11 @@ describe('getBatchPagePermissions', () => {
 
     expect(result.get('p1')).toEqual(NONE);
     expect(result.get('p2')).toEqual(NONE);
+    // Lock in the observability contract: callers shouldn't swallow fail-closed
+    // silently — the DB failure must surface as an error log.
+    expect(loggers.api.error).toHaveBeenCalledWith(
+      '[BATCH_PERMISSIONS] Error in batch permission check',
+      expect.objectContaining({ userId: USER, pageCount: 2, error: 'DB down' })
+    );
   });
 });
