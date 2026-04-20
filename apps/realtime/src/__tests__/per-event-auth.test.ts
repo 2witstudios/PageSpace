@@ -15,11 +15,11 @@ vi.mock('@pagespace/lib/logger-config', () => {
   return { loggers: { realtime: logger, api: logger, security: logger } };
 });
 
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions', () => ({
   getUserAccessLevel: vi.fn(),
 }));
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel } from '@pagespace/lib/permissions';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {

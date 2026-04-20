@@ -5,16 +5,13 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 // Contract Tests for /api/permissions/batch
 //
-// Mock at the SERVICE SEAM level: auth, getBatchPagePermissions,
-// getPermissionCacheStats
+// Mock at the SERVICE SEAM level: auth, getBatchPagePermissions
 // ============================================================================
 
 const mockGetBatchPagePermissions = vi.fn();
-const mockGetPermissionCacheStats = vi.fn();
 
 vi.mock('@pagespace/lib/server', () => ({
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
-  getPermissionCacheStats: (...args: unknown[]) => mockGetPermissionCacheStats(...args),
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
@@ -28,7 +25,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { POST, GET } from '../route';
+import { POST } from '../route';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -55,10 +52,6 @@ function createPostRequest(body: unknown): Request {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-}
-
-function createGetRequest(): Request {
-  return new Request('https://example.com/api/permissions/batch');
 }
 
 // ============================================================================
@@ -168,10 +161,11 @@ describe('POST /api/permissions/batch', () => {
   });
 
   describe('response contract', () => {
-    it('should return permissions map and stats on success', async () => {
+    it('should return only viewable pages in permissions and count them as accessible', async () => {
       const permissionsMap = new Map([
         ['page_1', { canView: true, canEdit: true, canShare: false, canDelete: false }],
         ['page_2', { canView: true, canEdit: false, canShare: false, canDelete: false }],
+        ['page_3', { canView: false, canEdit: false, canShare: false, canDelete: false }],
       ]);
       mockGetBatchPagePermissions.mockResolvedValue(permissionsMap);
 
@@ -208,10 +202,8 @@ describe('POST /api/permissions/batch', () => {
     });
 
     it('should log warning when processing takes over 500ms', async () => {
-      // Simulate slow processing by making getBatchPagePermissions take >500ms
       mockGetBatchPagePermissions.mockImplementation(async () => {
         const start = Date.now();
-        // Busy-wait for at least 501ms
         while (Date.now() - start < 510) {
           // spin
         }
@@ -264,105 +256,6 @@ describe('POST /api/permissions/batch', () => {
       await POST(request as never);
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error in batch permission check', error);
-    });
-  });
-});
-
-// ============================================================================
-// GET /api/permissions/batch
-// ============================================================================
-
-describe('GET /api/permissions/batch', () => {
-  const mockUserId = 'user_123';
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
-    vi.mocked(isAuthError).mockReturnValue(false);
-    mockGetPermissionCacheStats.mockReturnValue({
-      size: 100,
-      hits: 50,
-      misses: 50,
-    });
-  });
-
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
-
-      const request = createGetRequest();
-      const response = await GET(request as never);
-
-      expect(response.status).toBe(401);
-    });
-
-    it('should use read auth options without CSRF requirement', async () => {
-      const request = createGetRequest();
-      await GET(request as never);
-
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        request,
-        { allow: ['session'], requireCSRF: false }
-      );
-    });
-  });
-
-  describe('response contract', () => {
-    it('should return cache stats on success', async () => {
-      const cacheStats = { size: 200, hits: 150, misses: 50 };
-      mockGetPermissionCacheStats.mockReturnValue(cacheStats);
-
-      const request = createGetRequest();
-      const response = await GET(request as never);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.cache).toEqual(cacheStats);
-      expect(body).toHaveProperty('timestamp');
-    });
-  });
-
-  describe('error handling', () => {
-    it('should return 500 when cache stats throws an Error', async () => {
-      mockGetPermissionCacheStats.mockImplementation(() => {
-        throw new Error('Cache unavailable');
-      });
-
-      const request = createGetRequest();
-      const response = await GET(request as never);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to get cache statistics');
-      expect(body.message).toBe('Cache unavailable');
-    });
-
-    it('should return "Unknown error" when cache stats throws non-Error', async () => {
-      mockGetPermissionCacheStats.mockImplementation(() => {
-        throw 'non-error-thrown';
-      });
-
-      const request = createGetRequest();
-      const response = await GET(request as never);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to get cache statistics');
-      expect(body.message).toBe('Unknown error');
-    });
-
-    it('should log error when cache stats throws', async () => {
-      const error = new Error('Stats failure');
-      mockGetPermissionCacheStats.mockImplementation(() => {
-        throw error;
-      });
-
-      const request = createGetRequest();
-      await GET(request as never);
-
-      expect(loggers.api.error).toHaveBeenCalledWith('Error getting permission cache stats', error);
     });
   });
 });

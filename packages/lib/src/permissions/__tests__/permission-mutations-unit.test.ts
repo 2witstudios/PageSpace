@@ -43,20 +43,6 @@ vi.mock('../enforced-context', () => ({
   },
 }));
 
-vi.mock('../services/permission-cache', () => ({
-  permissionCache: {
-    invalidateUserCache: vi.fn().mockResolvedValue(undefined),
-    invalidateDriveCache: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
-vi.mock('../../services/permission-cache', () => ({
-  permissionCache: {
-    invalidateUserCache: vi.fn().mockResolvedValue(undefined),
-    invalidateDriveCache: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
 vi.mock('../../monitoring/activity-logger', () => ({
   logPermissionActivity: vi.fn().mockResolvedValue(undefined),
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'actor@test.com', actorDisplayName: 'Actor' }),

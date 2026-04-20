@@ -3,7 +3,6 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
@@ -11,8 +10,8 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *
  * POST /api/permissions/batch
  *
- * Efficiently check permissions for multiple pages at once,
- * eliminating N+1 query problems in search and bulk operations.
+ * Efficiently check permissions for multiple pages at once, eliminating N+1
+ * query problems in search and bulk operations.
  *
  * Request body:
  * {
@@ -29,16 +28,11 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *       canDelete: boolean;
  *     }
  *   },
- *   stats: {
- *     total: number;
- *     accessible: number;
- *     cacheHits: number;
- *   }
+ *   stats: { total, accessible, denied, processingTimeMs }
  * }
  */
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
@@ -46,7 +40,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { pageIds } = body;
 
-    // Validate input
     if (!Array.isArray(pageIds)) {
       return NextResponse.json(
         { error: 'pageIds must be an array' },
@@ -68,7 +61,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate that all pageIds are strings
     if (!pageIds.every(id => typeof id === 'string' && id.length > 0)) {
       return NextResponse.json(
         { error: 'All pageIds must be non-empty strings' },
@@ -78,13 +70,11 @@ export async function POST(request: NextRequest) {
 
     const startTime = Date.now();
 
-    // Get batch permissions using optimized function
     const permissionsMap = await getBatchPagePermissions(userId, pageIds);
 
     const endTime = Date.now();
     const duration = endTime - startTime;
 
-    // Convert Map to object for JSON response
     const permissions: Record<string, {
       canView: boolean;
       canEdit: boolean;
@@ -92,27 +82,29 @@ export async function POST(request: NextRequest) {
       canDelete: boolean;
     }> = {};
 
+    let accessibleCount = 0;
     for (const [pageId, permission] of permissionsMap.entries()) {
-      permissions[pageId] = permission;
+      if (permission.canView) {
+        permissions[pageId] = permission;
+        accessibleCount++;
+      }
     }
 
     const stats = {
       total: pageIds.length,
-      accessible: permissionsMap.size,
-      denied: pageIds.length - permissionsMap.size,
+      accessible: accessibleCount,
+      denied: pageIds.length - accessibleCount,
       processingTimeMs: duration
     };
 
-    // Log performance metrics
     loggers.api.debug('Batch permission check completed', {
       userId,
       requestedPages: pageIds.length,
-      accessiblePages: permissionsMap.size,
+      accessiblePages: accessibleCount,
       processingTimeMs: duration,
       avgTimePerPage: Math.round(duration / pageIds.length * 100) / 100
     });
 
-    // Log warning if request is slow
     if (duration > 500) {
       loggers.api.warn('Slow batch permission check', {
         userId,
@@ -122,7 +114,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'permissions', resourceId: '*', details: { source: 'batch', pageCount: pageIds.length, accessibleCount: permissionsMap.size } });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'permissions', resourceId: '*', details: { source: 'batch', pageCount: pageIds.length, accessibleCount } });
 
     return NextResponse.json({
       success: true,
@@ -136,40 +128,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: 'Failed to check permissions',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * GET /api/permissions/batch/stats
- *
- * Get cache performance statistics for monitoring
- */
-export async function GET(request: NextRequest) {
-  try {
-    // Verify authentication
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
-
-    // Import cache stats function dynamically to avoid circular dependencies
-    const { getPermissionCacheStats } = await import('@pagespace/lib/server');
-    const stats = getPermissionCacheStats();
-
-    return NextResponse.json({
-      success: true,
-      cache: stats,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    loggers.api.error('Error getting permission cache stats', error as Error);
-
-    return NextResponse.json(
-      {
-        error: 'Failed to get cache statistics',
         message: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }

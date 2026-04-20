@@ -41,8 +41,6 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   audit: vi.fn(),
   auditRequest: vi.fn(),
-  invalidateUserPermissions: vi.fn().mockResolvedValue(undefined),
-  invalidateDrivePermissions: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -72,7 +70,7 @@ import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
@@ -556,16 +554,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         { role: 'MEMBER', driveName: 'Test Drive' }
       );
       expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
-    });
-
-    it('should invalidate permission caches for invited user and drive', async () => {
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(invalidateUserPermissions).toHaveBeenCalledWith(mockInvitedUserId);
-      expect(invalidateDrivePermissions).toHaveBeenCalledWith(mockDriveId);
     });
 
     it('should send notification to invited user', async () => {

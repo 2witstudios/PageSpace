@@ -6,7 +6,7 @@ export * from './auth/device-auth-utils';
 export * from './auth/csrf-utils';
 export * from './encryption';
 export * from './content';
-export * from './permissions/permissions-cached';
+export * from './permissions/permissions';
 export * from './auth/rate-limit-utils';
 export * from './utils/utils';
 export * from './utils/hash-utils';
@@ -55,14 +55,6 @@ export * from './repositories';
 // Notifications
 export * from './notifications';
 
-// Re-export specific functions for backward compatibility
-export {
-  getDriveIdsForUser,
-  isUserDriveMember,
-  getUserAccessiblePagesInDriveWithDetails,
-  getUserAccessiblePagesInDrive,
-  isDriveOwnerOrAdmin,
-} from './permissions/permissions';
 
 // Zero-trust permission mutations (replaces old grantPagePermissions/revokePagePermissions)
 export {

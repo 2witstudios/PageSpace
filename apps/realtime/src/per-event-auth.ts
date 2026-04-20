@@ -14,7 +14,7 @@
  * - API routes: up to 60s (read operations, acceptable risk)
  */
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/logger-config';
 import type { Socket } from 'socket.io';
 
