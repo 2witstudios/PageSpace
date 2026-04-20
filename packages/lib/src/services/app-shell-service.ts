@@ -15,9 +15,15 @@
  * Today, this fetcher is purely additive — no existing route consumes it.
  *
  * Composition notes:
- *   - Drive-id derivation inlines the same union (owner ∪ member ∪ explicit-grant)
- *     that `getDriveIdsForUser` performs, but issued through `tx` so the result
- *     stays consistent with every other read inside the transaction.
+ *   - "Shell" drive visibility is owner ∪ accepted-member ONLY. A user with a
+ *     single explicit page-permission grant in a drive they don't belong to
+ *     does NOT see that drive in the shell — surfacing drive metadata or the
+ *     drive's member list to a non-member would leak data, and member-list
+ *     endpoints elsewhere enforce the same owner/member gate. Page-level reads
+ *     (loadPagePayload, activeDrive.tree) still go through
+ *     accessible_page_ids_for_user, which accepts explicit grants, so pages a
+ *     user has been explicitly granted remain reachable — just not via the
+ *     shell's drive summaries / member list.
  *   - Page tree fetching mirrors the AI module's `queryDriveTree` shape so the
  *     hydration target matches what the existing tree-utils helpers expect.
  *   - Per-page-type context loading delegates to `loadPagePayload` for shape
@@ -28,15 +34,13 @@ import {
   drives,
   driveMembers,
   pages,
-  pagePermissions,
   users,
   connections,
   and,
   eq,
   or,
   inArray,
-  isNull,
-  gt,
+  isNotNull,
   asc,
 } from '@pagespace/db';
 import type {
@@ -123,7 +127,12 @@ async function fetchConnections(tx: Tx, userId: string): Promise<ConnectionSumma
   });
 }
 
-async function fetchAccessibleDriveIds(tx: Tx, userId: string): Promise<Set<string>> {
+async function fetchShellDriveIds(tx: Tx, userId: string): Promise<Set<string>> {
+  // Drives surfaced by the app shell = drives the user belongs to (owner or
+  // accepted member of any role). Drives reached only via an explicit page
+  // grant are NOT promoted here: their metadata and member list would leak to
+  // non-members, and existing member-list endpoints require the same
+  // owner/member gate.
   const ids = new Set<string>();
 
   const owned = await tx
@@ -136,23 +145,14 @@ async function fetchAccessibleDriveIds(tx: Tx, userId: string): Promise<Set<stri
     .selectDistinct({ driveId: driveMembers.driveId })
     .from(driveMembers)
     .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-    .where(and(eq(driveMembers.userId, userId), eq(drives.isTrashed, false)));
-  for (const row of memberOf) ids.add(row.driveId);
-
-  const explicit = await tx
-    .selectDistinct({ driveId: pages.driveId })
-    .from(pagePermissions)
-    .innerJoin(pages, eq(pages.id, pagePermissions.pageId))
-    .innerJoin(drives, eq(drives.id, pages.driveId))
     .where(
       and(
-        eq(pagePermissions.userId, userId),
-        eq(pagePermissions.canView, true),
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt),
         eq(drives.isTrashed, false),
-        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
       ),
     );
-  for (const row of explicit) ids.add(row.driveId);
+  for (const row of memberOf) ids.add(row.driveId);
 
   return ids;
 }
@@ -278,7 +278,7 @@ export async function loadAppShell(
   return await db.transaction(async (tx) => {
     const user = await fetchUser(tx, userId);
     const connectionList = await fetchConnections(tx, userId);
-    const driveIdSet = await fetchAccessibleDriveIds(tx, userId);
+    const driveIdSet = await fetchShellDriveIds(tx, userId);
     const driveIds = Array.from(driveIdSet);
 
     const [drivesList, driveMemberList] = await Promise.all([

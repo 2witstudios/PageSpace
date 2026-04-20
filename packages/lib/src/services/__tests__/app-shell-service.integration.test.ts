@@ -93,6 +93,47 @@ describe('loadAppShell (integration)', () => {
     expect(shell.driveMembers.every((m) => m.driveId === callerDrive.id)).toBe(true);
   });
 
+  it('does NOT surface a drive in the shell when the caller only has an explicit page grant', async () => {
+    // A single-page grant in a drive the user does not belong to must not pull
+    // the drive's summary or member list into the shell payload. Page-level
+    // access still flows through loadPagePayload / accessible_page_ids_for_user.
+    const callerUser = await factories.createUser();
+    const otherOwner = await factories.createUser();
+    const otherMember = await factories.createUser();
+    const otherDrive = await factories.createDrive(otherOwner.id, { name: 'Not Mine' });
+    const sharedPage = await factories.createPage(otherDrive.id, { title: 'Shared' });
+    await factories.createDriveMember(otherDrive.id, otherMember.id, { role: 'MEMBER' });
+    await factories.createPagePermission(sharedPage.id, callerUser.id, {
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const shell = await loadAppShell(callerUser.id, { activeDriveId: otherDrive.id });
+
+    expect(shell.drives.map((d) => d.id)).not.toContain(otherDrive.id);
+    expect(shell.driveMembers.some((m) => m.driveId === otherDrive.id)).toBe(false);
+    // activeDrive must NOT expose the full tree either — the user has no shell
+    // relationship with this drive.
+    expect(shell.activeDrive).toBeUndefined();
+  });
+
+  it('does NOT surface a drive in the shell for a pending (unaccepted) member', async () => {
+    const callerUser = await factories.createUser();
+    const ownerUser = await factories.createUser();
+    const pendingDrive = await factories.createDrive(ownerUser.id, { name: 'Invite Pending' });
+    await factories.createDriveMember(pendingDrive.id, callerUser.id, {
+      role: 'ADMIN',
+      acceptedAt: null,
+    });
+
+    const shell = await loadAppShell(callerUser.id);
+
+    expect(shell.drives.map((d) => d.id)).not.toContain(pendingDrive.id);
+    expect(shell.driveMembers.some((m) => m.driveId === pendingDrive.id)).toBe(false);
+  });
+
   it('includes the active drive page tree when activeDriveId is provided', async () => {
     const callerUser = await factories.createUser();
     const drive = await factories.createDrive(callerUser.id);
