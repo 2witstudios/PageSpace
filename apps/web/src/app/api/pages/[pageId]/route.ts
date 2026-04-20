@@ -90,7 +90,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       );
     }
 
-    // Side effects: broadcast and cache invalidation
+    // Side effects: broadcast
     const driveId = result.driveId;
     const socketId = req.headers.get('X-Socket-ID') || undefined;
 
@@ -175,7 +175,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    // Side effects: broadcast and cache invalidation
+    // Side effects: broadcast
     await broadcastPageEvent(
       createPageEventPayload(result.driveId, pageId, 'trashed', {
         title: result.pageTitle ?? undefined,

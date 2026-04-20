@@ -143,7 +143,7 @@ export async function POST(request: Request) {
 
     let nextPosition = (lastPage?.position || 0) + 1;
 
-    // Track affected drives for cache invalidation
+    // Track affected drives for broadcast events
     const affectedDriveIds = new Set<string>();
     affectedDriveIds.add(targetDriveId);
 

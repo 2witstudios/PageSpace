@@ -7,8 +7,8 @@
  * - MCP token scope checks
  * - Page existence and permission checks
  * - Trash with/without children
- * - Recursive child trashing (including AI_CHAT detection)
- * - Side effects: cache invalidation, broadcast, activity logging
+ * - Recursive child trashing
+ * - Side effects: broadcast, activity logging
  * - Error handling
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';

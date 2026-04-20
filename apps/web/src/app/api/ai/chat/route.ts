@@ -703,6 +703,7 @@ export async function POST(request: Request) {
         createdAt: msg.createdAt,
         isActive: msg.isActive,
         editedAt: msg.editedAt,
+        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
       })
     );
 

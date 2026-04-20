@@ -21,7 +21,7 @@ vi.mock('@/services/api', () => ({
   },
 }));
 
-// Mock external boundaries (auth, websocket, cache)
+// Mock external boundaries (auth, websocket)
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),

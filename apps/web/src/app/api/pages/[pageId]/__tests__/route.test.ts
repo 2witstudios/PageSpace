@@ -5,7 +5,7 @@
  * - Request validation → appropriate error responses
  * - Service delegation → correct parameters passed
  * - Response mapping → service results mapped to HTTP responses
- * - Side effects → broadcasts/cache with correct payload essentials
+ * - Side effects → broadcasts with correct payload essentials
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';

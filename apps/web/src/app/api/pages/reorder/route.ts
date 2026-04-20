@@ -50,7 +50,6 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    // Broadcast event and invalidate cache on success
     await broadcastPageEvent(
       createPageEventPayload(result.driveId, pageId, 'moved', {
         parentId: newParentId,

@@ -82,8 +82,6 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
-;
-
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';

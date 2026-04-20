@@ -8,7 +8,7 @@
  * - Drive/page existence validation
  * - Permission checks (view source, edit target)
  * - Recursive child copying
- * - Side effects: cache invalidation, broadcast, activity logging
+ * - Side effects: broadcast, activity logging
  * - Error handling
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';

@@ -9,7 +9,7 @@
  * - Permission checks (edit source, edit target drive)
  * - Circular reference validation
  * - Recursive driveId update for cross-drive moves
- * - Side effects: cache invalidation, broadcast, activity logging
+ * - Side effects: broadcast, activity logging
  * - Error handling
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -551,7 +551,7 @@ describe('POST /api/pages/bulk-move', () => {
       expect(broadcastPageEvent).toHaveBeenCalledTimes(3);
     });
 
-    it('deduplicates drive IDs for cache/broadcast when source equals target', async () => {
+    it('deduplicates drive IDs for broadcast when source equals target', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         mockSourcePage({ driveId: mockTargetDriveId }),
       ] as never);
