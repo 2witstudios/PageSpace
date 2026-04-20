@@ -499,17 +499,12 @@ export const systems: AtlasSystem[] = [
     boundary: 'Acceleration and coordination only. Loss should degrade performance, not destroy workspace truth.',
     owns: ['Cross-process cache store', 'Shared Redis client', 'Ephemeral coordination layer'],
     dependsOn: ['REDIS_URL', 'packages/lib shared-redis adapter', 'realtime + web consumers'],
-    touchpoints: ['docker-compose.yml: redis', 'packages/lib/src/services/shared-redis.ts', 'packages/lib/src/services/page-tree-cache.ts'],
+    touchpoints: ['docker-compose.yml: redis', 'packages/lib/src/services/shared-redis.ts'],
     tree: [
       {
         label: 'shared-redis.ts',
         path: 'packages/lib/src/services/shared-redis.ts',
         note: 'Central Redis connection and fallback-to-memory behavior.',
-      },
-      {
-        label: 'page-tree-cache.ts',
-        path: 'packages/lib/src/services/page-tree-cache.ts',
-        note: 'Memory L1 + Redis L2 cache for tree-shaped context reads.',
       },
       {
         label: 'docker-compose redis service',
