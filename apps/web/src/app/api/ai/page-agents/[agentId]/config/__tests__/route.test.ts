@@ -28,9 +28,6 @@ vi.mock('@/lib/auth', () => ({
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
-  agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn(),
-  },
   loggers: {
     api: {
       info: vi.fn(),
@@ -85,11 +82,9 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
-;
-
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
@@ -432,38 +427,6 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
-    it('should invalidate cache when agentDefinition changes', async () => {
-      const request = createRequest(mockAgentId, {
-        agentDefinition: 'New definition',
-      });
-      const context = createContext(mockAgentId);
-
-      await PUT(request, context);
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('should invalidate cache when visibleToGlobalAssistant changes', async () => {
-      const request = createRequest(mockAgentId, {
-        visibleToGlobalAssistant: false,
-      });
-      const context = createContext(mockAgentId);
-
-      await PUT(request, context);
-
-      expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
-    });
-
-    it('should NOT invalidate cache when only systemPrompt changes', async () => {
-      const request = createRequest(mockAgentId, {
-        systemPrompt: 'New prompt',
-      });
-      const context = createContext(mockAgentId);
-
-      await PUT(request, context);
-
-      expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
-    });
   });
 
   describe('error handling', () => {

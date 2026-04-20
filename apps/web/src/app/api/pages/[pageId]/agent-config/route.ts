@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers, auditRequest } from '@pagespace/lib/server';
@@ -234,18 +234,6 @@ export async function PATCH(
         .limit(1);
       if (updatedPage) {
         responsePage = updatedPage;
-      }
-
-      // Invalidate agent awareness cache if this is an AI_CHAT page and
-      // visibility or definition changed
-      if (page.type === 'AI_CHAT' &&
-          (agentDefinition !== undefined || visibleToGlobalAssistant !== undefined)) {
-        agentAwarenessCache.invalidateDriveAgents(page.driveId).catch(err => {
-          loggers.api.warn('Agent awareness cache invalidation failed', {
-            error: err instanceof Error ? err.message : String(err),
-            driveId: page.driveId,
-          });
-        });
       }
 
       loggers.api.info('Page agent configuration updated', {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
-import { loggers, pageTreeCache, getActorInfo, auditRequest } from '@pagespace/lib/server';
+import { loggers, getActorInfo, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
@@ -119,14 +119,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           type: page.type,
         }),
       );
-
-      // Invalidate page tree cache when structure changes
-      pageTreeCache.invalidateDriveTree(page.drive.id).catch(err => {
-        loggers.api.warn('Page tree cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId: page.drive.id,
-        });
-      });
     }
 
     trackPageOperation(auth.userId, 'restore', pageId, {
