@@ -8,7 +8,6 @@
  * - PUT: alias for PATCH
  * - Tool validation against available tools
  * - PageRevisionMismatchError handling (409 and 428)
- * - Agent awareness cache invalidation for AI_CHAT pages
  * - Error handling
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';

@@ -676,7 +676,6 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
-    // DATABASE-FIRST ARCHITECTURE WITH CACHING:
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
     });
