@@ -66,6 +66,9 @@ export class RateLimitCache {
   private memoryCache = new Map<string, MemoryEntry>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private config: RateLimitConfig;
+  // Observed DB health, updated on every successful or failed round-trip.
+  // `null` until the first DB op runs.
+  private lastDbOpOk: boolean | null = null;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
     this.config = {
@@ -188,6 +191,7 @@ export class RateLimitCache {
         .returning({ count: rateLimitBuckets.count });
 
       const newCount = rows[0]?.count ?? 1;
+      this.lastDbOpOk = true;
 
       if (newCount > limit) {
         await db
@@ -211,6 +215,7 @@ export class RateLimitCache {
         remainingCalls: limit - newCount,
       };
     } catch (error) {
+      this.lastDbOpOk = false;
       this.logDbFailure('increment', userId, providerType, error);
       if (isProduction()) return blockedResult(limit);
       return this.incrementMemoryFallback(key, limit, windowStart, expiresAt);
@@ -240,6 +245,7 @@ export class RateLimitCache {
         .limit(1);
 
       const count = rows[0]?.count ?? 0;
+      this.lastDbOpOk = true;
       if (count > 0) this.writeMemory(key, count, windowStart, expiresAt);
 
       return {
@@ -249,6 +255,7 @@ export class RateLimitCache {
         remainingCalls: Math.max(0, limit - count),
       };
     } catch (error) {
+      this.lastDbOpOk = false;
       this.logDbFailure('get', userId, providerType, error);
       if (isProduction()) return blockedResult(limit, limit);
 
@@ -269,7 +276,9 @@ export class RateLimitCache {
 
     try {
       await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, key));
+      this.lastDbOpOk = true;
     } catch (error) {
+      this.lastDbOpOk = false;
       this.logDbFailure('reset', userId, providerType, error);
     }
 
@@ -279,13 +288,22 @@ export class RateLimitCache {
     });
   }
 
+  /**
+   * Returns in-process snapshot suitable for health/debug tooling.
+   * `dbAvailable` reflects the outcome of the most recent DB round-trip
+   * (null when no DB op has been attempted since startup). `dbConfigured`
+   * only reports whether `DATABASE_URL` is set — it does NOT imply the DB
+   * is reachable.
+   */
   getCacheStats(): {
     memoryEntries: number;
     dbConfigured: boolean;
+    dbAvailable: boolean | null;
   } {
     return {
       memoryEntries: this.memoryCache.size,
       dbConfigured: !!process.env.DATABASE_URL,
+      dbAvailable: this.lastDbOpOk,
     };
   }
 
@@ -295,7 +313,9 @@ export class RateLimitCache {
       await db
         .delete(rateLimitBuckets)
         .where(sql`${rateLimitBuckets.key} LIKE ${this.config.keyPrefix + '%'}`);
+      this.lastDbOpOk = true;
     } catch (error) {
+      this.lastDbOpOk = false;
       loggers.api.warn('Rate-limit clearAll failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -309,6 +329,7 @@ export class RateLimitCache {
       this.cleanupInterval = null;
     }
     this.memoryCache.clear();
+    this.lastDbOpOk = null;
     RateLimitCache.instance = null;
   }
 }

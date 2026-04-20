@@ -396,4 +396,156 @@ describe.skipIf(!process.env.DATABASE_URL)('RateLimitCache (Postgres integration
       });
     });
   });
+
+  describe('dev fallback: incrementUsage when DB is unreachable', () => {
+    it('falls back to the in-memory counter and succeeds under the limit', async () => {
+      process.env.NODE_ENV = 'development';
+      const cache = RateLimitCache.getInstance();
+      vi.spyOn(db, 'insert').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+
+      const r1 = await cache.incrementUsage('user-dev-fallback', 'standard', 3);
+      const r2 = await cache.incrementUsage('user-dev-fallback', 'standard', 3);
+
+      assert({
+        given: 'two increments in development while the DB is down',
+        should: 'serve success from the in-memory fallback with monotonic counts',
+        actual: [
+          { success: r1.success, currentCount: r1.currentCount },
+          { success: r2.success, currentCount: r2.currentCount },
+        ],
+        expected: [
+          { success: true, currentCount: 1 },
+          { success: true, currentCount: 2 },
+        ],
+      });
+    });
+
+    it('blocks in-memory fallback writers once the cap is reached', async () => {
+      process.env.NODE_ENV = 'development';
+      const cache = RateLimitCache.getInstance();
+      vi.spyOn(db, 'insert').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+
+      await cache.incrementUsage('user-dev-cap', 'pro', 1);
+      const overflow = await cache.incrementUsage('user-dev-cap', 'pro', 1);
+
+      assert({
+        given: 'a dev-fallback increment beyond the cap',
+        should: 'return blocked and pin currentCount at the cap',
+        actual: { success: overflow.success, currentCount: overflow.currentCount },
+        expected: { success: false, currentCount: 1 },
+      });
+    });
+  });
+
+  describe('dev fallback: getCurrentUsage when DB is unreachable', () => {
+    it('returns the last in-memory count when the DB read throws', async () => {
+      process.env.NODE_ENV = 'development';
+      const cache = RateLimitCache.getInstance();
+
+      await cache.incrementUsage('user-dev-read', 'standard', 10);
+      await cache.incrementUsage('user-dev-read', 'standard', 10);
+
+      vi.spyOn(db, 'select').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+
+      const usage = await cache.getCurrentUsage('user-dev-read', 'standard', 10);
+
+      assert({
+        given: 'two prior successful increments and a failing DB read',
+        should: 'serve the cached count from memory',
+        actual: usage.currentCount,
+        expected: 2,
+      });
+    });
+  });
+
+  describe('resetUsage swallows DB failures', () => {
+    it('does not throw when the DB delete rejects', async () => {
+      const cache = RateLimitCache.getInstance();
+      vi.spyOn(db, 'delete').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+
+      let threw = false;
+      try {
+        await cache.resetUsage('user-reset-fail', 'standard');
+      } catch {
+        threw = true;
+      }
+
+      assert({
+        given: 'a DB delete that throws during resetUsage',
+        should: 'swallow the error and return normally',
+        actual: threw,
+        expected: false,
+      });
+    });
+  });
+
+  describe('clearAll swallows DB failures', () => {
+    it('does not throw when the DB delete rejects', async () => {
+      const cache = RateLimitCache.getInstance();
+      vi.spyOn(db, 'delete').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+
+      let threw = false;
+      try {
+        await cache.clearAll();
+      } catch {
+        threw = true;
+      }
+
+      assert({
+        given: 'a DB delete that throws during clearAll',
+        should: 'swallow the error and return normally',
+        actual: threw,
+        expected: false,
+      });
+    });
+  });
+
+  describe('getCacheStats', () => {
+    it('reports unknown health before any DB op, then tracks observed outcomes', async () => {
+      const cache = RateLimitCache.getInstance();
+      const initial = cache.getCacheStats();
+
+      await cache.incrementUsage('user-stats', 'standard', 10);
+      const afterSuccess = cache.getCacheStats();
+
+      process.env.NODE_ENV = 'development';
+      vi.spyOn(db, 'insert').mockImplementation(() => {
+        throw new Error('DB unavailable');
+      });
+      await cache.incrementUsage('user-stats', 'standard', 10);
+      const afterFailure = cache.getCacheStats();
+
+      assert({
+        given: 'stats snapshots before/after a successful op and after a failing op',
+        should:
+          'move dbAvailable from null → true → false and always report dbConfigured per DATABASE_URL',
+        actual: {
+          initial: { dbAvailable: initial.dbAvailable, dbConfigured: initial.dbConfigured },
+          afterSuccess: {
+            dbAvailable: afterSuccess.dbAvailable,
+            dbConfigured: afterSuccess.dbConfigured,
+          },
+          afterFailure: {
+            dbAvailable: afterFailure.dbAvailable,
+            dbConfigured: afterFailure.dbConfigured,
+          },
+        },
+        expected: {
+          initial: { dbAvailable: null, dbConfigured: true },
+          afterSuccess: { dbAvailable: true, dbConfigured: true },
+          afterFailure: { dbAvailable: false, dbConfigured: true },
+        },
+      });
+    });
+  });
 });
