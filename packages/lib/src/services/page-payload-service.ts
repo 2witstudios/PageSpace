@@ -104,33 +104,52 @@ async function fetchPageRow(runner: Runner, pageId: string): Promise<Page> {
   };
 }
 
-async function fetchBreadcrumb(runner: Runner, pageId: string): Promise<BreadcrumbEntry[]> {
+async function fetchBreadcrumb(
+  runner: Runner,
+  userId: string,
+  pageId: string,
+): Promise<BreadcrumbEntry[]> {
   // Walk from the requested page up to the drive root using a recursive CTE.
   // ORDER BY depth DESC produces root → child → ... → page (the natural reading order).
   // Depth is capped so a malformed parentId cycle cannot cause runaway recursion —
   // real page trees are never this deep.
+  //
+  // Ancestor metadata (title, type) is redacted for any crumb entry the caller
+  // is NOT authorized to view via accessible_page_ids_for_user. An explicit
+  // page grant on a nested page would otherwise leak parent-folder titles the
+  // user has no right to see.
   const result = await runner.execute<{
     id: string;
-    title: string;
-    type: string;
+    title: string | null;
+    type: string | null;
   }>(sql`
     WITH RECURSIVE crumb AS (
-      SELECT p.id, p.title, p.type, p."parentId", 0 AS depth
+      SELECT p.id, p."parentId", 0 AS depth
       FROM pages p
       WHERE p.id = ${pageId}
       UNION ALL
-      SELECT parent.id, parent.title, parent.type, parent."parentId", c.depth + 1
+      SELECT parent.id, parent."parentId", c.depth + 1
       FROM pages parent
       JOIN crumb c ON c."parentId" = parent.id
       WHERE c.depth < 128
+    ),
+    allowed AS (
+      SELECT page_id FROM accessible_page_ids_for_user(${userId})
     )
-    SELECT id, title, type FROM crumb ORDER BY depth DESC
+    SELECT
+      c.id,
+      CASE WHEN a.page_id IS NOT NULL THEN p.title ELSE NULL END AS title,
+      CASE WHEN a.page_id IS NOT NULL THEN p.type  ELSE NULL END AS type
+    FROM crumb c
+    JOIN pages p ON p.id = c.id
+    LEFT JOIN allowed a ON a.page_id = c.id
+    ORDER BY c.depth DESC
   `);
 
   return result.rows.map((row) => ({
     id: row.id,
     title: row.title,
-    type: row.type as PageType,
+    type: row.type ? (row.type as PageType) : null,
   }));
 }
 
@@ -239,7 +258,7 @@ export async function loadPagePayload(
     await ensurePageAccessible(runner, userId, pageId);
     const page = await fetchPageRow(runner, pageId);
     const [breadcrumb, context] = await Promise.all([
-      fetchBreadcrumb(runner, pageId),
+      fetchBreadcrumb(runner, userId, pageId),
       buildContext(runner, page),
     ]);
     return { page, breadcrumb, context };

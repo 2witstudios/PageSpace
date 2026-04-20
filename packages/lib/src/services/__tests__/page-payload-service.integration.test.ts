@@ -126,6 +126,42 @@ describe('loadPagePayload (integration)', () => {
     await expect(loadPagePayload(grantee.id, page.id)).rejects.toThrow(/not accessible/);
   });
 
+  it('redacts title and type for breadcrumb ancestors the caller cannot view', async () => {
+    // Reproduces the explicit-grant breadcrumb leak: a grantee with access only
+    // to a nested page should not learn parent-folder titles they cannot view.
+    const owner = await factories.createUser();
+    const grantee = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const secretFolder = await factories.createPage(drive.id, {
+      type: 'FOLDER',
+      title: 'Secret Folder',
+      position: 0,
+    });
+    const grantedDoc = await factories.createPage(drive.id, {
+      type: 'DOCUMENT',
+      title: 'Shared Doc',
+      parentId: secretFolder.id,
+      position: 1,
+    });
+    await factories.createPagePermission(grantedDoc.id, grantee.id, {
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const payload = await loadPagePayload(grantee.id, grantedDoc.id);
+
+    expect(payload.breadcrumb.map((b) => b.id)).toEqual([secretFolder.id, grantedDoc.id]);
+    const ancestor = payload.breadcrumb[0];
+    expect(ancestor.id).toBe(secretFolder.id);
+    expect(ancestor.title).toBeNull();
+    expect(ancestor.type).toBeNull();
+    const leaf = payload.breadcrumb[1];
+    expect(leaf.title).toBe('Shared Doc');
+    expect(leaf.type).toBe(PageType.DOCUMENT);
+  });
+
   it('returns a bounded breadcrumb when the parentId chain contains a cycle', async () => {
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);

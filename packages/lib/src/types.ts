@@ -183,10 +183,17 @@ export interface PageTreeNode {
   position: number;
 }
 
+/**
+ * A single entry in a page breadcrumb. `title` and `type` are nullable so
+ * ancestors the caller is NOT authorized to view can be redacted: the ID is
+ * preserved (it's already known to be in the parent chain) but the metadata is
+ * hidden. Callers render redacted entries as a neutral placeholder (e.g. "…")
+ * rather than leaking the ancestor's title/type.
+ */
 export interface BreadcrumbEntry {
   id: string;
-  title: string;
-  type: PageType;
+  title: string | null;
+  type: PageType | null;
 }
 
 export interface PagePayload {
