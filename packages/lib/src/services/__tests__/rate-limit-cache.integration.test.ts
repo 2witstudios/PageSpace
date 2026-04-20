@@ -464,48 +464,74 @@ describe.skipIf(!process.env.DATABASE_URL)('RateLimitCache (Postgres integration
     });
   });
 
-  describe('resetUsage swallows DB failures', () => {
-    it('does not throw when the DB delete rejects', async () => {
+  describe('resetUsage propagates DB failures and preserves memory', () => {
+    it('rethrows the DB error and leaves the in-memory counter intact on failure', async () => {
+      process.env.NODE_ENV = 'development';
       const cache = RateLimitCache.getInstance();
+
+      // Seed a dev-mode memory entry so we can observe that a failed DB
+      // delete does NOT clear it.
+      await cache.incrementUsage('user-reset-fail', 'standard', 10);
+      const before = (await cache.getCurrentUsage('user-reset-fail', 'standard', 10))
+        .currentCount;
+
       vi.spyOn(db, 'delete').mockImplementation(() => {
         throw new Error('DB unavailable');
       });
 
-      let threw = false;
+      let thrown: Error | null = null;
       try {
         await cache.resetUsage('user-reset-fail', 'standard');
-      } catch {
-        threw = true;
+      } catch (error) {
+        thrown = error as Error;
       }
+
+      // Remove the mock so we can inspect state without hitting the broken path.
+      vi.restoreAllMocks();
+      const memoryAfter = (
+        await cache.getCurrentUsage('user-reset-fail', 'standard', 10)
+      ).currentCount;
 
       assert({
         given: 'a DB delete that throws during resetUsage',
-        should: 'swallow the error and return normally',
-        actual: threw,
-        expected: false,
+        should: 'rethrow the DB error and leave memory untouched',
+        actual: { threw: thrown?.message, before, memoryAfter },
+        expected: { threw: 'DB unavailable', before: 1, memoryAfter: 1 },
       });
     });
   });
 
-  describe('clearAll swallows DB failures', () => {
-    it('does not throw when the DB delete rejects', async () => {
+  describe('clearAll propagates DB failures and preserves memory', () => {
+    it('rethrows the DB error and leaves the in-memory cache intact on failure', async () => {
+      process.env.NODE_ENV = 'development';
       const cache = RateLimitCache.getInstance();
+
+      await cache.incrementUsage('user-clear-fail-a', 'standard', 10);
+      await cache.incrementUsage('user-clear-fail-b', 'pro', 10);
+      const statsBefore = cache.getCacheStats().memoryEntries;
+
       vi.spyOn(db, 'delete').mockImplementation(() => {
         throw new Error('DB unavailable');
       });
 
-      let threw = false;
+      let thrown: Error | null = null;
       try {
         await cache.clearAll();
-      } catch {
-        threw = true;
+      } catch (error) {
+        thrown = error as Error;
       }
+
+      const statsAfter = cache.getCacheStats().memoryEntries;
 
       assert({
         given: 'a DB delete that throws during clearAll',
-        should: 'swallow the error and return normally',
-        actual: threw,
-        expected: false,
+        should: 'rethrow and leave the in-memory cache entries intact',
+        actual: {
+          threw: thrown?.message,
+          memoryBefore: statsBefore,
+          memoryAfter: statsAfter,
+        },
+        expected: { threw: 'DB unavailable', memoryBefore: 2, memoryAfter: 2 },
       });
     });
   });

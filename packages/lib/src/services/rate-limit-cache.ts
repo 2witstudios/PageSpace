@@ -146,26 +146,17 @@ export class RateLimitCache {
 
   private logDbFailure(
     operation: string,
-    userId: string,
-    providerType: ProviderType,
+    metadata: Record<string, unknown>,
     error: unknown,
   ): void {
     const err = error instanceof Error ? error : new Error(String(error));
-    const metadata = {
-      userId: maskUserId(userId),
-      providerType,
-      error: err.message,
-    };
+    const fullMeta = { ...metadata, error: err.message };
 
     if (isProduction()) {
-      loggers.api.error(
-        `Rate-limit ${operation} failed in production - failing closed`,
-        err,
-        metadata,
-      );
+      loggers.api.error(`Rate-limit ${operation} failed in production`, err, fullMeta);
       return;
     }
-    loggers.api.warn(`Rate-limit ${operation} failed`, metadata);
+    loggers.api.warn(`Rate-limit ${operation} failed`, fullMeta);
   }
 
   async incrementUsage(
@@ -187,26 +178,20 @@ export class RateLimitCache {
         .onConflictDoUpdate({
           target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
           set: { count: sql`${rateLimitBuckets.count} + 1` },
+          setWhere: sql`${rateLimitBuckets.count} < ${limit}`,
         })
         .returning({ count: rateLimitBuckets.count });
 
-      const newCount = rows[0]?.count ?? 1;
       this.lastDbOpOk = true;
 
-      if (newCount > limit) {
-        await db
-          .update(rateLimitBuckets)
-          .set({ count: sql`${rateLimitBuckets.count} - 1` })
-          .where(
-            and(
-              eq(rateLimitBuckets.key, key),
-              eq(rateLimitBuckets.windowStart, windowStart),
-            ),
-          );
+      if (rows.length === 0) {
+        // conflict row was already at the cap; the setWhere predicate
+        // suppressed the UPDATE, so nothing was written.
         this.writeMemory(key, limit, windowStart, expiresAt);
         return blockedResult(limit);
       }
 
+      const newCount = rows[0].count;
       this.writeMemory(key, newCount, windowStart, expiresAt);
       return {
         success: true,
@@ -216,7 +201,11 @@ export class RateLimitCache {
       };
     } catch (error) {
       this.lastDbOpOk = false;
-      this.logDbFailure('increment', userId, providerType, error);
+      this.logDbFailure(
+        'increment',
+        { userId: maskUserId(userId), providerType },
+        error,
+      );
       if (isProduction()) return blockedResult(limit);
       return this.incrementMemoryFallback(key, limit, windowStart, expiresAt);
     }
@@ -256,7 +245,11 @@ export class RateLimitCache {
       };
     } catch (error) {
       this.lastDbOpOk = false;
-      this.logDbFailure('get', userId, providerType, error);
+      this.logDbFailure(
+        'get',
+        { userId: maskUserId(userId), providerType },
+        error,
+      );
       if (isProduction()) return blockedResult(limit, limit);
 
       const entry = this.readMemory(key, windowStart.getTime());
@@ -272,16 +265,21 @@ export class RateLimitCache {
 
   async resetUsage(userId: string, providerType: ProviderType): Promise<void> {
     const key = this.getRateLimitKey(userId, providerType);
-    this.memoryCache.delete(key);
 
     try {
       await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, key));
       this.lastDbOpOk = true;
     } catch (error) {
       this.lastDbOpOk = false;
-      this.logDbFailure('reset', userId, providerType, error);
+      this.logDbFailure(
+        'reset',
+        { userId: maskUserId(userId), providerType },
+        error,
+      );
+      throw error;
     }
 
+    this.memoryCache.delete(key);
     loggers.api.debug('Reset rate limit for user', {
       userId: maskUserId(userId),
       providerType,
@@ -308,7 +306,6 @@ export class RateLimitCache {
   }
 
   async clearAll(): Promise<void> {
-    this.memoryCache.clear();
     try {
       await db
         .delete(rateLimitBuckets)
@@ -316,10 +313,11 @@ export class RateLimitCache {
       this.lastDbOpOk = true;
     } catch (error) {
       this.lastDbOpOk = false;
-      loggers.api.warn('Rate-limit clearAll failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.logDbFailure('clearAll', { keyPrefix: this.config.keyPrefix }, error);
+      throw error;
     }
+
+    this.memoryCache.clear();
     loggers.api.info('Cleared all rate limit cache entries');
   }
 
