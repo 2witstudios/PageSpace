@@ -4,7 +4,11 @@
  * Exercises the Postgres-backed `RateLimitCache` against a real database
  * using the shared `rate_limit_buckets (key, window_start)` table.
  *
- * Skips gracefully when the DB is unavailable (see scripts/test-with-db.sh).
+ * The entire suite is skipped when `DATABASE_URL` is unset (CI paths that
+ * don't provision a DB). When `DATABASE_URL` is set but the DB is
+ * unreachable, the first `db.execute` in `beforeAll` throws and the suite
+ * fails loudly — we deliberately do not swallow liveness errors so
+ * regressions cannot hide behind silent skips.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +27,6 @@ const assert = ({ given, should, actual, expected }: AssertParams): void => {
 };
 
 const KEY_PREFIX = 'ai-usage:';
-let dbAvailable = false;
 
 async function clearAiUsageBuckets(): Promise<void> {
   await db
@@ -39,18 +42,13 @@ async function freshCache(): Promise<RateLimitCache> {
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
-describe('RateLimitCache (Postgres integration)', () => {
+describe.skipIf(!process.env.DATABASE_URL)('RateLimitCache (Postgres integration)', () => {
   beforeAll(async () => {
-    try {
-      await db.execute(sql`SELECT 1`);
-      dbAvailable = true;
-    } catch {
-      dbAvailable = false;
-    }
+    await db.execute(sql`SELECT 1`);
   });
 
   beforeEach(async () => {
-    if (dbAvailable) await clearAiUsageBuckets();
+    await clearAiUsageBuckets();
     await freshCache();
   });
 
@@ -61,12 +59,11 @@ describe('RateLimitCache (Postgres integration)', () => {
   });
 
   afterAll(async () => {
-    if (dbAvailable) await clearAiUsageBuckets();
+    await clearAiUsageBuckets();
   });
 
   describe('incrementUsage under limit', () => {
     it('returns sequential counts 1, 2, 3 for three successive increments', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       const r1 = await cache.incrementUsage('user-a', 'standard', 10);
@@ -90,7 +87,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('incrementUsage at and beyond limit', () => {
     it('blocks once the cap is reached and preserves currentCount at limit', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
       const limit = 3;
 
@@ -110,7 +106,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('key scheme and bucket storage', () => {
     it('writes to rate_limit_buckets under the ai-usage:{userId}:{providerType} prefix', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       await cache.incrementUsage('user-keys', 'pro', 10);
@@ -131,7 +126,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('provider isolation', () => {
     it('keeps separate buckets for standard and pro under the same user', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       await cache.incrementUsage('user-iso', 'standard', 10);
@@ -152,7 +146,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('user isolation', () => {
     it('keeps separate buckets across users for the same provider', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       await cache.incrementUsage('user-1', 'standard', 10);
@@ -173,13 +166,15 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('midnight-UTC window roll', () => {
     it('today starts at count=1 even when yesterday already recorded a count', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
-      const yesterday = new Date(today);
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const now = new Date();
+      const today = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      const yesterday = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1),
+      );
 
       await db.insert(rateLimitBuckets).values({
         key: 'ai-usage:user-roll:standard',
@@ -201,7 +196,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('getCurrentUsage', () => {
     it('returns zero usage for a brand-new user without touching the bucket', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       const usage = await cache.getCurrentUsage('user-new', 'standard', 10);
@@ -221,7 +215,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('resetUsage', () => {
     it('clears the bucket for the specified user and provider', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       for (let i = 0; i < 5; i++) {
@@ -241,7 +234,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('concurrent increment atomicity', () => {
     it('N parallel increments produce a final DB count of exactly N', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
       const N = 25;
       const limit = 10_000;
@@ -269,7 +261,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('fail-closed in production when DB is down', () => {
     it('returns blocked without throwing when the DB driver rejects in production', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       process.env.NODE_ENV = 'production';
@@ -290,13 +281,15 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('expiresAt window', () => {
     it('aligns window_start to today-midnight-UTC and expires_at to tomorrow-midnight-UTC', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
-      const todayMidnight = new Date();
-      todayMidnight.setUTCHours(0, 0, 0, 0);
-      const tomorrowMidnight = new Date(todayMidnight);
-      tomorrowMidnight.setUTCDate(tomorrowMidnight.getUTCDate() + 1);
+      const now = new Date();
+      const todayMidnight = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      const tomorrowMidnight = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+      );
 
       await cache.incrementUsage('user-expiry', 'standard', 10);
 
@@ -322,7 +315,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('strict cap under concurrent bursts', () => {
     it('splits N parallel increments with cap C into exactly C successes and N-C blocks', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
       const N = 30;
       const cap = 10;
@@ -348,7 +340,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('zero-limit short-circuit', () => {
     it('returns blocked without writing a DB row when the limit is zero', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       const result = await cache.incrementUsage('user-zero', 'pro', 0);
@@ -368,7 +359,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('clearAll', () => {
     it('removes every ai-usage bucket row', async () => {
-      if (!dbAvailable) return;
       const cache = RateLimitCache.getInstance();
 
       await cache.incrementUsage('user-clear-1', 'standard', 10);
@@ -391,8 +381,6 @@ describe('RateLimitCache (Postgres integration)', () => {
 
   describe('cross-instance persistence', () => {
     it('a fresh RateLimitCache instance reads the count written by the previous one', async () => {
-      if (!dbAvailable) return;
-
       const first = RateLimitCache.getInstance();
       await first.incrementUsage('user-persist', 'standard', 10);
       await first.shutdown();

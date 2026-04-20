@@ -10,13 +10,14 @@
  * Atomicity comes from a single `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
  * round-trip; concurrent writers serialize on the row lock.
  *
- * An L1 in-process cache is kept for fast reads and is updated opportunistically
- * after each DB hit. The DB is the source of truth; L1 is used only as a
- * fallback in development when the DB is unreachable.
+ * The DB is the source of truth. In non-production environments an L1
+ * in-process cache mirrors DB writes so that, when the DB is unreachable,
+ * callers can fall back to last-known counts and keep local workflows
+ * responsive. In production the L1 cache is never written or read — reads
+ * and writes all round-trip to Postgres.
  *
- * Fail-closed contract: in production with the DB unavailable, callers receive
- * a blocked `UsageTrackingResult`. In development we fall back to the L1 cache
- * to keep local workflows responsive.
+ * Fail-closed contract: in production with the DB unavailable, callers
+ * receive a blocked `UsageTrackingResult`.
  */
 
 import { db, rateLimitBuckets, sql, eq, and } from '@pagespace/db';
@@ -53,6 +54,11 @@ const blockedResult = (limit: number, currentCount: number = limit): UsageTracki
   limit,
   remainingCalls: 0,
 });
+
+const maskUserId = (userId: string): string =>
+  userId.length <= 8 ? userId : `${userId.slice(0, 4)}...${userId.slice(-4)}`;
+
+const isProduction = (): boolean => process.env.NODE_ENV === 'production';
 
 export class RateLimitCache {
   private static instance: RateLimitCache | null = null;
@@ -108,6 +114,7 @@ export class RateLimitCache {
   }
 
   private writeMemory(key: string, count: number, windowStart: Date, expiresAt: Date): void {
+    if (isProduction()) return;
     this.memoryCache.set(key, {
       count,
       windowStartMs: windowStart.getTime(),
@@ -134,11 +141,28 @@ export class RateLimitCache {
     };
   }
 
-  private logDbFailure(operation: string, key: string, error: unknown): void {
-    loggers.api.warn(`Rate-limit ${operation} failed`, {
-      key,
-      error: error instanceof Error ? error.message : String(error),
-    });
+  private logDbFailure(
+    operation: string,
+    userId: string,
+    providerType: ProviderType,
+    error: unknown,
+  ): void {
+    const err = error instanceof Error ? error : new Error(String(error));
+    const metadata = {
+      userId: maskUserId(userId),
+      providerType,
+      error: err.message,
+    };
+
+    if (isProduction()) {
+      loggers.api.error(
+        `Rate-limit ${operation} failed in production - failing closed`,
+        err,
+        metadata,
+      );
+      return;
+    }
+    loggers.api.warn(`Rate-limit ${operation} failed`, metadata);
   }
 
   async incrementUsage(
@@ -187,8 +211,8 @@ export class RateLimitCache {
         remainingCalls: limit - newCount,
       };
     } catch (error) {
-      this.logDbFailure('increment', key, error);
-      if (process.env.NODE_ENV === 'production') return blockedResult(limit);
+      this.logDbFailure('increment', userId, providerType, error);
+      if (isProduction()) return blockedResult(limit);
       return this.incrementMemoryFallback(key, limit, windowStart, expiresAt);
     }
   }
@@ -225,8 +249,8 @@ export class RateLimitCache {
         remainingCalls: Math.max(0, limit - count),
       };
     } catch (error) {
-      this.logDbFailure('get', key, error);
-      if (process.env.NODE_ENV === 'production') return blockedResult(limit, limit);
+      this.logDbFailure('get', userId, providerType, error);
+      if (isProduction()) return blockedResult(limit, limit);
 
       const entry = this.readMemory(key, windowStart.getTime());
       const count = entry?.count ?? 0;
@@ -246,19 +270,22 @@ export class RateLimitCache {
     try {
       await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, key));
     } catch (error) {
-      this.logDbFailure('reset', key, error);
+      this.logDbFailure('reset', userId, providerType, error);
     }
 
-    loggers.api.debug('Reset rate limit for user', { userId, providerType });
+    loggers.api.debug('Reset rate limit for user', {
+      userId: maskUserId(userId),
+      providerType,
+    });
   }
 
   getCacheStats(): {
     memoryEntries: number;
-    dbAvailable: boolean;
+    dbConfigured: boolean;
   } {
     return {
       memoryEntries: this.memoryCache.size,
-      dbAvailable: !!process.env.DATABASE_URL,
+      dbConfigured: !!process.env.DATABASE_URL,
     };
   }
 

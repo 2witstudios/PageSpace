@@ -100,7 +100,6 @@ export async function incrementUsage(
   }
 
   try {
-    // Use Redis-based rate limit cache with atomic increment
     const result = await rateLimitCache.incrementUsage(userId, providerType, limit);
 
     if (verboseUsageLogging) {
@@ -147,7 +146,6 @@ export async function getCurrentUsage(
     return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }
 
-  // Use Redis-based rate limit cache
   return await rateLimitCache.getCurrentUsage(userId, providerType, limit);
 }
 
@@ -171,7 +169,6 @@ export async function getUserUsageSummary(userId: string) {
   const standardLimit = getUsageLimits(subscriptionTier, 'standard');
   const proLimit = getUsageLimits(subscriptionTier, 'pro');
 
-  // Get current usage from Redis cache
   const standardUsageResult = await rateLimitCache.getCurrentUsage(userId, 'standard', standardLimit);
   const proUsageResult = await rateLimitCache.getCurrentUsage(userId, 'pro', proLimit);
 
