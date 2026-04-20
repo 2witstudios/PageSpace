@@ -15,6 +15,7 @@
 import Redis from 'ioredis';
 import { getSharedRedisClient, isSharedRedisAvailable } from '../services/shared-redis';
 import { loggers } from '../logging/logger-config';
+import { db, revokedServiceTokens, eq, lt, sql } from '@pagespace/db';
 
 const KEY_PREFIX = 'sec:';
 
@@ -187,120 +188,134 @@ export async function tryGetRateLimitRedisClient(): Promise<Redis | null> {
 
 /**
  * Record a new JTI (JWT ID) for a service token.
- * The JTI is stored with a TTL matching the token's expiration.
  *
- * SECURITY: In production, throws if Redis unavailable (fail-closed).
- * In development, logs warning and continues (graceful degradation).
+ * Inserts a row into `revoked_service_tokens` with `revoked_at = NULL` and
+ * `expires_at = now + expiresInSeconds`. The row tracks that the JTI was
+ * issued; `revokeJTI` later sets `revoked_at` to flip it to revoked.
+ *
+ * SECURITY: In production, throws if the DB write fails (fail-closed).
+ * In development, logs a warning and continues (graceful degradation).
  */
 export async function recordJTI(
   jti: string,
   userId: string,
   expiresInSeconds: number
 ): Promise<void> {
-  const redis = await tryGetSessionRedisClient();
-  if (!redis) {
+  try {
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    await db
+      .insert(revokedServiceTokens)
+      .values({ jti, revokedAt: null, expiresAt })
+      .onConflictDoNothing({ target: revokedServiceTokens.jti });
+  } catch (error) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('Cannot record JTI: Redis unavailable in production');
+      throw error;
     }
-    loggers.api.warn('JTI recording skipped: Redis unavailable', { userId });
-    return;
+    loggers.api.warn('JTI recording skipped: DB unavailable', { userId });
   }
-  const key = `${KEY_PREFIX}jti:${jti}`;
-
-  // Store as valid with user ID for potential auditing
-  await redis.setex(key, expiresInSeconds, JSON.stringify({
-    status: 'valid',
-    userId,
-    createdAt: Date.now(),
-  }));
 }
 
 /**
  * Check if a JTI is revoked.
  * Returns true (revoked) if:
- * - JTI is explicitly revoked
- * - JTI is not found (expired or never recorded)
- * - Redis is unavailable (fail-closed security)
+ * - The row exists and `revoked_at IS NOT NULL`
+ * - The row exists but is past its `expires_at`
+ * - No row exists (token was never recorded — fail closed)
  *
- * SECURITY: Always fails closed - when in doubt, treat token as revoked.
+ * SECURITY: Always fails closed — when in doubt, treat token as revoked.
+ * In production, re-throws on DB failure rather than silently returning true,
+ * so upstream retries / health checks can see the outage.
  */
 export async function isJTIRevoked(jti: string): Promise<boolean> {
-  const redis = await tryGetSessionRedisClient();
-  if (!redis) {
-    // FAIL CLOSED: If we can't verify, treat as revoked
-    if (process.env.NODE_ENV === 'production') {
-      loggers.api.error('JTI check failed: Redis unavailable in production - treating as revoked');
-    } else {
-      loggers.api.warn('JTI check failed: Redis unavailable - treating as revoked');
-    }
-    return true;
-  }
-  const key = `${KEY_PREFIX}jti:${jti}`;
-
-  const value = await redis.get(key);
-
-  if (!value) {
-    // Not found = treat as revoked (fail closed)
-    return true;
-  }
-
   try {
-    const data = JSON.parse(value);
-    return data.status === 'revoked';
-  } catch {
-    // Corrupted data = treat as revoked
+    const rows = await db
+      .select({
+        revokedAt: revokedServiceTokens.revokedAt,
+        expiresAt: revokedServiceTokens.expiresAt,
+      })
+      .from(revokedServiceTokens)
+      .where(eq(revokedServiceTokens.jti, jti))
+      .limit(1);
+
+    if (rows.length === 0) {
+      return true;
+    }
+    const row = rows[0];
+    if (row.expiresAt.getTime() <= Date.now()) {
+      return true;
+    }
+    return row.revokedAt !== null;
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    loggers.api.warn('JTI check failed: DB unavailable - treating as revoked');
     return true;
   }
 }
 
 /**
  * Revoke a specific JTI.
- * The revocation is stored with the remaining TTL.
  *
- * SECURITY: In production, throws if Redis unavailable (fail-closed).
+ * Looks up the row inserted by `recordJTI`; if present and not yet expired,
+ * upserts `revoked_at = now()` preserving the original `expires_at` so the
+ * sweeper reaps it on schedule. Returns false when the JTI was never
+ * recorded or has already expired (matching prior Redis semantics).
+ *
+ * SECURITY: In production, throws if DB unavailable (fail-closed).
  */
 export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
-  const redis = await tryGetSessionRedisClient();
-  if (!redis) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Cannot revoke JTI: Redis unavailable in production');
-    }
-    loggers.api.warn('JTI revocation skipped: Redis unavailable');
-    return false;
-  }
-  const key = `${KEY_PREFIX}jti:${jti}`;
-
-  // Get remaining TTL
-  const ttl = await redis.ttl(key);
-
-  if (ttl <= 0) {
-    // Already expired or doesn't exist
-    return false;
-  }
-
-  // Get existing data for audit trail
-  const existing = await redis.get(key);
-  let userId: string | undefined;
-
   try {
-    if (existing) {
-      const data = JSON.parse(existing);
-      userId = data.userId;
+    const existing = await db
+      .select({ expiresAt: revokedServiceTokens.expiresAt })
+      .from(revokedServiceTokens)
+      .where(eq(revokedServiceTokens.jti, jti))
+      .limit(1);
+
+    if (existing.length === 0 || existing[0].expiresAt.getTime() <= Date.now()) {
+      return false;
     }
-  } catch {
-    // Ignore parse errors
+
+    const now = new Date();
+    await db
+      .insert(revokedServiceTokens)
+      .values({ jti, revokedAt: now, expiresAt: existing[0].expiresAt })
+      .onConflictDoUpdate({
+        target: revokedServiceTokens.jti,
+        set: { revokedAt: now },
+      });
+
+    loggers.api.info('JTI revoked', { jti: '[REDACTED]', reason });
+    return true;
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    loggers.api.warn('JTI revocation skipped: DB unavailable');
+    return false;
   }
+}
 
-  // Mark as revoked with remaining TTL
-  await redis.setex(key, ttl, JSON.stringify({
-    status: 'revoked',
-    userId,
-    revokedAt: Date.now(),
-    reason,
-  }));
-
-  loggers.api.info('JTI revoked', { jti: '[REDACTED]', reason });
-  return true;
+/**
+ * Delete revoked-JTI rows whose `expires_at` is in the past.
+ * Runs on the cron sweeper; returns the number of rows deleted.
+ *
+ * Not fail-closed: the sweeper is best-effort cleanup. In production we
+ * still re-throw so the cron handler can surface a 500 and page ops.
+ */
+export async function sweepExpiredRevokedJTIs(): Promise<number> {
+  try {
+    const result = await db
+      .delete(revokedServiceTokens)
+      .where(lt(revokedServiceTokens.expiresAt, sql`now()`));
+    return result.rowCount ?? 0;
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    loggers.api.warn('JTI sweep skipped: DB unavailable');
+    return 0;
+  }
 }
 
 /**

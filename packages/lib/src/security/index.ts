@@ -20,6 +20,7 @@ export {
   isJTIRevoked,
   revokeJTI,
   revokeAllUserJTIs,
+  sweepExpiredRevokedJTIs,
   // Session operations
   setSessionData,
   getSessionData,
