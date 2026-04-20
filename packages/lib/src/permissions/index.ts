@@ -27,3 +27,7 @@ export * from './file-access';
 // Export zero-trust permission mutations (NEW - replaces grantPagePermissions/revokePagePermissions)
 export * from './permission-mutations';
 export * from './schemas';
+
+// Canonical "what pages can this user view?" primitive backed by the
+// accessible_page_ids_for_user Postgres function.
+export { accessiblePageIds } from './accessible-page-ids';
