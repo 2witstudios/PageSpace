@@ -1,8 +1,27 @@
-import { loggers } from '../logging/logger-config';
-import { getTodayUTC, getSecondsUntilMidnightUTC } from './date-utils';
-import { getSharedRedisClient, isSharedRedisAvailable } from './shared-redis';
+/**
+ * Per-user daily AI-usage rate-limit cache.
+ *
+ * Stores counters in the shared `rate_limit_buckets (key, window_start)` table
+ * using a key scheme of `ai-usage:{userId}:{providerType}`. The window_start is
+ * today-midnight-UTC; a new day is a new `(key, window_start)` pair, so the
+ * daily reset happens by construction. `expires_at` is tomorrow-midnight-UTC,
+ * picked up later by `sweepExpiredRateLimitBuckets`.
+ *
+ * Atomicity comes from a single `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
+ * round-trip; concurrent writers serialize on the row lock.
+ *
+ * An L1 in-process cache is kept for fast reads and is updated opportunistically
+ * after each DB hit. The DB is the source of truth; L1 is used only as a
+ * fallback in development when the DB is unreachable.
+ *
+ * Fail-closed contract: in production with the DB unavailable, callers receive
+ * a blocked `UsageTrackingResult`. In development we fall back to the L1 cache
+ * to keep local workflows responsive.
+ */
 
-// Types for rate limiting
+import { db, rateLimitBuckets, sql, eq, and } from '@pagespace/db';
+import { loggers } from '../logging/logger-config';
+
 export type ProviderType = 'standard' | 'pro';
 
 export interface UsageTrackingResult {
@@ -12,42 +31,44 @@ export interface UsageTrackingResult {
   remainingCalls: number;
 }
 
-// Cache configuration
 interface RateLimitConfig {
-  enableRedis: boolean;
   keyPrefix: string;
 }
 
-/**
- * High-performance rate limiting service with hybrid in-memory + Redis architecture
- *
- * Features:
- * - Two-tier caching: in-memory (L1) + Redis (L2)
- * - Automatic 24-hour TTL expiry (resets at midnight UTC)
- * - Atomic increment operations with limit checking
- * - Graceful degradation when Redis is unavailable
- * - Production-ready error handling and monitoring
- */
+interface MemoryEntry {
+  count: number;
+  windowStartMs: number;
+  expiresAtMs: number;
+}
+
+const todayMidnightUTC = (now: Date = new Date()): Date =>
+  new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+
+const tomorrowMidnightUTC = (now: Date = new Date()): Date =>
+  new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+
+const blockedResult = (limit: number, currentCount: number = limit): UsageTrackingResult => ({
+  success: false,
+  currentCount,
+  limit,
+  remainingCalls: 0,
+});
+
 export class RateLimitCache {
   private static instance: RateLimitCache | null = null;
 
-  private memoryCache = new Map<string, { count: number; expiresAt: number }>();
+  private memoryCache = new Map<string, MemoryEntry>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private config: RateLimitConfig;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
     this.config = {
-      enableRedis: true,
-      keyPrefix: 'pagespace:ratelimit:',
-      ...config
+      keyPrefix: 'ai-usage:',
+      ...config,
     };
-
     this.startMemoryCacheCleanup();
   }
 
-  /**
-   * Get singleton instance
-   */
   static getInstance(config?: Partial<RateLimitConfig>): RateLimitCache {
     if (!RateLimitCache.instance) {
       RateLimitCache.instance = new RateLimitCache(config);
@@ -55,286 +76,206 @@ export class RateLimitCache {
     return RateLimitCache.instance;
   }
 
-  /**
-   * Get Redis client at point of use (no local caching)
-   */
-  private async getRedis() {
-    if (!this.config.enableRedis) return null;
-    return getSharedRedisClient();
-  }
-
-  /**
-   * Cleanup expired entries from memory cache
-   */
   private startMemoryCacheCleanup(): void {
     this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       let cleanedCount = 0;
-
       for (const [key, entry] of this.memoryCache.entries()) {
-        if (now > entry.expiresAt) {
+        if (now >= entry.expiresAtMs) {
           this.memoryCache.delete(key);
           cleanedCount++;
         }
       }
-
       if (cleanedCount > 0) {
         loggers.api.debug(`Cleaned ${cleanedCount} expired rate limit cache entries`);
       }
-    }, 60000); // Clean every 60 seconds
+    }, 60_000);
   }
 
-  /**
-   * Generate cache key for rate limiting
-   */
   private getRateLimitKey(userId: string, providerType: ProviderType): string {
-    const date = getTodayUTC();
-    return `${this.config.keyPrefix}${userId}:${date}:${providerType}`;
+    return `${this.config.keyPrefix}${userId}:${providerType}`;
   }
 
-  /**
-   * Get TTL in seconds until midnight UTC (when limit resets)
-   */
-  private getTTL(): number {
-    return getSecondsUntilMidnightUTC();
-  }
-
-  /**
-   * Atomically increment usage count with limit check (Redis)
-   */
-  private async incrementRedis(
-    redis: NonNullable<Awaited<ReturnType<typeof getSharedRedisClient>>>,
-    key: string,
-    limit: number
-  ): Promise<UsageTrackingResult | null> {
-    try {
-      // Use Redis INCR for atomic increment
-      const newCount = await redis.incr(key);
-
-      // Set TTL on first increment (when count was 1)
-      if (newCount === 1) {
-        const ttl = this.getTTL();
-        await redis.expire(key, ttl);
-      }
-
-      // Check if limit exceeded
-      if (newCount > limit) {
-        // Decrement back (we exceeded the limit)
-        await redis.decr(key);
-
-        return {
-          success: false,
-          currentCount: limit,
-          limit,
-          remainingCalls: 0
-        };
-      }
-
-      return {
-        success: true,
-        currentCount: newCount,
-        limit,
-        remainingCalls: limit - newCount
-      };
-
-    } catch (error) {
-      loggers.api.warn('Redis increment error for rate limiting', { key, error });
+  private readMemory(key: string, windowStartMs: number): MemoryEntry | null {
+    const entry = this.memoryCache.get(key);
+    if (!entry) return null;
+    const now = Date.now();
+    if (now >= entry.expiresAtMs || entry.windowStartMs !== windowStartMs) {
+      this.memoryCache.delete(key);
       return null;
     }
+    return entry;
   }
 
-  /**
-   * Atomically increment usage count with limit check (Memory fallback)
-   */
-  private incrementMemory(
+  private writeMemory(key: string, count: number, windowStart: Date, expiresAt: Date): void {
+    this.memoryCache.set(key, {
+      count,
+      windowStartMs: windowStart.getTime(),
+      expiresAtMs: expiresAt.getTime(),
+    });
+  }
+
+  private incrementMemoryFallback(
     key: string,
-    limit: number
+    limit: number,
+    windowStart: Date,
+    expiresAt: Date,
   ): UsageTrackingResult {
-    const now = Date.now();
-    const ttl = this.getTTL() * 1000; // Convert to milliseconds
-    const expiresAt = now + ttl;
+    const current = this.readMemory(key, windowStart.getTime())?.count ?? 0;
+    if (current >= limit) return blockedResult(limit, current);
 
-    const existing = this.memoryCache.get(key);
-
-    // Check if expired
-    if (existing && now > existing.expiresAt) {
-      this.memoryCache.delete(key);
-    }
-
-    const current = (existing && now <= existing.expiresAt) ? existing.count : 0;
-
-    // Check limit
-    if (current >= limit) {
-      return {
-        success: false,
-        currentCount: current,
-        limit,
-        remainingCalls: 0
-      };
-    }
-
-    // Increment
     const newCount = current + 1;
-    this.memoryCache.set(key, { count: newCount, expiresAt });
-
+    this.writeMemory(key, newCount, windowStart, expiresAt);
     return {
       success: true,
       currentCount: newCount,
       limit,
-      remainingCalls: limit - newCount
+      remainingCalls: limit - newCount,
     };
   }
 
-  /**
-   * Increment usage count with limit check
-   */
+  private logDbFailure(operation: string, key: string, error: unknown): void {
+    loggers.api.warn(`Rate-limit ${operation} failed`, {
+      key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   async incrementUsage(
     userId: string,
     providerType: ProviderType,
-    limit: number
+    limit: number,
   ): Promise<UsageTrackingResult> {
+    if (limit <= 0) return blockedResult(limit, 0);
+
     const key = this.getRateLimitKey(userId, providerType);
+    const now = new Date();
+    const windowStart = todayMidnightUTC(now);
+    const expiresAt = tomorrowMidnightUTC(now);
 
-    // Try Redis first (L2)
-    const redis = await this.getRedis();
-    if (redis) {
-      const redisResult = await this.incrementRedis(redis, key, limit);
-      if (redisResult !== null) {
-        // Update memory cache for fast reads (monotonic: never regress count)
-        const ttl = this.getTTL() * 1000;
-        const existing = this.memoryCache.get(key);
-        if (!existing || redisResult.currentCount >= existing.count) {
-          this.memoryCache.set(key, {
-            count: redisResult.currentCount,
-            expiresAt: Date.now() + ttl
-          });
-        }
-        return redisResult;
+    try {
+      const rows = await db
+        .insert(rateLimitBuckets)
+        .values({ key, windowStart, count: 1, expiresAt })
+        .onConflictDoUpdate({
+          target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
+          set: { count: sql`${rateLimitBuckets.count} + 1` },
+        })
+        .returning({ count: rateLimitBuckets.count });
+
+      const newCount = rows[0]?.count ?? 1;
+
+      if (newCount > limit) {
+        await db
+          .update(rateLimitBuckets)
+          .set({ count: sql`${rateLimitBuckets.count} - 1` })
+          .where(
+            and(
+              eq(rateLimitBuckets.key, key),
+              eq(rateLimitBuckets.windowStart, windowStart),
+            ),
+          );
+        this.writeMemory(key, limit, windowStart, expiresAt);
+        return blockedResult(limit);
       }
-    }
 
-    // Fallback to memory (L1)
-    return this.incrementMemory(key, limit);
+      this.writeMemory(key, newCount, windowStart, expiresAt);
+      return {
+        success: true,
+        currentCount: newCount,
+        limit,
+        remainingCalls: limit - newCount,
+      };
+    } catch (error) {
+      this.logDbFailure('increment', key, error);
+      if (process.env.NODE_ENV === 'production') return blockedResult(limit);
+      return this.incrementMemoryFallback(key, limit, windowStart, expiresAt);
+    }
   }
 
-  /**
-   * Get current usage count without incrementing
-   */
   async getCurrentUsage(
     userId: string,
     providerType: ProviderType,
-    limit: number
+    limit: number,
   ): Promise<UsageTrackingResult> {
     const key = this.getRateLimitKey(userId, providerType);
-    const now = Date.now();
+    const now = new Date();
+    const windowStart = todayMidnightUTC(now);
+    const expiresAt = tomorrowMidnightUTC(now);
 
-    // Try Redis first (source of truth when available)
-    const redis = await this.getRedis();
-    if (redis) {
-      try {
-        const countStr = await redis.get(key);
-        const count = countStr ? parseInt(countStr, 10) : 0;
+    try {
+      const rows = await db
+        .select({ count: rateLimitBuckets.count })
+        .from(rateLimitBuckets)
+        .where(
+          and(
+            eq(rateLimitBuckets.key, key),
+            eq(rateLimitBuckets.windowStart, windowStart),
+          ),
+        )
+        .limit(1);
 
-        // Promote to memory cache
-        if (count > 0) {
-          const ttl = this.getTTL() * 1000;
-          this.memoryCache.set(key, {
-            count,
-            expiresAt: now + ttl
-          });
-        }
+      const count = rows[0]?.count ?? 0;
+      if (count > 0) this.writeMemory(key, count, windowStart, expiresAt);
 
-        return {
-          success: count < limit,
-          currentCount: count,
-          limit,
-          remainingCalls: Math.max(0, limit - count)
-        };
-      } catch (error) {
-        loggers.api.warn('Redis get error for rate limiting', { key, error });
-      }
-    }
-
-    // Fallback to memory cache (L1)
-    const memoryEntry = this.memoryCache.get(key);
-    if (memoryEntry && now <= memoryEntry.expiresAt) {
       return {
-        success: memoryEntry.count < limit,
-        currentCount: memoryEntry.count,
+        success: count < limit,
+        currentCount: count,
         limit,
-        remainingCalls: Math.max(0, limit - memoryEntry.count)
+        remainingCalls: Math.max(0, limit - count),
+      };
+    } catch (error) {
+      this.logDbFailure('get', key, error);
+      if (process.env.NODE_ENV === 'production') return blockedResult(limit, limit);
+
+      const entry = this.readMemory(key, windowStart.getTime());
+      const count = entry?.count ?? 0;
+      return {
+        success: count < limit,
+        currentCount: count,
+        limit,
+        remainingCalls: Math.max(0, limit - count),
       };
     }
-
-    // No data found, return zero usage
-    return {
-      success: true,
-      currentCount: 0,
-      limit,
-      remainingCalls: limit
-    };
   }
 
-  /**
-   * Reset usage for a user (for testing or admin purposes)
-   */
   async resetUsage(userId: string, providerType: ProviderType): Promise<void> {
     const key = this.getRateLimitKey(userId, providerType);
-
-    // Clear from memory
     this.memoryCache.delete(key);
 
-    // Clear from Redis
-    const redis = await this.getRedis();
-    if (redis) {
-      try {
-        await redis.del(key);
-      } catch (error) {
-        loggers.api.warn('Redis delete error for rate limiting', { key, error });
-      }
+    try {
+      await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, key));
+    } catch (error) {
+      this.logDbFailure('reset', key, error);
     }
 
-    loggers.api.debug(`Reset rate limit for user`, { userId, providerType });
+    loggers.api.debug('Reset rate limit for user', { userId, providerType });
   }
 
-  /**
-   * Get cache statistics
-   */
   getCacheStats(): {
     memoryEntries: number;
-    redisAvailable: boolean;
+    dbAvailable: boolean;
   } {
     return {
       memoryEntries: this.memoryCache.size,
-      redisAvailable: this.config.enableRedis && isSharedRedisAvailable()
+      dbAvailable: !!process.env.DATABASE_URL,
     };
   }
 
-  /**
-   * Clear all cache entries (use with caution)
-   */
   async clearAll(): Promise<void> {
     this.memoryCache.clear();
-
-    const redis = await this.getRedis();
-    if (redis) {
-      try {
-        const keys = await redis.keys(`${this.config.keyPrefix}*`);
-        if (keys.length > 0) {
-          await redis.del(...keys);
-        }
-      } catch (error) {
-        loggers.api.warn('Redis clear all error for rate limiting', { error });
-      }
+    try {
+      await db
+        .delete(rateLimitBuckets)
+        .where(sql`${rateLimitBuckets.key} LIKE ${this.config.keyPrefix + '%'}`);
+    } catch (error) {
+      loggers.api.warn('Rate-limit clearAll failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-
     loggers.api.info('Cleared all rate limit cache entries');
   }
 
-  /**
-   * Graceful shutdown
-   * Note: Does not close the shared Redis connection - that's managed by shared-redis.ts
-   */
   async shutdown(): Promise<void> {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
@@ -345,5 +286,4 @@ export class RateLimitCache {
   }
 }
 
-// Export singleton instance
 export const rateLimitCache = RateLimitCache.getInstance();
