@@ -8,10 +8,9 @@
  * might have been kicked from the permission system but their socket
  * hasn't been kicked from the room yet.
  *
- * Stale-window analysis after bypassCache fix:
+ * Stale-window analysis (post-Redis-deprecation, direct-to-Postgres):
  * - Write operations (per-event auth): 0s — always hits DB directly
- * - Room joins: up to 60s (kick handler provides immediate eviction)
- * - API routes: up to 60s (read operations, acceptable risk)
+ * - Room joins: immediate at kick time (kick handler evicts sockets)
  */
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions';
@@ -99,7 +98,7 @@ interface AuthCheckResult {
 
 /**
  * Re-check authorization for a sensitive event.
- * This goes directly to the permission system (cache or DB) to verify current access.
+ * Goes directly to Postgres to verify current access.
  *
  * @param userId - The user attempting the action
  * @param pageId - The page being accessed
@@ -111,7 +110,7 @@ export async function reauthorizePageAccess(
   requiredLevel: 'view' | 'edit' = 'edit'
 ): Promise<AuthCheckResult> {
   try {
-    const accessLevel = await getUserAccessLevel(userId, pageId, { bypassCache: true });
+    const accessLevel = await getUserAccessLevel(userId, pageId);
 
     if (!accessLevel) {
       loggers.realtime.warn('Per-event auth: Access denied (no permission)', {

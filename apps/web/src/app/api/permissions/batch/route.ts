@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     if (pageIds.length === 0) {
       return NextResponse.json({
         permissions: {},
-        stats: { total: 0, accessible: 0, cacheHits: 0 }
+        stats: { total: 0, accessible: 0, denied: 0, processingTimeMs: 0 }
       });
     }
 

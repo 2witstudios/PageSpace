@@ -27,7 +27,6 @@ export * from './content';
 
 // Permissions (single canonical source after Redis cache removal)
 export * from './permissions/permissions';
-export type { DrivePermissionLevel } from './permissions/permissions';
 
 // Utilities
 export * from './utils';

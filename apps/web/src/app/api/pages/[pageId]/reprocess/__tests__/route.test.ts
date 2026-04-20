@@ -156,10 +156,10 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
       expect(body.error).toMatch(/permission/i);
     });
 
-    it('checks edit permission with bypassCache option', async () => {
+    it('checks edit permission for the caller and page', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId, { bypassCache: true });
+      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
     });
   });
 

@@ -32,7 +32,7 @@ export async function POST(
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
 
-    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
+    const canEdit = await canUserEditPage(userId, pageId);
     if (!canEdit) {
       return NextResponse.json({ error: 'Insufficient permissions to reprocess this page' }, { status: 403 });
     }

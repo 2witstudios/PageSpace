@@ -117,7 +117,7 @@ describe('POST /api/permissions/batch', () => {
       expect(response.status).toBe(200);
       expect(body).toEqual({
         permissions: {},
-        stats: { total: 0, accessible: 0, cacheHits: 0 },
+        stats: { total: 0, accessible: 0, denied: 0, processingTimeMs: 0 },
       });
     });
 

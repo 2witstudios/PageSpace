@@ -75,13 +75,12 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
  * @param userId - User ID to check permissions for (validated as CUID2)
  * @param pageId - Page ID to check permissions on (validated as CUID2)
  * @param options.silent - If false, log debug messages (default: true)
- * @param options.bypassCache - Accepted for signature compatibility; no caching layer exists after Redis removal.
  * @returns Permission object or null if no access / invalid input
  */
 export async function getUserAccessLevel(
   userId: unknown,
   pageId: unknown,
-  options: { silent?: boolean; bypassCache?: boolean } = {}
+  options: { silent?: boolean } = {}
 ): Promise<PermissionLevel | null> {
   const { silent = true } = options;
 
@@ -150,7 +149,8 @@ export async function getUserAccessLevel(
         .where(and(
           eq(driveMembers.driveId, pageData.driveId),
           eq(driveMembers.userId, validUserId),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         ))
         .limit(1);
 
@@ -211,48 +211,32 @@ export async function getUserAccessLevel(
 /**
  * Check if user can view a page
  */
-export async function canUserViewPage(
-  userId: string,
-  pageId: string,
-  options: { bypassCache?: boolean } = {}
-): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId, options);
+export async function canUserViewPage(userId: string, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(userId, pageId);
   return perms?.canView ?? false;
 }
 
 /**
  * Check if user can edit a page
  */
-export async function canUserEditPage(
-  userId: string,
-  pageId: string,
-  options: { bypassCache?: boolean } = {}
-): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId, options);
+export async function canUserEditPage(userId: string, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(userId, pageId);
   return perms?.canEdit ?? false;
 }
 
 /**
  * Check if user can share a page
  */
-export async function canUserSharePage(
-  userId: string,
-  pageId: string,
-  options: { bypassCache?: boolean } = {}
-): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId, options);
+export async function canUserSharePage(userId: string, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(userId, pageId);
   return perms?.canShare ?? false;
 }
 
 /**
  * Check if user can delete a page
  */
-export async function canUserDeletePage(
-  userId: string,
-  pageId: string,
-  options: { bypassCache?: boolean } = {}
-): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId, options);
+export async function canUserDeletePage(userId: string, pageId: string): Promise<boolean> {
+  const perms = await getUserAccessLevel(userId, pageId);
   return perms?.canDelete ?? false;
 }
 
@@ -277,7 +261,8 @@ export async function isDriveOwnerOrAdmin(
     .where(and(
       eq(driveMembers.driveId, driveId),
       eq(driveMembers.userId, userId),
-      eq(driveMembers.role, 'ADMIN')
+      eq(driveMembers.role, 'ADMIN'),
+      isNotNull(driveMembers.acceptedAt)
     ))
     .limit(1);
 
@@ -285,7 +270,7 @@ export async function isDriveOwnerOrAdmin(
 }
 
 /**
- * Check if user is a member of a drive
+ * Check if user is a member of a drive (accepted members only)
  */
 export async function isUserDriveMember(
   userId: string,
@@ -304,7 +289,8 @@ export async function isUserDriveMember(
     .from(driveMembers)
     .where(and(
       eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
     ))
     .limit(1);
 
@@ -332,7 +318,8 @@ export async function getUserAccessiblePagesInDrive(
       .where(and(
         eq(driveMembers.driveId, driveId),
         eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
+        eq(driveMembers.role, 'ADMIN'),
+        isNotNull(driveMembers.acceptedAt)
       ))
       .limit(1);
 
@@ -404,7 +391,8 @@ export async function getUserAccessiblePagesInDriveWithDetails(
       .where(and(
         eq(driveMembers.driveId, driveId),
         eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
+        eq(driveMembers.role, 'ADMIN'),
+        isNotNull(driveMembers.acceptedAt)
       ))
       .limit(1);
 
@@ -479,13 +467,11 @@ export async function getUserAccessiblePagesInDriveWithDetails(
  * Check if user has access to a drive by drive ID.
  * Returns true when the user owns the drive, is a drive member, or has
  * page-level permissions within the drive.
- *
- * @param options.bypassCache - Accepted for signature compatibility; no caching layer exists after Redis removal.
  */
 export async function getUserDriveAccess(
   userId: string,
   driveId: string,
-  options: { silent?: boolean; bypassCache?: boolean } = {}
+  options: { silent?: boolean } = {}
 ): Promise<boolean> {
   const { silent = true } = options;
 
@@ -527,7 +513,8 @@ export async function getUserDriveAccess(
       .from(driveMembers)
       .where(and(
         eq(driveMembers.driveId, driveData.id),
-        eq(driveMembers.userId, userId)
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
       ))
       .limit(1);
 
@@ -620,7 +607,11 @@ export async function getUserDrivePermissions(
       .select({ role: driveMembers.role })
       .from(driveMembers)
       .where(
-        and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId))
+        and(
+          eq(driveMembers.driveId, driveId),
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )
       )
       .limit(1);
 

@@ -50,7 +50,7 @@ vi.mock('../../validators', () => ({
 }));
 
 import { getBatchPagePermissions } from '../permissions';
-import { db } from '@pagespace/db';
+import { db, isNotNull } from '@pagespace/db';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -261,6 +261,14 @@ describe('getBatchPagePermissions', () => {
     expect(result.get('denied')).toEqual(NONE);
     expect(result.get('missing')).toEqual(NONE);
     expect(result.size).toBe(6);
+  });
+
+  it('should filter drive_members join on acceptedAt IS NOT NULL (matches single-page path)', async () => {
+    stubQueryRows([]);
+
+    await getBatchPagePermissions(USER, ['p1']);
+
+    expect(vi.mocked(isNotNull)).toHaveBeenCalledWith('acceptedAt');
   });
 
   it('given a DB failure, should return the pre-seeded deny map (fail-closed)', async () => {
