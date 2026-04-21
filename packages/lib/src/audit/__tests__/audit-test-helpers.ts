@@ -20,31 +20,44 @@ export interface MockSecurityAuditEntry {
 }
 
 export function createValidSecurityChain(count: number): MockSecurityAuditEntry[] {
+  return createValidSecurityChainWithEventTypes(
+    Array.from({ length: count }, () => 'auth.login.success')
+  );
+}
+
+// Builds a valid chain where each entry carries the caller-supplied event_type
+// string. The eventType field is cast through AuditEvent so legacy values
+// (removed from SecurityEventType) can still be used — the DB column is text
+// post-migration 0105, so stored values are arbitrary strings and the verifier
+// must accept them.
+export function createValidSecurityChainWithEventTypes(
+  eventTypes: string[]
+): MockSecurityAuditEntry[] {
   const entries: MockSecurityAuditEntry[] = [];
   let previousHash = 'genesis';
 
-  for (let i = 0; i < count; i++) {
+  eventTypes.forEach((eventType, i) => {
     const timestamp = new Date(Date.now() + i * 1000);
-    const event: AuditEvent = {
-      eventType: 'auth.login.success',
+    const event = {
+      eventType,
       userId: 'user-123',
       sessionId: `session-${i}`,
       ipAddress: '127.0.0.1',
       userAgent: 'test-agent',
-    };
+    } as AuditEvent;
 
     const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
 
     entries.push({
       id: `audit-${i + 1}`,
-      eventType: event.eventType,
-      userId: event.userId ?? null,
-      sessionId: event.sessionId ?? null,
+      eventType,
+      userId: 'user-123',
+      sessionId: `session-${i}`,
       serviceId: null,
       resourceType: null,
       resourceId: null,
-      ipAddress: event.ipAddress ?? null,
-      userAgent: event.userAgent ?? null,
+      ipAddress: '127.0.0.1',
+      userAgent: 'test-agent',
       geoLocation: null,
       details: null,
       riskScore: null,
@@ -55,7 +68,7 @@ export function createValidSecurityChain(count: number): MockSecurityAuditEntry[
     });
 
     previousHash = eventHash;
-  }
+  });
 
   return entries;
 }

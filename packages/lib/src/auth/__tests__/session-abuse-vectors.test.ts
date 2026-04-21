@@ -390,7 +390,7 @@ describe('Session Abuse Vectors', () => {
     it('revokeAllUserSessions should return count of revoked sessions', async () => {
       mockUpdateSetWhere.mockResolvedValue({ rowCount: 5 });
 
-      const count = await service.revokeAllUserSessions('user-123', 'password_changed');
+      const count = await service.revokeAllUserSessions('user-123', 'admin_action');
 
       expect(count).toBe(5);
     });

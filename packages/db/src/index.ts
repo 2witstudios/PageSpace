@@ -54,7 +54,6 @@ export {
 export {
   activityLogs,
   activityLogsRelations,
-  activityOperationEnum,
   activityResourceEnum,
   activityChangeGroupTypeEnum,
   contentFormatEnum,
@@ -66,7 +65,6 @@ export {
 export {
   securityAuditLog,
   securityAuditLogRelations,
-  securityEventTypeEnum,
   type SecurityEventType,
   type InsertSecurityAuditLog,
   type SelectSecurityAuditLog,
