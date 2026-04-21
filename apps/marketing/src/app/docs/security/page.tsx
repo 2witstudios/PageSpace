@@ -20,9 +20,9 @@ This section documents PageSpace's authentication system, permission model, and 
 - **Opaque session tokens** — random 256-bit values with no embedded claims, validated by database lookup.
 - **SHA-256 hash-only storage** — raw tokens are returned to the client once; only the hash is stored.
 - **Instant revocation** — deleting the session row immediately invalidates the token on the next request.
-- **Global invalidation** — bumping \`users.tokenVersion\` rejects every existing session on validation.
-- **Device-token theft detection** — device (desktop/mobile) tokens rotate; mismatched user agent, IP change, or rapid refresh lowers a per-device \`trustScore\`.
-- **Account lockout** — 10 consecutive failed attempts lock the account for 15 minutes. DB-backed, so it persists across restarts and survives attacker IP rotation. Complements rate limiting — rate limits throttle traffic, lockout halts the targeted account.
+- **Global invalidation** — administrative actions (log-out-everywhere, credential reset, suspension) reject every existing session for a user atomically.
+- **Device-token theft detection** — device (desktop/mobile) tokens rotate; anomalous signals (user-agent change, unexpected IP, refresh-timing anomalies) lower a per-device trust score that operators can gate sensitive actions on.
+- **Account lockout** — accounts facing repeated failed authentication are temporarily locked, regardless of source IP. Lockout state is durable across infrastructure restarts and complements rate limiting: rate limits throttle traffic, lockout halts the targeted account.
 - **OAuth 2.1 PKCE** — Google and Apple flows use RFC 7636 with a server-stored \`code_verifier\`. An intercepted authorization code is unusable without it.
 - **Timing-safe comparisons** — every secret comparison (magic-link verify, device-token lookup, auth headers, CSRF) goes through a SHA-256 pre-hash + \`timingSafeEqual\`, so length and prefix structure leak no timing.
 - **Rate limiting** — login, signup, magic-link send, and token refresh are rate-limited in Postgres via a weighted sliding window (see [Zero-Trust](/docs/security/zero-trust#rate-limiting)).
@@ -30,8 +30,8 @@ This section documents PageSpace's authentication system, permission model, and 
 ### Authorization
 
 - **Drive ownership** — \`drives.ownerId\` grants unconditional full access to every page in the drive.
-- **Drive admin membership** — a \`drive_members\` row with \`role='ADMIN'\` and \`acceptedAt IS NOT NULL\` grants full access.
-- **Direct page permissions** — per-user boolean flags (\`canView\`, \`canEdit\`, \`canShare\`, \`canDelete\`) on \`page_permissions\`, with optional \`expiresAt\` for temporary grants.
+- **Drive admin membership** — drive members with admin role, once they accept the invitation, get full access to every page in the drive.
+- **Direct page permissions** — per-user capability flags on each page (view, edit, share, delete), with optional expiry for temporary grants.
 - **No inheritance** — permissions do not flow from parent pages. Each page is checked independently.
 - **Fresh checks** — every permission lookup queries Postgres directly. There is no cache layer.
 
@@ -39,18 +39,17 @@ This section documents PageSpace's authentication system, permission model, and 
 
 - **Encrypted API keys** — AI provider keys are encrypted at rest with AES-256-GCM (scrypt KDF, unique salt+IV per write).
 - **HTTP-only cookies** — session cookies are inaccessible to JavaScript.
-- **SameSite cookies** — \`strict\` by default; relaxed to \`lax\` only when \`COOKIE_DOMAIN\` is configured for subdomain sharing.
-- **CSRF tokens** — HMAC-signed, bound to the session ID, required on state-changing requests.
+- **SameSite cookies** — \`strict\` by default; relaxed to \`lax\` only for multi-subdomain deployments.
+- **CSRF tokens** — HMAC-signed, bound to the session, required on state-changing requests.
 - **Content sanitization** — user HTML is sanitized before render; canvas pages render in Shadow DOM.
 
 ### Infrastructure
 
-- **Service-to-service auth** — internal services (web, realtime, processor) authenticate each other with opaque service tokens (\`ps_svc_*\`) issued by the web app, validated by the same \`sessionService\` that validates user sessions, and scoped to a specific resource and capability.
-- **JTI revocation** — every service token's JTI is tracked in \`revoked_service_tokens\`; unknown or expired JTIs fail closed.
-- **Continuously verified audit log** — security events are written to \`security_audit_log\` with a SHA-256 hash chain over the prior event, serialized by a Postgres advisory lock. A cron route re-verifies the chain on a schedule, and the SIEM delivery worker re-verifies each batch synchronously before emitting it — a detected break stops the emission.
-- **SSRF protection** — outbound URL fetches run through a validator that blocks localhost, RFC1918 private ranges, link-local addresses, and cloud metadata endpoints (AWS, GCP, Azure, Alibaba — including IPv6 variants), and verifies every DNS-resolved IP, not just the first.
-- **Path-traversal protection** — file paths from uploads and avatars run through a validator that blocks \`../\`, URL-encoded and double-encoded variants, null bytes, and symlink escape via \`realpath\`.
-- **HMAC-signed cron endpoints** — internal cron routes require HMAC-SHA256 headers (timestamp, nonce, signature). In production, missing \`CRON_SECRET\` fails closed.
+- **Service-to-service auth** — internal services authenticate each other with scoped, revocable tokens that are validated the same way user sessions are. Every cross-service call carries a user context — least privilege is enforced per call, not per service.
+- **Revocation registry** — service tokens have a central revocation registry that fails closed on unknown or expired identifiers.
+- **Continuously verified audit log** — security events are recorded with a SHA-256 hash chain over the prior event, serialized at write time. The chain is re-verified on a schedule and, separately, re-verified for every batch before it's emitted to external sinks — a detected break stops the emission.
+- **SSRF protection** — server-side URL fetches are validated against a blocklist covering loopback, private network ranges, link-local addresses, cloud metadata endpoints, and non-HTTP schemes. Every DNS-resolved address is checked, not just the first, which defeats DNS-rebinding tricks.
+- **Path-traversal protection** — file paths from uploads and user input are validated to reject directory traversal, encoded variants, null-byte injection, and symlink escape.
 - **Distributed rate limiting** — Postgres-backed, works across multiple instances; fails closed in production.
 
 ## Known Tradeoffs

@@ -11,7 +11,7 @@ export const metadata = createMetadata({
 const content = `
 # Tool Calling
 
-PageSpace AI agents expose 37 workspace tools. Tools are the only way an agent reads, writes, or searches content — nothing happens inside the model alone. Source: \`apps/web/src/lib/ai/tools/*.ts\`.
+PageSpace AI agents expose 37 workspace tools. Tools are the only way an agent reads, writes, or searches content — nothing happens inside the model alone.
 
 ## Tool catalog
 
@@ -141,11 +141,9 @@ Every tool receives an \`experimental_context\` object with everything it needs 
 }
 \`\`\`
 
-Source: \`apps/web/src/lib/ai/core/types.ts\`, \`apps/web/src/app/api/ai/chat/route.ts\`.
-
 ## Multi-step turns
 
-Tool calls chain up to **100 steps** per turn. The model keeps calling tools until it either calls \`finish\` or hits the step cap. Source: \`stepCountIs(100)\` in \`apps/web/src/app/api/ai/chat/route.ts\`.
+Tool calls chain across multiple steps per turn — the model keeps calling tools until it signals \`finish\` or hits a bounded step cap that prevents runaway loops.
 
 \`\`\`
 User: "Set up a new project called Q2 Campaign"
@@ -169,8 +167,6 @@ Two page-level toggles decide which tools are actually available at runtime:
 - **Read-only mode** (\`isReadOnly: true\`) — every write tool is stripped: \`create_page\`, \`rename_page\`, \`replace_lines\`, \`move_page\`, \`edit_sheet_cells\`, \`create_drive\`, \`rename_drive\`, \`update_drive_context\`, \`trash\`, \`restore\`, \`update_agent_config\`, \`update_task\`, \`send_channel_message\`, and all calendar writes.
 - **Web search enabled** (\`webSearchEnabled: true\`) — controls whether \`web_search\` is exposed. Default is off.
 
-Source: \`apps/web/src/lib/ai/core/tool-filtering.ts\`.
-
 ## Per-agent tool sets
 
 AI_CHAT pages pin an \`enabledTools\` array. Behaviour:
@@ -181,7 +177,7 @@ AI_CHAT pages pin an \`enabledTools\` array. Behaviour:
 | \`[]\` | None. Agent chats but cannot act. |
 | \`["read_page", "regex_search"]\` | Exactly those, further filtered by read-only and web-search toggles. |
 
-Source: \`apps/web/src/app/api/ai/chat/route.ts\` (line comment: "null or [] = no tools enabled"). An empty array is not a wildcard.
+An empty array is not a wildcard.
 
 \`\`\`typescript
 // Content editor
@@ -248,12 +244,12 @@ Tool errors are returned as structured results — the model sees them and adapt
 
 - **Permission denied** — the agent surfaces the required permission to the user.
 - **Not found** — the agent tries a different id or suggests alternatives.
-- **Rate limit / transient provider error** — the streamText call retries up to 20 times before failing. Source: \`maxRetries: 20\` in \`apps/web/src/app/api/ai/chat/route.ts\`.
-- **Sub-agent calls** (\`ask_agent\`) retry up to 3 times and are capped at 20 internal steps.
+- **Rate limit / transient provider error** — built-in retries absorb transient provider errors before the turn fails.
+- **Sub-agent calls** (\`ask_agent\`) are themselves retried on transient failures and run under their own bounded step cap.
 
 ## Agent depth
 
-\`ask_agent\` increments a depth counter on the execution context. When the counter reaches **2**, further calls throw. The cap prevents runaway chains of agents calling agents. Source: \`MAX_AGENT_DEPTH\` in \`apps/web/src/lib/ai/tools/agent-communication-tools.ts\`.
+\`ask_agent\` increments a depth counter on the execution context; calls beyond a bounded depth throw. The cap prevents runaway chains of agents calling agents.
 
 ## Real-time broadcasting
 

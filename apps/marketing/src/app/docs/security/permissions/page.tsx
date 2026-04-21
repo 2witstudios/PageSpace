@@ -11,91 +11,46 @@ export const metadata = createMetadata({
 const content = `
 # Permissions
 
-PageSpace resolves page access against three primitives, checked in order on every request. Every check queries Postgres directly.
-
-Source: \`packages/lib/src/permissions/permissions.ts\`, \`packages/db/drizzle/0102_accessible_page_ids_for_user.sql\`, \`packages/db/src/schema/members.ts\`.
+PageSpace resolves page access against three primitives, checked in order on every request. Every check hits the database directly — there is no permission cache between you and the authoritative answer.
 
 ## The Three Primitives
 
-### 1. Drive ownership — \`drives.ownerId\`
+### 1. Drive ownership
 
-Every drive has exactly one owner, recorded directly on the \`drives\` row. The owner has unconditional \`canView\`, \`canEdit\`, \`canShare\`, and \`canDelete\` on every page in the drive. Ownership cannot be overridden by any other record.
+Every drive has exactly one owner. The owner has unconditional view, edit, share, and delete capability on every page in the drive. Ownership cannot be overridden by any other record.
 
-Ownership is tracked on \`drives.ownerId\`, not on \`drive_members\`.
+### 2. Drive admin membership
 
-### 2. Drive admin membership — \`drive_members\`
+Drive members with admin role, once they accept their invitation, get the same full page access as the owner. Non-admin members are a membership record only — they don't automatically get page-level access. Page-level access for non-admin members is carried by direct page permissions (below).
 
-Users added to a drive get a \`drive_members\` row:
+### 3. Direct page permissions
 
-| Column | Notes |
-|--------|-------|
-| \`role\` | \`ADMIN\` or \`MEMBER\`. The canonical viewer only elevates \`ADMIN\`. |
-| \`acceptedAt\` | Must be non-null — pending invitations do not grant access. |
-| \`customRoleId\` | Optional reference to a drive-scoped role template (see below). |
-| \`invitedBy\` / \`invitedAt\` | Audit fields. |
+Per-user, per-page capability flags: **view**, **edit**, **share**, **delete**. Each grant can optionally carry an expiry — the grant stops being honored once the expiry passes, and expired rows can be kept for audit without re-exposing access.
 
-An accepted \`ADMIN\` row grants full page access across the whole drive, equivalent to the owner for day-to-day operations. \`MEMBER\` rows are a membership record only — they do not grant page-level access by themselves. Page-level access for members is carried by \`page_permissions\` rows.
-
-### 3. Direct page permissions — \`page_permissions\`
-
-Per-user, per-page flags:
-
-| Flag | Action |
-|------|--------|
-| \`canView\` | Read page content |
-| \`canEdit\` | Modify content |
-| \`canShare\` | Grant / revoke permissions on the page |
-| \`canDelete\` | Send page to trash |
-
-Additional columns:
-
-- \`expiresAt\` — optional. A row is only honored while \`expiresAt IS NULL OR expiresAt > now()\`. Expired grants are ignored automatically and can be kept for audit.
-- \`grantedBy\` / \`grantedAt\` — who granted the permission and when.
-- \`note\` — free-text annotation for the grant.
-
-There is no inheritance from parent pages. A grant on a folder does not imply a grant on any page inside it. Each page is checked independently.
+**No inheritance.** A grant on a folder does not imply a grant on any page inside it. Each page is checked independently. This prevents the classic "accidentally shared the whole subtree" class of mistake.
 
 ## Authorization Flow
 
-When a user requests access to a page, the server applies these checks in order:
+When a user requests access to a page, the server resolves access in this order:
 
-\`\`\`
-User → Page Y
-  ├─ Drive.ownerId === user? ─────────── yes → full access
-  ├─ drive_members row for this drive where
-  │    userId=user AND role='ADMIN' AND acceptedAt IS NOT NULL? ─ yes → full access
-  ├─ page_permissions row for (userId=user, pageId=Y) where
-  │    expiresAt IS NULL OR expiresAt > now()? ─────── yes → return the stored flags
-  └─ otherwise ─────────────────────────────────────── deny
-\`\`\`
-
-This is implemented both in TypeScript (\`getUserAccessLevel\` in \`packages/lib/src/permissions/permissions.ts\`) and in the Postgres function \`accessible_page_ids_for_user(uid)\` (migration \`0102_accessible_page_ids_for_user.sql\`) for bulk queries.
+1. Is the user the drive owner? → full access.
+2. Does the user have an accepted admin membership on the drive? → full access.
+3. Is there a non-expired direct page permission for this user on this page? → return the granted capabilities.
+4. Otherwise → deny.
 
 ### Example
 
 Drive A is owned by Alice. It contains Folder X, which contains Document Y.
 
 - **Alice** requests Document Y → full access via drive ownership.
-- **Bob**, accepted \`ADMIN\` of Drive A, requests Document Y → full access via drive admin membership.
-- **Carol**, \`MEMBER\` of Drive A, has \`page_permissions\` on Document Y with \`canView=true, canEdit=true\`, no \`expiresAt\` → view and edit.
-- **Dan**, \`MEMBER\` of Drive A, has \`canView=true\` on Folder X but no row on Document Y → denied (no inheritance).
-- **Eve** has a \`page_permissions\` row on Document Y with \`canView=true\` and \`expiresAt\` yesterday → denied (expired).
+- **Bob**, an accepted admin of Drive A, requests Document Y → full access via drive admin membership.
+- **Carol**, a drive member with a view+edit grant directly on Document Y → view and edit.
+- **Dan**, a drive member with a grant on Folder X but no grant on Document Y → denied (no inheritance).
+- **Eve** has a direct grant on Document Y that expired yesterday → denied.
 
-## Role Templates — \`drive_roles\`
+## Role Templates
 
-Drive owners and admins can define custom role templates, scoped to a single drive, that bundle page-level capability flags:
-
-\`\`\`typescript
-// packages/db/src/schema/members.ts
-drive_roles: {
-  id, driveId, name, description, color,
-  isDefault: boolean,
-  permissions: Record<string, { canView, canEdit, canShare }>,
-  position, createdAt, updatedAt
-}
-\`\`\`
-
-A \`drive_members\` row can reference a template via \`customRoleId\`. Templates are a convenience layer on top of \`drive_members.role\` + \`page_permissions\`; the canonical access check still resolves against the three primitives above.
+Drive owners and admins can define custom role templates, scoped to a single drive, that bundle common capability flags into a named role — useful for consistent "Editor", "Reviewer", "Viewer" patterns across many pages. Templates are a convenience layer; the canonical access check still resolves against the three primitives above.
 
 ## Permission Management
 
@@ -113,7 +68,7 @@ POST /api/pages/{pageId}/permissions
 }
 \`\`\`
 
-Requires drive ownership, drive admin membership, or \`canShare\` on the target page.
+Requires drive ownership, drive admin membership, or share capability on the target page.
 
 ### Revoking
 

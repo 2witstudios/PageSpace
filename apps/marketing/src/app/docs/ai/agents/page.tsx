@@ -54,7 +54,7 @@ PATCH /api/pages/{pageId}/agent-config
 
 ## Read-only mode and web search
 
-PageSpace runs one unified system prompt for every agent. Two runtime toggles on the page decide what that agent can actually do. Source: \`apps/web/src/lib/ai/core/system-prompt.ts\`, \`tool-filtering.ts\`.
+PageSpace runs one unified system prompt for every agent. Two runtime toggles on the page decide what that agent can actually do.
 
 - **Read-only** — appends a READ-ONLY constraint to the system prompt and strips every write tool. Use for research, planning, and analysis agents that must not touch content.
 - **Web search** — adds \`web_search\`. Off by default so agents stay inside the workspace unless you opt in.
@@ -84,7 +84,7 @@ enabledTools: ["list_pages", "read_page", "create_page", "rename_page", "move_pa
 | \`[]\` | None — same as \`null\`. |
 | \`["tool_a", "tool_b"]\` | Exactly those, then filtered by read-only and web-search toggles. |
 
-Empty means empty. To give an agent everything, list every tool explicitly. Source: \`apps/web/src/app/api/ai/chat/route.ts\` ("null or [] = no tools enabled").
+Empty means empty. To give an agent everything, list every tool explicitly.
 
 The 37 tool names live in [Tool Calling](/docs/ai/tool-calling).
 
@@ -102,7 +102,7 @@ An agent sees the same page tree its caller sees. Position in the tree decides d
 └── 🤖 Project AI            ← scoped to Website Redesign
 \`\`\`
 
-Every tool call carries \`locationContext\` with the current drive, current page, and breadcrumbs. When the user says "here", the agent resolves it against this context instead of guessing. Source: \`apps/web/src/lib/ai/core/types.ts\`.
+Every tool call carries \`locationContext\` with the current drive, current page, and breadcrumbs. When the user says "here", the agent resolves it against this context instead of guessing.
 
 Optional flags expand the context further:
 
@@ -128,12 +128,12 @@ What happens, in order:
 1. Target agent is verified — must be AI_CHAT, not trashed, and visible to the calling user.
 2. If a \`conversationId\` is passed, the persisted history is loaded; otherwise a new conversation is started.
 3. The target agent runs with its own system prompt, provider, model, and \`enabledTools\` — but uses the caller's permissions.
-4. The user's question and the assistant's response are persisted to \`chat_messages\` under the target page.
+4. The user's question and the assistant's response are persisted under the target page.
 5. The response, the new or reused \`conversationId\`, and metadata (provider, model, call depth, tool-call count) return to the caller.
 
 ### Depth limit
 
-Depth is tracked on the execution context. The sub-agent runs at depth 1; any \`ask_agent\` it calls would be depth 2, which throws. The maximum chain is **original → one sub-agent**. Source: \`MAX_AGENT_DEPTH = 2\` in \`apps/web/src/lib/ai/tools/agent-communication-tools.ts\`.
+Chain depth is tracked on the execution context and capped to prevent runaway agent-calling-agent loops.
 
 ### Discovering agents
 
@@ -152,9 +152,9 @@ By default an agent is visible to the global assistant; flip \`visibleToGlobalAs
 
 AI_CHAT pages support multiple users at once.
 
-- User A sends a message → row written to \`chat_messages\` → broadcast to every connected user on the page.
-- Assistant response streams over Socket.IO to all viewers.
-- Every user message is attributed to its sender via \`userId\`; assistant messages have \`userId = null\`.
+- User A sends a message → persisted, then broadcast to every connected user on the page.
+- Assistant response streams over the real-time channel to all viewers.
+- Every user message is attributed to its sender; assistant messages are unattributed.
 - The agent sees the entire multi-user thread as it composes each reply.
 
 ## Best practices

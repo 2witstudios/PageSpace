@@ -34,29 +34,11 @@ Consequences:
 
 ## Message persistence
 
-Every message — user or assistant — is a row in \`chat_messages\`. Columns used today:
-
-| Column | Purpose |
-|---|---|
-| \`id\` | Message id |
-| \`pageId\` | Owning AI_CHAT page |
-| \`conversationId\` | Groups messages into a session within a page |
-| \`role\` | \`user\` or \`assistant\` |
-| \`content\` | Message text |
-| \`toolCalls\`, \`toolResults\` | JSONB tool-call payloads |
-| \`userId\` | Who sent it (null for assistant) |
-| \`sourceAgentId\` | Set when one agent sent on behalf of another via \`ask_agent\` |
-| \`messageType\` | \`standard\` or \`todo_list\` |
-| \`isActive\`, \`editedAt\` | Edit / regenerate support |
-| \`createdAt\` | Timestamp |
-
-Source: \`packages/db/src/schema/core.ts\`.
-
-Persisting per-message enables multi-user conversations (several people sharing one agent), real-time sync via Socket.IO, and full tool-call history for debugging and context.
+Every message — user or assistant — is persisted. Messages carry their author, role, text, and full tool-call history; an agent that ran a tool hours ago can still explain what it did. Persistence also enables multi-user conversations (several people sharing one agent) and real-time sync across connected clients.
 
 ## Context inheritance
 
-Every tool call receives an execution context with the caller's user id, timezone, active provider and model, and the page + drive it is running inside. Agents use this context to scope search, resolve "here", and pick the correct drive for new pages. Source: \`apps/web/src/lib/ai/core/types.ts\`.
+Every tool call receives an execution context with the caller's user, timezone, active provider and model, and the page and drive it is running inside. Agents use this context to scope search, resolve "here" to the right page, and pick the correct drive for new pages.
 
 ## Providers and models
 
@@ -77,7 +59,7 @@ PageSpace routes AI through the Vercel AI SDK across 12 providers:
 | LM Studio | discovered from local instance | N/A (local server) |
 | Azure OpenAI | user's deployment name | User |
 
-Full list with model IDs: \`apps/web/src/lib/ai/core/ai-providers-config.ts\`.
+The full list of available models is visible in **Settings > AI** and updates as providers publish new ones.
 
 ## Tools
 
@@ -92,11 +74,11 @@ Each AI_CHAT page exposes two runtime toggles that filter the tool set:
 - **Read-only mode** — excludes every write tool (create, edit, delete, send). The agent can still read, search, and plan.
 - **Web search enabled** — includes \`web_search\`; off by default.
 
-Source: \`apps/web/src/lib/ai/core/tool-filtering.ts\`. A page can also pin a specific subset of tools via \`enabledTools\` on the page config.
+A page can also pin a specific subset of tools in its configuration.
 
 ## Agent-to-agent consultation
 
-An agent can call another agent via \`ask_agent\`, passing a question and optional context. Target agent loads its conversation history, runs with its own system prompt and tools, persists the exchange, and returns a response. A depth limit of 2 prevents chains deeper than the original → first sub-agent. Source: \`apps/web/src/lib/ai/tools/agent-communication-tools.ts\`.
+An agent can call another agent via \`ask_agent\`, passing a question and optional context. The target agent loads its own conversation history, runs with its own system prompt and tools, persists the exchange, and returns a response. Chain depth is bounded to prevent runaway agent-calling-agent loops.
 
 ## Real-time collaboration
 

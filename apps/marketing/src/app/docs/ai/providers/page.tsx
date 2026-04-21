@@ -11,7 +11,7 @@ export const metadata = createMetadata({
 const content = `
 # Providers & Models
 
-PageSpace routes AI through the Vercel AI SDK across 12 providers. Each user configures the providers they want in **Settings > AI**. Keys are stored encrypted per user, per provider. Source: \`apps/web/src/lib/ai/core/ai-providers-config.ts\`.
+PageSpace routes AI through the Vercel AI SDK across 12 providers. Each user configures the providers they want in **Settings > AI**. Keys are stored encrypted per user, per provider.
 
 ## Configuration hierarchy
 
@@ -42,8 +42,6 @@ Daily call limits by plan:
 | Pro | 200 | 50 |
 | Founder | 500 | 100 |
 | Business | 1000 | 500 |
-
-Source: \`apps/web/src/lib/subscription/usage-service.ts\`.
 
 ### OpenRouter (Paid)
 
@@ -161,11 +159,11 @@ Provider: "openai"
 Model: "gpt-4.1-2025-04-14"
 \`\`\`
 
-Always use the model id shown in \`ai-providers-config.ts\` — unversioned aliases like \`gpt-4.1\` or \`gemini-2.5-pro-preview\` are not accepted (except the PageSpace provider, which accepts \`standard\` / \`pro\`).
+Always use the exact model id published by the provider — unversioned aliases like \`gpt-4.1\` or \`gemini-2.5-pro-preview\` are not accepted (except the PageSpace provider, which accepts \`standard\` / \`pro\`).
 
 ## API-key storage
 
-User keys live in \`user_ai_settings\` (one row per user + provider), encrypted with \`ENCRYPTION_KEY\` before insert. Keys are never returned by the API — only presence is exposed. Source: \`packages/db/src/schema/ai.ts\`, \`apps/web/src/lib/ai/core/ai-utils.ts\`.
+User-provided provider keys are encrypted at rest with AES-256-GCM. Keys are never returned by the API — only a boolean presence flag is exposed.
 
 ## Model capability detection
 
