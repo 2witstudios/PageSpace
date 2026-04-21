@@ -245,6 +245,7 @@ Tool errors are returned as structured results — the model sees them and adapt
 - **Permission denied** — the agent surfaces the required permission to the user.
 - **Not found** — the agent tries a different id or suggests alternatives.
 - **Rate limit / transient provider error** — built-in retries absorb transient provider errors before the turn fails.
+- **Validation errors** — the agent adjusts parameters and retries.
 - **Sub-agent calls** (\`ask_agent\`) are themselves retried on transient failures and run under their own bounded step cap.
 
 ## Agent depth

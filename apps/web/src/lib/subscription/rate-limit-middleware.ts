@@ -66,7 +66,7 @@ export function createRateLimitResponse(
 
   const errorMessage = providerType === 'pro'
     ? `Pro AI calls limited to ${limit} per day. Upgrade to Pro or Business for more access.`
-    : `Standard AI calls limited to ${limit} per day. Upgrade to Pro (100/day) or Business (500/day) for more calls.`;
+    : `Standard AI calls limited to ${limit} per day. Upgrade to Pro (200/day) or Business (1000/day) for more calls.`;
 
   return NextResponse.json(
     {
