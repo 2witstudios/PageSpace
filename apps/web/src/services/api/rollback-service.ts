@@ -45,7 +45,7 @@ const VALID_OPERATIONS = [
   'permission_grant', 'permission_update', 'permission_revoke',
   'trash', 'move', 'agent_config_update',
   'member_add', 'member_remove', 'member_role_change',
-  'login', 'logout', 'signup', 'password_change', 'email_change',
+  'login', 'logout', 'signup', 'email_change',
   'token_create', 'token_revoke', 'upload', 'convert',
   'account_delete', 'profile_update', 'avatar_update',
   'message_update', 'message_delete', 'role_reorder', 'ownership_transfer',

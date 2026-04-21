@@ -73,8 +73,8 @@ PageSpace routes every model through the Vercel AI SDK across 12 providers:
 | Azure OpenAI | Models from your Azure deployment | Endpoint + key |
 | GLM | GLM-5, 4.7, 4.6, 4.5 Air | Your GLM key |
 | MiniMax | MiniMax M2.x models | Your MiniMax key |
-| Ollama (Local) | Models discovered from a local Ollama server | Self-hosted |
-| LM Studio (Local) | Models discovered from a running LM Studio server | Self-hosted |
+| Ollama | Models discovered from a local Ollama server | Local server URL |
+| LM Studio | Models discovered from a running LM Studio server | Local server URL |
 
 The full provider + model list lives in \`apps/web/src/lib/ai/core/ai-providers-config.ts\`. To configure a provider, go to **Settings > AI** and enter your key. You can set different providers per drive or per page.
 

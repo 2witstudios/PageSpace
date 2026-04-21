@@ -42,7 +42,7 @@ This section documents PageSpace's authentication system, permission model, and 
 
 ### Infrastructure
 
-- **Service-to-service auth** — internal services (web, realtime, processor) authenticate each other with opaque service tokens (\`ps_svc_*\`) issued by the web app, validated by the same \`sessionService\` that validates user sessions, and scoped to a specific resource and capability. No shared secrets.
+- **Service-to-service auth** — internal services (web, realtime, processor) authenticate each other with opaque service tokens (\`ps_svc_*\`) issued by the web app, validated by the same \`sessionService\` that validates user sessions, and scoped to a specific resource and capability.
 - **Tamper-evident audit log** — security events are written to \`security_audit_log\` with a SHA-256 hash chain over the prior event, serialized by a Postgres advisory lock.
 - **Distributed rate limiting** — Postgres-backed, works across multiple instances; fails closed in production.
 
@@ -52,19 +52,13 @@ This section documents PageSpace's authentication system, permission model, and 
 
 Page content, conversation messages, and file metadata are stored as plaintext in PostgreSQL. This is a deliberate choice — it enables full-text search, regex tools, and AI features without the latency of searchable encryption. API keys and credentials are always encrypted at rest; page content is not encrypted at the application layer.
 
-**Why**: PageSpace started as a local-first, self-hosted application where all data stays on your own hardware. Plaintext in your own Postgres instance enables powerful search and AI without the complexity of field-level encryption.
-
 **Mitigations in place**:
 
-- **Infrastructure encryption** — cloud deployments use volume-level encryption (e.g., AWS EBS, GCP persistent disk) so data is encrypted at rest at the storage layer, transparent to queries.
+- **Infrastructure encryption** — data is stored on volume-encrypted disks and transmitted over TLS.
 - **Access controls** — drive ownership, drive admin membership, and direct page permissions; every check hits the DB on every request.
-- **Backup encryption** — rely on your infrastructure provider's backup encryption.
+- **Backup encryption** — backups inherit the same volume-level encryption.
 - **Audit logging** — SHA-256 hash-chain log covers authentication, authorization, data access, and admin events.
-- **Network isolation** — realtime and processor run inside the Docker network; only web is exposed.
-
-**Self-hosted deployments**: You control encryption at rest at the infrastructure level. PostgreSQL TDE or volume-level encryption protects stored content while preserving search and AI functionality. Data never leaves your deployment boundary.
-
-**Cloud deployments**: On PageSpace Cloud, infrastructure-level encryption at rest is enabled. All data is stored in encrypted volumes and transmitted over TLS.
+- **Network isolation** — realtime and processor run on an internal network; only the web app is reachable from the public edge.
 
 ## Section Overview
 

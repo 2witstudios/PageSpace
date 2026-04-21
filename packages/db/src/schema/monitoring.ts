@@ -270,7 +270,6 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   'login',
   'logout',
   'signup',
-  'password_change',
   'email_change',
   'token_create',
   'token_revoke',

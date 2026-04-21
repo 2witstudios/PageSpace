@@ -113,7 +113,6 @@ const OPERATIONS = [
   "login",
   "logout",
   "signup",
-  "password_change",
   "email_change",
   "token_create",
   "token_revoke",

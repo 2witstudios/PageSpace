@@ -106,7 +106,7 @@ Source: \`packages/lib/src/auth/session-service.ts\`.
 
 ### Idle Timeout
 
-If \`SESSION_IDLE_TIMEOUT_MS\` is set, sessions are revoked on validation once \`now - lastUsedAt\` exceeds the configured window. Default: 15 minutes on-prem, disabled in cloud. HIPAA deployments should enable this.
+If \`SESSION_IDLE_TIMEOUT_MS\` is set, sessions are revoked on validation once \`now - lastUsedAt\` exceeds the configured window. Unset by default. HIPAA-style deployments should enable this.
 
 Source: \`packages/lib/src/auth/constants.ts\`.
 
@@ -163,7 +163,6 @@ Authentication and authorization events are written to \`security_audit_log\` wi
 | \`auth.session.created\` / \`auth.session.revoked\` | Session lifecycle |
 | \`auth.token.created\` / \`auth.token.revoked\` / \`auth.token.refreshed\` | Token issuance and device-token rotation |
 | \`auth.device.registered\` / \`auth.device.revoked\` | Device registration / removal |
-| \`auth.password.changed\` | Password-change flow (legacy accounts) |
 | \`security.rate.limited\` / \`security.brute.force.detected\` | Rate-limit hits and brute-force detection |
 | \`security.suspicious.activity\` / \`security.anomaly.detected\` | Device fingerprint anomalies and other signals |
 

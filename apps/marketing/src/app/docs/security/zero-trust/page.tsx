@@ -11,27 +11,25 @@ export const metadata = createMetadata({
 const content = `
 # Zero-Trust Architecture
 
-Every request is authenticated and authorized independently. Internal services do not trust network location, prior hops, or a shared secret — they validate the same kind of opaque token the browser sends, with scopes reduced to what the calling user actually has.
+Every request is authenticated and authorized independently. Internal services validate the same kind of opaque token the browser sends, with scopes reduced to what the calling user actually has. Network location and prior hops grant no trust.
 
 ## Token Architecture
 
-### Why Opaque Tokens
+Every authentication token is an opaque random string, hashed at rest, validated by database lookup.
 
-PageSpace migrated off JWTs. Every authentication token is now an opaque random string, hashed at rest, validated by database lookup.
-
-| Concern | JWT | Opaque token (current) |
-|---------|-----|------------------------|
-| Payload | Encoded claims, verifiable offline | Random string; claims come from the DB row |
-| Revocation | Blocklist or short expiry | Delete the row — effective on the next request |
-| Size | ~1 KB typical | ~60 bytes |
-| Theft of a valid token | Valid until expiry / cache flush | Revocable immediately; \`tokenVersion\` also invalidates all user sessions at once |
-| Storage | Not stored (stateless) | Only the SHA-256 hash is stored |
+| Property | Behavior |
+|---|---|
+| Payload | Random string; claims come from the DB row |
+| Revocation | Delete the row — effective on the next request |
+| Size | ~60 bytes |
+| Theft response | Revocable immediately; \`tokenVersion\` also invalidates all of a user's sessions at once |
+| Storage | Only the SHA-256 hash is stored |
 
 ### Token Generator
 
 The core generator lives at \`packages/lib/src/auth/opaque-tokens.ts\`. It produces tokens in the shape \`ps_{type}_{base64url}\` with 32 bytes (256 bits) of entropy, where \`{type}\` is one of \`sess\`, \`svc\`, \`mcp\`, or \`dev\`.
 
-Two other paths use their own generators for historical or technical reasons:
+Two paths use their own generators:
 
 | Token | Prefix | Generator | Entropy |
 |-------|--------|-----------|---------|
@@ -50,7 +48,7 @@ All tokens are:
 
 ## Service-to-Service Authentication
 
-Internal services — web, realtime, processor — authenticate each other with **opaque service tokens**, not shared secrets. There is no \`SERVICE_SECRET\` or equivalent environment variable in the repo.
+Internal services — web, realtime, processor — authenticate each other with **opaque service tokens** validated by the same \`sessionService\` that validates user sessions.
 
 ### How it works
 

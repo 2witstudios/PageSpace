@@ -181,7 +181,7 @@ AI_CHAT pages pin an \`enabledTools\` array. Behaviour:
 | \`[]\` | None. Agent chats but cannot act. |
 | \`["read_page", "regex_search"]\` | Exactly those, further filtered by read-only and web-search toggles. |
 
-Source: \`apps/web/src/app/api/ai/chat/route.ts\` (line comment: "null or [] = no tools enabled"). This differs from historical docs — an empty array is not a wildcard.
+Source: \`apps/web/src/app/api/ai/chat/route.ts\` (line comment: "null or [] = no tools enabled"). An empty array is not a wildcard.
 
 \`\`\`typescript
 // Content editor

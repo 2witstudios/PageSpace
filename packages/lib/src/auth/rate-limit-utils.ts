@@ -186,12 +186,6 @@ export const RATE_LIMIT_CONFIGS = {
     blockDurationMs: 60 * 60 * 1000, // 1 hour
     progressiveDelay: false
   },
-  PASSWORD_RESET: {
-    maxAttempts: 3,
-    windowMs: 60 * 60 * 1000, // 1 hour  
-    blockDurationMs: 60 * 60 * 1000, // 1 hour
-    progressiveDelay: false
-  },
   REFRESH: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000, // 5 minutes

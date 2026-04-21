@@ -11,7 +11,7 @@ export const metadata = createMetadata({
 const content = `
 # Permissions
 
-PageSpace resolves page access against three primitives, checked in order on every request. There is no permission cache; every check queries Postgres directly.
+PageSpace resolves page access against three primitives, checked in order on every request. Every check queries Postgres directly.
 
 Source: \`packages/lib/src/permissions/permissions.ts\`, \`packages/db/drizzle/0102_accessible_page_ids_for_user.sql\`, \`packages/db/src/schema/members.ts\`.
 
