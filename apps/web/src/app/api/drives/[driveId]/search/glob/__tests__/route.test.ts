@@ -113,7 +113,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       expect(response.status).toBe(401);
     });
 
-    it('should allow JWT authentication', async () => {
+    it('should allow session authentication', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 

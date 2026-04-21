@@ -357,16 +357,18 @@ describe('Tenant docker-compose configuration', () => {
 
     const redisEnvVars = ['REDIS_URL', 'REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'REDIS_PASSWORD'];
     const jwtEnvVars = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
-    const appServices = ['web', 'realtime', 'processor'] as const;
+    const servicesWithEnv = Object.keys(compose.services).filter(
+      (svc) => compose.services[svc].environment !== undefined,
+    );
 
-    it.each(appServices.flatMap(svc => redisEnvVars.map(v => [svc, v] as const)))(
+    it.each(servicesWithEnv.flatMap(svc => redisEnvVars.map(v => [svc, v] as const)))(
       'given the %s service, should NOT set %s (Redis was deprecated)',
       (svc, v) => {
         expect(getEnv(svc)).not.toHaveProperty(v);
       },
     );
 
-    it.each(appServices.flatMap(svc => jwtEnvVars.map(v => [svc, v] as const)))(
+    it.each(servicesWithEnv.flatMap(svc => jwtEnvVars.map(v => [svc, v] as const)))(
       'given the %s service, should NOT set %s (JWT is vestigial; auth uses opaque session tokens)',
       (svc, v) => {
         expect(getEnv(svc)).not.toHaveProperty(v);

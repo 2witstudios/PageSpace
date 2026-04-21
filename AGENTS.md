@@ -7,7 +7,7 @@
 - **Full-Stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
 - **Database**: PostgreSQL + Drizzle ORM (local deployment via Docker)
 - **AI**: Ollama (local models) + Vercel AI SDK + OpenRouter + Google AI SDK
-- **Auth**: Custom JWT-based authentication (local user management)
+- **Auth**: Passwordless — passkeys (WebAuthn) + magic links; opaque session tokens, SHA-256 hashed at rest
 - **File Storage**: Local filesystem with metadata in PostgreSQL
 - **Real-time**: Socket.IO for live collaboration
 - **Deployment**: Docker containers on Mac Studio (local deployment)
@@ -38,8 +38,7 @@ This project uses a pnpm workspace with the following structure:
 
 **Backend & Database:**
 - Drizzle ORM ^0.32.2 with PostgreSQL
-- Custom JWT authentication with jose ^6.0.11
-- bcryptjs ^3.0.2 for password hashing
+- Passwordless auth: `@simplewebauthn/server` for passkeys, magic-link tokens, opaque session tokens (SHA-256 hashed at rest)
 
 **AI & Real-time:**
 - Vercel AI SDK ^4.3.17
@@ -181,7 +180,7 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 
 ### 5.1. Core Infrastructure (5 agents)
 
-- **Authentication & Security Expert**: JWT tokens, CSRF protection, encryption, rate limiting, session management
+- **Authentication & Security Expert**: passkey/magic-link auth, opaque session tokens, CSRF protection, encryption, rate limiting, session management
 - **Database & Schema Expert**: Drizzle ORM, PostgreSQL, migrations, schema design, query optimization
 - **Permissions & Authorization Expert**: RBAC, drive membership, page permissions, access control logic
 - **Real-time Collaboration Expert**: Socket.IO, live sync, conflict resolution, event broadcasting

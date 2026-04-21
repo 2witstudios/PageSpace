@@ -93,16 +93,16 @@ const runtimeGraphCompact: GraphDefinition = {
       tone: 'data',
       position: { x: 640, y: 10 },
       width: 300,
-      height: 780,
+      height: 400,
     },
     {
       id: 'runtime-compact-external',
       title: 'External Contracts',
       subtitle: 'AI, billing, and Google integrations outside the repo.',
       tone: 'external',
-      position: { x: 640, y: 810 },
+      position: { x: 640, y: 430 },
       width: 300,
-      height: 620,
+      height: 600,
     },
   ],
   nodes: [
@@ -116,9 +116,9 @@ const runtimeGraphCompact: GraphDefinition = {
     { ...runtimeGraph.nodes.find((node) => node.id === 'cron')!, position: { x: 330, y: 810 }, width: 260 },
     { ...runtimeGraph.nodes.find((node) => node.id === 'postgres')!, position: { x: 670, y: 20 }, width: 250 },
     { ...runtimeGraph.nodes.find((node) => node.id === 'file-storage')!, position: { x: 670, y: 210 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'ai-providers')!, position: { x: 670, y: 470 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'stripe')!, position: { x: 670, y: 660 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'google-services')!, position: { x: 670, y: 850 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'ai-providers')!, position: { x: 670, y: 460 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'stripe')!, position: { x: 670, y: 650 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'google-services')!, position: { x: 670, y: 840 }, width: 250 },
   ],
 };
 

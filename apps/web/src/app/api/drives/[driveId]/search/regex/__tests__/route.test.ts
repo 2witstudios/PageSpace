@@ -114,7 +114,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       expect(response.status).toBe(401);
     });
 
-    it('should allow JWT authentication', async () => {
+    it('should allow session authentication', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(regexSearchPages).mockResolvedValue(createRegexSearchResponse());
 
