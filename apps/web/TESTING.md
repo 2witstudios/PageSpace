@@ -165,5 +165,3 @@ describe('My Feature', () => {
 ## Resources
 
 - [Vitest Documentation](https://vitest.dev/)
-- [Main Testing Guide](../../docs/testing/README.md)
-- [Test Coverage Requirements](../../docs/testing/README.md#coverage-targets)

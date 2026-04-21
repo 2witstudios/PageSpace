@@ -21,7 +21,6 @@ This project uses a pnpm workspace with the following structure:
 - `apps/processor`: Express-based file/OCR processing pipeline
 - `packages/db`: The centralized Drizzle ORM package containing database schema, migrations, and query logic
 - `packages/lib`: Shared utilities, types, and functions used across the monorepo
-- `docs/`: Design notes and documentation
 - `types/`: Global TypeScript types
 - `scripts/`: Helper scripts
 
@@ -219,8 +218,7 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 1. **Adding new API routes**: Follow Next.js 15 async params pattern (see Section 2.1)
 2. **Database changes**: Update schema in `packages/db`, generate migrations with `pnpm db:generate`
 3. **New components**: Follow existing patterns in `components/` directory
-4. **AI provider integration**: See `docs/3.0-guides-and-tools/adding-ai-provider.md`
-5. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
+4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
 
 ### 6.2. Commit & Pull Request Guidelines
 
