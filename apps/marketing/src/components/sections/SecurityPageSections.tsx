@@ -208,7 +208,7 @@ export function AuthenticationSection() {
             <h2 className="text-3xl font-bold mb-4">Authentication</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
               Passwordless by design: passkeys and magic links, with Google and Apple OAuth.
-              There's no password to phish, guess, or leak.
+              There&apos;s no password to phish, guess, or leak.
             </p>
           </div>
 
