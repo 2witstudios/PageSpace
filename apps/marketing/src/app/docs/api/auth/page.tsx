@@ -148,7 +148,7 @@ Return the current authenticated user.
 
 ### POST /api/auth/logout
 
-Revoke the current session. Clears \`session\` and \`csrf\` cookies and emits audit events.
+Revoke the current session. Clears the \`session\` cookie and emits audit events.
 
 ## Desktop and mobile
 
@@ -170,7 +170,7 @@ Exchange a one-time OAuth code (from the \`pagespace://auth-exchange?code=...\` 
 }
 \`\`\`
 
-Codes are one-time use with a 5-minute TTL. The session cookie is also set on the response.
+Codes are short-lived and one-time use. The session cookie is also set on the response.
 
 ---
 
@@ -190,7 +190,7 @@ Mobile-app variant of device-token refresh.
 
 ### GET /api/auth/socket-token
 
-Issue a short-lived (5 min) token for Socket.IO authentication. Required because the realtime service is cross-origin and cannot receive the SameSite=Strict session cookie.
+Issue a short-lived token for Socket.IO authentication. Required because the realtime service is cross-origin and cannot receive the SameSite=Strict session cookie.
 
 **Response:**
 \`\`\`json
@@ -201,7 +201,7 @@ Issue a short-lived (5 min) token for Socket.IO authentication. Required because
 
 ### POST /api/auth/ws-token
 
-Issue a long-lived WebSocket token (90 days) for desktop/mobile persistent connections. Rate limited to 10/min per user.
+Issue a long-lived WebSocket token for desktop/mobile persistent connections. Rate limited per user.
 
 **Response:**
 \`\`\`json

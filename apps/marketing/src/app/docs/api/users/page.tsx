@@ -29,7 +29,7 @@ Return the current user's core profile.
 }
 \`\`\`
 
-Role and verification state live on \`/api/auth/me\`. Avatars served through external HTTP URLs (e.g. Google) are normalized to \`null\` here — use \`/api/avatar/[userId]/[filename]\` for the canonical image path.
+Role and verification state live on \`/api/auth/me\`. The \`image\` field contains the current stored avatar URL when one is set; use \`/api/avatar/[userId]/[filename]\` for the canonical image path when serving an uploaded avatar.
 
 ---
 
@@ -78,7 +78,7 @@ Revoke one or more devices. Body:
 
 ### GET /api/account/export
 
-Return a signed download URL for a personal data export (async job).
+Stream a ZIP archive containing the caller's personal data export (GDPR Article 15/20). Rate limited to 1 export per 24 hours.
 
 ### Verification status
 

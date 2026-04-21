@@ -32,7 +32,7 @@ PageSpace organizes everything into **drives** and **pages**:
 - **Drives** are top-level workspaces. You can create multiple drives and invite members to each.
 - **Pages** are the universal content primitive. Everything is a page — documents, folders, AI chats, channels, task lists, sheets, canvases, code files, and uploaded files.
 
-Pages form a tree hierarchy. A document can live inside a folder, which lives inside another folder. This structure encodes meaning — AI and permissions both flow through the tree.
+Pages form a tree hierarchy. A document can live inside a folder, which lives inside another folder. This structure gives AI meaningful context; access is controlled by drive membership and explicit per-page permissions (no inheritance from parent folders).
 
 \`\`\`
 📁 Marketing/

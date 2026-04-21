@@ -13,7 +13,7 @@ const content = `
 
 CRUD operations on pages, along with hierarchy, permissions, bulk moves, agent configuration, exports, version history, tasks, and file processing.
 
-All routes accept session or MCP bearer auth unless noted. State-changing routes require \`x-csrf-token\` when called with a session cookie.
+All routes accept session or MCP bearer auth unless noted. Routes that use non-GET methods require \`x-csrf-token\` when called with a session cookie, including read-only POST routes such as \`POST /api/pages/tree\`.
 
 ## Page CRUD
 

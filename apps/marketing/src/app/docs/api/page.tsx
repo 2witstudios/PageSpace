@@ -27,11 +27,11 @@ export default function ApiIndexPage() {
     <div>
       <h1 className="text-3xl font-bold tracking-tight mb-4">API Reference</h1>
       <p className="text-lg text-muted-foreground mb-4">
-        PageSpace exposes a REST API under <code className="bg-muted px-1.5 py-0.5 rounded text-xs">/api</code>. Routes live in <code className="bg-muted px-1.5 py-0.5 rounded text-xs">apps/web/src/app/api/</code> and are implemented as Next.js 15 route handlers.
+        PageSpace exposes a REST API under <code className="bg-muted px-1.5 py-0.5 rounded text-xs">/api</code>, implemented as Next.js 15 route handlers.
       </p>
       <div className="text-sm text-muted-foreground mb-8 space-y-2">
         <p><strong>Base URL</strong>: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">https://pagespace.ai/api</code></p>
-        <p><strong>Authentication</strong>: opaque session cookies (web) or <code className="bg-muted px-1.5 py-0.5 rounded text-xs">Authorization: Bearer mcp_...</code> (MCP). A handful of public routes — <code className="bg-muted px-1.5 py-0.5 rounded text-xs">/contact</code>, OAuth callbacks, magic-link initiation — require no session.</p>
+        <p><strong>Authentication</strong>: opaque session cookies (web) or <code className="bg-muted px-1.5 py-0.5 rounded text-xs">Authorization: Bearer mcp_...</code> (MCP). A handful of public routes — <code className="bg-muted px-1.5 py-0.5 rounded text-xs">/api/contact</code>, OAuth callbacks, magic-link initiation — require no session.</p>
         <p><strong>CSRF</strong>: state-changing routes require a CSRF token fetched from <code className="bg-muted px-1.5 py-0.5 rounded text-xs">GET /api/auth/csrf</code> and sent in the <code className="bg-muted px-1.5 py-0.5 rounded text-xs">x-csrf-token</code> header.</p>
         <p><strong>Content-Type</strong>: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">application/json</code> except for uploads (<code className="bg-muted px-1.5 py-0.5 rounded text-xs">multipart/form-data</code>).</p>
       </div>

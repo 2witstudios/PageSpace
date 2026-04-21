@@ -41,7 +41,7 @@ Organizational containers for grouping pages.
 | Uploads | Drag-and-drop — files become child FILE pages |
 | Sorting | Manual drag-and-drop reordering |
 
-Folders are semantic — moving a page into a different folder changes its context for AI and permissions. The tree structure encodes meaning.
+Folders are semantic — moving a page into a different folder changes its context for AI and navigation. Access is resolved independently through drive membership and explicit page permissions.
 
 ## AI_CHAT
 
@@ -185,7 +185,7 @@ All page types compose into a single recursive tree:
     └── 📎 brief.pdf           (FILE)
 \`\`\`
 
-This recursive composition means any page type can be a child of any folder. The tree structure drives permissions, AI context, and navigation.
+This recursive composition means any page type can be a child of any folder. The tree drives AI context and navigation; permissions are resolved from drive membership and explicit per-page grants, not folder position.
 `;
 
 export default function PageTypesPage() {

@@ -78,7 +78,7 @@ export default function PrivacyPolicy() {
               <li><strong>Google AI (Gemini):</strong> direct API access with your key</li>
               <li><strong>xAI (Grok):</strong> direct API access with your key</li>
               <li><strong>Azure OpenAI, GLM, MiniMax:</strong> direct API access with your key</li>
-              <li><strong>Ollama and LM Studio:</strong> local-only — inference runs on your machine and no content leaves it</li>
+              <li><strong>Ollama and LM Studio:</strong> self-managed endpoints you configure; prompts and selected context are sent only to that configured server. When the endpoint is a local process, content stays on the machine running it — verify your deployment to confirm</li>
             </ul>
             <p className="mb-4">
               <strong>Important:</strong> When using AI services, we send your prompts and relevant context to AI providers to generate responses. We do not share your personal information or unrelated workspace data with AI providers.

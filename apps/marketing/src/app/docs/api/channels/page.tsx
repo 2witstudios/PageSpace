@@ -17,7 +17,7 @@ Real-time messaging on \`CHANNEL\` pages. New messages are persisted and broadca
 
 ### GET /api/channels/[pageId]/messages
 
-List messages in a channel, newest-first with cursor pagination.
+List messages in a channel with cursor pagination. Each response page is returned oldest-first for display; \`nextCursor\` fetches older messages.
 
 **Query params:**
 - \`limit\` — 1-200, default 50
@@ -34,7 +34,7 @@ List messages in a channel, newest-first with cursor pagination.
     "fileId": "string | null",
     "createdAt": "string",
     "user": { "id": "string", "name": "string", "image": "string | null" },
-    "file": { "id": "string", "mimeType": "string", "sizeBytes": 0 },
+    "file": "{ id, mimeType, sizeBytes } | null",
     "reactions": []
   }],
   "nextCursor": "ISO-date|id or null",
@@ -42,7 +42,7 @@ List messages in a channel, newest-first with cursor pagination.
 }
 \`\`\`
 
-Messages are returned oldest-first within each page for display. **Auth:** view permission on the page.
+**Auth:** view permission on the page.
 
 ---
 

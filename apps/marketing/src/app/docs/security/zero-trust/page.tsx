@@ -17,7 +17,7 @@ Every request is authenticated and authorized independently. Internal services v
 
 Every authentication token is a high-entropy opaque random string, hashed at rest, and validated by database lookup. Tokens carry no embedded claims — claims come from the database row. Revoking a token is a single-row delete that takes effect on the next request.
 
-Every secret comparison — session verification, magic-link verification, device-token lookup, CSRF verification, auth-header checks — goes through a timing-safe helper. The presented value is hashed before comparison, so length, prefix structure, and content differences cannot leak through timing.
+Presented authentication tokens are hashed before database lookup, so plaintext tokens are not stored or compared directly. Where direct secret comparisons are required (CSRF token verification, auth-header checks, device-token equality), PageSpace uses a timing-safe helper so length, prefix structure, and content differences cannot leak through timing.
 
 ## Service-to-Service Authentication
 
@@ -71,7 +71,7 @@ State-changing requests must present a CSRF token bound to the current session.
 
 1. Client calls \`GET /api/auth/csrf\`.
 2. Server validates the session cookie, then returns an HMAC-signed token that encodes the session reference.
-3. Client includes the token in subsequent POST / PATCH / DELETE requests (header or body).
+3. Client includes the token in subsequent POST / PATCH / DELETE requests using the \`x-csrf-token\` header.
 4. Server verifies the signature, confirms the token binds to the active session, and rejects mismatches.
 
 ## Outbound Request Safety (SSRF)
