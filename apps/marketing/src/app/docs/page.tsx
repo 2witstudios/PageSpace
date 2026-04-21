@@ -7,7 +7,7 @@ export const metadata = pageMetadata.docs;
 const sections = [
   {
     title: "Getting Started",
-    description: "Set up your workspace, understand core concepts, and explore all 9 page types.",
+    description: "Set up your workspace, understand core concepts, and work through the 9 built-in page types.",
     icon: Book,
     href: "/docs/getting-started",
     links: [
@@ -18,7 +18,7 @@ const sections = [
   },
   {
     title: "AI System",
-    description: "Multi-provider AI with contextual intelligence, 13+ workspace tools, and agent collaboration.",
+    description: "Multi-provider AI, 38 workspace tools, and agent-to-agent calls via ask_agent.",
     icon: Sparkles,
     href: "/docs/ai",
     links: [
@@ -84,7 +84,7 @@ export default function DocsPage() {
         Documentation
       </h1>
       <p className="text-lg text-muted-foreground mb-10">
-        Technical documentation for PageSpace — the AI-powered unified workspace. Covers the API, AI system, security model, self-hosting, and MCP integration.
+        Technical documentation for PageSpace. Covers the REST API, AI system, security model, self-hosting, and MCP integration.
       </p>
 
       <div className="grid gap-6 sm:grid-cols-2">

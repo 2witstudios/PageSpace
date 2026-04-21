@@ -46,16 +46,16 @@ This spatial-semantic model drives three systems:
 
 **Permissions flow downward.** If you own a drive, you own every page in it. Page-level permissions grant specific access to specific users on specific pages.
 
-**AI context flows upward.** An AI agent nested inside a folder can reference its sibling and parent pages. This means:
+**AI agents are location-aware.** An agent's system prompt is automatically populated with its drive, its breadcrumb path, and the page it lives on.
 
 \`\`\`
 📁 Marketing Campaign/
 ├── 📄 Brand Guidelines
 ├── 📄 Target Audience
-└── 🤖 Campaign AI          ← Can reference Brand Guidelines and Target Audience
+└── 🤖 Campaign AI          ← Knows its path is "Marketing Campaign / Campaign AI"
 \`\`\`
 
-The Campaign AI inherits context from its location. It knows about Brand Guidelines and Target Audience because they're siblings in the same folder. This context awareness is automatic — no configuration required.
+That path is the hook. To pull in Brand Guidelines or Target Audience, the agent calls workspace tools like \`list_pages\` or \`read_page\` — the tree tells it where to look; the tools fetch the content.
 
 ## 4. Drives Are the Root of Ownership
 
