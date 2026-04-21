@@ -53,6 +53,28 @@ function getCommonOptions(httpOnly = true) {
   };
 }
 
+let policyLogged = false;
+
+/**
+ * Log the resolved SameSite/domain cookie policy exactly once.
+ * Self-hosters who set NODE_ENV=production but forget COOKIE_DOMAIN silently
+ * get SameSite=Strict (no cross-subdomain auth); surface the choice so it's
+ * visible in deployment logs.
+ */
+function logCookiePolicyOnce(): void {
+  if (policyLogged) return;
+  policyLogged = true;
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  const sameSite = (isProduction && cookieDomain) ? 'Lax' : 'Strict';
+  console.info(
+    `[auth] cookie policy: SameSite=${sameSite} domain=${cookieDomain ?? 'unset'} ` +
+    `(NODE_ENV=${process.env.NODE_ENV ?? 'unset'}, COOKIE_DOMAIN=${cookieDomain ? 'set' : 'unset'})`,
+  );
+}
+
+logCookiePolicyOnce();
+
 /**
  * Create a session cookie string
  *
