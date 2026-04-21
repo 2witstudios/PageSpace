@@ -3,44 +3,134 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Auth API",
-  description: "PageSpace authentication API routes: OAuth, passkeys, magic links, session management, CSRF, and MCP token management.",
+  description: "PageSpace authentication API: passkeys, magic links, Google and Apple OAuth, sessions, CSRF, device and realtime tokens, and MCP tokens.",
   path: "/docs/api/auth",
-  keywords: ["API", "authentication", "OAuth", "passkeys", "magic links", "MCP tokens"],
+  keywords: ["API", "authentication", "passkeys", "magic links", "OAuth", "MCP tokens"],
 });
 
 const content = `
 # Auth API
 
-Authentication routes for passkeys, magic links, OAuth, session management, and MCP tokens.
+PageSpace uses passwordless authentication: **passkeys (WebAuthn)** or **magic links** for primary sign-in, with **Google** and **Apple** OAuth as alternative flows. Sessions are opaque 32-byte tokens stored in an httpOnly \`session\` cookie; only the SHA-256 hash is persisted. There are no JWTs, access tokens, or refresh tokens for web sessions.
 
-## Core Authentication
+## CSRF
+
+### GET /api/auth/csrf
+
+Issue a CSRF token bound to the current session. Required for any state-changing request with session auth.
+
+**Response:**
+\`\`\`json
+{ "csrfToken": "string" }
+\`\`\`
+
+Send the token in the \`x-csrf-token\` header on POST/PATCH/DELETE. Bearer (\`Authorization: Bearer mcp_...\`) calls skip CSRF.
+
+---
+
+### GET /api/auth/login-csrf
+
+Issue a CSRF token for the unauthenticated login flow. Returns the token value and sets a \`login_csrf\` cookie. Used by magic-link send.
+
+## Magic link
 
 ### POST /api/auth/magic-link/send
 
-Send a magic link to an email address for passwordless sign-in.
+Send a magic link email for passwordless sign-in.
+
+**Headers:** \`x-login-csrf-token\` matching the \`login_csrf\` cookie (from \`GET /api/auth/login-csrf\`).
 
 **Body:**
 \`\`\`json
-{ "email": "string" }
+{
+  "email": "string",
+  "platform": "web | desktop",
+  "deviceId": "string (required when platform=desktop)",
+  "deviceName": "string (required when platform=desktop)"
+}
 \`\`\`
 
-**Response:** Success message. Sends email with one-time sign-in link.
-
-**Security:** Rate limited by IP and email.
+**Security:** Rate limited per IP and email.
 
 ---
 
-### POST /api/auth/logout
+### GET /api/auth/magic-link/verify?token=...
 
-Log out and invalidate session.
+Consume a magic link. On success, issues a session cookie and redirects. Desktop-scoped links return an exchange code for \`/api/auth/desktop/exchange\`.
 
-**Side effects:** Deletes refresh token, clears cookies, logs event.
+## Passkeys (WebAuthn)
+
+Passkey flows use two steps: fetch a challenge from \`.../options\`, then submit the signed attestation or assertion.
+
+### Registration (existing user)
+
+| Route | Purpose |
+|---|---|
+| \`POST /api/auth/passkey/register/options\` | Generate registration challenge |
+| \`POST /api/auth/passkey/register\` | Verify attestation, store credential |
+| \`POST /api/auth/passkey/register/handoff\` | Hand off a pending registration between devices |
+
+### Authentication
+
+| Route | Purpose |
+|---|---|
+| \`POST /api/auth/passkey/authenticate/options\` | Generate authentication challenge |
+| \`POST /api/auth/passkey/authenticate\` | Verify assertion, issue session |
+
+### Signup with passkey (new account)
+
+| Route | Purpose |
+|---|---|
+| \`POST /api/auth/signup-passkey/options\` | Registration challenge for new account |
+| \`POST /api/auth/signup-passkey\` | Create account and passkey atomically |
+
+### Passkey management
+
+| Route | Method | Purpose |
+|---|---|---|
+| \`/api/auth/passkey\` | GET | List current user's passkeys |
+| \`/api/auth/passkey/[passkeyId]\` | PATCH | Rename a passkey (\`{ "name": "string" }\`) |
+| \`/api/auth/passkey/[passkeyId]\` | DELETE | Delete a passkey |
+
+Management routes require a valid session + \`x-csrf-token\`.
+
+## OAuth
+
+### Google
+
+| Route | Method | Purpose |
+|---|---|---|
+| \`/api/auth/google/signin\` | GET, POST | Start OAuth redirect. POST accepts \`{ "returnUrl": "string" }\`. |
+| \`/api/auth/google/callback\` | GET | OAuth callback. Creates or links the account and sets the session cookie. |
+| \`/api/auth/google/native\` | POST | Exchange a native Google ID token (mobile). |
+| \`/api/auth/google/one-tap\` | POST | Exchange a Google One Tap credential on the web. |
+| \`/api/auth/mobile/oauth/google/exchange\` | POST | Mobile-app Google token exchange. |
+
+### Apple
+
+| Route | Method | Purpose |
+|---|---|---|
+| \`/api/auth/apple/signin\` | GET, POST | Start Apple OAuth redirect. |
+| \`/api/auth/apple/callback\` | POST | Apple OAuth form-post callback. |
+| \`/api/auth/apple/native\` | POST | Exchange a native Apple identity token (mobile). |
+
+## Email verification
+
+### GET /api/auth/verify-email?token=...
+
+Consume an email-verification token. Redirects with a status query param.
 
 ---
+
+### POST /api/auth/resend-verification
+
+Resend the verification email for the currently authenticated user.
+
+## Session
 
 ### GET /api/auth/me
 
-Get the current authenticated user's profile.
+Return the current authenticated user.
 
 **Response:**
 \`\`\`json
@@ -48,56 +138,93 @@ Get the current authenticated user's profile.
   "id": "string",
   "name": "string",
   "email": "string",
+  "image": "string | null",
   "role": "user | admin",
-  "provider": "email | google | both",
-  "currentAiProvider": "string",
-  "currentAiModel": "string"
+  "emailVerified": "string | null"
 }
 \`\`\`
 
 ---
 
-### POST /api/auth/refresh
+### POST /api/auth/logout
 
-Refresh the session using a one-time refresh token. Implements token rotation.
+Revoke the current session. Clears \`session\` and \`csrf\` cookies and emits audit events.
 
-**Security:** Rate limited. Detects token reuse (potential theft) and invalidates all sessions.
+## Desktop and mobile
 
----
+### POST /api/auth/desktop/exchange
 
-### GET /api/auth/csrf
-
-Generate a CSRF token for the current session.
-
-**Response:**
-\`\`\`json
-{ "csrfToken": "string" }
-\`\`\`
-
-## OAuth
-
-### GET, POST /api/auth/google/signin
-
-Initiate Google OAuth flow. POST accepts an optional \`returnUrl\`.
-
-**Response:** Redirects to Google authorization URL.
-
----
-
-### GET /api/auth/google/callback
-
-Handle Google OAuth callback. Creates or links user account, sets authentication cookies.
-
-## MCP Tokens
-
-### POST /api/auth/mcp-tokens
-
-Create a new MCP token for API access.
+Exchange a one-time OAuth code (from the \`pagespace://auth-exchange?code=...\` deep link) for tokens.
 
 **Body:**
 \`\`\`json
-{ "name": "string" }
+{ "code": "string" }
 \`\`\`
+
+**Response:**
+\`\`\`json
+{
+  "sessionToken": "string",
+  "csrfToken": "string",
+  "deviceToken": "string"
+}
+\`\`\`
+
+Codes are one-time use with a 5-minute TTL. The session cookie is also set on the response.
+
+---
+
+### POST /api/auth/device/register
+
+Register a long-lived device token for a desktop or mobile client.
+
+### POST /api/auth/device/refresh
+
+Rotate a device token. Desktop and mobile clients use this instead of a web session.
+
+### POST /api/auth/mobile/refresh
+
+Mobile-app variant of device-token refresh.
+
+## Realtime tokens
+
+### GET /api/auth/socket-token
+
+Issue a short-lived (5 min) token for Socket.IO authentication. Required because the realtime service is cross-origin and cannot receive the SameSite=Strict session cookie.
+
+**Response:**
+\`\`\`json
+{ "token": "ps_sock_...", "expiresAt": "string" }
+\`\`\`
+
+---
+
+### POST /api/auth/ws-token
+
+Issue a long-lived WebSocket token (90 days) for desktop/mobile persistent connections. Rate limited to 10/min per user.
+
+**Response:**
+\`\`\`json
+{ "token": "string" }
+\`\`\`
+
+## MCP tokens
+
+MCP tokens authenticate programmatic access from external tools (Claude Desktop, Cursor, \`pagespace-mcp\`). Tokens are prefixed \`mcp_\` and only the SHA-256 hash is stored.
+
+### POST /api/auth/mcp-tokens
+
+Create a new MCP token.
+
+**Body:**
+\`\`\`json
+{
+  "name": "string",
+  "driveIds": ["string"]
+}
+\`\`\`
+
+\`driveIds\` is optional. When present and non-empty, the token is scoped to those drives and cannot create new drives. The user must own or be a member of every drive in the list.
 
 **Response:**
 \`\`\`json
@@ -105,17 +232,19 @@ Create a new MCP token for API access.
   "id": "string",
   "name": "string",
   "token": "mcp_...",
-  "createdAt": "string"
+  "createdAt": "string",
+  "lastUsed": null,
+  "driveScopes": [{ "id": "string", "name": "string" }]
 }
 \`\`\`
 
-The \`token\` value is only returned once at creation.
+The raw \`token\` value is returned once and never persisted.
 
 ---
 
 ### GET /api/auth/mcp-tokens
 
-List all MCP tokens for the current user (without token values).
+List the current user's non-revoked MCP tokens.
 
 **Response:**
 \`\`\`json
@@ -124,7 +253,8 @@ List all MCP tokens for the current user (without token values).
   "name": "string",
   "lastUsed": "string | null",
   "createdAt": "string",
-  "revokedAt": "string | null"
+  "isScoped": true,
+  "driveScopes": [{ "id": "string", "name": "string" }]
 }]
 \`\`\`
 
@@ -132,7 +262,7 @@ List all MCP tokens for the current user (without token values).
 
 ### DELETE /api/auth/mcp-tokens/[tokenId]
 
-Revoke a specific MCP token. The user must own the token.
+Revoke the specified MCP token. The caller must own the token.
 `;
 
 export default function AuthApiPage() {
