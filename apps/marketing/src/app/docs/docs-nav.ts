@@ -6,7 +6,6 @@ import {
   Wrench,
   Server,
   Monitor,
-  Code2,
   Shield,
   KeyRound,
   Users,
@@ -17,10 +16,13 @@ import {
   Blocks,
   MessageSquare,
   Search,
-  UserCog,
   Lightbulb,
   ListChecks,
   Upload,
+  Folder,
+  Palette,
+  Table,
+  Code,
 } from "lucide-react";
 
 export interface NavItem {
@@ -52,11 +54,16 @@ export const docsNav: NavSection[] = [
     items: [
       { title: "Overview", href: "/docs/how-it-works", icon: Lightbulb },
       { title: "Pages", href: "/docs/how-it-works/pages", icon: FileText },
-      { title: "Drives & Workspaces", href: "/docs/how-it-works/drives", icon: HardDrive },
+      { title: "Documents", href: "/docs/how-it-works/documents", icon: FileText },
+      { title: "Folders", href: "/docs/how-it-works/folders", icon: Folder },
       { title: "AI in your Workspace", href: "/docs/how-it-works/ai", icon: Sparkles },
       { title: "Channels", href: "/docs/how-it-works/channels", icon: MessageSquare },
       { title: "Task Lists", href: "/docs/how-it-works/task-lists", icon: ListChecks },
+      { title: "Sheets", href: "/docs/how-it-works/sheets", icon: Table },
+      { title: "Canvas", href: "/docs/how-it-works/canvas", icon: Palette },
+      { title: "Code", href: "/docs/how-it-works/code", icon: Code },
       { title: "Files & Uploads", href: "/docs/how-it-works/files", icon: Upload },
+      { title: "Drives & Workspaces", href: "/docs/how-it-works/drives", icon: HardDrive },
       { title: "Search", href: "/docs/how-it-works/search", icon: Search },
       { title: "Sharing & Permissions", href: "/docs/how-it-works/sharing", icon: Users },
       { title: "Accounts & Sign In", href: "/docs/how-it-works/accounts", icon: KeyRound },
@@ -78,22 +85,6 @@ export const docsNav: NavSection[] = [
     items: [
       { title: "MCP Overview", href: "/docs/mcp", icon: Server },
       { title: "Desktop MCP", href: "/docs/mcp/desktop", icon: Monitor },
-    ],
-  },
-  {
-    title: "API Reference",
-    icon: Code2,
-    items: [
-      { title: "API Overview", href: "/docs/api", icon: Code2 },
-      { title: "Authentication", href: "/docs/api/auth", icon: KeyRound },
-      { title: "Pages", href: "/docs/api/pages", icon: FileText },
-      { title: "Drives", href: "/docs/api/drives", icon: HardDrive },
-      { title: "AI", href: "/docs/api/ai", icon: Sparkles },
-      { title: "Channels", href: "/docs/api/channels", icon: MessageSquare },
-      { title: "MCP", href: "/docs/api/mcp", icon: Server },
-      { title: "Files", href: "/docs/api/files", icon: FileText },
-      { title: "Search", href: "/docs/api/search", icon: Search },
-      { title: "Users", href: "/docs/api/users", icon: UserCog },
     ],
   },
   {

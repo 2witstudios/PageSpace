@@ -131,9 +131,9 @@ Members can collaborate in real-time on documents, channels, and AI conversation
 ## Next Steps
 
 - **[Core Concepts](/docs/core-concepts)** — pages as primitives, context inheritance, the tree model
-- **[Page Types](/docs/page-types)** — the 9 built-in page types in detail
-- **[AI System](/docs/ai)** — multi-provider AI, tool calling, and agents
-- **[API Reference](/docs/api)** — the PageSpace REST API
+- **[How it Works](/docs/how-it-works)** — feature-by-feature plain-language reference
+- **[Page Types](/docs/page-types)** — the 9 built-in page types at a glance
+- **[MCP Integration](/docs/mcp)** — connect Claude Desktop, Cursor, or your own MCP client
 `;
 
 export default function GettingStartedPage() {

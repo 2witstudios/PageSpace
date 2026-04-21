@@ -1,24 +1,13 @@
 import Link from "next/link";
-import { ArrowRight, Book, Lightbulb, Sparkles, Server, Code2, Shield } from "lucide-react";
+import { ArrowRight, Book, Lightbulb, LayoutGrid, Server, Shield } from "lucide-react";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.docs;
 
-const sections = [
-  {
-    title: "Getting Started",
-    description: "Set up your workspace, understand core concepts, and work through the 9 built-in page types.",
-    icon: Book,
-    href: "/docs/getting-started",
-    links: [
-      { title: "Quick Start", href: "/docs/getting-started" },
-      { title: "Core Concepts", href: "/docs/core-concepts" },
-      { title: "Page Types", href: "/docs/page-types" },
-    ],
-  },
+const referenceSections = [
   {
     title: "How it Works",
-    description: "Plain-language feature reference — what each feature does, how it works, and what it doesn't do.",
+    description: "Plain-language reference for every feature — what each one does, how it works, and what it doesn't do.",
     icon: Lightbulb,
     href: "/docs/how-it-works",
     links: [
@@ -29,20 +18,17 @@ const sections = [
     ],
   },
   {
-    title: "AI System",
-    description: "Multi-provider AI, 38 workspace tools, and agent-to-agent calls via ask_agent.",
-    icon: Sparkles,
-    href: "/docs/ai",
+    title: "Page Types",
+    description: "The 9 built-in page types at a glance — documents, folders, AI chats, channels, canvases, sheets, task lists, code, and files.",
+    icon: LayoutGrid,
+    href: "/docs/page-types",
     links: [
-      { title: "AI Overview", href: "/docs/ai" },
-      { title: "Providers & Models", href: "/docs/ai/providers" },
-      { title: "Tool Calling", href: "/docs/ai/tool-calling" },
-      { title: "Agents", href: "/docs/ai/agents" },
+      { title: "Overview", href: "/docs/page-types" },
     ],
   },
   {
     title: "MCP Integration",
-    description: "Connect external AI tools to PageSpace or add local MCP servers to the desktop app.",
+    description: "Connect Claude Desktop, Cursor, or your own MCP client to your PageSpace workspace.",
     icon: Server,
     href: "/docs/mcp",
     links: [
@@ -51,21 +37,8 @@ const sections = [
     ],
   },
   {
-    title: "API Reference",
-    description: "Complete REST API documentation for authentication, pages, drives, AI, and more.",
-    icon: Code2,
-    href: "/docs/api",
-    links: [
-      { title: "API Overview", href: "/docs/api" },
-      { title: "Auth", href: "/docs/api/auth" },
-      { title: "Pages", href: "/docs/api/pages" },
-      { title: "Drives", href: "/docs/api/drives" },
-      { title: "AI", href: "/docs/api/ai" },
-    ],
-  },
-  {
     title: "Security & Auth",
-    description: "Opaque session tokens, RBAC permissions, and zero-trust architecture.",
+    description: "How authentication, permissions, and session handling work — for procurement and curious users.",
     icon: Shield,
     href: "/docs/security",
     links: [
@@ -84,11 +57,40 @@ export default function DocsPage() {
         Documentation
       </h1>
       <p className="text-lg text-muted-foreground mb-10">
-        Documentation for PageSpace — a plain-language feature reference, the REST API, the AI system, the security model, and MCP integration.
+        How PageSpace works, how to use it, how to connect your AI tools to it, and how we handle your data.
       </p>
 
+      <div className="relative rounded-xl border border-primary/30 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent p-8 mb-6 overflow-hidden">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/15 text-primary">
+            <Book className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-xs uppercase tracking-wider text-primary font-semibold mb-0.5">Start here</div>
+            <h2 className="text-xl font-semibold">Getting Started</h2>
+          </div>
+        </div>
+        <p className="text-muted-foreground mb-4 max-w-2xl">
+          New to PageSpace? Set up your workspace, learn the core concepts, and meet the page types that make everything tick.
+        </p>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <Link
+            href="/docs/getting-started"
+            className="group inline-flex items-center gap-1.5 font-medium text-primary hover:gap-2 transition-all"
+          >
+            Quick Start <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+          <Link
+            href="/docs/core-concepts"
+            className="text-muted-foreground hover:text-primary transition-colors"
+          >
+            Core Concepts
+          </Link>
+        </div>
+      </div>
+
       <div className="grid gap-6 sm:grid-cols-2">
-        {sections.map((section) => {
+        {referenceSections.map((section) => {
           const Icon = section.icon;
           return (
             <div

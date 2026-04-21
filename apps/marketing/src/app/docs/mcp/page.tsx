@@ -28,8 +28,6 @@ Tokens authenticate as your user. Every operation runs with your permissions; dr
 3. Copy the token. It starts with \`mcp_\` and is shown **once** — only the SHA-256 hash is stored server-side.
 4. Optionally scope the token to specific drives. Scoped tokens cannot create new drives.
 
-See the [Auth API](/docs/api/auth#mcp-tokens) for programmatic token management (\`POST/GET/DELETE /api/auth/mcp-tokens\`).
-
 ## Step 2: Configure your AI tool
 
 The config format follows the standard MCP \`mcpServers\` schema:
