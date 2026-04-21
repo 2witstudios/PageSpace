@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "AI Agents",
-  description: "Create custom AI agents in PageSpace with system prompts, tool configuration, agent roles, and agent-to-agent communication.",
+  description: "Configure AI agents in PageSpace: system prompts, tool sets, read-only and web-search toggles, context inheritance, and agent-to-agent consultation.",
   path: "/docs/ai/agents",
   keywords: ["AI agents", "custom agents", "system prompts", "agent communication", "ask_agent"],
 });
@@ -11,26 +11,29 @@ export const metadata = createMetadata({
 const content = `
 # Agents
 
-AI agents in PageSpace are \`AI_CHAT\` pages with custom configuration. Each agent has its own system prompt, tool set, model, and role — turning it into a specialized assistant for a specific domain.
+An agent is an AI_CHAT page with a custom configuration. Each agent is a specialized assistant: its own system prompt, tool set, provider, model, and toggles — all scoped to the page's place in the drive tree.
 
-## Creating an Agent
+## Creating an agent
 
-1. Create an \`AI_CHAT\` page (right-click > New AI Chat, or via the API)
-2. Open the agent's settings panel
-3. Configure:
+1. Create an AI_CHAT page: right-click in the sidebar → **New AI Chat**, or use the API (below).
+2. Open the page's settings panel.
+3. Configure the fields below.
 
-| Setting | Description |
-|---------|-------------|
-| System Prompt | Custom instructions that define the agent's behavior and expertise |
-| Enabled Tools | Which of the 13+ workspace tools this agent can use |
-| AI Provider | Which provider powers this agent (overrides drive/user default) |
-| AI Model | Which model to use (overrides drive/user default) |
-| Agent Role | PARTNER, PLANNER, or WRITER |
+| Setting | Effect |
+|---|---|
+| System Prompt | Custom instructions on behavior, expertise, and output format. |
+| Enabled Tools | Array of tool names the agent may call. See below. |
+| Read-only mode | Strips every write tool (create / edit / delete / send). |
+| Web search enabled | Adds \`web_search\` to the tool set. Off by default. |
+| AI Provider | Overrides the drive / user default for this page. |
+| AI Model | Overrides the drive / user default for this page. |
+| Include drive prompt | Prepends the drive's AI context to the system prompt. |
+| Include page tree | Injects a tree snapshot of the page's children or drive. |
 
 ### Via API
 
 \`\`\`typescript
-// Step 1: Create the AI_CHAT page
+// Step 1: create the AI_CHAT page
 POST /api/pages
 {
   "driveId": "drive-123",
@@ -39,47 +42,55 @@ POST /api/pages
   "parentId": "project-folder-id"
 }
 
-// Step 2: Configure the agent
+// Step 2: configure the agent
 PATCH /api/pages/{pageId}/agent-config
 {
   "systemPrompt": "You are a research assistant specializing in market analysis. Always cite sources and provide data-driven insights.",
   "enabledTools": ["read_page", "regex_search", "glob_search", "multi_drive_search"],
   "aiProvider": "anthropic",
-  "aiModel": "claude-sonnet-4-20250514"
+  "aiModel": "claude-sonnet-4-6-20260217"
 }
 \`\`\`
 
-## Agent Roles
+## Read-only mode and web search
 
-Three built-in roles define the agent's baseline capabilities:
+PageSpace runs one unified system prompt for every agent. Two runtime toggles on the page decide what that agent can actually do.
 
-### PARTNER
+- **Read-only** — appends a READ-ONLY constraint to the system prompt and strips every write tool. Use for research, planning, and analysis agents that must not touch content.
+- **Web search** — adds \`web_search\`. Off by default so agents stay inside the workspace unless you opt in.
 
-The default role. Full read/write/delete capabilities with balanced conversation style.
+\`\`\`typescript
+// Analysis agent: cannot modify anything
+isReadOnly: true
+webSearchEnabled: false
+enabledTools: ["list_pages", "read_page", "regex_search", "glob_search", "multi_drive_search"]
 
-- All tools available
-- Creates, edits, and organizes content
-- Best for: General-purpose AI assistants
+// Research agent that also hits the web
+isReadOnly: true
+webSearchEnabled: true
+enabledTools: ["list_pages", "read_page", "multi_drive_search", "web_search"]
 
-### PLANNER
+// Full-authority project agent
+isReadOnly: false
+webSearchEnabled: false
+enabledTools: ["list_pages", "read_page", "create_page", "rename_page", "move_page", "replace_lines", "update_task", "ask_agent"]
+\`\`\`
 
-Read-only strategic planning role. Cannot modify workspace content.
+## enabledTools is an allow-list
 
-- Read and search tools only
-- Analyzes, plans, and recommends
-- Best for: Strategy, analysis, planning without accidental modifications
+| \`enabledTools\` | Tools available at runtime |
+|---|---|
+| \`null\` | None — agent chats but cannot act. |
+| \`[]\` | None — same as \`null\`. |
+| \`["tool_a", "tool_b"]\` | Exactly those, then filtered by read-only and web-search toggles. |
 
-### WRITER
+Empty means empty. To give an agent everything, list every tool explicitly.
 
-Execution-focused role with minimal conversation. Writes and creates efficiently.
+The 37 tool names live in [Tool Calling](/docs/ai/tool-calling).
 
-- Read, write, create, update, delete tools
-- Concise responses, focuses on output
-- Best for: Content generation, batch operations, automated workflows
+## Context inheritance
 
-## Context Inheritance
-
-Agents understand their position in the workspace hierarchy:
+An agent sees the same page tree its caller sees. Position in the tree decides default scope:
 
 \`\`\`
 📁 Website Redesign/
@@ -87,100 +98,72 @@ Agents understand their position in the workspace hierarchy:
 ├── 📄 User Research
 ├── 📁 UI Components/
 │   ├── 📄 Button Spec
-│   └── 🤖 UI Design AI     ← Knows about UI Components, can reference parent docs
-└── 🤖 Project AI            ← Knows about entire project
+│   └── 🤖 UI Design AI     ← scoped to UI Components, can reach parent docs via tools
+└── 🤖 Project AI            ← scoped to Website Redesign
 \`\`\`
 
-- **Project AI** sees all documents in the Website Redesign folder
-- **UI Design AI** has focused context on UI Components and can reference parent-level documents
+Every tool call carries \`locationContext\` with the current drive, current page, and breadcrumbs. When the user says "here", the agent resolves it against this context instead of guessing.
 
-No configuration is needed — context is automatic based on the page's position in the tree.
+Optional flags expand the context further:
 
-## Agent-to-Agent Communication
+- \`includeDrivePrompt: true\` — prepend the drive's AI prompt to the agent's system prompt.
+- \`includePageTree: true\` with \`pageTreeScope: "children"\` or \`"drive"\` — inject a tree snapshot of the relevant subtree.
 
-The \`ask_agent\` tool enables agents to consult each other:
+## Agent-to-agent consultation
+
+An agent can call another agent with \`ask_agent\`:
 
 \`\`\`typescript
-// Marketing AI asks the Finance AI about budget
 ask_agent({
   agentId: "page-ai-finance-456",
   agentPath: "/finance/Budget Analyst",
   question: "What's our Q4 budget for marketing campaigns?",
-  context: "Planning new social media campaign"
+  context: "Planning new social media campaign",
+  conversationId: undefined  // omit to start fresh, pass to continue
 })
 \`\`\`
 
-### How It Works
+What happens, in order:
 
-1. Agent A calls \`ask_agent\` with a question and target agent
-2. PageSpace loads the target agent's conversation history and system prompt
-3. The question is sent to the target agent's configured model
-4. The response is returned to Agent A, which incorporates it into its own response
+1. Target agent is verified — must be AI_CHAT, not trashed, and visible to the calling user.
+2. If a \`conversationId\` is passed, the persisted history is loaded; otherwise a new conversation is started.
+3. The target agent runs with its own system prompt, provider, model, and \`enabledTools\` — but uses the caller's permissions.
+4. The user's question and the assistant's response are persisted under the target page.
+5. The response, the new or reused \`conversationId\`, and metadata (provider, model, call depth, tool-call count) return to the caller.
 
-### Depth Control
+### Depth limit
 
-Agent communication includes depth tracking to prevent infinite loops:
+Chain depth is tracked on the execution context and capped to prevent runaway agent-calling-agent loops.
 
-- Maximum depth: **2 levels** (Agent A → Agent B)
-- Each nested call increments a depth counter
-- Exceeding the limit returns an error instead of making another call
-
-### Multi-Agent Discovery
-
-Agents can discover other agents across the workspace:
+### Discovering agents
 
 \`\`\`typescript
-// Find all agents in a specific drive
 list_agents({ driveId: "drive-123" })
 
-// Find all agents across all accessible drives
 multi_drive_list_agents({
   groupByDrive: true,
   includeTools: true
 })
 \`\`\`
 
-## Custom Tool Sets
+By default an agent is visible to the global assistant; flip \`visibleToGlobalAssistant: false\` on a page to hide it from cross-drive discovery.
 
-Beyond role-based filtering, you can specify exactly which tools an agent can use:
+## Multi-user conversations
 
-\`\`\`typescript
-// Content editor — only reads and edits
-enabledTools: ["read_page", "replace_lines"]
+AI_CHAT pages support multiple users at once.
 
-// Research analyst — only searches
-enabledTools: ["read_page", "regex_search", "glob_search", "multi_drive_search"]
+- User A sends a message → persisted, then broadcast to every connected user on the page.
+- Assistant response streams over the real-time channel to all viewers.
+- Every user message is attributed to its sender; assistant messages are unattributed.
+- The agent sees the entire multi-user thread as it composes each reply.
 
-// Project manager — creates and manages tasks
-enabledTools: ["create_page", "read_page", "update_task", "list_pages", "ask_agent"]
+## Best practices
 
-// Full autonomy — all tools
-enabledTools: [] // Empty = use role-based defaults (all tools for PARTNER)
-\`\`\`
-
-## Multi-User Conversations
-
-AI agent conversations support multiple users simultaneously:
-
-- **User A** sends a message → saved to database → broadcast to all users
-- **AI responds** → response visible to both users in real-time
-- **User B** can continue the conversation
-- All messages are attributed to their sender
-- The AI sees the complete multi-user context
-
-This makes agents effective for team collaboration, not just individual use.
-
-## Best Practices
-
-1. **Specific system prompts**: The more specific your prompt, the better the agent performs. Include domain knowledge, preferred response format, and constraints.
-
-2. **Minimal tool sets**: Give agents only the tools they need. A research agent doesn't need \`create_page\` or \`trash\`.
-
-3. **Hierarchical placement**: Place agents near the content they need. An agent in a project folder automatically understands that project.
-
-4. **Agent specialization**: Create multiple focused agents rather than one general-purpose agent. Use \`ask_agent\` for cross-domain questions.
-
-5. **Model matching**: Use powerful models (Claude Opus, GPT-5) for complex reasoning tasks and faster models (Gemini Flash, GPT-4.1 mini) for simple tasks.
+1. **Be specific in system prompts.** Domain knowledge, response format, and constraints all belong here.
+2. **Prefer smaller tool sets.** A research agent doesn't need \`create_page\` or \`trash\`. Fewer tools means fewer ways to go wrong and a smaller effective prompt.
+3. **Place agents where their context lives.** An agent in a project folder automatically sees that project.
+4. **Specialize.** Multiple focused agents, coordinated via \`ask_agent\`, beat one monolithic agent.
+5. **Match model to task.** Use larger reasoning models for planning and synthesis; lean on fast / cheap models for straightforward edits.
 `;
 
 export default function AgentsPage() {

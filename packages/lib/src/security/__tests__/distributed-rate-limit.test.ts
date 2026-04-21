@@ -449,11 +449,6 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.SIGNUP.windowMs).toBe(60 * 60 * 1000);
     });
 
-    it('PASSWORD_RESET allows 3 attempts per hour', () => {
-      expect(DISTRIBUTED_RATE_LIMITS.PASSWORD_RESET.maxAttempts).toBe(3);
-      expect(DISTRIBUTED_RATE_LIMITS.PASSWORD_RESET.windowMs).toBe(60 * 60 * 1000);
-    });
-
     it('REFRESH allows more attempts in shorter window', () => {
       expect(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts).toBe(10);
       expect(DISTRIBUTED_RATE_LIMITS.REFRESH.windowMs).toBe(5 * 60 * 1000);

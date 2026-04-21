@@ -68,13 +68,17 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">4. Third-Party AI Services</h2>
             <p className="mb-4">
-              When you use AI features, we work with external AI providers:
+              When you use AI features, we work with external AI providers, each subject to that provider&apos;s own privacy policy. Supported providers include:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>OpenRouter:</strong> Subject to OpenRouter&apos;s privacy policy</li>
-              <li><strong>Google AI:</strong> Subject to Google&apos;s privacy policy</li>
-              <li><strong>Anthropic (Claude):</strong> Subject to Anthropic&apos;s privacy policy</li>
-              <li><strong>OpenAI:</strong> Subject to OpenAI&apos;s privacy policy</li>
+              <li><strong>PageSpace-hosted (default):</strong> included free tier, backed by a GLM inference provider</li>
+              <li><strong>OpenRouter:</strong> paid and free-tier model catalogs</li>
+              <li><strong>Anthropic (Claude):</strong> direct API access with your key</li>
+              <li><strong>OpenAI:</strong> direct API access with your key</li>
+              <li><strong>Google AI (Gemini):</strong> direct API access with your key</li>
+              <li><strong>xAI (Grok):</strong> direct API access with your key</li>
+              <li><strong>Azure OpenAI, GLM, MiniMax:</strong> direct API access with your key</li>
+              <li><strong>Ollama and LM Studio:</strong> self-managed endpoints you configure; prompts and selected context are sent only to that configured server. When the endpoint is a local process, content stays on the machine running it — verify your deployment to confirm</li>
             </ul>
             <p className="mb-4">
               <strong>Important:</strong> When using AI services, we send your prompts and relevant context to AI providers to generate responses. We do not share your personal information or unrelated workspace data with AI providers.

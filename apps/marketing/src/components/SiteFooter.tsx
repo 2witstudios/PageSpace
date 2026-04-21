@@ -14,7 +14,6 @@ const resourceLinks = [
   { label: "Documentation", href: "/docs" },
   { label: "Getting Started", href: "/docs/getting-started" },
   { label: "API Reference", href: "/docs/api" },
-  { label: "Self-Hosting", href: "/docs/self-hosting" },
   { label: "MCP Integration", href: "/docs/mcp" },
 ];
 

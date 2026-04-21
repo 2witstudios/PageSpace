@@ -149,10 +149,6 @@ describe('rate-limit-utils', () => {
       expect(RATE_LIMIT_CONFIGS.SIGNUP.maxAttempts).toBe(3);
     });
 
-    it('should have PASSWORD_RESET config', () => {
-      expect(RATE_LIMIT_CONFIGS.PASSWORD_RESET.maxAttempts).toBe(3);
-    });
-
     it('should have REFRESH config', () => {
       expect(RATE_LIMIT_CONFIGS.REFRESH.maxAttempts).toBe(10);
     });

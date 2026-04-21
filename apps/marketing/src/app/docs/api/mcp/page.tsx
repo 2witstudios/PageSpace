@@ -3,76 +3,77 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "MCP API",
-  description: "PageSpace MCP API: document operations, drive listing, and path detection for MCP clients.",
+  description: "PageSpace MCP API: document and sheet operations, drive listing, and drive creation for MCP clients.",
   path: "/docs/api/mcp",
-  keywords: ["API", "MCP", "Model Context Protocol", "document operations"],
+  keywords: ["API", "MCP", "Model Context Protocol", "document operations", "drives"],
 });
 
 const content = `
 # MCP API
 
-API endpoints for MCP (Model Context Protocol) clients. These routes are used by the \`pagespace-mcp\` server to interact with PageSpace.
+Endpoints for MCP (Model Context Protocol) clients such as the \`pagespace-mcp\` npm package. All routes authenticate via \`Authorization: Bearer mcp_...\`. See [MCP integration](/docs/mcp) for token setup.
 
-All MCP routes authenticate via \`Authorization: Bearer mcp_...\` header.
+MCP tokens authenticate as the owning user and inherit that user's permissions. A token may be scoped to specific drives; scoped tokens cannot create new drives and cannot touch pages outside their allow-list.
 
-## Document Operations
+## Document and sheet operations
 
 ### POST /api/mcp/documents
 
-Perform line operations on document content.
+Perform line or cell operations on a page's content. Works for document, code, and sheet pages.
 
 **Body:**
 \`\`\`json
 {
+  "operation": "read | replace | insert | delete | edit-cells",
   "pageId": "string",
-  "operation": "read | replace | insert | delete",
   "startLine": 1,
   "endLine": 10,
-  "content": "string (for replace/insert)"
+  "content": "string",
+  "cells": [{ "address": "A1", "value": "string" }]
 }
 \`\`\`
 
+If \`pageId\` is omitted, the server falls back to the user's most recently updated page they own.
+
 **Operations:**
-- \`read\` — Read content with line numbers
-- \`replace\` — Replace lines in a range
-- \`insert\` — Insert content at a line
-- \`delete\` — Delete lines in a range
+- \`read\` — Return content with line numbers.
+- \`replace\` — Replace lines in \`[startLine, endLine]\`.
+- \`insert\` — Insert \`content\` starting at \`startLine\`.
+- \`delete\` — Delete lines in \`[startLine, endLine]\`.
+- \`edit-cells\` — Update named cells on a sheet page via \`cells\`. Addresses are validated (e.g. \`A1\`, \`BC42\`).
 
-Content is automatically formatted and validated.
+Edits broadcast a \`page:updated\` event to the drive's Socket.IO room. Page edits are revision-checked and will return a mismatch error if another writer has moved past the expected revision.
 
-## Drive Discovery
+## Drives
 
 ### GET /api/mcp/drives
 
-List drives accessible via the MCP token.
+List drives the token can access. Scoped tokens return only the drives in their allow-list; unscoped tokens return every drive the owning user can see (owned + member).
 
-**Response:**
+---
+
+### POST /api/mcp/drives
+
+Create a new drive.
+
+**Body:**
 \`\`\`json
-[{
-  "id": "string",
-  "name": "string",
-  "slug": "string",
-  "pageCount": 23
-}]
+{ "name": "string" }
 \`\`\`
 
-If the token is scoped to specific drives, only those drives are returned.
-
-## Path Detection
-
-### GET /api/mcp/detect-paths
-
-Detect and resolve MCP paths for integrations. Used by the MCP server to resolve page references.
+Scoped tokens are rejected with \`403\`. The name \`Personal\` is reserved.
 
 ## Authentication
 
-MCP API routes use Bearer token authentication:
+Send the token in the \`Authorization\` header:
 
 \`\`\`
 Authorization: Bearer mcp_abc123...
 \`\`\`
 
-Tokens are created via \`POST /api/auth/mcp-tokens\` or Settings > MCP in the web UI. Each token authenticates as a specific user with that user's permissions.
+Tokens are created via [\`POST /api/auth/mcp-tokens\`](/docs/api/auth#mcp-tokens) or **Settings > MCP** in the web UI. The raw token is returned once at creation; only the SHA-256 hash is persisted.
+
+MCP-authenticated calls skip CSRF (Bearer tokens are not vulnerable to CSRF).
 `;
 
 export default function McpApiPage() {

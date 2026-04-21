@@ -332,20 +332,6 @@ export class SecurityAuditService {
   }
 
   /**
-   * Log password change event.
-   */
-  async logPasswordChanged(
-    userId: string,
-    ipAddress: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.password.changed',
-      userId,
-      ipAddress,
-    });
-  }
-
-  /**
    * Log logout event.
    */
   async logLogout(

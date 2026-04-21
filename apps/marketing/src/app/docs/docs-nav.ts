@@ -12,9 +12,6 @@ import {
   Users,
   Eye,
   HardDrive,
-  Container,
-  Settings,
-  Network,
   LayoutGrid,
   FileText,
   Blocks,
@@ -90,16 +87,6 @@ export const docsNav: NavSection[] = [
       { title: "Authentication", href: "/docs/security/authentication", icon: KeyRound },
       { title: "Permissions", href: "/docs/security/permissions", icon: Users },
       { title: "Zero-Trust", href: "/docs/security/zero-trust", icon: Eye },
-    ],
-  },
-  {
-    title: "Self-Hosting",
-    icon: HardDrive,
-    items: [
-      { title: "Deployment Overview", href: "/docs/self-hosting", icon: HardDrive },
-      { title: "Docker Setup", href: "/docs/self-hosting/docker", icon: Container },
-      { title: "Environment", href: "/docs/self-hosting/environment", icon: Settings },
-      { title: "Architecture", href: "/docs/self-hosting/architecture", icon: Network },
     ],
   },
 ];

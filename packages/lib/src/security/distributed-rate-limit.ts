@@ -472,12 +472,6 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
-  PASSWORD_RESET: {
-    maxAttempts: 3,
-    windowMs: 60 * 60 * 1000,
-    blockDurationMs: 60 * 60 * 1000,
-    progressiveDelay: false,
-  },
   REFRESH: {
     maxAttempts: 10,
     windowMs: 5 * 60 * 1000,

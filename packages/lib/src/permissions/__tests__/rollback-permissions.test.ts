@@ -83,7 +83,6 @@ describe('rollback-permissions', () => {
         'signup',
         'login',
         'logout',
-        'password_change',
         'email_change',
         'token_create',
         'token_revoke',

@@ -47,7 +47,7 @@ export default function TermsOfService() {
             <ul className="list-disc pl-6 mb-4">
               <li>Your data is stored on our cloud infrastructure using commercially reasonable security measures</li>
               <li>You can access your workspace from anywhere with an internet connection</li>
-              <li>We implement security measures appropriate for a service of this type, including secure connections, password hashing, and database access controls</li>
+              <li>We implement security measures appropriate for a service of this type, including secure connections, passwordless authentication, encrypted credentials at rest, and database access controls</li>
               <li>AI processing is performed using third-party cloud-based AI services</li>
               <li>While we take reasonable precautions, you are responsible for maintaining your own backups of critical data</li>
             </ul>

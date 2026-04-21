@@ -89,11 +89,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/security/authentication",
     "/docs/security/permissions",
     "/docs/security/zero-trust",
-    // Self-Hosting
-    "/docs/self-hosting",
-    "/docs/self-hosting/docker",
-    "/docs/self-hosting/environment",
-    "/docs/self-hosting/architecture",
   ];
 
   const docsRoutes: MetadataRoute.Sitemap = docPaths.map((path) => ({

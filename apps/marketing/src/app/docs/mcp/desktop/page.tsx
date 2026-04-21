@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Desktop MCP Servers",
-  description: "Add local MCP servers to PageSpace Desktop. Connect filesystem, GitHub, databases, and other tools to your workspace AI.",
+  description: "Run local MCP servers from PageSpace Desktop — filesystem, GitHub, databases, and any other MCP-compatible tool.",
   path: "/docs/mcp/desktop",
   keywords: ["MCP", "desktop", "local servers", "filesystem", "GitHub", "PostgreSQL"],
 });
@@ -11,31 +11,29 @@ export const metadata = createMetadata({
 const content = `
 # Desktop MCP Servers
 
-PageSpace Desktop can connect to **local MCP servers**, giving your workspace AI access to external tools like the filesystem, GitHub, databases, and more.
+PageSpace Desktop can run **local MCP servers**, giving your workspace AI access to external systems like the filesystem, GitHub, and databases.
 
-## How It Works
-
-Unlike the PageSpace MCP server (which lets external tools connect _to_ PageSpace), desktop MCP servers let PageSpace AI reach _out_ to external systems:
+This is the inverse of the [PageSpace MCP server](/docs/mcp): that flow lets external tools read your PageSpace; this flow lets PageSpace call out to external tools.
 
 \`\`\`
-PageSpace Desktop AI → Local MCP Server → External System
-                                            ├── Filesystem
-                                            ├── GitHub
-                                            ├── PostgreSQL
-                                            └── Any MCP server
+PageSpace Desktop AI  →  Local MCP server  →  External system
+                                               ├── Filesystem
+                                               ├── GitHub
+                                               ├── PostgreSQL
+                                               └── Any MCP server
 \`\`\`
 
-MCP servers run locally on your machine and are only accessible to the desktop app. They are not exposed to the web version or other users.
+Local MCP servers are bound to the desktop app on your machine. They are not exposed to the web version and cannot be triggered by other users.
 
 ## Setup
 
-1. Open **Settings > Local MCP Servers** in the PageSpace desktop app
-2. Add servers using the standard MCP JSON configuration format
-3. Servers start automatically when PageSpace Desktop launches
+1. Open **Settings > Local MCP Servers** in PageSpace Desktop.
+2. Paste a standard MCP \`mcpServers\` configuration (same shape as Claude Desktop's \`claude_desktop_config.json\`).
+3. Servers start on launch and shut down with the app.
 
-## Configuration Format
+The desktop app stores the config at \`~/.pagespace/local-mcp-config.json\` (or the platform userData equivalent) and validates every entry before spawning a subprocess.
 
-The configuration format is identical to Claude Desktop's \`claude_desktop_config.json\`:
+## Configuration format
 
 \`\`\`json
 {
@@ -56,11 +54,11 @@ The configuration format is identical to Claude Desktop's \`claude_desktop_confi
 }
 \`\`\`
 
-## Example Servers
+## Example servers
 
 ### Filesystem
 
-Read and write local files. Useful for AI agents that need to work with local project files.
+Read and write local files. Scope the directory you pass.
 
 \`\`\`json
 {
@@ -71,7 +69,7 @@ Read and write local files. Useful for AI agents that need to work with local pr
 
 ### GitHub
 
-Interact with GitHub repositories, issues, and pull requests.
+Repositories, issues, and pull requests.
 
 \`\`\`json
 {
@@ -85,7 +83,7 @@ Interact with GitHub repositories, issues, and pull requests.
 
 ### PostgreSQL
 
-Query and manage PostgreSQL databases.
+Query and mutate PostgreSQL databases.
 
 \`\`\`json
 {
@@ -96,7 +94,7 @@ Query and manage PostgreSQL databases.
 
 ### Brave Search
 
-Web search through Brave's search API.
+Web search via Brave's API.
 
 \`\`\`json
 {
@@ -108,23 +106,21 @@ Web search through Brave's search API.
 }
 \`\`\`
 
-## Trust Model
+## Trust model
 
-Desktop MCP servers run with the **desktop app's local privileges**:
+Local MCP servers inherit the desktop app's privileges on your machine:
 
-- Servers execute on your machine with your user permissions
-- Filesystem access is limited to the directories you specify
-- Network access depends on the server implementation
-- Servers are not accessible from the web version or by other users
-- AI tool calls through MCP servers are logged in the conversation history
+- Processes run as your OS user.
+- Filesystem access is limited to the directories you pass each server.
+- Network access depends on the server's own implementation.
+- Servers are unreachable from the web app or from other users.
+- Tool calls and results are logged in the conversation history.
 
-This is a deliberate security trade-off: desktop MCP servers can do more (access local files, databases, etc.) because they run locally under your control, unlike the web version which is sandboxed to PageSpace's API.
+This is a deliberate trade-off: the desktop app can do things the browser sandbox cannot, in exchange for your local authority over what it runs.
 
-## Desktop-Only
+## Desktop-only
 
-Local MCP servers require the PageSpace Desktop app. The web version cannot run local MCP servers because it runs in a browser sandbox.
-
-If you need external integrations in the web version, use the [PageSpace MCP server](/docs/mcp) approach instead — external AI tools connect to PageSpace via tokens.
+The web app cannot spawn local MCP servers. If you need to integrate external services from the web, use the [PageSpace MCP server](/docs/mcp) — external AI clients connect to your PageSpace with a token.
 `;
 
 export default function DesktopMCPPage() {

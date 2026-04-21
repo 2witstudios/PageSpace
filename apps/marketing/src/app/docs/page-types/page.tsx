@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Page Types",
-  description: "Technical reference for all 9 page types in PageSpace: documents, folders, AI chats, channels, canvases, sheets, task lists, code files, and uploaded files.",
+  description: "Reference for the 9 built-in page types: documents, folders, AI chats, channels, canvases, sheets, task lists, code files, and uploaded files.",
   path: "/docs/page-types",
   keywords: ["page types", "documents", "channels", "AI chat", "canvas", "sheets", "tasks", "code editor"],
 });
@@ -13,7 +13,7 @@ const content = `
 
 Everything in PageSpace is a **page**. Pages are the universal content primitive — they form a recursive tree, inherit permissions from their drive, and participate in search, mentions, and AI context.
 
-There are 9 page types, each designed for a different kind of work.
+There are 9 built-in page types, each designed for a different kind of work. A tenth type — \`TERMINAL\` — ships as experimental and is hidden from the create menu.
 
 ## DOCUMENT
 
@@ -21,13 +21,15 @@ Rich text documents powered by TipTap with full markdown support.
 
 | Feature | Detail |
 |---------|--------|
-| Editor | TipTap with markdown shortcuts |
+| Editor | TipTap with markdown input shortcuts |
 | Real-time | Yes — live collaboration via Socket.IO |
 | Versioning | Yes |
-| AI | Inline assistance, slash commands |
+| Formatting UI | Bubble toolbar on selection, \`/\` floating menu for blocks |
 | Uploads | Drag-and-drop file attachments |
 
-Documents support headings, lists, code blocks, tables, blockquotes, and embedded files. Content is stored as HTML with markdown import/export.
+To bring AI into a document, @mention an AI_CHAT page or ask an agent from a sibling page to read and edit it via \`read_page\` / \`replace_lines\`.
+
+Documents support headings, lists, code blocks, tables, blockquotes, and embedded files. Each page stores its content in one of two modes — HTML (default) or Markdown.
 
 ## FOLDER
 
@@ -39,7 +41,7 @@ Organizational containers for grouping pages.
 | Uploads | Drag-and-drop — files become child FILE pages |
 | Sorting | Manual drag-and-drop reordering |
 
-Folders are semantic — moving a page into a different folder changes its context for AI and permissions. The tree structure encodes meaning.
+Folders are semantic — moving a page into a different folder changes its context for AI and navigation. Access is resolved independently through drive membership and explicit page permissions.
 
 ## AI_CHAT
 
@@ -47,13 +49,13 @@ Dedicated AI conversation pages with full tool calling support.
 
 | Feature | Detail |
 |---------|--------|
-| Providers | 7 providers, 100+ models |
-| Tools | 13+ workspace automation tools |
-| Roles | PARTNER, PLANNER, WRITER |
+| Providers | 12 providers wired through the Vercel AI SDK |
+| Tools | 38 workspace tools, covering page reads and writes, search, tasks, calendar, channels, and agent coordination |
+| Modes | \`isReadOnly\` toggle (explore-only) and \`webSearchEnabled\` toggle (enables \`web_search\`) |
 | Multi-user | Multiple people can chat with the same AI |
-| Context | Inherits context from parent pages |
+| Context | System prompt includes drive, breadcrumb path, and page type |
 
-Each AI_CHAT page can be configured with a custom system prompt, specific enabled tools, and a preferred AI provider/model. The agent understands its position in the workspace hierarchy.
+Each AI_CHAT page can be configured with a custom system prompt, a subset of the 38 tools, and a preferred provider/model. The agent's system prompt is populated with its location in the tree so it knows where in the workspace it's operating.
 
 \`\`\`typescript
 // Create an AI agent via the API
@@ -71,7 +73,7 @@ PATCH /api/pages/{pageId}/agent-config
   "systemPrompt": "You are a research assistant...",
   "enabledTools": ["read_page", "regex_search", "multi_drive_search"],
   "aiProvider": "anthropic",
-  "aiModel": "claude-sonnet-4-20250514"
+  "aiModel": "claude-sonnet-4-6-20260217"
 }
 \`\`\`
 
@@ -83,10 +85,10 @@ Real-time team messaging pages.
 |---------|--------|
 | Real-time | Yes — instant message delivery via Socket.IO |
 | AI | @mention AI agents in conversations |
-| Threads | Threaded replies |
-| Uploads | Inline file sharing |
+| Reactions | Emoji reactions on messages |
+| Uploads | Inline file attachments per message |
 
-Channels function like Slack channels but live inside your workspace tree. You can @mention any AI agent to bring it into the conversation.
+Channels function like team chat but live inside your workspace tree. @mention any AI agent to pull it into the conversation; AI-posted messages carry sender metadata so it's clear who spoke.
 
 ## CANVAS
 
@@ -107,12 +109,12 @@ Uploaded files with automatic processing.
 
 | Feature | Detail |
 |---------|--------|
-| Max size | 100 MB |
-| Processing | Automatic text extraction, image optimization |
-| Storage | Content-addressed deduplication |
+| Max size | 20 MB by default (configurable per deployment) |
+| Processing | Image optimization, OCR, and text extraction run in the background after upload |
+| Storage | Content-addressed — identical bytes are stored once regardless of how many places reference them |
 | Convert | Files can be converted to DOCUMENT pages |
 
-Files are processed by the dedicated processor service. Images are optimized, text is extracted from documents, and metadata is stored in PostgreSQL. Content-addressed storage means identical files are stored only once.
+Files are processed by the dedicated processor service. Images are optimized, OCR runs on scanned content, text is extracted from documents, and metadata is stored in PostgreSQL. Content-addressed storage means identical bytes are stored once regardless of how many places they're linked from.
 
 ## SHEET
 
@@ -133,13 +135,14 @@ Project management with structured task tracking.
 
 | Feature | Detail |
 |---------|--------|
-| Views | Table view, kanban board |
-| Fields | Status, priority, assignee, due date |
-| AI | AI can create and update tasks via \`update_task\` tool |
+| Views | Table view and kanban board (toggled in the header) |
+| Fields | Title, priority (\`low\`/\`medium\`/\`high\`), due date, and multiple assignees (users or AI agents) |
+| Custom statuses | Each list defines its own status set — name, color, and group (\`todo\` / \`in_progress\` / \`done\`) |
+| AI | Agents create and update tasks via \`update_task\` and pick up assigned work via \`get_assigned_tasks\` |
 | Real-time | Yes — live status updates |
-| Linked pages | Each task creates a linked DOCUMENT for notes |
+| Linked pages | Page-based tasks can have an optional linked DOCUMENT for notes |
 
-Task lists are first-class AI citizens — agents can create task lists, add tasks, update status, and track progress programmatically.
+Task lists are first-class AI citizens — agents can add tasks, change status, and work through a list of assignments that were routed to them.
 
 \`\`\`typescript
 // AI tool: Create a task on a task list page
@@ -158,11 +161,11 @@ Monaco-powered code editor with syntax highlighting.
 | Feature | Detail |
 |---------|--------|
 | Editor | Monaco (VS Code engine) |
-| Languages | 50+ languages with syntax highlighting |
-| Real-time | Yes — live collaboration |
+| Languages | Every language Monaco ships by default (JS, TS, Python, Rust, Go, SQL, Markdown, and so on) |
+| Real-time | Yes — live collaboration via Socket.IO |
 | Versioning | Yes |
 
-Code pages use the same editor engine as VS Code, providing familiar editing experience with syntax highlighting, auto-indentation, and bracket matching.
+Code pages use the same editor engine as VS Code, giving you syntax highlighting, auto-indentation, and bracket matching.
 
 ## Page Hierarchy
 
@@ -182,7 +185,7 @@ All page types compose into a single recursive tree:
     └── 📎 brief.pdf           (FILE)
 \`\`\`
 
-This recursive composition means any page type can be a child of any folder. The tree structure drives permissions, AI context, and navigation.
+This recursive composition means any page type can be a child of any folder. The tree drives AI context and navigation; permissions are resolved from drive membership and explicit per-page grants, not folder position.
 `;
 
 export default function PageTypesPage() {

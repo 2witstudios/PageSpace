@@ -3,135 +3,111 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Zero-Trust Architecture",
-  description: "PageSpace zero-trust security: opaque tokens, service-to-service auth, session management, audit logging, and rate limiting.",
+  description: "PageSpace zero-trust architecture: opaque session and service tokens, scoped service-to-service auth, continuously verified audit log, SSRF and path-traversal hardening, CSRF, and encrypted credentials.",
   path: "/docs/security/zero-trust",
-  keywords: ["zero trust", "security architecture", "opaque tokens", "audit logging", "rate limiting"],
+  keywords: ["zero trust", "security architecture", "opaque tokens", "service tokens", "SSRF", "path traversal", "audit chain verification", "PKCE", "rate limiting"],
 });
 
 const content = `
 # Zero-Trust Architecture
 
-PageSpace implements a zero-trust security model where every request is authenticated and authorized independently. No request is trusted based on network location or prior authentication alone.
+Every request is authenticated and authorized independently. Internal services validate the same kind of opaque token the browser sends, with scopes reduced to what the calling user actually has. Network location and prior hops grant no trust.
 
 ## Token Architecture
 
-### Why Opaque Tokens
+Every authentication token is a high-entropy opaque random string, hashed at rest, and validated by database lookup. Tokens carry no embedded claims — claims come from the database row. Revoking a token is a single-row delete that takes effect on the next request.
 
-PageSpace migrated from JWTs to opaque session tokens for several security advantages:
-
-| Concern | JWT | Opaque Token |
-|---------|-----|-------------|
-| Payload exposure | Token contains user data | Token is a random string |
-| Revocation | Requires blocklist or short expiry | Instant — delete from database |
-| Token size | Large (1KB+) | Small (~60 bytes) |
-| Validation | Cryptographic signature check | Hash lookup in database |
-| Stolen token | Valid until expiry | Revocable immediately |
-
-### Token Format
-
-\`\`\`
-ps_sess_<32 bytes of randomness, base64url encoded>
-\`\`\`
-
-- **Prefix**: Identifies token type (\`ps_sess_\`, \`ps_dev_\`, \`ps_sock_\`, \`ps_unsub_\`)
-- **Entropy**: 32 bytes (256 bits) of cryptographic randomness
-- **Storage**: Only the SHA-256 hash is stored in the database
-- **Comparison**: Constant-time comparison prevents timing attacks
+Presented authentication tokens are hashed before database lookup, so plaintext tokens are not stored or compared directly. Where direct secret comparisons are required (CSRF token verification, auth-header checks, device-token equality), PageSpace uses a timing-safe helper so length, prefix structure, and content differences cannot leak through timing.
 
 ## Service-to-Service Authentication
 
-Internal services (web, realtime, processor) authenticate with each other using shared secrets:
+Internal services — web, realtime, processor — authenticate each other with **opaque service tokens** validated by the same session service that validates user sessions. When one service calls another on behalf of a user, it requests a service token scoped to a specific resource (e.g., "write files on page X") and the token is minted only if the user actually has that permission. The service token carries the user's identity forward; downstream routes assert the exact scope they need.
 
-\`\`\`
-Web App ←→ Realtime Service (Socket.IO)
-Web App ←→ Processor Service (File Processing)
-\`\`\`
+### What this buys you
 
-- Shared secrets are configured via environment variables
-- Internal API calls include the secret in request headers
-- Services validate the secret before processing requests
-- No user tokens are passed between services — only the shared secret and user context
+- **Instant revocation of cross-service capability.** Deleting the row disables the token in flight.
+- **Least privilege.** A service token for page X with file-read scope cannot be replayed to write files or to access page Y.
+- **Audit completeness.** Every service call is traceable to a specific user, resource, and scope in the audit log.
+- **No shared secrets.** New services plug in by validating tokens against the database — there's no environment-variable secret to rotate or leak.
+
+### Revocation Registry
+
+Service tokens are tracked in a central revocation registry that fails closed: presenting a token whose identifier is unknown, expired, or explicitly revoked is rejected. A maintenance job prunes expired entries without losing the revocation semantic.
 
 ## Session Management
 
-### Session Lifecycle
+### Web Sessions
 
-1. **Login**: Generate opaque token → hash → store hash in DB → set HTTP-only cookie
-2. **Request**: Read cookie → hash → look up in DB → validate expiration → authorize
-3. **Refresh**: Validate refresh token → issue new session → rotate refresh token
-4. **Logout**: Delete session from DB → clear cookies
+Web sessions are a single opaque token, stored only as a hash on the server and as an \`HttpOnly\`, \`Secure\`, \`SameSite=strict\` cookie on the browser. Sessions are validated on every request — cookie, lookup, expiry check, user-suspension check, optional idle-timeout check — and are revoked by deleting the row.
+
+### Device Token Rotation
+
+Device tokens — desktop and mobile clients — rotate on refresh. When the client presents its current token, the server issues a new one, keeps the old one valid for a brief grace window so concurrent requests don't fail, and marks the old one replaced. Rapid-refresh anomalies combined with user-agent or IP changes lower the device's trust score; a low enough score lets an operator force re-authentication.
 
 ### Global Invalidation
 
-The \`tokenVersion\` field enables instant invalidation of all sessions:
-
-\`\`\`
-Password change → Increment tokenVersion → All existing sessions invalid
-"Logout all devices" → Increment tokenVersion → All sessions invalid
-\`\`\`
-
-Every token validation checks the user's \`tokenVersion\`. If the stored version doesn't match, the session is rejected.
+Administrative actions — log-out-everywhere, credential reset, account suspension — invalidate every active session for a user atomically. In-progress tokens are rejected on their next request.
 
 ## Rate Limiting
 
-### Endpoint Protection
-
-| Endpoint | Strategy | Purpose |
-|----------|----------|---------|
-| Login | Per-IP + per-email | Prevent brute force |
-| Signup | Per-IP | Prevent mass account creation |
-| Token refresh | Per-user | Prevent token abuse |
-| API routes | Per-user | Prevent API abuse |
-
-### Implementation
-
-Rate limits use a sliding window algorithm. Exceeding the limit returns HTTP 429 with a \`Retry-After\` header. Successful authentication resets the counter.
+Login, signup, magic-link send, and token-refresh endpoints are rate-limited per-IP, per-email, and per-user depending on the endpoint, using a distributed sliding-window counter stored in Postgres. Exceeding a bucket returns HTTP 429 with \`Retry-After\`. Progressive blocking extends the ban for repeated violators. In production, a storage-layer failure fails closed rather than opening the floodgates.
 
 ## Audit Logging
 
-### What's Logged
+Authentication, authorization, data-access, and admin events are recorded in a SHA-256 hash-chained log — every entry's hash incorporates the previous entry's hash, so any retroactive change to history is detectable. A database-level lock serializes chain writes so concurrent inserts cannot fork the chain.
 
-| Event | Data Captured |
-|-------|--------------|
-| Login attempt | Email, IP, user agent, success/failure |
-| Signup | Email, IP, provider (email/Google) |
-| Password change | User ID, IP |
-| Token refresh | User ID, device, IP |
-| Permission change | Granter, grantee, page, flags |
-| MCP token usage | Token ID, operation, timestamp |
-| AI tool execution | User, tool name, page context, success |
+### Tamper Detection
 
-### Security Alerts
+The chain is continuously re-verified:
 
-- **Token reuse detected**: Potential token theft — all sessions invalidated
-- **Rate limit exceeded**: Potential brute force — logged with IP
-- **Permission cache invalidation failure**: Stale permissions may persist for up to 60s
+- **Periodic full-chain sweep** — a scheduled job recomputes every entry's hash and checks every chain link. On break, a registered alert handler fires.
+- **Preflight verification on delivery** — every batch bound for an external sink is re-verified synchronously before it's emitted. A detected break short-circuits the emission — the tampered batch never leaves the system.
+
+Each audit entry carries the user reference (nullable for unauthenticated failures), IP, user agent, session reference, a resource reference where applicable, and a risk score for downstream alerting. Email addresses are redacted before write — enough structure is preserved for operational debugging without storing full PII.
 
 ## CSRF Protection
 
-State-changing requests require a CSRF token:
+State-changing requests must present a CSRF token bound to the current session.
 
-1. Client requests token: \`GET /api/auth/csrf\`
-2. Server generates token bound to the session
-3. Client includes token in subsequent POST/PATCH/DELETE requests
-4. Server validates token before processing
+1. Client calls \`GET /api/auth/csrf\`.
+2. Server validates the session cookie, then returns an HMAC-signed token that encodes the session reference.
+3. Client includes the token in subsequent POST / PATCH / DELETE requests using the \`x-csrf-token\` header.
+4. Server verifies the signature, confirms the token binds to the active session, and rejects mismatches.
+
+## Outbound Request Safety (SSRF)
+
+Every server-side URL fetch runs through a validator that resolves the hostname, then checks every resolved IP against a blocklist before connecting.
+
+The blocklist covers:
+
+- Loopback and localhost.
+- Private network ranges and link-local addresses.
+- Cloud provider metadata endpoints.
+- Non-HTTP(S) schemes.
+
+A single hostname can resolve to multiple IPs; the validator rejects the request if **any** resolved address is blocked — defeating DNS-rebinding tricks where a host advertises a public IP but serves a private one. IPv4-mapped IPv6 is normalized before comparison.
+
+## Path Traversal Safety
+
+Filesystem paths from uploads, avatars, and user-controlled input run through a validator before the filesystem is touched.
+
+Blocked:
+
+- Directory traversal.
+- Encoded, double-encoded, and further-nested-encoded variants.
+- Null-byte injection.
+- Symlink escape — paths are resolved through the filesystem and rejected if the resolved target falls outside the configured base directory.
+- Absolute paths when a base directory is configured.
 
 ## Content Security
 
 ### HTML Sanitization
 
-User-generated HTML content is sanitized to prevent XSS:
-- Canvas pages use Shadow DOM isolation
-- Document content is rendered through controlled components
-- Mentions and links are validated before rendering
+User-generated HTML is sanitized before render. Canvas pages render inside Shadow DOM, isolating arbitrary author styles and scripts from the rest of the app. Mentions and links are validated server-side before rendering.
 
 ### API Key Encryption
 
-AI provider API keys are encrypted at rest in the database. Keys are:
-- Encrypted on write with server-side encryption
-- Decrypted only when making provider API calls
-- Never exposed in API responses
-- Deletable by the user at any time
+AI provider API keys are encrypted at rest with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Keys are decrypted only on the request path that makes the provider call, are never returned in API responses, and are deletable by the user at any time.
 `;
 
 export default function ZeroTrustPage() {

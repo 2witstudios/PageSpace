@@ -3,76 +3,88 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Search API",
-  description: "PageSpace search API: global search, multi-drive search, mentions, and discovery.",
+  description: "PageSpace search API: global search across drives, pages, and users, multi-drive search with regex, and mention autocomplete.",
   path: "/docs/api/search",
-  keywords: ["API", "search", "mentions", "discovery", "multi-drive"],
+  keywords: ["API", "search", "mentions", "multi-drive", "regex"],
 });
 
 const content = `
 # Search API
 
-Global search, multi-drive search, and the mention system.
+Global search across drives, pages, and users; multi-drive regex search; and mention autocomplete.
 
-## Search
+All routes accept session or MCP bearer auth. Results are filtered to what the caller can access.
+
+## Global search
 
 ### GET /api/search
 
-Global search across all accessible pages and content.
+Search drives, pages, and users. Multi-word queries require every word to be present (in any order) in the title; content matches are more lenient.
 
-**Query params:** \`q\` (search query), \`type\` (page type filter), \`limit\`
+**Query params:**
+- \`q\` — query string (minimum 2 non-whitespace characters)
+- \`limit\` — 1-50, default 20
 
 **Response:**
 \`\`\`json
 {
   "results": [{
-    "pageId": "string",
+    "id": "string",
     "title": "string",
-    "type": "string",
-    "path": "string",
-    "snippet": "string",
+    "type": "page | drive | user",
+    "pageType": "DOCUMENT | CODE | ...",
     "driveId": "string",
-    "driveName": "string"
-  }],
-  "totalCount": 42
+    "driveName": "string",
+    "description": "string",
+    "avatarUrl": "string | null",
+    "matchLocation": "title | content | both",
+    "relevanceScore": 0
+  }]
 }
 \`\`\`
 
-Results are filtered by the current user's permissions.
+If the trimmed query is shorter than 2 characters, the route returns an empty result set (\`200\`).
 
----
+## Multi-drive search
 
 ### GET /api/search/multi-drive
 
-Search across multiple drives simultaneously with advanced filtering.
+Search content across every drive the caller can access (filtered by MCP token scope).
 
-**Query params:** \`q\`, \`type\`, \`driveIds\`, \`limit\`
+**Query params:**
+- \`searchQuery\` — query string (required)
+- \`searchType\` — \`text\` (default) or \`regex\`
+- \`maxResultsPerDrive\` — 1-50, default 20
+
+**Response:**
+\`\`\`json
+{
+  "success": true,
+  "searchQuery": "string",
+  "searchType": "text | regex",
+  "results": [],
+  "totalDrives": 0,
+  "totalMatches": 0,
+  "summary": "Found N matches across M drives",
+  "stats": {
+    "drivesSearched": 0,
+    "drivesWithResults": 0,
+    "totalMatches": 0
+  }
+}
+\`\`\`
 
 ## Mentions
 
 ### GET /api/mentions/search
 
-Search for mentionable entities (@mentions) with cross-drive capability.
+Search for entities you can \`@\`-mention — pages, users, and agents. Powers the autocomplete in documents and channels.
 
-**Query params:** \`q\` (search query), \`driveId\` (optional scope)
-
-**Response:**
-\`\`\`json
-{
-  "pages": [{
-    "id": "string",
-    "title": "string",
-    "type": "string",
-    "path": "string"
-  }],
-  "users": [{
-    "id": "string",
-    "name": "string",
-    "email": "string"
-  }]
-}
-\`\`\`
-
-Results include both pages and users, filtered by permissions. This powers the @mention autocomplete in documents and channels.
+**Query params:**
+- \`q\` — query string
+- \`driveId\` — scope results to a single drive
+- \`crossDrive\` — \`true\` to return matches from every accessible drive
+- \`types\` — comma-separated filter, e.g. \`pages,users,agents\`
 `;
 
 export default function SearchApiPage() {
