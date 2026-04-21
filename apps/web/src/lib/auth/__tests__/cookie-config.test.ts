@@ -222,6 +222,77 @@ describe('cookie-config', () => {
     });
   });
 
+  describe('SameSite policy matrix', () => {
+    it('uses Strict when NODE_ENV is not production (no COOKIE_DOMAIN)', () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      const cookie = createSessionCookie('ps_sess_test');
+      expect(cookie).toContain('SameSite=Strict');
+      expect(cookie).not.toContain('Domain=');
+    });
+
+    it('uses Strict when NODE_ENV is not production even with COOKIE_DOMAIN set', () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
+      const cookie = createSessionCookie('ps_sess_test');
+      expect(cookie).toContain('SameSite=Strict');
+    });
+
+    it('uses Strict in production when COOKIE_DOMAIN is unset', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const cookie = createSessionCookie('ps_sess_test');
+      expect(cookie).toContain('SameSite=Strict');
+      expect(cookie).not.toContain('Domain=');
+    });
+
+    it('uses Lax in production when COOKIE_DOMAIN is set', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
+      const cookie = createSessionCookie('ps_sess_test');
+      expect(cookie).toContain('SameSite=Lax');
+      expect(cookie).toContain('Domain=.example.com');
+    });
+  });
+
+  describe('startup policy log', () => {
+    it('logs the resolved cookie policy on module load', async () => {
+      vi.resetModules();
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
+
+      await import('../cookie-config');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const [message] = infoSpy.mock.calls[0];
+      expect(message).toContain('[auth] cookie policy:');
+      expect(message).toContain('SameSite=Lax');
+      expect(message).toContain('domain=.example.com');
+      expect(message).toContain('NODE_ENV=production');
+      expect(message).toContain('COOKIE_DOMAIN=set');
+
+      infoSpy.mockRestore();
+    });
+
+    it('logs Strict + unset domain when COOKIE_DOMAIN is missing in production', async () => {
+      vi.resetModules();
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+      vi.stubEnv('NODE_ENV', 'production');
+      delete process.env.COOKIE_DOMAIN;
+
+      await import('../cookie-config');
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const [message] = infoSpy.mock.calls[0];
+      expect(message).toContain('SameSite=Strict');
+      expect(message).toContain('domain=unset');
+      expect(message).toContain('COOKIE_DOMAIN=unset');
+
+      infoSpy.mockRestore();
+    });
+  });
+
   describe('getSessionFromCookies', () => {
     it('should extract session token from cookie header', () => {
       const cookieHeader = 'session=ps_sess_test123; other=value';
