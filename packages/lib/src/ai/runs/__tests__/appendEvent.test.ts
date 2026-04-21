@@ -37,7 +37,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { appendEvent } from '../appendEvent';
+import { appendEvent, TerminalRunError } from '../appendEvent';
 
 function joinedSql(): string[] {
   return testState.executedSql.map((s) => s.strings.join('?'));
@@ -181,6 +181,32 @@ describe('appendEvent', () => {
       testState.rowsByPattern.set('FROM agent_runs', [{ last_seq: 5, status: 'streaming' }]);
       await appendEvent({ runId, type: 'aborted', payload: {} });
       expect(allValues()).toContain('aborted');
+    });
+  });
+
+  describe('terminal status guard', () => {
+    const terminalCases: Array<{ status: string }> = [
+      { status: 'completed' },
+      { status: 'failed' },
+      { status: 'aborted' },
+    ];
+
+    for (const { status } of terminalCases) {
+      it(`given a run with status=${status}, should throw TerminalRunError and skip the insert`, async () => {
+        testState.rowsByPattern.set('FROM agent_runs', [{ last_seq: 5, status }]);
+        await expect(
+          appendEvent({ runId, type: 'error', payload: { message: 'late' } }),
+        ).rejects.toBeInstanceOf(TerminalRunError);
+        expect(joinedSql().some((s) => s.includes('INSERT INTO agent_run_events'))).toBe(false);
+        expect(joinedSql().some((s) => s.includes('UPDATE agent_runs'))).toBe(false);
+        expect(joinedSql().some((s) => s.includes('pg_notify'))).toBe(false);
+      });
+    }
+
+    it('given a run in pending status, should not be treated as terminal', async () => {
+      testState.rowsByPattern.set('FROM agent_runs', [{ last_seq: 0, status: 'pending' }]);
+      const result = await appendEvent({ runId, type: 'text-segment', payload: { text: 'hi' } });
+      expect(result.seq).toBe(1);
     });
   });
 

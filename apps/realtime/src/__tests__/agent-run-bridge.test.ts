@@ -206,6 +206,32 @@ describe('startAgentRunBridge', () => {
     };
   }
 
+  // Synchronous reconnect scheduler — fires immediately when invoked via trigger().
+  function makeManualScheduler() {
+    const pending: Array<() => void> = [];
+    const schedule = (_attempt: number, cb: () => void) => {
+      pending.push(cb);
+      return () => {
+        const idx = pending.indexOf(cb);
+        if (idx >= 0) pending.splice(idx, 1);
+      };
+    };
+    return {
+      schedule,
+      trigger: async () => {
+        const cb = pending.shift();
+        if (cb) cb();
+        // Yield microtasks so the async reconnect can progress.
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+      },
+      pendingCount: () => pending.length,
+    };
+  }
+
+  const noopScheduler: NonNullable<Parameters<typeof startAgentRunBridge>[0]['scheduleReconnect']> =
+    () => () => {};
+
   it('given startup, should LISTEN on agent_run_events and forward notifications to the matching room', async () => {
     const fake = makeFakeClient();
     const pool = { connect: vi.fn().mockResolvedValue(fake) };
@@ -215,6 +241,7 @@ describe('startAgentRunBridge', () => {
     const dispose = await startAgentRunBridge({
       pool: pool as never,
       io: { to } as never,
+      scheduleReconnect: noopScheduler,
     });
 
     expect(fake.queries).toContain('LISTEN agent_run_events');
@@ -241,7 +268,11 @@ describe('startAgentRunBridge', () => {
     const pool = { connect: vi.fn().mockResolvedValue(fake) };
     const to = vi.fn();
 
-    await startAgentRunBridge({ pool: pool as never, io: { to } as never });
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to } as never,
+      scheduleReconnect: noopScheduler,
+    });
     fake.emit('notification', { channel: 'other_channel', payload: 'x' });
     expect(to).not.toHaveBeenCalled();
   });
@@ -251,7 +282,11 @@ describe('startAgentRunBridge', () => {
     const pool = { connect: vi.fn().mockResolvedValue(fake) };
     const to = vi.fn();
 
-    await startAgentRunBridge({ pool: pool as never, io: { to } as never });
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to } as never,
+      scheduleReconnect: noopScheduler,
+    });
     expect(() =>
       fake.emit('notification', { channel: 'agent_run_events', payload: 'not-json' }),
     ).not.toThrow();
@@ -269,16 +304,119 @@ describe('startAgentRunBridge', () => {
     const dispose = await startAgentRunBridge({
       pool: pool as never,
       io: { to: vi.fn() } as never,
+      scheduleReconnect: noopScheduler,
     });
     await dispose();
     expect(fake.release).toHaveBeenCalled();
   });
 
-  it('given a pg client error, should log it via loggers.realtime.error without crashing', async () => {
+  it('given a pg client error, should log it, release the client, and schedule a reconnect', async () => {
     const fake = makeFakeClient();
     const pool = { connect: vi.fn().mockResolvedValue(fake) };
+    const scheduler = makeManualScheduler();
 
-    await startAgentRunBridge({ pool: pool as never, io: { to: vi.fn() } as never });
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
     expect(() => fake.emit('error', new Error('boom'))).not.toThrow();
+    expect(fake.release).toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(1);
+  });
+
+  it('given a pg client error followed by the reconnect, should LISTEN again on a fresh client', async () => {
+    const first = makeFakeClient();
+    const second = makeFakeClient();
+    const pool = { connect: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
+    const scheduler = makeManualScheduler();
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    expect(first.queries).toContain('LISTEN agent_run_events');
+
+    first.emit('error', new Error('transient'));
+    await scheduler.trigger();
+
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    expect(second.queries).toContain('LISTEN agent_run_events');
+  });
+
+  it('given a pg client `end` event, should treat it like an error and reconnect', async () => {
+    const first = makeFakeClient();
+    const second = makeFakeClient();
+    const pool = { connect: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
+    const scheduler = makeManualScheduler();
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    first.emit('end');
+    await scheduler.trigger();
+
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+    expect(second.queries).toContain('LISTEN agent_run_events');
+  });
+
+  it('given dispose before a scheduled reconnect fires, should cancel the reconnect', async () => {
+    const fake = makeFakeClient();
+    const pool = { connect: vi.fn().mockResolvedValue(fake) };
+    const scheduler = makeManualScheduler();
+
+    const dispose = await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    fake.emit('error', new Error('boom'));
+    expect(scheduler.pendingCount()).toBe(1);
+
+    await dispose();
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it('given pool.connect rejects on startup, should schedule a reconnect without crashing', async () => {
+    const pool = {
+      connect: vi.fn().mockRejectedValueOnce(new Error('db down')).mockResolvedValueOnce(makeFakeClient()),
+    };
+    const scheduler = makeManualScheduler();
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    expect(scheduler.pendingCount()).toBe(1);
+    await scheduler.trigger();
+    expect(pool.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('given LISTEN fails on a fresh client, should treat it as a failure and schedule a reconnect', async () => {
+    const fake = makeFakeClient();
+    fake.query = vi.fn(async (sql: string) => {
+      if (sql.startsWith('LISTEN')) throw new Error('listen denied');
+      return undefined;
+    });
+    const pool = { connect: vi.fn().mockResolvedValue(fake) };
+    const scheduler = makeManualScheduler();
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    expect(fake.release).toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(1);
   });
 });

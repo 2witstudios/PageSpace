@@ -49,6 +49,9 @@ vi.mock('@/lib/websocket', () => ({
   kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
   kickUserFromPage: vi.fn().mockResolvedValue(undefined),
   kickUserFromPageActivity: vi.fn().mockResolvedValue(undefined),
+  kickUserFromAgentRunsForDrive: vi.fn().mockResolvedValue(undefined),
+  kickUserFromAgentRunsForPage: vi.fn().mockResolvedValue(undefined),
+  kickUserFromAgentRun: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

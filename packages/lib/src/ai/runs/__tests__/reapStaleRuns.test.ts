@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { staleRowsState, executedSql } = vi.hoisted(() => ({
-  staleRowsState: { rows: [] as Array<{ id: string }> },
-  executedSql: [] as Array<{ strings: readonly string[]; values: unknown[] }>,
-}));
+const { staleRowsState, executedSql, FakeTerminalRunError } = vi.hoisted(() => {
+  class FakeTerminalRunError extends Error {
+    constructor(runId: string) {
+      super(`appendEvent: runId "${runId}" is already terminal (status=completed)`);
+      this.name = 'TerminalRunError';
+    }
+  }
+  return {
+    staleRowsState: { rows: [] as Array<{ id: string }> },
+    executedSql: [] as Array<{ strings: readonly string[]; values: unknown[] }>,
+    FakeTerminalRunError,
+  };
+});
 
 vi.mock('@pagespace/db', () => ({
   db: {
@@ -21,6 +30,7 @@ vi.mock('@pagespace/db', () => ({
 const appendEventMock = vi.fn();
 vi.mock('../appendEvent', () => ({
   appendEvent: (...args: unknown[]) => appendEventMock(...args),
+  TerminalRunError: FakeTerminalRunError,
 }));
 
 import { reapStaleRuns } from '../reapStaleRuns';
@@ -72,6 +82,16 @@ describe('reapStaleRuns', () => {
     });
     const result = await reapStaleRuns();
     expect(result.reapedRunIds.sort()).toEqual(['run_a', 'run_c']);
+  });
+
+  it('given appendEvent throws TerminalRunError because the worker finished first, should swallow the error and not include the run in the reaped list', async () => {
+    staleRowsState.rows = [{ id: 'run_finished' }, { id: 'run_still_stuck' }];
+    appendEventMock.mockImplementation(async (input: { runId: string }) => {
+      if (input.runId === 'run_finished') throw new FakeTerminalRunError(input.runId);
+      return { seq: 1 };
+    });
+    const result = await reapStaleRuns();
+    expect(result.reapedRunIds).toEqual(['run_still_stuck']);
   });
 
   it('given a stale run, should carry the threshold into the error message so operators can tell reaps apart from model errors', async () => {

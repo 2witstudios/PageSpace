@@ -16,6 +16,8 @@ import {
   kickUserFromDriveActivity,
   kickUserFromPage,
   kickUserFromPageActivity,
+  kickUserFromAgentRunsForDrive,
+  kickUserFromAgentRunsForPage,
 } from '@/lib/websocket';
 import { db } from '@pagespace/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
@@ -182,6 +184,7 @@ export async function POST(
           await Promise.all([
             kickUserFromDrive(activity.driveId, targetUserId, 'member_removed', activity.resourceTitle ?? undefined),
             kickUserFromDriveActivity(activity.driveId, targetUserId, 'member_removed'),
+            kickUserFromAgentRunsForDrive(activity.driveId, targetUserId, 'member_removed'),
           ]);
         }
       }
@@ -193,6 +196,7 @@ export async function POST(
         await Promise.all([
           kickUserFromPage(activity.pageId, targetUserId, 'permission_revoked'),
           kickUserFromPageActivity(activity.pageId, targetUserId, 'permission_revoked'),
+          kickUserFromAgentRunsForPage(activity.pageId, targetUserId, 'permission_revoked'),
         ]);
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {

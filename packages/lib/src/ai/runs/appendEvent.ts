@@ -13,6 +13,15 @@ export type AppendEventResult = {
   seq: number;
 };
 
+export class TerminalRunError extends Error {
+  constructor(runId: string, status: string) {
+    super(`appendEvent: runId "${runId}" is already terminal (status=${status})`);
+    this.name = 'TerminalRunError';
+  }
+}
+
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'aborted']);
+
 export async function appendEvent(input: AppendEventInput): Promise<AppendEventResult> {
   const { runId, type, payload } = input;
   const payloadJson = JSON.stringify(payload);
@@ -30,6 +39,9 @@ export async function appendEvent(input: AppendEventInput): Promise<AppendEventR
     const existing = row.rows[0] as { last_seq: number; status: string } | undefined;
     if (!existing) {
       throw new Error(`appendEvent: runId "${runId}" does not exist`);
+    }
+    if (TERMINAL_STATUSES.has(existing.status)) {
+      throw new TerminalRunError(runId, existing.status);
     }
 
     assignedSeq = existing.last_seq + 1;

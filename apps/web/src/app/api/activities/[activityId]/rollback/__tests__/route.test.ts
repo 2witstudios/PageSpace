@@ -65,6 +65,12 @@ vi.mock('../../../../../../lib/websocket', () => ({
   createDriveEventPayload: vi.fn(),
   broadcastDriveMemberEvent: vi.fn(),
   createDriveMemberEventPayload: vi.fn(),
+  kickUserFromDrive: vi.fn().mockResolvedValue(undefined),
+  kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
+  kickUserFromPage: vi.fn().mockResolvedValue(undefined),
+  kickUserFromPageActivity: vi.fn().mockResolvedValue(undefined),
+  kickUserFromAgentRunsForDrive: vi.fn().mockResolvedValue(undefined),
+  kickUserFromAgentRunsForPage: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock mask utility

@@ -15,7 +15,11 @@ import {
 } from '@pagespace/lib/server';
 import { permissionManagementService } from '@/services/api';
 import { db, pages, eq } from '@pagespace/db';
-import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import {
+  kickUserFromPage,
+  kickUserFromPageActivity,
+  kickUserFromAgentRunsForPage,
+} from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -195,6 +199,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       await Promise.all([
         kickUserFromPage(pageId, targetUserId, 'permission_revoked'),
         kickUserFromPageActivity(pageId, targetUserId, 'permission_revoked'),
+        kickUserFromAgentRunsForPage(pageId, targetUserId, 'permission_revoked'),
       ]);
     }
 
