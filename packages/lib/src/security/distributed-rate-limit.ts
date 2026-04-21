@@ -438,7 +438,7 @@ export async function getDistributedRateLimitStatus(
  * 500 and pages ops. Uses `rowCount` instead of `.returning()` so the return
  * is constant-size regardless of how many rows were deleted.
  *
- * Mirrors `sweepExpiredRevokedJTIs` in `./security-redis.ts`.
+ * Mirrors `sweepExpiredRevokedJTIs` in `./jti-revocation.ts`.
  */
 export async function sweepExpiredRateLimitBuckets(): Promise<number> {
   try {

@@ -54,7 +54,6 @@ echo "------------------------"
 run_test_suite "Distributed Rate Limiting" "@pagespace/lib" "src/security/__tests__/distributed-rate-limit.test.ts"
 run_test_suite "Path Traversal Prevention" "@pagespace/lib" "src/security/__tests__/path-validator.test.ts"
 run_test_suite "SSRF URL Validation" "@pagespace/lib" "src/security/__tests__/url-validator.test.ts"
-run_test_suite "Security Redis (Unit)" "@pagespace/lib" "src/security/__tests__/security-redis.test.ts"
 run_test_suite "JTI Revocation (Integration)" "@pagespace/lib" "src/security/__tests__/jti-revocation.integration.test.ts"
 
 # =============================================================================
