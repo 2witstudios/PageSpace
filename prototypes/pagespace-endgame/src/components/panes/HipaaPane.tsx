@@ -22,10 +22,6 @@ export function HipaaPane() {
         customer&apos;s infrastructure. Cloud HIPAA is more achievable than it
         appears &mdash; most of the vendor BAA chain is already available.
       </p>
-      <p style={{ marginBottom: 28, maxWidth: 720 }}>
-        Reference: <code>docs/on-prem-deployment.md</code> includes a full
-        HIPAA compliance checklist.
-      </p>
 
       <h3 style={{ marginBottom: 12 }}>HIPAA deployment model</h3>
       <ArchDiagram>
@@ -124,7 +120,6 @@ export function HipaaPane() {
       <Card accent="green" style={{ marginBottom: 12 }}>
         <h4>On-prem deployment guide</h4>
         <p style={{ marginTop: 6, fontSize: 12 }}>
-          Full deployment guide at <code>docs/on-prem-deployment.md</code> with:
           HIPAA compliance checklist (6 technical + 7 administrative/physical
           safeguards), PostgreSQL encryption at rest (LUKS/FileVault),
           TLS configuration, network isolation, backup and recovery procedures
