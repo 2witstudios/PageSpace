@@ -40,6 +40,9 @@ export {
   type RateLimitResult,
 } from './distributed-rate-limit';
 
+// Auth handoff token sweep
+export { sweepExpiredAuthHandoffTokens } from './auth-handoff-sweep';
+
 // SSRF prevention (URL validation)
 export {
   validateExternalURL,

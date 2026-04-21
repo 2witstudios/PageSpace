@@ -17,24 +17,27 @@
  * 4. External verify endpoint calls `consumePasskeyRegisterHandoff` which
  *    atomically reads and deletes (one-time use).
  *
- * Matches the security posture of `./exchange-codes`:
+ * Storage: Postgres `auth_handoff_tokens`, kind='passkey-register-handoff'
+ * for the primary token and kind='passkey-options-marker' for the
+ * one-options-per-mint replay guard.
+ *
+ * Security posture:
  * - 32-byte base64url token, SHA-256 hashed at rest
  * - 300s TTL
- * - Lua GET+DEL for atomic consume
- * - Fail-closed on create when Redis is unavailable; log-and-return-null on
- *   read paths.
+ * - Atomic DELETE … RETURNING for consume (no select-then-delete race)
+ * - Fail-closed on create when DB is unavailable; log-and-return-null on
+ *   read paths; fail-closed (return false) on the marker.
  *
  * @module @pagespace/lib/auth/passkey-register-handoff
  */
 
 import { randomBytes } from 'crypto';
 import { hashToken } from './token-utils';
-import { tryGetSecurityRedisClient } from '../security/security-redis';
+import { db, authHandoffTokens, and, eq, sql } from '@pagespace/db';
 import { loggers } from '../logging/logger-config';
 
-const PASSKEY_REGISTER_HANDOFF_PREFIX = 'auth:passkey-register-handoff:';
-const PASSKEY_REGISTER_HANDOFF_OPTIONS_PREFIX =
-  'auth:passkey-register-handoff-options-issued:';
+const PASSKEY_REGISTER_HANDOFF_KIND = 'passkey-register-handoff';
+const PASSKEY_OPTIONS_MARKER_KIND = 'passkey-options-marker';
 const PASSKEY_REGISTER_HANDOFF_TTL_SECONDS = 300;
 
 export interface PasskeyRegisterHandoffData {
@@ -42,46 +45,43 @@ export interface PasskeyRegisterHandoffData {
   createdAt: number;
 }
 
-function keyFor(token: string): string {
-  return `${PASSKEY_REGISTER_HANDOFF_PREFIX}${hashToken(token)}`;
-}
-
-function optionsMarkerKeyFor(token: string): string {
-  return `${PASSKEY_REGISTER_HANDOFF_OPTIONS_PREFIX}${hashToken(token)}`;
-}
-
 /**
  * Create a one-time passkey register handoff token and store the associated
- * user identity in Redis.
+ * user identity in Postgres.
  *
- * @throws if Redis is unavailable (in any environment — fail fast)
+ * @throws if the DB is unavailable (in any environment — fail fast).
  */
 export async function createPasskeyRegisterHandoff(
-  input: { userId: string }
+  input: { userId: string },
 ): Promise<string> {
-  const redis = await tryGetSecurityRedisClient();
-
-  if (!redis) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(
-        'Cannot create passkey register handoff: Redis unavailable in production'
-      );
-    }
-    throw new Error('Redis required for passkey register handoff');
-  }
-
   const token = randomBytes(32).toString('base64url');
-  const key = keyFor(token);
   const data: PasskeyRegisterHandoffData = {
     userId: input.userId,
     createdAt: Date.now(),
   };
-
-  await redis.setex(
-    key,
-    PASSKEY_REGISTER_HANDOFF_TTL_SECONDS,
-    JSON.stringify(data)
+  const expiresAt = new Date(
+    Date.now() + PASSKEY_REGISTER_HANDOFF_TTL_SECONDS * 1000,
   );
+
+  try {
+    await db.insert(authHandoffTokens).values({
+      tokenHash: hashToken(token),
+      kind: PASSKEY_REGISTER_HANDOFF_KIND,
+      payload: data,
+      expiresAt,
+    });
+  } catch (error) {
+    loggers.auth.error(
+      'Cannot create passkey register handoff: Postgres query failed',
+      error as Error,
+    );
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'Cannot create passkey register handoff: Postgres unavailable in production',
+      );
+    }
+    throw new Error('Postgres required for passkey register handoff');
+  }
 
   loggers.auth.info('Passkey register handoff created', {
     userId: input.userId,
@@ -93,178 +93,148 @@ export async function createPasskeyRegisterHandoff(
 
 /**
  * Non-destructive lookup. Returns the stored handoff data without deleting
- * the key. Used by the external options endpoint so the verify call still
+ * the row. Used by the external options endpoint so the verify call still
  * finds a live token.
  *
- * Returns `null` for missing / expired / malformed tokens or when Redis is
- * unavailable — never throws.
+ * Returns `null` for missing / expired tokens or when the DB is unavailable
+ * — never throws.
  */
 export async function peekPasskeyRegisterHandoff(
-  token: string
+  token: string,
 ): Promise<PasskeyRegisterHandoffData | null> {
   if (!token || typeof token !== 'string') {
     return null;
   }
 
-  const redis = await tryGetSecurityRedisClient();
+  const tokenHash = hashToken(token);
 
-  if (!redis) {
-    if (process.env.NODE_ENV === 'production') {
-      loggers.auth.error(
-        'Cannot peek passkey register handoff: Redis unavailable in production'
-      );
-    }
-    return null;
-  }
-
-  const key = keyFor(token);
-
-  let raw: string | null;
+  let payload: unknown;
   try {
-    raw = (await redis.get(key)) as string | null;
+    const rows = await db
+      .select({ payload: authHandoffTokens.payload })
+      .from(authHandoffTokens)
+      .where(
+        and(
+          eq(authHandoffTokens.tokenHash, tokenHash),
+          eq(authHandoffTokens.kind, PASSKEY_REGISTER_HANDOFF_KIND),
+          sql`${authHandoffTokens.expiresAt} > now()`,
+        ),
+      )
+      .limit(1);
+    payload = rows[0]?.payload;
   } catch (error) {
     loggers.auth.error(
-      'Passkey register handoff peek Redis error',
-      error as Error
+      'Passkey register handoff peek DB error',
+      error as Error,
     );
     return null;
   }
 
-  if (!raw) {
+  if (!payload || typeof payload !== 'object') {
     loggers.auth.warn('Passkey register handoff peek miss', {
       tokenPrefix: token.substring(0, 8),
     });
     return null;
   }
 
-  try {
-    return JSON.parse(raw) as PasskeyRegisterHandoffData;
-  } catch (error) {
-    loggers.auth.error(
-      'Failed to parse passkey register handoff data (peek)',
-      error as Error
-    );
-    return null;
-  }
+  return payload as PasskeyRegisterHandoffData;
 }
 
 /**
- * Atomically read and delete a passkey register handoff token. One-time use —
- * a second call returns `null`.
+ * Atomically read and delete a passkey register handoff token. One-time
+ * use — a second call returns `null`.
  *
- * Returns `null` for missing / expired / malformed tokens or when Redis is
- * unavailable — never throws.
+ * Returns `null` for missing / expired tokens or when the DB is unavailable
+ * — never throws.
  */
 export async function consumePasskeyRegisterHandoff(
-  token: string
+  token: string,
 ): Promise<PasskeyRegisterHandoffData | null> {
   if (!token || typeof token !== 'string') {
     return null;
   }
 
-  const redis = await tryGetSecurityRedisClient();
+  const tokenHash = hashToken(token);
 
-  if (!redis) {
-    if (process.env.NODE_ENV === 'production') {
-      loggers.auth.error(
-        'Cannot consume passkey register handoff: Redis unavailable in production'
-      );
-    }
-    return null;
-  }
-
-  const key = keyFor(token);
-
-  const luaScript = `
-    local data = redis.call('GET', KEYS[1])
-    if data then
-      redis.call('DEL', KEYS[1])
-    end
-    return data
-  `;
-
-  let raw: string | null;
+  let payload: unknown;
   try {
-    raw = (await redis.eval(luaScript, 1, key)) as string | null;
+    const result = await db.execute<{ payload: unknown }>(
+      sql`DELETE FROM ${authHandoffTokens}
+          WHERE ${authHandoffTokens.tokenHash} = ${tokenHash}
+            AND ${authHandoffTokens.kind} = ${PASSKEY_REGISTER_HANDOFF_KIND}
+            AND ${authHandoffTokens.expiresAt} > now()
+          RETURNING ${authHandoffTokens.payload} AS payload`,
+    );
+    payload = result.rows[0]?.payload;
   } catch (error) {
     loggers.auth.error(
-      'Passkey register handoff consume Redis error',
-      error as Error
+      'Passkey register handoff consume DB error',
+      error as Error,
     );
     return null;
   }
 
-  if (!raw) {
+  if (!payload || typeof payload !== 'object') {
     loggers.auth.warn('Passkey register handoff invalid or already consumed', {
       tokenPrefix: token.substring(0, 8),
     });
     return null;
   }
 
-  try {
-    const parsed = JSON.parse(raw) as PasskeyRegisterHandoffData;
-    loggers.auth.info('Passkey register handoff consumed', {
-      userId: parsed.userId,
-    });
-    return parsed;
-  } catch (error) {
-    loggers.auth.error(
-      'Failed to parse passkey register handoff data (consume)',
-      error as Error
-    );
-    return null;
-  }
+  const parsed = payload as PasskeyRegisterHandoffData;
+  loggers.auth.info('Passkey register handoff consumed', {
+    userId: parsed.userId,
+  });
+  return parsed;
 }
 
 /**
- * One-options-per-handoff-token guard. Sets a short-lived marker the first
- * time a handoff token is used to issue WebAuthn registration options.
- * Returns `true` if the marker was set (first call — caller should proceed)
- * or `false` if the marker already existed (replay — caller should reject).
+ * One-options-per-handoff-token guard. Inserts a short-lived marker the
+ * first time a handoff token is used to issue WebAuthn registration
+ * options. Returns `true` if the marker was set (first call — caller
+ * should proceed) or `false` if the marker already existed (replay —
+ * caller should reject).
  *
  * Required because the options endpoint uses `peek` (non-destructive), so
  * without this guard a single minted handoff token could drive unbounded
  * `generateRegistrationOptions` calls within its TTL. The legitimate
  * ceremony calls options exactly once per minted token.
  *
- * Fails closed: any Redis unavailability or error returns `false`. A
- * transient Redis blip forces the client to re-mint, which is acceptable
+ * Fails closed: any DB unavailability or error returns `false`. A
+ * transient DB blip forces the client to re-mint, which is acceptable
  * (mint is session-authed + rate-limited) and strictly safer than opening
  * the replay window.
  */
 export async function markPasskeyRegisterOptionsIssued(
-  token: string
+  token: string,
 ): Promise<boolean> {
   if (!token || typeof token !== 'string') {
     return false;
   }
 
-  const redis = await tryGetSecurityRedisClient();
-
-  if (!redis) {
-    if (process.env.NODE_ENV === 'production') {
-      loggers.auth.error(
-        'Cannot mark passkey register options issued: Redis unavailable in production'
-      );
-    }
-    return false;
-  }
-
-  const key = optionsMarkerKeyFor(token);
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(
+    Date.now() + PASSKEY_REGISTER_HANDOFF_TTL_SECONDS * 1000,
+  );
 
   try {
-    const result = await redis.set(
-      key,
-      '1',
-      'EX',
-      PASSKEY_REGISTER_HANDOFF_TTL_SECONDS,
-      'NX'
-    );
-    return result === 'OK';
+    const inserted = await db
+      .insert(authHandoffTokens)
+      .values({
+        tokenHash,
+        kind: PASSKEY_OPTIONS_MARKER_KIND,
+        payload: {},
+        expiresAt,
+      })
+      .onConflictDoNothing({
+        target: [authHandoffTokens.tokenHash, authHandoffTokens.kind],
+      })
+      .returning({ tokenHash: authHandoffTokens.tokenHash });
+    return inserted.length > 0;
   } catch (error) {
     loggers.auth.error(
-      'Passkey register options marker Redis error',
-      error as Error
+      'Passkey register options marker DB error',
+      error as Error,
     );
     return false;
   }
