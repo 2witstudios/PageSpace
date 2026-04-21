@@ -208,7 +208,7 @@ Tool errors are captured and reported back to the AI, which can retry or adjust 
 
 - **Permission denied**: AI explains the permission requirement to the user
 - **Page not found**: AI suggests alternative actions
-- **Rate limited**: Built-in retry with up to 20 retries for rate limit errors
+- **Rate limited**: Built-in retry with up to 3 retries for rate limit errors
 - **Validation errors**: AI adjusts parameters and retries
 
 ## Real-Time Broadcasting
