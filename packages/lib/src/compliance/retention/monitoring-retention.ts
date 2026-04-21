@@ -71,9 +71,8 @@ export async function cleanupUserActivities(opts: { retentionDays: number }): Pr
 }
 
 // security_audit_log is intentionally excluded — tamper-evident hash chain
-// requires infinite retention to preserve chain integrity for verification.
-// See docs/security/audit-log-retention-policy.md for the GDPR Art 17(3)(b)
-// legal-obligation justification.
+// requires infinite retention to preserve chain integrity for verification
+// (GDPR Art 17(3)(b) legal-obligation justification).
 
 export async function runMonitoringRetentionCleanup(): Promise<CleanupResult[]> {
   const config = getRetentionConfig();
