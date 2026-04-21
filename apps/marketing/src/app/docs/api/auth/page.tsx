@@ -11,7 +11,7 @@ export const metadata = createMetadata({
 const content = `
 # Auth API
 
-PageSpace uses passwordless authentication: **passkeys (WebAuthn)** or **magic links** for primary sign-in, with **Google** and **Apple** OAuth as alternative flows. Sessions are opaque 32-byte tokens stored in an httpOnly \`session\` cookie; only the SHA-256 hash is persisted. There are no JWTs, access tokens, or refresh tokens for web sessions.
+PageSpace uses passwordless authentication: **passkeys (WebAuthn)** or **magic links** for primary sign-in, with **Google** and **Apple** OAuth as alternative flows. Sessions are opaque 32-byte tokens stored in an httpOnly \`session\` cookie; only the SHA-256 hash is persisted.
 
 ## CSRF
 

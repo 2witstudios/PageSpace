@@ -88,10 +88,6 @@ Every tool respects the caller's permissions. If you cannot view a page in the w
 - **Hash-only storage** — the database stores a SHA-256 hash, never the raw token. Losing a token means creating a new one.
 - **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
 
-## Custom instance URLs
-
-Set \`PAGESPACE_API_URL\` to whichever PageSpace instance the token belongs to. The MCP server talks to that instance over HTTPS.
-
 ## Troubleshooting
 
 **Token rejected**: confirm it hasn't been revoked in **Settings > MCP** and that it starts with \`mcp_\`.

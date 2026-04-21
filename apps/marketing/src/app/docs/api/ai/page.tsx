@@ -128,7 +128,7 @@ Save credentials for a provider.
 }
 \`\`\`
 
-\`apiKey\` is required for remote providers; \`baseUrl\` is required for \`ollama\`, \`lmstudio\`, and \`azure_openai\` and is validated for SSRF. API keys are encrypted before storage. On-prem mode blocks providers outside the allow-list.
+\`apiKey\` is required for remote providers; \`baseUrl\` is required for \`ollama\`, \`lmstudio\`, and \`azure_openai\` and is validated for SSRF. API keys are encrypted before storage.
 
 ---
 
