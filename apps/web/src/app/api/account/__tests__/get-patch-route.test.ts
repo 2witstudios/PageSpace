@@ -202,11 +202,11 @@ describe('PATCH /api/account', () => {
     expect(response.status).toBe(401);
   });
 
-  it('should return 400 when name is missing', async () => {
+  it('should return 400 when both name and email are missing', async () => {
     // Arrange
     const request = new Request('https://example.com/api/account', {
       method: 'PATCH',
-      body: JSON.stringify({ email: 'test@example.com' }),
+      body: JSON.stringify({}),
     });
 
     // Act
@@ -215,14 +215,25 @@ describe('PATCH /api/account', () => {
 
     // Assert
     expect(response.status).toBe(400);
-    expect(body.error).toBe('Name and email are required');
+    expect(body.error).toBe('At least one of name or email is required');
   });
 
-  it('should return 400 when email is missing', async () => {
+  it('should accept a partial PATCH with only name and not overwrite email', async () => {
     // Arrange
+    const updatedUser = {
+      id: mockUserId,
+      name: 'Updated Name',
+      email: 'existing@example.com',
+      image: null,
+    };
+    const returningMock = vi.fn().mockResolvedValue([updatedUser]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
     const request = new Request('https://example.com/api/account', {
       method: 'PATCH',
-      body: JSON.stringify({ name: 'Test User' }),
+      body: JSON.stringify({ name: 'Updated Name' }),
     });
 
     // Act
@@ -230,8 +241,39 @@ describe('PATCH /api/account', () => {
     const body = await response.json();
 
     // Assert
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Name and email are required');
+    expect(response.status).toBe(200);
+    expect(body.name).toBe('Updated Name');
+    expect(setMock).toHaveBeenCalledWith({ name: 'Updated Name' });
+  });
+
+  it('should accept a partial PATCH with only email and not overwrite name', async () => {
+    // Arrange
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+
+    const updatedUser = {
+      id: mockUserId,
+      name: 'Existing Name',
+      email: 'new@example.com',
+      image: null,
+    };
+    const returningMock = vi.fn().mockResolvedValue([updatedUser]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'new@example.com' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+    const body = await response.json();
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(body.email).toBe('new@example.com');
+    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com' });
   });
 
   it('should return 400 when email format is invalid', async () => {
