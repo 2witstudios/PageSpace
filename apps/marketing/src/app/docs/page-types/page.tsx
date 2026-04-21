@@ -136,7 +136,8 @@ Project management with structured task tracking.
 | Feature | Detail |
 |---------|--------|
 | Views | Table view and kanban board (toggled in the header) |
-| Fields | Title, status (configurable per list), priority (\`low\`/\`medium\`/\`high\`), due date, multiple assignees (users or AI agents) |
+| Fields | Title, priority (\`low\`/\`medium\`/\`high\`), due date, and multiple assignees (users or AI agents) |
+| Custom statuses | Each list defines its own status set — name, color, and group (\`todo\` / \`in_progress\` / \`done\`) — stored in \`task_status_configs\` |
 | AI | Agents create and update tasks via \`update_task\` and pick up assigned work via \`get_assigned_tasks\` |
 | Real-time | Yes — live status updates via Socket.IO |
 | Linked pages | Page-based tasks have an optional linked DOCUMENT for notes (\`taskItems.pageId\`) |
