@@ -2,7 +2,8 @@
  * Tests for One-Time Exchange Codes
  *
  * These tests verify the core token hashing and code generation logic.
- * Integration tests with Redis would require a running Redis instance.
+ * End-to-end tests against auth_handoff_tokens live in
+ * `exchange-codes-impl.test.ts` (mocks the Postgres boundary).
  */
 
 import { describe, it, expect } from 'vitest';

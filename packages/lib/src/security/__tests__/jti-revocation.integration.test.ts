@@ -14,7 +14,7 @@ import {
   isJTIRevoked,
   revokeJTI,
   sweepExpiredRevokedJTIs,
-} from '../security-redis';
+} from '../jti-revocation';
 
 const originalNodeEnv = process.env.NODE_ENV;
 let dbAvailable = false;

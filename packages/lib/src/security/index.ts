@@ -2,30 +2,20 @@
  * Security Module
  *
  * Provides security utilities for PageSpace:
- * - Distributed rate limiting
- * - JTI (JWT ID) tracking and revocation
- * - Session management
+ * - Distributed rate limiting (Postgres)
+ * - JTI (JWT ID) tracking and revocation (Postgres)
+ * - Auth handoff token sweep (Postgres)
  * - SSRF prevention (URL validation)
  * - Path traversal prevention
  */
 
-// Security Redis operations
+// JTI (JWT ID) revocation
 export {
-  getSecurityRedisClient,
-  isSecurityRedisAvailable,
-  tryGetSecurityRedisClient,
-  checkSecurityRedisHealth,
-  // JTI operations
   recordJTI,
   isJTIRevoked,
   revokeJTI,
-  revokeAllUserJTIs,
   sweepExpiredRevokedJTIs,
-  // Session operations
-  setSessionData,
-  getSessionData,
-  deleteSessionData,
-} from './security-redis';
+} from './jti-revocation';
 
 // Distributed rate limiting
 export {

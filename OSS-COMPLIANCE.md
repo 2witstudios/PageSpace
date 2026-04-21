@@ -393,7 +393,7 @@ and the seller rotates or retires keys.
 
 | Item | Reason |
 |---|---|
-| Production VPS (Postgres + Redis) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
+| Production VPS (Postgres) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
 | BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | Encrypted at rest in `user_ai_settings.encryptedApiKey` (`packages/db/src/schema/ai.ts`); handover handled as part of the database migration in §4.5. |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
 
@@ -431,9 +431,8 @@ table list: from `packages/db/src/schema/`.
 
 **Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
 buyer-provided Postgres over an encrypted transfer channel (SSH tunnel
-or signed S3-compatible upload with a short-lived credential). Redis is not
-migrated — it contains only ephemeral session / pub-sub state and is
-reconstituted empty on buyer infrastructure.
+or signed S3-compatible upload with a short-lived credential). The production
+stack runs on Postgres only — there is no secondary datastore to coordinate.
 
 **BYOK keys — encryption at rest and handover options.** The
 `user_ai_settings.encryptedApiKey` column is encrypted with a symmetric key
@@ -795,7 +794,6 @@ package's `package.json` `license` field.
 | @ionic/utils-stream | 3.1.7 | MIT |
 | @ionic/utils-subprocess | 3.0.1 | MIT |
 | @ionic/utils-terminal | 2.3.5 | MIT |
-| @ioredis/commands | 1.4.0 | MIT |
 | @isaacs/balanced-match | 4.0.1 | MIT |
 | @isaacs/brace-expansion | 5.0.0 | MIT |
 | @isaacs/cliui | 8.0.2 | ISC |
@@ -1500,7 +1498,6 @@ package's `package.json` `license` field.
 | delaunator | 5.0.1 | ISC |
 | delayed-stream | 1.0.0 | MIT |
 | delegates | 1.0.0 | MIT |
-| denque | 2.1.0 | Apache-2.0 |
 | depd | 2.0.0 | MIT |
 | dequal | 2.0.3 | MIT |
 | detect-libc | 2.1.1 | Apache-2.0 |
@@ -1811,7 +1808,6 @@ package's `package.json` `license` field.
 | internal-slot | 1.1.0 | MIT |
 | internmap | 1.0.1 | ISC |
 | internmap | 2.0.3 | ISC |
-| ioredis | 5.8.0 | MIT |
 | ip-address | 10.0.1 | MIT |
 | ip-address | 10.1.0 | MIT |
 | ipaddr.js | 1.9.1 | MIT |
@@ -2336,8 +2332,6 @@ package's `package.json` `license` field.
 | recharts | 3.2.1 | MIT |
 | recharts-scale | 0.4.5 | MIT |
 | redent | 3.0.0 | MIT |
-| redis-errors | 1.2.0 | MIT |
-| redis-parser | 3.0.0 | MIT |
 | redux | 5.0.1 | MIT |
 | redux-thunk | 3.1.0 | MIT |
 | reflect-metadata | 0.2.2 | Apache-2.0 |
@@ -2467,7 +2461,6 @@ package's `package.json` `license` field.
 | stable-hash | 0.0.5 | MIT |
 | stack-utils | 2.0.6 | MIT |
 | stackback | 0.0.2 | MIT |
-| standard-as-callback | 2.1.0 | MIT |
 | stat-mode | 1.0.0 | MIT |
 | state-local | 1.0.7 | MIT |
 | statuses | 2.0.1 | MIT |

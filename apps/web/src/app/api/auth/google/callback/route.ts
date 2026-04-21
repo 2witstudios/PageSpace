@@ -276,7 +276,7 @@ export async function GET(req: Request) {
       });
 
       // SECURE TOKEN HANDOFF: Generate one-time exchange code
-      // Tokens are stored server-side in Redis, only opaque code appears in URL
+      // Tokens are stored server-side in Postgres (auth_handoff_tokens); only the opaque code appears in URL
       // This prevents token leakage in nginx logs, browser history, referer headers
       const exchangeCode = await createExchangeCode({
         sessionToken,
@@ -338,7 +338,7 @@ export async function GET(req: Request) {
       });
 
       // SECURE TOKEN HANDOFF: Generate one-time exchange code
-      // Tokens are stored server-side in Redis, only opaque code appears in URL
+      // Tokens are stored server-side in Postgres (auth_handoff_tokens); only the opaque code appears in URL
       const exchangeCode = await createExchangeCode({
         sessionToken,
         csrfToken,

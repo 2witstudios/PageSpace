@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { getUsageLimits } from '../usage-service';
 
 // Note: incrementUsage, getCurrentUsage, and getUserUsageSummary require database
-// and Redis mocking. We test those in integration tests. Here we test the pure function.
+// mocking. We test those in integration tests. Here we test the pure function.
 
 describe('Usage Service', () => {
   describe('getUsageLimits()', () => {

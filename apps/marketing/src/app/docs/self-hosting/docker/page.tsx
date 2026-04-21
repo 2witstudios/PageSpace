@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Docker Setup",
-  description: "Deploy PageSpace with Docker Compose. Complete docker-compose.yml configuration for all services, PostgreSQL, and Redis.",
+  description: "Deploy PageSpace with Docker Compose. Complete docker-compose.yml configuration for all services and PostgreSQL.",
   path: "/docs/self-hosting/docker",
   keywords: ["Docker", "Docker Compose", "deployment", "containers", "PostgreSQL"],
 });
@@ -33,16 +33,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   web:
     build:
       context: .
@@ -51,14 +41,11 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: postgresql://pagespace:\${POSTGRES_PASSWORD}@postgres:5432/pagespace
-      REDIS_URL: redis://redis:6379
       REALTIME_URL: http://realtime:3001
       PROCESSOR_URL: http://processor:3003
       NEXT_PUBLIC_APP_URL: \${APP_URL:-http://localhost:3000}
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   realtime:
@@ -69,7 +56,6 @@ services:
       - "3001:3001"
     environment:
       DATABASE_URL: postgresql://pagespace:\${POSTGRES_PASSWORD}@postgres:5432/pagespace
-      REDIS_URL: redis://redis:6379
       SERVICE_SECRET: \${SERVICE_SECRET}
     depends_on:
       postgres:

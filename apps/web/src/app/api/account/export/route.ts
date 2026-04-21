@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   }
   const userId = auth.userId;
 
-  // Rate limiting (distributed via Redis)
+  // Rate limiting (distributed via Postgres rate_limit_buckets)
   const rateLimitKey = `export:user:${userId}`;
   const rateLimitResult = await checkDistributedRateLimit(
     rateLimitKey,
