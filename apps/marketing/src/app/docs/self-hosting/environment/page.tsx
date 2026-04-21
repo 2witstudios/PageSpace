@@ -43,6 +43,24 @@ GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 \`\`\`
 
+### Cookie SameSite policy
+
+PageSpace selects the auth cookie's \`SameSite\` attribute from \`NODE_ENV\` + \`COOKIE_DOMAIN\`:
+
+| NODE_ENV | COOKIE_DOMAIN | SameSite | Cookie \`domain\` |
+|----------|---------------|----------|----------------|
+| \`production\` | set | \`Lax\` | the value of \`COOKIE_DOMAIN\` |
+| \`production\` | unset | \`Strict\` | host-only (no \`domain\`) |
+| anything else | — | \`Strict\` | host-only |
+
+Set \`COOKIE_DOMAIN\` (e.g. \`.example.com\`) if your deployment spans subdomains — the web app, realtime service, and any redirect-based login flow need the cookie to flow across them, which requires \`SameSite=Lax\`. A single-host deployment can leave it unset and keep \`Strict\` for the extra CSRF defence-in-depth.
+
+The selected policy is logged once at startup, e.g.:
+
+\`\`\`
+[auth] cookie policy: SameSite=Lax domain=.example.com (NODE_ENV=production, COOKIE_DOMAIN=set)
+\`\`\`
+
 ## Service URLs
 
 | Variable | Required | Description |
@@ -65,11 +83,11 @@ AI provider keys are configured per-user in the web UI, not via environment vari
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`OPENROUTER_API_KEY\` | No | OpenRouter API key for the built-in PageSpace provider |
+| \`OPENROUTER_DEFAULT_API_KEY\` | No | OpenRouter API key for the built-in PageSpace provider |
 | \`ENCRYPTION_KEY\` | Yes | Key for encrypting user AI API keys at rest |
 
 \`\`\`bash
-OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+OPENROUTER_DEFAULT_API_KEY=sk-or-v1-your-openrouter-key
 ENCRYPTION_KEY=your-32-byte-encryption-key
 \`\`\`
 
@@ -129,7 +147,7 @@ GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-secret
 
 # Optional: Default AI provider
-OPENROUTER_API_KEY=sk-or-v1-your-key
+OPENROUTER_DEFAULT_API_KEY=sk-or-v1-your-key
 \`\`\`
 
 ## Generating Secrets

@@ -1,9 +1,19 @@
 import { users, db, eq } from '@pagespace/db';
+import { z } from 'zod';
 import { loggers, accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+
+const patchBodySchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    email: z.string().trim().optional(),
+  })
+  .refine((data) => data.name !== undefined || data.email !== undefined, {
+    message: 'At least one of name or email is required',
+  });
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -48,19 +58,19 @@ export async function PATCH(req: Request) {
 
   try {
     const body = await req.json();
-    const { name, email } = body;
+    const parsed = patchBodySchema.safeParse(body);
 
-    // Validate inputs
-    if (!name || !email) {
-      return Response.json({ error: 'Name and email are required' }, { status: 400 });
+    if (!parsed.success) {
+      return Response.json({ error: 'At least one of name or email is required' }, { status: 400 });
     }
 
-    if (!isValidEmail(email)) {
+    const { name, email } = parsed.data;
+
+    if (email !== undefined && !isValidEmail(email)) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    // Check if email is already taken by another user
-    if (email) {
+    if (email !== undefined) {
       const existingUser = await db.query.users.findFirst({
         where: eq(users.email, email),
       });
@@ -70,13 +80,13 @@ export async function PATCH(req: Request) {
       }
     }
 
-    // Update user
+    const updates: { name?: string; email?: string } = {};
+    if (name !== undefined) updates.name = name;
+    if (email !== undefined) updates.email = email.toLowerCase();
+
     const [updatedUser] = await db
       .update(users)
-      .set({
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-      })
+      .set(updates)
       .where(eq(users.id, userId))
       .returning({
         id: users.id,
@@ -92,8 +102,8 @@ export async function PATCH(req: Request) {
     // Log activity for audit trail (profile updates may be security-relevant)
     const actorInfo = await getActorInfo(userId);
     const updatedFields: string[] = [];
-    if (name) updatedFields.push('name');
-    if (email) updatedFields.push('email');
+    if (name !== undefined) updatedFields.push('name');
+    if (email !== undefined) updatedFields.push('email');
     logUserActivity(userId, 'profile_update', {
       targetUserId: userId,
       targetUserEmail: updatedUser.email,
