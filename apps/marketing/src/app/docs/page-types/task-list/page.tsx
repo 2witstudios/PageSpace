@@ -38,15 +38,6 @@ Agent triggers sit on top of that. When you attach one to a task, you pick an ag
 
 Reordering uses the page tree. Because each task is backed by a Document page, dragging a task up or down changes the underlying page's position, so the order you see in the list is the same order you see in the sidebar.
 
-## What it doesn't do
-
-- **No recurring tasks.** A task fires once. If you want a weekly check-in, schedule it from the Calendar, or build the recurrence into a triggered agent that creates the next task.
-- **No subtasks or dependencies.** The list is flat. You can't mark one task as "blocked by" another, and you can't nest a task under another task. Group related work in a folder instead, or put the breakdown in the task's linked document.
-- **No time tracking.** There's no estimated hours field, no time log, and no burndown chart. Due dates are a single timestamp, not a range.
-- **No comments thread on the task row.** Discussion lives in the linked document or in a Channel — the task itself only carries the title, description, and metadata.
-- **Agent trigger prompts cap at 10,000 characters, and you can attach at most 10 context pages.** If you need more, point the trigger at an instruction page instead of pasting the prompt inline.
-- **You can't reorder statuses from the configuration panel.** You can add, rename, recolor, regroup, and delete them, but the order is fixed by creation order.
-
 ## Related
 
 - [Pages](/docs/features/pages) — every task is backed by a Document page, and Task Lists follow the same permissions, sharing, and trash rules as any other page.

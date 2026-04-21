@@ -43,14 +43,6 @@ You don't have a password. There is no password stored for your account — ther
 
 **Deployment changes what's on the sign-in screen.** On the hosted pagespace.ai service you see passkey, magic link, Google, and Apple, and anyone can create an account. On a self-hosted install, Google and Apple sign-in aren't available and self-signup is turned off — your administrator creates the account and you sign in with a passkey or magic link. Self-hosted installs also idle sessions out after 15 minutes of inactivity by default.
 
-## What it doesn't do
-
-- **It doesn't let you set a password.** There's no password field on the account. "Forgot password" doesn't exist because there's nothing to forget — if you lose access to your passkey and your email, you lose access to the account.
-- **It doesn't let you self-sign-up on a self-hosted install.** If your team runs its own PageSpace, an administrator has to create your account before you can sign in. Visiting the signup page just redirects you with a "contact your administrator" message.
-- **It doesn't offer Google or Apple sign-in on self-hosted installs.** Those providers are only wired up on the hosted pagespace.ai service. If you're running your own PageSpace, you sign in with a passkey or a magic link.
-- **It doesn't keep magic links alive.** A link is good for 5 minutes and one click. If your email provider delays delivery past that window, the link is dead when it arrives and you'll need to request another.
-- **It doesn't sync passkeys between devices for you.** Platform passkeys (iCloud Keychain, Google Password Manager) sync within their own ecosystem, but a passkey registered only on one laptop stays on that laptop. Register a second passkey per device if you want redundancy.
-
 ## Related
 
 - [Sharing & Permissions](/docs/features/sharing) — what signing in actually lets you see once you're in.

@@ -42,15 +42,10 @@ Integrations (Google Drive, GitHub, calendars, and so on) are attached to the dr
 
 Backups are point-in-time snapshots of the drive — every page, every permission grant, every member, every custom role, and every file reference. Only owners and admins can trigger or view them. A backup gives you a rollback point before a risky change.
 
-## What it doesn't do
+## Good to know
 
-- **A page can't belong to two drives.** If you need the same content in two places, use an @-mention or move the page — there's no multi-home for pages.
-- **Page-level collaborators are not drive members.** They can't create pages in the drive, can't be chosen as task assignees, and can't be used as a scope for a drive-level service token. If someone needs to be part of the drive, invite them to the drive, not just one page.
-- **The member role does not automatically see every page.** Members see the pages they were explicitly granted access to when invited. If you want someone to see the whole tree automatically, invite them as an admin.
-- **Members don't inherit your personal integrations.** Your Google Drive connection on your account doesn't flow through to a drive you created — you attach the connection to the drive explicitly, and that's what members use.
-- **Invitations that haven't been accepted don't confer access.** A pending invite sits on the member list, but permission checks treat them as if they're not there yet.
-- **Deleting a drive isn't permanent by default.** A deleted drive goes to the drive trash with all its pages intact, and stays there until you restore it.
-- **The \`Personal\` name is reserved.** You can't create a second drive called Personal.
+- **The member role sees only what's granted.** Unlike owners and admins, a plain member doesn't automatically see every page in the drive — they see the pages they were explicitly added to when invited. Invite someone as an admin if you want them to have full tree access.
+- **Deleting a drive goes to trash first.** A deleted drive sits in the drive trash with all its pages intact, and stays there until you restore or purge it.
 
 ## Related
 

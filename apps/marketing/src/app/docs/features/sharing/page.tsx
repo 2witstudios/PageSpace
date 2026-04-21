@@ -35,12 +35,10 @@ Every per-page grant is one record per person per page, with four flags. **There
 
 Role templates are a convenience layer for owners and admins. A template says "people with this role get View + Edit on this set of pages" — it saves you from wiring up the same grants by hand every time you onboard a new person. Templates don't change the resolution order; they're just a tidy way to produce the same per-page grants.
 
-## What it doesn't do
+## Good to know
 
-- **No public or link-only sharing.** Access is tied to a PageSpace account. You invite by email, and if the person doesn't have an account yet, they sign up before you can grant them anything. There are no "anyone with the link can view" URLs.
-- **No folder inheritance.** Granting access to a folder does not grant access to any page inside it. If you want someone to see a folder and its contents, you grant each one — or put them in a role template that covers the set.
-- **No domain-wide rules.** There is no "everyone at acme.com gets view" switch. Every person is added individually, either directly or through a role template.
-- **No bundled delete.** Role templates and the drive-invite flow cover view, edit, and share only. Delete access is granted one person at a time from each page's **Share** dialog — it can't be baked into a role.
+- **Sharing is per-person, not per-link.** Every grant is tied to a specific PageSpace account — there are no public URLs. If the person doesn't have an account yet, they sign up before you can grant them anything.
+- **Folder access doesn't cascade to children.** Granting access to a folder lets someone open the folder page itself; each child page is checked on its own grants. This prevents the common "I shared a subfolder and accidentally gave away the tree" accident.
 
 ## Related
 

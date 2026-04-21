@@ -34,16 +34,6 @@ When your message contains \`@Agent Name\`, PageSpace looks at what that agent i
 
 Unread tracking is per-person: opening a channel marks it read up to the latest message, and your inbox shows a count of channels with activity since you last looked.
 
-## What it doesn't do
-
-- **No threads or replies.** Every message is part of one flat timeline. If you want a side conversation, make a new channel.
-- **No editing or deleting a message after you send it.** Messages are the permanent record of what was said. The one exception is that removing the channel page removes its messages with it.
-- **No direct messages from inside a channel.** DMs are a separate surface — you can't convert a channel message into a private chat, and you can't @mention someone who isn't already a member of the drive to invite them in.
-- **No voice, video, or screen share.** Channels are text and attachments only. There are no calls, no huddles, and no presence beyond "this person has the channel open right now."
-- **No private sub-groups inside a channel.** If two people in a channel can both see it, they both see every message. To restrict who sees what, put the channel under a folder with tighter permissions or create a separate channel.
-- **No message scheduling, pinning, or bookmarks.** You send a message when you send it, and you find older messages by scrolling or searching.
-- **No cross-drive channels.** A channel belongs to exactly one drive, and only members of that drive (plus anyone granted explicit access) can see it.
-
 ## Related
 
 - [Pages](/docs/features/pages) — channels are a page type, so everything pages do (move, share, version the title) applies.

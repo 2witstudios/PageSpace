@@ -46,15 +46,10 @@ Real-time collaboration runs through the same socket channel every other page us
 
 AI agents read and edit sheets through the same page permissions as anyone else. On an [AI Chat page](/docs/page-types/ai-chat) that can see the sheet, an agent reads the evaluated grid and writes back to specific cell addresses — values, formulas, or clears — in a single batched call. Formulas the agent writes run through the same engine as formulas you write.
 
-## What it doesn't do
+## Good to know
 
-- **Not every Excel function is here.** There is no \`VLOOKUP\`, \`HLOOKUP\`, \`INDEX\`, \`MATCH\`, \`XLOOKUP\`, \`SUMIF\`, \`COUNTIF\`, \`SUMPRODUCT\`, financial, or array functions. If it's not in the list above, the formula will fail with \`#ERROR\`.
-- **No charts, pivot tables, or conditional formatting.** A sheet renders as a grid of values — no built-in visualisation, no coloured-by-rule cells, no pivot view. For charts, drop the numbers into a Canvas page.
-- **No cell formatting.** There is no bold, colour, currency, percentage, date format, column width, or merged cells. Numbers display as numbers; dates you type show as the string you typed.
-- **Export flattens formulas.** CSV and XLSX downloads contain the evaluated values only — \`=SUM(A1:A3)\` exports as the number, not the formula. Open the file elsewhere and the formulas are gone.
-- **No CSV or XLSX import.** You can't upload a spreadsheet file to turn it into a sheet page. Paste the data in from your clipboard, type it, or ask an AI agent to write the cells.
-- **Collaboration isn't cell-level.** Two people editing the same cell at the same instant don't merge — one version arrives second and overwrites the other. Different cells are safe; the same cell is last-write-wins.
-- **Sheets aren't unbounded.** The grid grows as you fill it, but a sheet is stored as a single page document that re-evaluates from scratch on every edit. If you're reaching for a database-sized dataset, a sheet isn't the right container.
+- **Not every Excel function is here.** The supported set is listed above. Lookups (\`VLOOKUP\`, \`XLOOKUP\`, \`INDEX/MATCH\`), conditional aggregates (\`SUMIF\`, \`COUNTIF\`), and array/financial functions aren't included — formulas that reference them return \`#ERROR\`.
+- **Sheets aren't unbounded.** The grid grows as you fill it, but a sheet re-evaluates from scratch on every edit. For database-sized datasets, reach for a different container.
 
 ## Related
 

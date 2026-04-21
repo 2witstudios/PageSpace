@@ -39,15 +39,10 @@ Clicks inside a Canvas are caught at the shadow root. Anchors and elements with 
 
 Saves are optimistic and debounced, and every save carries the revision you started from — if someone else saved in the meantime, your save is rejected as a conflict and your editor re-fetches their version before continuing, instead of silently overwriting it. Readers get a socket event after each save and re-fetch the HTML, so other viewers see your changes once a save lands, not while you're typing. Every save writes to version history, so you can roll back to any earlier HTML.
 
-## What it doesn't do
+## Good to know
 
-- **No JavaScript.** \`<script>\` tags are stripped and every inline event handler (\`onclick\`, \`onerror\`, and the rest) is removed. Your Canvas can't fetch data, run a framework, animate with JS, or respond to anything beyond CSS \`:hover\` and the built-in click-to-navigate behaviour.
-- **No external stylesheets or CSS-loaded assets.** \`<link>\` tags are stripped, and any \`url(...)\` in your CSS that points at \`https://\` is replaced with an empty URL. External \`@import\` is removed as well. That means you can't pull a CSS background-image, a Google Font, or a CDN stylesheet from the network — inline the asset as a \`data:\` URI (image or font MIME types only) instead.
-- **No iframes, embeds, or meta tags.** \`<iframe>\`, \`<object>\`, \`<embed>\`, \`<link>\`, and \`<meta>\` are all removed, so you can't embed a YouTube video, a Figma frame, a tracker, or a custom favicon.
-- **No live collaborative editing.** You won't see another editor's cursor or their edits as they type. Other viewers only see your HTML once you've saved, and two editors saving at once will see each other's changes as conflicts that force a re-fetch.
-- **No export format.** Canvas pages don't download as HTML or as anything else. If you need an offline copy, copy the code out of the Code tab.
-- **No Canvas-aware AI tool.** An agent can edit the HTML source line-by-line the same way it would edit any document, but there's no Canvas-aware assistant that understands the DOM, previews the render, or auto-fixes invalid markup.
-- **No uploads.** You can't drag an image onto a Canvas to embed it — attach images to a document or a file page instead, or paste them in as base64 \`data:\` URIs.
+- **No JavaScript runs.** \`<script>\` tags and inline event handlers (\`onclick\`, \`onerror\`, and the rest) are stripped for sandbox safety. CSS \`:hover\` and the built-in click-to-navigate behaviour are all the interactivity a Canvas gets.
+- **No external stylesheets or network assets.** \`<link>\`, external \`@import\`, and any non-\`data:\` \`url(...)\` reference is removed. Inline assets with \`data:\` URIs — image or font MIME types only.
 
 ## Related
 

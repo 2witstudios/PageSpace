@@ -44,16 +44,9 @@ Under the **@** picker, results come from a search across the current drive: pag
 
 AI reads a Document by pulling its current content into the conversation, and edits it by replacing specific lines rather than rewriting the whole file from scratch. Because the Document is just a page, an agent can also @-mention it from somewhere else in the workspace to pull it into context.
 
-## What it doesn't do
+## Good to know
 
-- **No inline images or file embeds.** You can't drag an image into a Document body or paste a screenshot into the prose — the editor has no image node. Drop files onto the page tree instead and they become sibling File pages you can @-link to.
-- **Rich Text and Markdown don't mix.** A Document is one mode at a time, and switching is an explicit **Page Setup** action with a confirm dialog. Font family and font size belong to Rich Text; they don't survive a round-trip to Markdown and back, because Markdown has nowhere to store them.
-- **Code view is source-only, not a split view.** You're either in the rich editor or looking at the raw HTML / Markdown in Monaco — there is no side-by-side preview pane.
-- **No inline comments or suggestion mode.** Documents track edits through version history, not through Google Docs–style comment threads or tracked-change suggestions. If you want discussion next to the text, open a Channel page alongside it.
-- **The footer shows character count, not word count.** There's no word-count readout or reading-time estimate in the editor.
-- **No PDF export endpoint.** Export targets are **.docx** and **Markdown**. To get a PDF, use the browser's **Print** dialog and print-to-PDF from there.
-- **The @ picker links to pages, not people.** Even when a user shows up in the suggestion list, the inserted mention is a link — it doesn't notify them or add them to a thread. Ping people in a Channel instead.
-- **Pagination is off.** The editor can render letter-sized pages with margins internally, but Documents ship with pagination disabled — you write in a continuous canvas, and print uses the browser's own page breaks.
+- **Rich Text and Markdown modes are exclusive.** A Document is one or the other at any moment, and switching is a deliberate **Page Setup** action with a confirm dialog. Font family and size belong to Rich Text and don't survive a round-trip through Markdown.
 
 ## Related
 

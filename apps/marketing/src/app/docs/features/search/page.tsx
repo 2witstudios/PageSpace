@@ -33,16 +33,10 @@ The \`@\`-mention picker is a separate, drive-scoped search. When your query is 
 
 AI agents get stronger tools than the search box. Through their sidebar they can pattern-match with regex, glob across page paths in a drive, or sweep every drive you've given them access to in one pass — useful for finding a quote whose exact wording you've half-forgotten.
 
-## What it doesn't do
+## Good to know
 
-- **Content search only reads Document bodies.** The words inside channel messages, sheet cells, canvas notes, code files, and AI Chat transcripts aren't indexed by the main search — only the page titles are. To look inside those, ask an AI agent.
-- **No fuzzy matching and no typo tolerance.** *Projet* does not find *Project*. The substring has to match exactly, though case is ignored.
-- **Single-character queries return nothing.** You need two characters or more before search runs at all.
-- **The top-bar search only covers drives you own.** Pages in drives where you're a member won't appear in the header box — open that drive's page tree to find them, or ask an AI agent, which can search across every drive you can see.
-- **Only public profiles show up as people results.** If someone hasn't made their profile public, their name won't surface in search.
-- **No semantic or AI-ranked results in the search box.** The same query always returns the same order. For concept-level or fuzzy searches ("that thing about onboarding"), ask an AI agent.
-- **No sort-by-recency in the top-bar search.** Results are ranked purely by match quality. The \`@\`-mention picker does fall back to recent pages, but only when your query is empty.
-- **No advanced syntax in the search box.** You can't restrict by page type, drive, or author from the box itself.
+- **Content search reads Document bodies.** The words inside channel messages, sheet cells, canvas source, code pages, and AI Chat transcripts aren't indexed by the header search — only their titles are. Ask an AI agent for those.
+- **The header search covers drives you own.** For pages in drives you're a member of, open that drive's tree or use an AI agent — agents can search across every drive you can see.
 
 ## Related
 

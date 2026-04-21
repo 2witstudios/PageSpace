@@ -39,14 +39,10 @@ Version history is an activity log of the page's edits. You can scroll it, diff 
 
 Permissions resolve from two places at once: your role in the drive the page lives in, plus any per-page grants on this page or an ancestor. Every read, save, and export re-checks them, so changing someone's access takes effect on their next action.
 
-## What it doesn't do
+## Good to know
 
-- **No public-link sharing.** Pages live behind workspace sign-in. There is no "anyone with the link" toggle — a URL you paste to someone outside the workspace will bounce them to the login screen and then to a not-found page unless they have a grant or drive membership.
-- **Version history isn't kept forever.** By default, page versions older than 30 days are cleaned up and can't be rolled back to.
-- **Export is format-specific.** Documents download as Markdown or .docx, sheets as .csv or .xlsx. Canvas, Code, Channel, Task List, and AI Chat pages have no download format — copy the content out, or screenshot the page if you need an artefact.
-- **Trash takes the whole subtree.** You can't trash a folder while leaving its children in place. Trash the folder and the children go with it; restore the ones you want back afterwards.
-- **Page URLs are IDs, not slugs.** Renaming a page doesn't change its link, and there's no vanity URL to set on a page.
-- **A document picks one content mode.** A document page is rich text or Markdown at any given moment — switching between the two is an explicit convert action, not something you flip inline.
+- **Sharing is per-person, not per-link.** Access is always tied to a PageSpace account — invite by email or grant a specific account. There are no "anyone with the link" URLs.
+- **Version history runs for 30 days by default.** Older entries are cleaned up in the background and can't be rolled back to.
 
 ## Related
 

@@ -30,12 +30,9 @@ Dropping files onto a folder creates a File page per file under that folder, in 
 
 Permissions on a folder apply to the folder page itself. Granting someone view or edit on a folder does not walk down to its children — each page checks its own grants plus drive membership. See [Sharing & Permissions](/docs/features/sharing) for the full resolution rules.
 
-## What it doesn't do
+## Good to know
 
-- **A folder share doesn't share what's inside it.** A view or edit grant on a folder lets someone open that folder page and nothing else. To let them read or edit the children, add them to the drive, or grant each child page directly. A teammate who can see the folder but not a child will see a shorter list than you do.
-- **A folder has no content of its own.** No body text, no AI chat attached, no version history — the folder records its title, parent, and position among siblings and that's it. If you want a landing page with real writing and links, use a Document.
-- **A folder isn't a search or AI boundary.** Global search spans every page you can see in the drive, not the folder you opened. [AI Chat pages](/docs/page-types/ai-chat) can be told to read a subtree, but that's a setting on the chat page — not something a folder enforces on the AI agents that walk into it.
-- **Folders can't be converted.** A folder stays a folder — there is no action that turns it into a Document, Sheet, or anything else, and no other page type converts into a folder. If you want different content in that slot, move the children out and create the page type you actually want.
+- **Folder access doesn't cascade.** A view or edit grant on a folder lets someone open the folder page itself — nothing more. Each child page is checked on its own grants, so sharing a folder never accidentally shares the tree beneath it.
 
 ## Related
 

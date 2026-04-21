@@ -40,14 +40,12 @@ While those jobs run, the File page shows a processing status. Your browser gets
 
 Size and concurrency are bounded by your tier. Free gives you 500 MB of storage and accepts files up to 20 MB, with 2 uploads in flight at once. Pro is 2 GB / 50 MB per file / 3 at once. Founder is 10 GB / 50 MB per file / 3 at once. Business is 50 GB / 100 MB per file / 10 at once.
 
-## What it doesn't do
+## Good to know
 
-- **It doesn't accept every file type.** Executables for Windows, macOS, Linux, and Android, as well as raw HTML, SVG, and JavaScript, are rejected outright. If the content classifier can't identify the file confidently, the upload is refused rather than stored as an unknown blob — there's no override.
-- **It doesn't extract text from every document format.** Text extraction covers PDF, Word, plain text, Markdown, CSV, and JSON. Rich Text Format, Apple Pages, PowerPoint, Excel, EPUB, and legacy binary formats are stored and downloadable but not indexed for AI.
-- **It doesn't version files.** Uploading a new revision with the same filename creates a separate File page, not a new version of the old one. Converting a File to a Document creates a new page; it doesn't replace the file. If you need history, rely on Document page history after conversion.
-- **OCR runs locally, not through a vision model.** It uses Tesseract with the English model by default. Handwriting, unusual scripts, and low-contrast scans will miss words — the text is good enough for search, not good enough to trust as a transcript.
-- **It doesn't sync with external drives.** There's no background pull from Google Drive, Dropbox, or OneDrive. Every file is one you (or an AI agent with upload rights) put there.
-- **Deduplication is account-wide, not private.** Two users who upload the same PDF share one stored copy. You can't see each other's files — permissions still apply — but you also can't guarantee your bytes are stored uniquely.
+- **Not every file type is accepted.** Executables (Windows, macOS, Linux, Android), raw HTML, SVG, and scripts are rejected for security. If the content classifier can't identify a file confidently, the upload is refused rather than stored as an unknown blob.
+- **Not every document format is text-extracted.** Text extraction covers PDF, Word, plain text, Markdown, CSV, and JSON. Rich Text Format, Apple Pages, PowerPoint, Excel, EPUB, and legacy binary formats are stored and downloadable but not indexed for AI.
+- **OCR runs locally with Tesseract.** The extracted text is good enough to make scanned pages searchable; handwriting, unusual scripts, and low-contrast scans will miss words. Don't treat OCR output as a transcript.
+- **Deduplication is account-wide.** Two users uploading the same bytes share one stored blob. Permissions still apply — you can't see each other's files — but storage is shared.
 
 ## Related
 

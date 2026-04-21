@@ -30,13 +30,11 @@ The configuration panel is where you shape the agent. The **system prompt** is a
 
 Multi-user chat is built in: any teammate with access to the AI Chat page can post into the same conversation. User messages are attributed to their sender; the agent sees the whole thread and replies to everyone in real time.
 
-## What it doesn't do
+## Good to know
 
-- **The agent doesn't act without a tool.** An empty tool allow-list means the page is chat-only — the agent cannot create, edit, delete, move, or send anything no matter what the prompt says. Empty is not a wildcard.
-- **Read-only really is read-only.** A page with the toggle on cannot call a write tool even if the user asks for one. Write tools are removed from the menu before the model sees it — the prompt can't override it.
-- **The system prompt lives on the page, not on you.** Sharing an AI Chat page with a teammate hands them the same prompt, tools, and provider selection; there's no per-user override.
-- **Deleting the page deletes the conversation.** Trashing an AI Chat page moves its full history to trash along with the page; restoring the page restores the history. The underlying model provider is unaffected either way.
-- **You can't branch a conversation.** Editing an earlier message doesn't fork the conversation into a new timeline — it edits in place and the subsequent turns stay where they are.
+- **An empty tool list means chat-only.** The agent can talk but cannot create, edit, delete, move, or send anything. Empty is not a wildcard — nothing means nothing.
+- **Read-only is enforced at the tool layer.** When the toggle is on, write tools are stripped before the model sees them; no prompt can override it.
+- **The system prompt lives on the page, not on you.** Anyone you share the AI Chat page with sees the same prompt, tools, and provider selection.
 
 ## Related
 

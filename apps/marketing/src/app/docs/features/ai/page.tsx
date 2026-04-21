@@ -36,16 +36,6 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 **Agent-to-agent.** One agent can consult another by name. The called agent runs under its own system prompt and tools, but still with the *calling user's* permissions, and returns a single response. Chains are depth-capped so agents can't spiral into each other forever.
 
-## What it doesn't do
-
-- **It doesn't see what you can't see.** Sharing goes through the normal permissions system; an agent you own cannot read pages you don't have access to, even if a teammate asks it to.
-- **It doesn't act without a tool.** An agent with an empty tool list can chat but will not create, edit, delete, move, or send anything. Empty is not a wildcard — nothing means nothing.
-- **It doesn't run on its own schedule.** An agent responds when you message it, @mention it, or another agent consults it. It does not poll your workspace in the background or act while no one is watching.
-- **Web search is off by default.** Agents stay inside your workspace unless you turn web search on for that specific AI Chat page.
-- **Your API keys are yours alone.** Keys live on your user, encrypted, and are not shared with teammates on the same drive.
-- **Agents can't call each other forever.** Agent-to-agent chains have a bounded depth cap; a loop of agents asking agents will stop instead of running up your bill.
-- **It doesn't bypass billing or plan limits.** The built-in PageSpace provider has a per-day call budget by plan, and bring-your-own-key providers run against your own account with the provider.
-
 ## Related
 
 - [AI Chat](/docs/page-types/ai-chat) — the page type the agent lives in, and its per-page configuration.

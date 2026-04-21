@@ -36,16 +36,6 @@ Every save becomes an entry in version history. You can scroll the history, diff
 
 Permissions resolve from the drive role plus any per-page grants on this Code page or an ancestor. Every read and save re-checks them, so dropping someone's edit rights takes effect on their next save.
 
-## What it doesn't do
-
-- **It doesn't run your code.** There's no Run button, no REPL, no terminal, no output pane — a Code page is an editor, not an execution environment. To run something, copy it out to your own machine.
-- **No debugger, no language server.** You get syntax highlighting and bracket matching, not type-checking, not go-to-definition across files, not red squiggles from a real compiler. Monaco looks like VS Code; it doesn't have VS Code's extensions.
-- **No live co-editing with shared cursors.** Two people editing the same Code page at the same time won't see each other's cursors, selections, or unsaved keystrokes. Simultaneous saves resolve by revision — the later save refetches and retries — so whoever saves second effectively wins after a brief reconcile. Plan around it for hot-path edits.
-- **You can't download a Code page.** Documents export as Markdown or .docx, sheets as .csv or .xlsx — Code pages have no export format. To get the file off PageSpace, copy the contents out of the editor.
-- **Fixed language list.** The 25 languages above are what ships. You can't register your own grammar, install a Monaco extension, or upload a custom theme beyond the built-in light/dark.
-- **No git.** There are no commits, branches, pull requests, or remote-repo diffs. Version history is PageSpace's own timeline, not a git log.
-- **No file-on-disk import.** Dragging a file into the sidebar creates a **File** page, not a Code page — the File page viewer will syntax-highlight the contents, but it isn't editable the way a Code page is. To move code into a Code page, create one and paste.
-
 ## Related
 
 - [Pages](/docs/features/pages) — the container every Code page lives in, including how version history, trash, and permissions work across page types.
