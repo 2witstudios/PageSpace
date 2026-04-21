@@ -73,11 +73,11 @@ PageSpace routes AI through the Vercel AI SDK across 12 providers:
 | xAI (Grok) | user-selected | User |
 | GLM (Coder Plan) | user-selected | User |
 | MiniMax | user-selected | User |
-| Ollama | discovered from local instance | Self-hosted |
-| LM Studio | discovered from local instance | Self-hosted |
+| Ollama | discovered from local instance | N/A (local server) |
+| LM Studio | discovered from local instance | N/A (local server) |
 | Azure OpenAI | user's deployment name | User |
 
-Full list with model IDs: \`apps/web/src/lib/ai/core/ai-providers-config.ts\`. On-prem deployments restrict the set to Ollama, LM Studio, and Azure OpenAI.
+Full list with model IDs: \`apps/web/src/lib/ai/core/ai-providers-config.ts\`.
 
 ## Tools
 

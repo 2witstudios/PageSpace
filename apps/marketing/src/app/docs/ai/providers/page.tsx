@@ -34,7 +34,7 @@ Built-in. No key required. Runs against a GLM backend (\`getBackendProvider('pag
 
 Aliases resolve at call time via \`PAGESPACE_MODEL_ALIASES\`, so an agent pinned to \`standard\` stays on whatever backend model the team ships today.
 
-Daily call limits (cloud):
+Daily call limits by plan:
 
 | Plan | Standard / day | Pro / day |
 |---|---|---|
@@ -43,7 +43,7 @@ Daily call limits (cloud):
 | Founder | 500 | 100 |
 | Business | 1000 | 500 |
 
-Source: \`apps/web/src/lib/subscription/usage-service.ts\`. Self-hosted (\`DEPLOYMENT_MODE=onprem\`) is uncapped.
+Source: \`apps/web/src/lib/subscription/usage-service.ts\`.
 
 ### OpenRouter (Paid)
 
@@ -144,10 +144,6 @@ Same pattern as Ollama: connect to a running LM Studio server; available models 
 ### Azure OpenAI
 
 Point at an Azure deployment. Users enter the deployment name as the model id; the provider resolves it against the Azure endpoint.
-
-## On-prem visibility
-
-\`DEPLOYMENT_MODE=onprem\` restricts the selectable provider set to \`ollama\`, \`lmstudio\`, and \`azure_openai\` — the three that keep traffic inside your perimeter or a BAA-covered cloud. Source: \`ONPREM_ALLOWED_PROVIDERS\` in \`ai-providers-config.ts\`.
 
 ## Configuring a specific model
 
