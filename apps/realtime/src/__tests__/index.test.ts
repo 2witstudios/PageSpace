@@ -200,6 +200,7 @@ vi.mock('http', () => ({
 
 // Mocked io object - tracks calls to use() and on()
 const mockIo = {
+  adapter: vi.fn(),
   to: vi.fn().mockReturnThis(),
   emit: vi.fn(),
   sockets: { sockets: new Map() },
@@ -215,6 +216,20 @@ const mockIo = {
 
 vi.mock('socket.io', () => ({
   Server: vi.fn().mockImplementation(() => mockIo),
+}));
+
+vi.mock('pg', () => ({
+  Pool: vi.fn().mockImplementation(() => ({ connect: vi.fn() })),
+}));
+
+vi.mock('@socket.io/postgres-adapter', () => ({
+  createAdapter: vi.fn(() => vi.fn()),
+}));
+
+vi.mock('../agent-run-bridge', () => ({
+  startAgentRunBridge: vi.fn().mockResolvedValue(async () => undefined),
+  validateRunId: vi.fn(() => ({ ok: true, value: 'run_x' })),
+  isAgentRunAccessibleDefault: vi.fn().mockResolvedValue(true),
 }));
 
 // ---------------------------------------------------------------------------
