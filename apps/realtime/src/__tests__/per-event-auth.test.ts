@@ -15,11 +15,11 @@ vi.mock('@pagespace/lib/logger-config', () => {
   return { loggers: { realtime: logger, api: logger, security: logger } };
 });
 
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions', () => ({
   getUserAccessLevel: vi.fn(),
 }));
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel } from '@pagespace/lib/permissions';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {
@@ -115,7 +115,7 @@ describe('reauthorizePageAccess', () => {
     mockedGetUserAccessLevel.mockReset();
   });
 
-  it('calls getUserAccessLevel with bypassCache: true', async () => {
+  it('calls getUserAccessLevel with userId and pageId', async () => {
     mockedGetUserAccessLevel.mockResolvedValue({
       canView: true,
       canEdit: true,
@@ -125,7 +125,7 @@ describe('reauthorizePageAccess', () => {
 
     await reauthorizePageAccess('user-1', 'page-1', 'edit');
 
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1');
   });
 
   it('given revoked user (null permissions), should return authorized: false', async () => {
@@ -338,7 +338,7 @@ describe('withPerEventAuth', () => {
     await listener(payload);
 
     expect(handler).toHaveBeenCalledWith(socket, payload);
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1');
   });
 });
 

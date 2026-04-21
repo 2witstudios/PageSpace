@@ -316,19 +316,6 @@ export function emergencyMemoryCleanup(): void {
     loggers.api.info('Forced garbage collection during emergency cleanup');
   }
 
-  // Clear permission cache if available (helps free memory)
-  try {
-    // Dynamic import to avoid circular dependencies
-    import('./permission-cache').then(({ permissionCache }) => {
-      permissionCache.clearAll();
-      loggers.api.info('Cleared permission cache during emergency cleanup');
-    }).catch(() => {
-      // Permission cache not available, ignore
-    });
-  } catch {
-    // Ignore errors during emergency cleanup
-  }
-
   // Log memory status after cleanup
   setTimeout(() => {
     const afterCleanup = getProcessMemory();

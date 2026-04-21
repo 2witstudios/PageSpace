@@ -55,6 +55,7 @@ run_test_suite "Distributed Rate Limiting" "@pagespace/lib" "src/security/__test
 run_test_suite "Path Traversal Prevention" "@pagespace/lib" "src/security/__tests__/path-validator.test.ts"
 run_test_suite "SSRF URL Validation" "@pagespace/lib" "src/security/__tests__/url-validator.test.ts"
 run_test_suite "Security Redis (Unit)" "@pagespace/lib" "src/security/__tests__/security-redis.test.ts"
+run_test_suite "JTI Revocation (Integration)" "@pagespace/lib" "src/security/__tests__/jti-revocation.integration.test.ts"
 
 # =============================================================================
 # Authentication Module Tests (packages/lib/src/auth)
@@ -91,8 +92,6 @@ echo "------------------------------------------"
 
 run_test_suite "Multi-Tenant Isolation" "@pagespace/lib" "src/__tests__/multi-tenant-isolation.test.ts"
 run_test_suite "Permissions" "@pagespace/lib" "src/__tests__/permissions.test.ts"
-run_test_suite "Permissions (Cached)" "@pagespace/lib" "src/__tests__/permissions-cached.test.ts"
-run_test_suite "Permission Cache" "@pagespace/lib" "src/__tests__/permission-cache.test.ts"
 
 # =============================================================================
 # Web App Auth Route Tests

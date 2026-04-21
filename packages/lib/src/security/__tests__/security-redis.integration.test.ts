@@ -52,69 +52,7 @@ describe('security-redis integration', () => {
     }
   });
 
-  describe('JTI Operations with real Redis', () => {
-    it('stores and retrieves JTI data with TTL', async () => {
-      if (!redis) return;
-
-      const jti = 'test-jti-' + Date.now();
-      const key = `sec:test:jti:${jti}`;
-
-      // Store JTI with 10 second TTL
-      await redis.setex(key, 10, JSON.stringify({
-        status: 'valid',
-        userId: 'user-123',
-        createdAt: Date.now(),
-      }));
-
-      // Verify stored data
-      const stored = await redis.get(key);
-      expect(stored).toBeTruthy();
-
-      const data = JSON.parse(stored!);
-      expect(data.status).toBe('valid');
-      expect(data.userId).toBe('user-123');
-
-      // Verify TTL is set
-      const ttl = await redis.ttl(key);
-      expect(ttl).toBeGreaterThan(0);
-      expect(ttl).toBeLessThanOrEqual(10);
-    });
-
-    it('revocation preserves TTL', async () => {
-      if (!redis) return;
-
-      const jti = 'test-jti-revoke-' + Date.now();
-      const key = `sec:test:jti:${jti}`;
-
-      // Store with 60 second TTL
-      await redis.setex(key, 60, JSON.stringify({
-        status: 'valid',
-        userId: 'user-123',
-        createdAt: Date.now(),
-      }));
-
-      // Get current TTL
-      const originalTtl = await redis.ttl(key);
-
-      // Revoke with remaining TTL
-      await redis.setex(key, originalTtl, JSON.stringify({
-        status: 'revoked',
-        userId: 'user-123',
-        revokedAt: Date.now(),
-        reason: 'test revocation',
-      }));
-
-      // Verify revocation
-      const stored = await redis.get(key);
-      const data = JSON.parse(stored!);
-      expect(data.status).toBe('revoked');
-      expect(data.reason).toBe('test revocation');
-
-      // TTL should still be close to original
-      const newTtl = await redis.ttl(key);
-      expect(newTtl).toBeGreaterThan(50);
-    });
-  });
+  // JTI operations have moved to Postgres — see jti-revocation.integration.test.ts
 
   describe('Rate Limiting with real Redis', () => {
     it('sliding window algorithm works correctly', async () => {

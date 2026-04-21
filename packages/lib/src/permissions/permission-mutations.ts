@@ -11,7 +11,6 @@ import { db, and, eq, pages, drives, driveMembers, pagePermissions, users } from
 import { createId } from '@paralleldrive/cuid2';
 import { EnforcedAuthContext } from './enforced-context';
 import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './schemas';
-import { permissionCache } from '../services/permission-cache';
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
 
 // ============================================================================
@@ -284,13 +283,7 @@ export async function grantPagePermission(
     return { permissionId: updated.id, isUpdate: true };
   });
 
-  // 7. Cache invalidation
-  await Promise.all([
-    permissionCache.invalidateUserCache(targetUserId),
-    permissionCache.invalidateDriveCache(page.driveId),
-  ]);
-
-  // 8. Audit log (fire-and-forget)
+  // 7. Audit log (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {
     logPermissionActivity(
       ctx.userId,
@@ -379,13 +372,7 @@ export async function revokePagePermission(
     .delete(pagePermissions)
     .where(eq(pagePermissions.id, previousPermission.id));
 
-  // 6. Cache invalidation
-  await Promise.all([
-    permissionCache.invalidateUserCache(targetUserId),
-    permissionCache.invalidateDriveCache(page.driveId),
-  ]);
-
-  // 7. Audit log with previousValues (fire-and-forget)
+  // 6. Audit log with previousValues (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {
     logPermissionActivity(
       ctx.userId,

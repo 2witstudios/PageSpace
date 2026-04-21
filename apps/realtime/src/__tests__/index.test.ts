@@ -46,7 +46,7 @@ vi.mock('@pagespace/lib/broadcast-auth', () => ({
 }));
 
 // permissions mock
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
 }));
@@ -237,7 +237,7 @@ vi.mock('../agent-run-bridge', () => ({
 // ---------------------------------------------------------------------------
 import { loggers } from '@pagespace/lib/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
 import { sessionService } from '@pagespace/lib/auth';
 import { emitValidationError } from '../validation';
 

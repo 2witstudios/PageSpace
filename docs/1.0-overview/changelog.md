@@ -1,3 +1,35 @@
+## 2026-04-20
+
+### Auth Handoffs: Migrated From Redis to Postgres (Redis Deprecation PR 7)
+
+Three short-lived auth-handoff stores — PKCE verifier, OAuth exchange code, and desktop passkey register handoff (incl. the one-options-per-mint replay marker) — now live in the new `auth_handoff_tokens` Postgres table instead of Redis. Continues the Redis-deprecation series (PR 1 caches, PR 2 JTI revocation, PR 3 rate limits).
+
+#### Changed
+
+- **New table `auth_handoff_tokens`**: JSONB-keyed, TTL-backed, discriminated by a `kind` column (`pkce`, `exchange-code`, `passkey-register-handoff`, `passkey-options-marker`). Composite primary key `(token_hash, kind)` so a single minted token can host both a handoff row and its options-marker row without colliding.
+- **Atomic consume**: every consume path uses a single `DELETE … RETURNING payload` round-trip — no select-then-delete race window.
+- **Preserved fail semantics**: `generatePKCE` fail-open-null (OAuth still completes without PKCE), `createExchangeCode` / `createPasskeyRegisterHandoff` fail-closed-throw, all consume paths return `null` on DB error, `markPasskeyRegisterOptionsIssued` fails closed (`false`) so transient DB blips force a re-mint rather than opening the replay window.
+- **Cron sweep**: new `sweepExpiredAuthHandoffTokens` helper wired into `/api/cron/sweep-expired` as a third isolated try/catch block — one table's failure cannot block the others. Mirrors the JTI + rate-limit sweepers (`rowCount`-based, rethrows in production).
+
+#### Fixed
+
+- **Composite primary key on `auth_handoff_tokens`**: initial PR-7 draft made `token_hash` the sole PK, which caused `markPasskeyRegisterOptionsIssued` to return `false` on the first legitimate call after a mint (marker row collided with handoff row on the PK). Promoted to `(token_hash, kind)` before merge so the desktop passkey register flow actually completes.
+
+## 2026-04-17
+
+### Notification Item Redesign
+
+The notification dropdown and the full `/notifications` page now render through a single `NotificationItem` component on a real 3-column grid, use theme tokens only (no raw palette colors), and cover every type in the `NotificationType` enum with compile-time safety. Resolves Eric Elliott's feedback on the notifications UI being mismatched and misaligned.
+
+#### Changed
+
+- **Shared notification layout**: `apps/web/src/components/notifications/NotificationItem.tsx` is the single presentational component for both surfaces. The dropdown (`NotificationDropdown.tsx`) and the full-page list (`app/notifications/page.tsx`) delegate rendering to it, ending the prior drift where the two surfaces supported different subsets of notification types.
+- **Grid alignment**: each item uses `grid-cols-[0.5rem_auto_1fr_auto]` with a reserved unread-dot slot that stays in the DOM in both states, so marking a notification read no longer causes a layout shift. The dismiss control lives in a fixed slot that is keyboard-reachable and visible on focus, not only on pointer hover.
+- **Theme tokens only**: per-type hardcoded color classes (`text-blue-500`, `bg-amber-500/10`, etc.) are gone. Contrast is carried by `text-foreground` / `text-muted-foreground` / `bg-card` / `bg-accent` / `bg-primary` so the item themes correctly in light and dark mode and passes WCAG AA.
+- **Read/unread/hover distinction**: three cues instead of color alone — reserved unread dot, subtle `bg-accent/40` tint on unread rows, semibold title weight on unread. Survives a grayscale screenshot.
+- **Type coverage**: `apps/web/src/components/notifications/notificationIcons.tsx` types the icon map as `Record<NotificationType, LucideIcon>`, so adding a new enum value is a build error unless an icon is assigned, rather than a silent fallback to the generic document icon.
+- **Tests**: `apps/web/src/components/notifications/__tests__/NotificationItem.test.tsx` covers rendering for every notification type, unread vs. read slot stability, variant-scoped meta-row behavior, keyboard activation, connection-request inline actions, and a regex assertion that forbids raw palette color classes.
+
 ## 2026-04-14
 
 ### GitHub Import Tool Removed From AI Chat

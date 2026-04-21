@@ -6,7 +6,7 @@ export * from './auth/device-auth-utils';
 export * from './auth/csrf-utils';
 export * from './encryption';
 export * from './content';
-export * from './permissions/permissions-cached';
+export * from './permissions/permissions';
 export * from './auth/rate-limit-utils';
 export * from './utils/utils';
 export * from './utils/hash-utils';
@@ -55,22 +55,6 @@ export * from './repositories';
 // Notifications
 export * from './notifications';
 
-// Agent awareness caching
-export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
-export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
-
-// Page tree caching
-export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
-export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
-
-// Re-export specific functions for backward compatibility
-export {
-  getDriveIdsForUser,
-  isUserDriveMember,
-  getUserAccessiblePagesInDriveWithDetails,
-  getUserAccessiblePagesInDrive,
-  isDriveOwnerOrAdmin,
-} from './permissions/permissions';
 
 // Zero-trust permission mutations (replaces old grantPagePermissions/revokePagePermissions)
 export {
@@ -91,7 +75,3 @@ export {
 
 // Enforced auth context
 export { EnforcedAuthContext } from './permissions/enforced-context';
-
-// Conversation caching (server-only)
-export { conversationCache, ConversationCache } from './services/conversation-cache';
-export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';

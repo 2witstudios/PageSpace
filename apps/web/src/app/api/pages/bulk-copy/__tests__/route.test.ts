@@ -8,7 +8,7 @@
  * - Drive/page existence validation
  * - Permission checks (view source, edit target)
  * - Recursive child copying
- * - Side effects: cache invalidation, broadcast, activity logging
+ * - Side effects: broadcast, activity logging
  * - Error handling
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -35,9 +35,6 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-  },
-  pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
   auditRequest: vi.fn(),
   canUserViewPage: vi.fn().mockResolvedValue(true),
@@ -95,7 +92,7 @@ vi.mock('@pagespace/db', () => {
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { pageTreeCache, canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/server';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
@@ -191,9 +188,6 @@ function setupSuccessScenario() {
 
   // Permissions
   vi.mocked(canUserViewPage).mockResolvedValue(true);
-
-  // Page tree cache
-  vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
 
   // Transaction mocks
   txInsertValues.mockResolvedValue(undefined);
@@ -568,12 +562,6 @@ describe('POST /api/pages/bulk-copy', () => {
   // ── Side effects ────────────────────────────────────────────────────
 
   describe('side effects', () => {
-    it('invalidates page tree cache for target drive', async () => {
-      await POST(createRequest(validBody));
-
-      expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
-    });
-
     it('broadcasts page created event', async () => {
       await POST(createRequest(validBody));
 
@@ -621,15 +609,6 @@ describe('POST /api/pages/bulk-copy', () => {
       expect(opts.metadata.source).toBeUndefined();
     });
 
-    it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
-
-      const response = await POST(createRequest(validBody));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-    });
   });
 
   // ── Error handling ──────────────────────────────────────────────────

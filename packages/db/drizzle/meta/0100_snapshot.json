@@ -1,5 +1,5 @@
 {
-  "id": "25698597-dca4-49e3-b39c-0689e9a133f6",
+  "id": "c9b970c7-b7f9-46fd-940e-78985f956cd6",
   "prevId": "d6405ca1-3729-4540-8d39-7b1c5c5bf922",
   "version": "7",
   "dialect": "postgresql",
@@ -12654,258 +12654,35 @@
         }
       }
     },
-    "public.agent_run_events": {
-      "name": "agent_run_events",
+    "public.revoked_service_tokens": {
+      "name": "revoked_service_tokens",
       "schema": "",
       "columns": {
-        "runId": {
-          "name": "runId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "seq": {
-          "name": "seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "AgentRunEventType",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "agent_run_events_run_id_created_at_idx": {
-          "name": "agent_run_events_run_id_created_at_idx",
-          "columns": [
-            {
-              "expression": "runId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "createdAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "agent_run_events_runId_agent_runs_id_fk": {
-          "name": "agent_run_events_runId_agent_runs_id_fk",
-          "tableFrom": "agent_run_events",
-          "tableTo": "agent_runs",
-          "columnsFrom": [
-            "runId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "agent_run_events_runId_seq_pk": {
-          "name": "agent_run_events_runId_seq_pk",
-          "columns": [
-            "runId",
-            "seq"
-          ]
-        }
-      },
-      "uniqueConstraints": {}
-    },
-    "public.agent_runs": {
-      "name": "agent_runs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
+        "jti": {
+          "name": "jti",
           "type": "text",
           "primaryKey": true,
           "notNull": true
         },
-        "ownerUserId": {
-          "name": "ownerUserId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agentScope": {
-          "name": "agentScope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agentContextId": {
-          "name": "agentContextId",
-          "type": "text",
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
-        "parentMessageId": {
-          "name": "parentMessageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "AgentRunStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "modelConfig": {
-          "name": "modelConfig",
-          "type": "jsonb",
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "lastSeq": {
-          "name": "lastSeq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "tokenUsageInput": {
-          "name": "tokenUsageInput",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "tokenUsageOutput": {
-          "name": "tokenUsageOutput",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "costCents": {
-          "name": "costCents",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "startedAt": {
-          "name": "startedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "lastHeartbeatAt": {
-          "name": "lastHeartbeatAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "completedAt": {
-          "name": "completedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "errorMessage": {
-          "name": "errorMessage",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "agent_runs_conversation_id_idx": {
-          "name": "agent_runs_conversation_id_idx",
+        "revoked_service_tokens_expires_at_idx": {
+          "name": "revoked_service_tokens_expires_at_idx",
           "columns": [
             {
-              "expression": "conversationId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_runs_owner_user_id_idx": {
-          "name": "agent_runs_owner_user_id_idx",
-          "columns": [
-            {
-              "expression": "ownerUserId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_runs_status_heartbeat_idx": {
-          "name": "agent_runs_status_heartbeat_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "lastHeartbeatAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_runs_parent_message_id_idx": {
-          "name": "agent_runs_parent_message_id_idx",
-          "columns": [
-            {
-              "expression": "parentMessageId",
+              "expression": "expires_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -12917,47 +12694,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "agent_runs_ownerUserId_users_id_fk": {
-          "name": "agent_runs_ownerUserId_users_id_fk",
-          "tableFrom": "agent_runs",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerUserId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "agent_runs_conversationId_conversations_id_fk": {
-          "name": "agent_runs_conversationId_conversations_id_fk",
-          "tableFrom": "agent_runs",
-          "tableTo": "conversations",
-          "columnsFrom": [
-            "conversationId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "agent_runs_parentMessageId_messages_id_fk": {
-          "name": "agent_runs_parentMessageId_messages_id_fk",
-          "tableFrom": "agent_runs",
-          "tableTo": "messages",
-          "columnsFrom": [
-            "parentMessageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     }
@@ -13373,30 +13110,6 @@
         "event",
         "task_due_date",
         "task_completion"
-      ]
-    },
-    "public.AgentRunEventType": {
-      "name": "AgentRunEventType",
-      "schema": "public",
-      "values": [
-        "text-segment",
-        "tool-input",
-        "tool-result",
-        "metadata",
-        "finish",
-        "error",
-        "aborted"
-      ]
-    },
-    "public.AgentRunStatus": {
-      "name": "AgentRunStatus",
-      "schema": "public",
-      "values": [
-        "pending",
-        "streaming",
-        "completed",
-        "failed",
-        "aborted"
       ]
     }
   },

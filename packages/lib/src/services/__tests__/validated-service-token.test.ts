@@ -24,7 +24,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 // Mock the permissions module
-vi.mock('../../permissions/permissions-cached', () => ({
+vi.mock('../../permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDrivePermissions: vi.fn(),
 }));
@@ -49,7 +49,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions-cached';
+import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions';
 import { sessionService } from '../../auth/session-service';
 import { loggers } from '../../logging/logger-config';
 

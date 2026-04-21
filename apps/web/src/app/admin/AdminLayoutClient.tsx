@@ -2,8 +2,10 @@
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 export default function AdminLayoutClient({
   children,
@@ -11,6 +13,7 @@ export default function AdminLayoutClient({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const currentTab = pathname === '/admin' ? 'overview' :
                      pathname.includes('/monitoring') ? 'monitoring' :
                      pathname.includes('/tables') ? 'tables' :
@@ -20,6 +23,15 @@ export default function AdminLayoutClient({
   return (
     <div className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-10">
       <div className="mx-auto max-w-7xl">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push('/settings')}
+          className="mb-4"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to Settings
+        </Button>
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Admin Dashboard</CardTitle>

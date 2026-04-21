@@ -21,8 +21,6 @@ vi.mock('@pagespace/lib/server', () => ({
   getMemberPermissions: vi.fn(),
   updateMemberRole: vi.fn(),
   updateMemberPermissions: vi.fn(),
-  invalidateUserPermissions: vi.fn().mockResolvedValue(undefined),
-  invalidateDrivePermissions: vi.fn().mockResolvedValue(undefined),
   audit: vi.fn(),
   auditRequest: vi.fn(),
   loggers: {
@@ -107,8 +105,6 @@ import {
   getMemberPermissions,
   updateMemberRole,
   updateMemberPermissions,
-  invalidateUserPermissions,
-  invalidateDrivePermissions,
   loggers,
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
@@ -971,10 +967,6 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       return callback(mockTx);
     });
 
-    // Re-set up invalidation mocks
-    vi.mocked(invalidateUserPermissions).mockResolvedValue(undefined as never);
-    vi.mocked(invalidateDrivePermissions).mockResolvedValue(undefined as never);
-
     // Re-set up activity logger mocks
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' } as never);
   });
@@ -1174,13 +1166,6 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       expect(kickUserFromPage).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
       expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_1', mockTargetUserId, 'member_removed');
       expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
-    });
-
-    it('should invalidate permission caches', async () => {
-      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
-
-      expect(invalidateUserPermissions).toHaveBeenCalledWith(mockTargetUserId);
-      expect(invalidateDrivePermissions).toHaveBeenCalledWith(mockDriveId);
     });
 
     it('should log permission revocations and delete permissions when drive has pages', async () => {

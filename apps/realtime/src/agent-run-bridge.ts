@@ -13,7 +13,7 @@
 import type { Server } from 'socket.io';
 import type { Pool } from 'pg';
 import { db, eq, agentRuns, conversations } from '@pagespace/db';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/logger-config';
 import { isCUID2, type ValidationResult } from './validation';
 

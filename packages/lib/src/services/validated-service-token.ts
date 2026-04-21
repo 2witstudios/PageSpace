@@ -11,7 +11,7 @@ import { db, pages, eq } from '@pagespace/db';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
-} from '../permissions/permissions-cached';
+} from '../permissions/permissions';
 import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
 

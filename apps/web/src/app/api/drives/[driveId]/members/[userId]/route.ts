@@ -8,8 +8,6 @@ import {
   getMemberPermissions,
   updateMemberRole,
   updateMemberPermissions,
-  invalidateUserPermissions,
-  invalidateDrivePermissions,
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import {
@@ -168,12 +166,6 @@ export async function PATCH(
     if (permissions.length > 0) {
       auditRequest(request, { eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } });
     }
-
-    // Invalidate permission caches so changes take effect immediately
-    await Promise.all([
-      invalidateUserPermissions(userId),
-      invalidateDrivePermissions(driveId),
-    ]);
 
     return NextResponse.json({
       success: true,
@@ -348,12 +340,6 @@ export async function DELETE(
       ]);
       await Promise.all(pageKickPromises);
     }
-
-    // Invalidate permission caches so removed user loses access immediately
-    await Promise.all([
-      invalidateUserPermissions(targetUserId),
-      invalidateDrivePermissions(driveId),
-    ]);
 
     // Note: No in-app notification sent for removal - the broadcast event
     // will trigger a page refresh/redirect for the removed user, and the

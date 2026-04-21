@@ -13,7 +13,7 @@ vi.mock('@pagespace/db', () => ({
   },
   pages: { id: 'id', driveId: 'driveId' },
   drives: { id: 'id', ownerId: 'ownerId' },
-  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id', acceptedAt: 'acceptedAt' },
   pagePermissions: {
     pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit',
     canShare: 'canShare', canDelete: 'canDelete', expiresAt: 'expiresAt', id: 'id',
@@ -22,7 +22,9 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
   isNull: vi.fn((a) => ({ isNull: a })),
+  isNotNull: vi.fn((a) => ({ isNotNull: a })),
   gt: vi.fn((a, b) => ({ gt: { a, b } })),
+  inArray: vi.fn((a, b) => ({ inArray: { a, b } })),
 }));
 
 vi.mock('../../logging/logger-config', () => ({

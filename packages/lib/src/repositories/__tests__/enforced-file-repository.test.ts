@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
-import type { DrivePermissionLevel } from '../../permissions/permissions-cached';
+import type { DrivePermissionLevel } from '../../permissions/permissions';
 
 // Mock @pagespace/db
 vi.mock('@pagespace/db', () => ({
@@ -44,7 +44,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 // Mock permissions
-vi.mock('../../permissions/permissions-cached', () => ({
+vi.mock('../../permissions/permissions', () => ({
   getUserDrivePermissions: vi.fn(),
 }));
 
@@ -65,7 +65,7 @@ import {
   type FileRecord,
 } from '../enforced-file-repository';
 import { db } from '@pagespace/db';
-import { getUserDrivePermissions } from '../../permissions/permissions-cached';
+import { getUserDrivePermissions } from '../../permissions/permissions';
 
 // Helper to create mock SessionClaims
 const createMockClaims = (overrides: Partial<SessionClaims> = {}): SessionClaims => ({

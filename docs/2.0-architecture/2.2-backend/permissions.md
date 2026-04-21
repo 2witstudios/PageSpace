@@ -245,69 +245,32 @@ This simplified approach trades some advanced features (like inheritance) for be
 
 ---
 
-## 7. Caching Strategy & Stale Window
+## 7. Read Path & Stale Window
 
 ### 7.1. Architecture
 
-Permission lookups are cached using a two-tier strategy implemented in `packages/lib/src/services/permission-cache.ts`:
+Permission lookups go straight to Postgres. There is no cache layer — the hybrid L1/L2 Redis cache was removed in PR 4/5 of the Redis-deprecation series. All permission functions live in the single canonical module `packages/lib/src/permissions/permissions.ts` and are exposed via `@pagespace/lib/permissions`.
 
-- **L1 (In-Memory):** Process-local `Map` with max 1000 entries, cleaned every 30 seconds.
-- **L2 (Redis):** Shared across processes via `ioredis`, keyed under `pagespace:perms:`.
-- **TTL:** 60 seconds (1 minute) for both page permissions and drive access entries.
+A single-page check (`getUserAccessLevel`) costs up to three small indexed queries (page → drive, admin membership, explicit grant). Batch checks (`getBatchPagePermissions`) collapse the same logic into one query that joins `pages`, `drives`, `drive_members` (ADMIN + `acceptedAt IS NOT NULL`), and `page_permissions` (with `expires_at` filter) across every input page ID in one round-trip.
 
-On cache miss, the system queries the database and populates both tiers. On cache hit, L2 results are promoted to L1. If Redis is unavailable, the system degrades gracefully to L1 only. Cache failures never result in access denial -- the system falls through to a direct database lookup.
+### 7.2. Freshness Semantics
 
-The cached permission functions in `packages/lib/src/permissions/permissions-cached.ts` are re-exported as the primary API from `@pagespace/lib/permissions`.
+- Every permission read is definitive at query time — there is no stale window to reason about.
+- Mutations commit to Postgres, so the next read is automatically fresh. No invalidation step is required.
+- Database failures cause permission reads to return `null` / all-false (fail-closed). No stale grant is possible.
 
-### 7.2. The `bypassCache` Parameter
+### 7.3. Operation Coverage
 
-`getUserAccessLevel`, `canUserEditPage`, `canUserDeletePage`, `canUserSharePage`, and `canUserViewPage` accept an optional `{ bypassCache: true }` option that skips both L1 and L2 cache and queries the database directly:
+| Operation | Path |
+|---|---|
+| Page view / edit / delete / share | `getUserAccessLevel` → Postgres |
+| Batch permission lookup (search, bulk ops) | `getBatchPagePermissions` → single CTE |
+| Drive access predicate | `getUserDriveAccess` → Postgres |
+| Service-token scope validation | `getUserDrivePermissions` → Postgres |
+| Real-time write events | `getUserAccessLevel` → Postgres (zero stale window) |
 
-```typescript
-// Read operation -- cache is acceptable
-const perms = await getUserAccessLevel(userId, pageId);
+### 7.4. Failure Behavior
 
-// Write operation -- bypass cache to get fresh permissions
-const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
-```
-
-### 7.3. Cache Invalidation
-
-Two invalidation functions are available and are called automatically by the zero-trust permission mutation functions (`grantPagePermission`, `revokePagePermission`):
-
-- **`invalidateUserPermissions(userId)`** -- Clears all cached entries for a user across L1 and L2.
-- **`invalidateDrivePermissions(driveId)`** -- Clears all cached entries for pages in a drive across L1 and L2.
-
-If invalidation fails (e.g., Redis is down), a security warning is logged noting that stale permissions may persist for up to 60 seconds.
-
-### 7.4. Which Operations Bypass Cache
-
-| Operation | Bypasses Cache | Rationale |
-|---|---|---|
-| Page view (GET) | No | Read-only, stale data is acceptable |
-| Page edit (PATCH/PUT) | Yes | Mutation -- must verify current permissions |
-| Page delete (DELETE) | Yes | Destructive -- must verify current permissions |
-| Page trash (soft delete) | Yes | Destructive -- must verify current permissions |
-| Bulk move | Yes | Mutation -- must verify current permissions |
-| Bulk delete | Yes | Destructive -- must verify current permissions |
-| Permission grant/revoke | Yes | Security-critical -- uses direct DB in `getPageIfCanShare` |
-| Channel message send (POST) | Yes | Mutation -- must verify current permissions |
-| Channel file upload | Yes | Mutation -- must verify current permissions |
-| Page reprocess | Yes | Mutation -- must verify current permissions |
-| Agent config update (PATCH) | Yes | Mutation -- must verify current permissions |
-| Real-time write events | Yes | Per-event auth uses `bypassCache: true` directly |
-| AI chat page reads | No | Read-only, stale data is acceptable |
-| Mention search | No | Read-only, stale data is acceptable |
-| MCP document read | No | Read-only, stale data is acceptable |
-| AI tool read operations | No | Read-only, stale data is acceptable |
-
-### 7.5. Failure Behavior
-
-- **Cache miss:** Falls through to database query. Result is cached for subsequent requests.
-- **Redis unavailable:** L1 (in-memory) cache still operates. No denial of service.
-- **Invalidation failure:** Logged at security level. Stale entry expires naturally within 60s TTL.
-- **Database error:** Returns `null` (access denied). No stale grant is possible.
-
-### 7.6. Monitoring
-
-Cache statistics are available via `getPermissionCacheStats()` and logged every 30 seconds at `performance.debug` level, including hit rate, memory usage, and error counts.
+- **Database error on single-page check:** `getUserAccessLevel` returns `null`; `canUser*Page` returns `false`.
+- **Database error on batch check:** `getBatchPagePermissions` returns the pre-seeded deny map (all-false for every input pageId).
+- **No cache → no cache-coherency failure modes.**

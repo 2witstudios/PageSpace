@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, pageTreeCache, agentAwarenessCache, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { pages, db, eq, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
@@ -60,7 +60,7 @@ export async function DELETE(request: Request) {
 
     // Verify delete permissions for all pages
     for (const page of sourcePages) {
-      const canDelete = await canUserDeletePage(userId, page.id, { bypassCache: true });
+      const canDelete = await canUserDeletePage(userId, page.id);
       if (!canDelete) {
         return NextResponse.json(
           { error: `You do not have permission to delete page: ${page.title}` },
@@ -69,9 +69,8 @@ export async function DELETE(request: Request) {
       }
     }
 
-    // Track affected drives for cache invalidation
+    // Track affected drives for broadcast events
     const affectedDriveIds = new Set<string>();
-    let hasAIChatPages = sourcePages.some(p => p.type === 'AI_CHAT');
 
     // Trash pages in transaction
     await db.transaction(async (tx) => {
@@ -91,10 +90,7 @@ export async function DELETE(request: Request) {
 
         // Recursively trash children if requested
         if (trashChildren) {
-          const trashedAIChat = await trashChildrenRecursively(tx, page.id, now);
-          if (trashedAIChat) {
-            hasAIChatPages = true;
-          }
+          await trashChildrenRecursively(tx, page.id, now);
         } else {
           // Move children to parent's parent
           await tx.update(pages)
@@ -132,14 +128,8 @@ export async function DELETE(request: Request) {
       });
     }
 
-    // Invalidate caches and broadcast events
+    // Broadcast events
     for (const driveId of affectedDriveIds) {
-      await pageTreeCache.invalidateDriveTree(driveId);
-
-      if (hasAIChatPages) {
-        await agentAwarenessCache.invalidateDriveAgents(driveId);
-      }
-
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'trashed')
       );
@@ -160,23 +150,16 @@ export async function DELETE(request: Request) {
   }
 }
 
-// Recursively trash children and return whether any AI_CHAT pages were trashed
 async function trashChildrenRecursively(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   parentId: string,
   trashedAt: Date
-): Promise<boolean> {
+): Promise<void> {
   const children = await tx.query.pages.findMany({
     where: eq(pages.parentId, parentId),
   });
 
-  let hasAIChatChild = false;
-
   for (const child of children) {
-    if (child.type === 'AI_CHAT') {
-      hasAIChatChild = true;
-    }
-
     await tx.update(pages)
       .set({
         isTrashed: true,
@@ -185,12 +168,6 @@ async function trashChildrenRecursively(
       })
       .where(eq(pages.id, child.id));
 
-    // Recursively trash grandchildren
-    const grandchildHasAIChat = await trashChildrenRecursively(tx, child.id, trashedAt);
-    if (grandchildHasAIChat) {
-      hasAIChatChild = true;
-    }
+    await trashChildrenRecursively(tx, child.id, trashedAt);
   }
-
-  return hasAIChatChild;
 }

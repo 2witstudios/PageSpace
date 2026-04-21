@@ -11,7 +11,7 @@ vi.mock('@pagespace/lib/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/permissions-cached', () => ({
+vi.mock('@pagespace/lib/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
 }));
@@ -46,7 +46,7 @@ import {
   validateRunId,
   startAgentRunBridge,
 } from '../agent-run-bridge';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
 
 describe('parseAgentRunNotification', () => {
   it('given a valid JSON payload, should return the parsed notification', () => {

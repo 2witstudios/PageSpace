@@ -2,13 +2,16 @@ import { NextResponse } from 'next/server';
 
 export const NONCE_HEADER = 'x-nonce';
 
+const PERMISSIONS_POLICY =
+  'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")';
+
 // Security headers for error responses (API routes)
 const ERROR_RESPONSE_HEADERS: Record<string, string> = {
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  'Permissions-Policy': PERMISSIONS_POLICY,
 };
 
 export const createSecureErrorResponse = (
@@ -113,10 +116,7 @@ export const applySecurityHeaders = (
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  response.headers.set(
-    'Permissions-Policy',
-    'geolocation=(), microphone=(), camera=()'
-  );
+  response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
   // COEP 'credentialless' is set for all page routes except Stripe-dependent
   // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
   // via no-cors without Cross-Origin-Resource-Policy headers.

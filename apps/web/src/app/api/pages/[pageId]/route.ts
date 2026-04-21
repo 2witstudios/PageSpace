@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, agentAwarenessCache, pageTreeCache, auditRequest } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -90,7 +90,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       );
     }
 
-    // Side effects: broadcast and cache invalidation
+    // Side effects: broadcast
     const driveId = result.driveId;
     const socketId = req.headers.get('X-Socket-ID') || undefined;
 
@@ -104,15 +104,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         })
       );
 
-      // Invalidate agent awareness cache when an AI_CHAT page's title changes
-      if (result.isAIChatPage) {
-        agentAwarenessCache.invalidateDriveAgents(driveId).catch(err => {
-          loggers.api.warn('Agent awareness cache invalidation failed', {
-            error: err instanceof Error ? err.message : String(err),
-            driveId,
-          });
-        });
-      }
     }
 
     // Broadcast content update (for document synchronization)
@@ -124,16 +115,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
           socketId
         })
       );
-    }
-
-    // Invalidate page tree cache when structure changes (title or parent)
-    if (safeBody.title || safeBody.parentId !== undefined) {
-      pageTreeCache.invalidateDriveTree(driveId).catch(err => {
-        loggers.api.warn('Page tree cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId,
-        });
-      });
     }
 
     // Track page update
@@ -194,31 +175,13 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    // Side effects: broadcast and cache invalidation
+    // Side effects: broadcast
     await broadcastPageEvent(
       createPageEventPayload(result.driveId, pageId, 'trashed', {
         title: result.pageTitle ?? undefined,
         parentId: result.parentId ?? undefined
       })
     );
-
-    // Invalidate agent awareness cache when an AI_CHAT page is trashed
-    if (result.isAIChatPage) {
-      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(err => {
-        loggers.api.warn('Agent awareness cache invalidation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          driveId: result.driveId,
-        });
-      });
-    }
-
-    // Invalidate page tree cache when structure changes
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
-      loggers.api.warn('Page tree cache invalidation failed', {
-        error: err instanceof Error ? err.message : String(err),
-        driveId: result.driveId,
-      });
-    });
 
     // Track page deletion/trash
     trackPageOperation(userId, 'trash', pageId, {

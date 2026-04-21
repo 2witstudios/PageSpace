@@ -6,6 +6,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.{test,spec}.{js,ts}'],
+    exclude: [
+      // Integration tests that require a running PostgreSQL database.
+      // Run via ./scripts/test-with-db.sh, or:
+      //   pnpm --filter @pagespace/db test -- src/__tests__/accessible-page-ids.integration.test.ts
+      'src/__tests__/accessible-page-ids.integration.test.ts',
+    ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
     fileParallelism: false,

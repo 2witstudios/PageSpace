@@ -39,14 +39,12 @@ packages/lib/src/
 │   └── ai-monitoring.ts
 ├── notifications/           # Notification system
 │   └── index.ts
-├── permissions/             # Access control
-│   ├── permissions.ts       # Core permission logic
-│   └── permissions-cached.ts # Cached permission checks (preferred)
+├── permissions/             # Access control (single canonical module)
+│   └── permissions.ts       # All permission logic — reads go straight to Postgres
 ├── services/                # Shared services
 │   ├── date-utils.ts
 │   ├── email-service.ts
 │   ├── memory-monitor.ts
-│   ├── permission-cache.ts
 │   ├── rate-limit-cache.ts
 │   ├── service-auth.ts      # Service-to-service authentication
 │   ├── storage-limits.ts
@@ -133,8 +131,8 @@ import { LogLevel } from '@pagespace/lib/logger-config';
 import { trackActivity } from '@pagespace/lib/activity-tracker';
 import { trackAiUsage } from '@pagespace/lib/ai-monitoring';
 
-// Permissions (cached version - preferred)
-import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
+// Permissions
+import { getUserAccessLevel } from '@pagespace/lib/permissions';
 
 // Services
 import { getStorageLimits } from '@pagespace/lib/services/storage-limits';
@@ -161,8 +159,7 @@ import { validateFileUpload } from '@pagespace/lib/utils/file-security';
 - **page-type-validators.ts** - Validation logic for page creation/updates
 
 ### Permissions (`permissions/`)
-- **permissions.ts** - Core access control: `getUserAccessLevel`, `canUserViewPage`, `canUserEditPage`
-- **permissions-cached.ts** - Cached permission checks for performance (preferred for hot paths)
+- **permissions.ts** - Single canonical access-control module: `getUserAccessLevel`, `canUser{View,Edit,Share,Delete}Page`, `getUserDriveAccess`, `getUserDrivePermissions`, `getBatchPagePermissions`. All reads go directly to Postgres — no cache layer after the Redis deprecation (see `docs/changelog/` for PR 4/5 of the Redis-deprecation series).
 
 ### Logging (`logging/`)
 - **logger.ts** - Structured logging with log levels
@@ -177,8 +174,7 @@ import { validateFileUpload } from '@pagespace/lib/utils/file-security';
 
 ### Services (`services/`)
 - **service-auth.ts** - Service-to-service authentication (internal APIs)
-- **rate-limit-cache.ts** - Redis-backed rate limiting
-- **permission-cache.ts** - Permission caching for performance
+- **rate-limit-cache.ts** - Rate-limit counters (Postgres-backed after Redis deprecation)
 - **storage-limits.ts** - File storage quota management
 - **subscription-utils.ts** - Subscription tier utilities
 - **email-service.ts** - Email sending via Resend
@@ -204,7 +200,7 @@ import { validateFileUpload } from '@pagespace/lib/utils/file-security';
 ### Permission Checking
 
 ```typescript
-import { getUserAccessLevel, canUserEditPage } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel, canUserEditPage } from '@pagespace/lib/permissions';
 
 const access = await getUserAccessLevel(userId, pageId);
 if (access?.canEdit) {

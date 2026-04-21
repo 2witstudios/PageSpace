@@ -20,6 +20,7 @@ export {
   isJTIRevoked,
   revokeJTI,
   revokeAllUserJTIs,
+  sweepExpiredRevokedJTIs,
   // Session operations
   setSessionData,
   getSessionData,
@@ -33,10 +34,14 @@ export {
   getDistributedRateLimitStatus,
   initializeDistributedRateLimiting,
   shutdownRateLimiting,
+  sweepExpiredRateLimitBuckets,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
   type RateLimitResult,
 } from './distributed-rate-limit';
+
+// Auth handoff token sweep
+export { sweepExpiredAuthHandoffTokens } from './auth-handoff-sweep';
 
 // SSRF prevention (URL validation)
 export {

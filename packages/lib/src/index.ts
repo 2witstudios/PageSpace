@@ -25,18 +25,8 @@ export { getOnPremUserDefaults, getOnPremOllamaSettings } from './onprem-default
 // Content processing
 export * from './content';
 
-// Permissions (export cached version by default)
-export * from './permissions/permissions-cached'; // Server-only: cached permissions (preferred)
-export type { DrivePermissionLevel } from './permissions/permissions-cached';
-
-// Export specific functions from original permissions that aren't in cached version
-export {
-  getDriveIdsForUser,
-  getUserAccessiblePagesInDriveWithDetails,
-  getUserAccessiblePagesInDrive,
-  isDriveOwnerOrAdmin,
-  isUserDriveMember,
-} from './permissions/permissions';
+// Permissions (single canonical source after Redis cache removal)
+export * from './permissions/permissions';
 
 // Utilities
 export * from './utils';
@@ -102,18 +92,6 @@ export * from './repositories';
 export { rateLimitCache } from './services/rate-limit-cache';
 export type { ProviderType, UsageTrackingResult } from './services/rate-limit-cache';
 export { getTodayUTC, getTomorrowMidnightUTC, getSecondsUntilMidnightUTC } from './services/date-utils';
-
-// Agent awareness caching (server-only)
-export { agentAwarenessCache, AgentAwarenessCache } from './services/agent-awareness-cache';
-export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-cache';
-
-// Page tree caching (server-only)
-export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
-export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
-
-// Conversation caching (server-only)
-export { conversationCache, ConversationCache } from './services/conversation-cache';
-export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';
 
 // File processing utilities (server-only)
 export * from './file-processing';

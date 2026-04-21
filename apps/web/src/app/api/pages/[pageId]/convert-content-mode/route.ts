@@ -29,7 +29,7 @@ export async function POST(
     const { targetMode } = convertSchema.parse(body);
 
     // Check permissions
-    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
+    const canEdit = await canUserEditPage(userId, pageId);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You need edit permission to convert this page' },

@@ -31,7 +31,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canDelete = await canUserDeletePage(userId, pageId, { bypassCache: true });
+  const canDelete = await canUserDeletePage(userId, pageId);
   if (!canDelete) {
     return new NextResponse("Forbidden", { status: 403 });
   }

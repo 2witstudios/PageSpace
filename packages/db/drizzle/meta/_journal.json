@@ -705,8 +705,43 @@
     {
       "idx": 100,
       "version": "7",
-      "when": 1776734460090,
-      "tag": "0100_curved_lenny_balinger",
+      "when": 1776656052321,
+      "tag": "0100_gray_kingpin",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1776698272882,
+      "tag": "0101_stiff_mephistopheles",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1776700000000,
+      "tag": "0102_accessible_page_ids_for_user",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1776703154673,
+      "tag": "0103_easy_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1776725637300,
+      "tag": "0104_futuristic_dragon_lord",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1776738769114,
+      "tag": "0105_sticky_genesis",
       "breakpoints": true
     }
   ]

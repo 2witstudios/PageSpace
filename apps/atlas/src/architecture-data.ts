@@ -419,7 +419,7 @@ export const systems: AtlasSystem[] = [
       {
         label: 'src/services',
         path: 'packages/lib/src/services',
-        note: 'Redis/cache adapters, version storage, member services, conversation caches, rate limits, and storage utilities.',
+        note: 'Redis/cache adapters, version storage, member services, rate limits, and storage utilities.',
       },
       {
         label: 'src/content',
@@ -495,21 +495,16 @@ export const systems: AtlasSystem[] = [
     eyebrow: 'L2 cache + fanout support',
     tone: 'data',
     group: 'State + Storage',
-    summary: 'Shared Redis used for cache-backed read acceleration, page-tree cache promotion, and realtime scale-out support.',
+    summary: 'Shared Redis used for cache-backed read acceleration and realtime scale-out support.',
     boundary: 'Acceleration and coordination only. Loss should degrade performance, not destroy workspace truth.',
     owns: ['Cross-process cache store', 'Shared Redis client', 'Ephemeral coordination layer'],
     dependsOn: ['REDIS_URL', 'packages/lib shared-redis adapter', 'realtime + web consumers'],
-    touchpoints: ['docker-compose.yml: redis', 'packages/lib/src/services/shared-redis.ts', 'packages/lib/src/services/page-tree-cache.ts'],
+    touchpoints: ['docker-compose.yml: redis', 'packages/lib/src/services/shared-redis.ts'],
     tree: [
       {
         label: 'shared-redis.ts',
         path: 'packages/lib/src/services/shared-redis.ts',
         note: 'Central Redis connection and fallback-to-memory behavior.',
-      },
-      {
-        label: 'page-tree-cache.ts',
-        path: 'packages/lib/src/services/page-tree-cache.ts',
-        note: 'Memory L1 + Redis L2 cache for tree-shaped context reads.',
       },
       {
         label: 'docker-compose redis service',
@@ -1064,7 +1059,7 @@ export const kernelSatellites: KernelSatellite[] = [
     id: 'kernel-perms',
     title: 'Permissions',
     summary: 'Drive and page access checks that guard the kernel boundary.',
-    path: 'packages/lib/src/permissions/permissions-cached.ts',
+    path: 'packages/lib/src/permissions/permissions.ts',
     slot: 'bottom-center',
   },
   {
