@@ -22,7 +22,7 @@ A drive is a PageSpace workspace — the top-level container that holds a page t
 - Write a drive prompt — custom AI instructions that AI Chat pages in the drive can opt into.
 - Take a snapshot backup of a drive before a risky import, rename, or restructure.
 - See who accessed the drive recently and jump back into the ones you touched today.
-- Move a drive to the trash and restore it later, or open its history feed to see what changed and when.
+- Open a drive's history feed to see what changed, when, and by whom.
 
 ## How it works
 
