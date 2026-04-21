@@ -90,10 +90,10 @@ export async function POST(req: Request) {
       process.env.OAUTH_STATE_SECRET!
     );
 
-    // Generate PKCE challenge (code_verifier stored server-side in Redis)
+    // Generate PKCE challenge (code_verifier stored server-side in Postgres via auth_handoff_tokens)
     const pkce = await generatePKCE(stateParam);
 
-    // Generate OAuth URL (with PKCE when Redis is available)
+    // Generate OAuth URL (PKCE is optional — fails open to null if the DB is unavailable)
     const params = new URLSearchParams({
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,

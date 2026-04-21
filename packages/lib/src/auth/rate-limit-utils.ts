@@ -1,5 +1,6 @@
-// Simple in-memory rate limiter for local deployment
-// For production with multiple instances, consider Redis-based rate limiting
+// Simple in-memory rate limiter for process-local / single-instance use.
+// For distributed rate limiting across replicas, use `checkDistributedRateLimit`
+// from `@pagespace/lib/security` (Postgres-backed, see `distributed-rate-limit.ts`).
 
 interface RateLimitAttempt {
   count: number;

@@ -29,7 +29,7 @@ packages/
 - **Database**: PostgreSQL + Drizzle ORM
 - **AI**: Vercel AI SDK + multi-provider (Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama)
 - **Auth**: Passwordless — passkeys (WebAuthn) + magic links. Opaque session tokens, SHA-256 hashed at rest.
-- **Real-time**: Socket.IO with Redis pub/sub
+- **Real-time**: Socket.IO (single-process fanout; no external broker)
 - **Editors**: TipTap (rich text), Monaco (code), custom sheet + canvas
 - **State**: Zustand (client) + SWR (server cache)
 - **Build**: pnpm + Turbo + Docker Compose
@@ -91,7 +91,7 @@ When you need to understand a subsystem, read these canonical sources (not docs 
 ```bash
 # Development
 pnpm dev                    # Start all services (web, realtime, processor — excludes control-plane)
-pnpm dev:services           # Start Postgres, Redis, processor, realtime via Docker
+pnpm dev:services           # Start Postgres, processor, realtime via Docker
 pnpm --filter web dev       # Start web app only
 pnpm --filter realtime dev  # Start realtime service only
 pnpm --filter processor dev # Start processor service only

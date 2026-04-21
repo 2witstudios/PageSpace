@@ -76,7 +76,8 @@ const MAX_NONCES = 10_000; // Memory exhaustion safeguard
 
 // In-memory nonce store for replay detection.
 // NOTE: This is process-local and won't prevent replay across multiple server instances.
-// For horizontal scaling (multiple replicas, serverless), use Redis with TTL instead.
+// For horizontal scaling (multiple replicas, serverless), back this with a Postgres
+// TTL-keyed table (same pattern as auth_handoff_tokens / rate_limit_buckets).
 // The HMAC signature + 5-minute timestamp window still provides strong protection.
 const usedNonces = new Map<string, number>(); // nonce → epoch ms when recorded
 let lastNonceCleanup = Date.now();
