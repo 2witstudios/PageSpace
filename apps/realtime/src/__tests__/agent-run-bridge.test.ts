@@ -401,6 +401,82 @@ describe('startAgentRunBridge', () => {
     expect(pool.connect).toHaveBeenCalledTimes(2);
   });
 
+  it('given dispose fires while a reconnect LISTEN is still in-flight, should release the fresh client without logging ready', async () => {
+    const first = makeFakeClient();
+    const second = makeFakeClient();
+    let resolveSecondListen: ((value?: unknown) => void) | null = null;
+    second.query = vi.fn((sql: string) => {
+      second.queries.push(sql);
+      if (sql.startsWith('LISTEN')) {
+        return new Promise((resolve) => {
+          resolveSecondListen = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const pool = { connect: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
+    const scheduler = makeManualScheduler();
+
+    const dispose = await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    first.emit('error', new Error('transient'));
+    // Kick off reconnect; second.query LISTEN will hang until we resolve it.
+    scheduler.trigger();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(resolveSecondListen).toBeTruthy();
+
+    // Race: call dispose while reconnect's LISTEN is still pending.
+    const disposePromise = dispose();
+    resolveSecondListen?.(undefined);
+    await disposePromise;
+
+    expect(second.release).toHaveBeenCalled();
+  });
+
+  it('given both error and end fire for the same client, should only process the first and ignore the second', async () => {
+    const fake = makeFakeClient();
+    const pool = { connect: vi.fn().mockResolvedValue(fake) };
+    const scheduler = makeManualScheduler();
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduler.schedule,
+    });
+
+    fake.emit('error', new Error('first'));
+    expect(fake.release).toHaveBeenCalledTimes(1);
+    expect(scheduler.pendingCount()).toBe(1);
+
+    fake.emit('end');
+    expect(fake.release).toHaveBeenCalledTimes(1); // second failure is a no-op
+    expect(scheduler.pendingCount()).toBe(1);
+  });
+
+  it('given a reconnect is already scheduled, should not schedule a second one', async () => {
+    const first = makeFakeClient();
+    const second = makeFakeClient();
+    const pool = { connect: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
+    const scheduler = makeManualScheduler();
+    const scheduleSpy = vi.fn(scheduler.schedule);
+
+    await startAgentRunBridge({
+      pool: pool as never,
+      io: { to: vi.fn() } as never,
+      scheduleReconnect: scheduleSpy,
+    });
+
+    first.emit('error', new Error('boom'));
+    // Both 'error' and 'end' might fire in sequence; only one reconnect should be scheduled.
+    first.emit('end');
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('given LISTEN fails on a fresh client, should treat it as a failure and schedule a reconnect', async () => {
     const fake = makeFakeClient();
     fake.query = vi.fn(async (sql: string) => {

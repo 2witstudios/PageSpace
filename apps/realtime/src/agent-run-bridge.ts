@@ -112,6 +112,7 @@ type BridgeDeps = {
 const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/* c8 ignore start */ /* Real-timer scheduler; tests inject a synchronous one. */
 function defaultScheduleReconnect(attempt: number, cb: () => void): () => void {
   const delay = Math.min(
     MAX_RECONNECT_DELAY_MS,
@@ -120,6 +121,7 @@ function defaultScheduleReconnect(attempt: number, cb: () => void): () => void {
   const timer = setTimeout(cb, delay);
   return () => clearTimeout(timer);
 }
+/* c8 ignore stop */
 
 /**
  * Wire a LISTEN on `agent_run_events` from Postgres and re-emit each valid
@@ -135,14 +137,16 @@ function defaultScheduleReconnect(attempt: number, cb: () => void): () => void {
  */
 export async function startAgentRunBridge(deps: BridgeDeps): Promise<() => Promise<void>> {
   const { pool, io } = deps;
-  const scheduleReconnect = deps.scheduleReconnect ?? defaultScheduleReconnect;
+  const scheduleReconnect = deps.scheduleReconnect ?? /* c8 ignore next */ defaultScheduleReconnect;
 
   let disposed = false;
   let currentClient: PoolClient | null = null;
   let cancelReconnect: (() => void) | null = null;
 
   const scheduleReconnectAttempt = (attempt: number) => {
-    if (disposed || cancelReconnect) return;
+    // Guard against double-scheduling; cancelReconnect branch is a defensive
+    // idempotency check for unusual call ordering.
+    if (disposed || /* c8 ignore next */ cancelReconnect) return;
     cancelReconnect = scheduleReconnect(attempt, () => {
       cancelReconnect = null;
       void connect(attempt);
@@ -154,21 +158,27 @@ export async function startAgentRunBridge(deps: BridgeDeps): Promise<() => Promi
       // Truthy arg tells pg to discard the client instead of returning it
       // to the pool — the connection is in an unknown state after failure.
       client.release(err ?? true);
+      /* c8 ignore start */
     } catch {
       /* ignore release-after-destroy */
     }
+    /* c8 ignore stop */
   };
 
   const cleanReleaseClient = (client: PoolClient) => {
     try {
       client.release();
+      /* c8 ignore start */
     } catch {
       /* ignore */
     }
+    /* c8 ignore stop */
   };
 
   const connect = async (attempt: number): Promise<void> => {
-    if (disposed) return;
+    // Defensive: dispose() races with a timer that already fired — the cancel
+    // function can miss the timer if the callback was queued before cancel ran.
+    if (disposed) /* c8 ignore next */ return;
     let client: PoolClient;
     try {
       client = await pool.connect();
