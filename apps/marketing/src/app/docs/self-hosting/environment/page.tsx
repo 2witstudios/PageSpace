@@ -3,148 +3,225 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Environment Variables",
-  description: "Complete reference for PageSpace environment variables: database, authentication, AI providers, file storage, and service configuration.",
+  description: "Every environment variable PageSpace reads: required secrets, deployment mode, service URLs, storage limits, AI providers, email, Stripe, and monitoring.",
   path: "/docs/self-hosting/environment",
-  keywords: ["environment variables", "configuration", "secrets", "database", "AI providers"],
+  keywords: ["environment variables", "configuration", "secrets", "CSRF_SECRET", "ENCRYPTION_KEY", "DEPLOYMENT_MODE"],
 });
 
 const content = `
 # Environment Variables
 
-Complete reference for all PageSpace configuration variables.
+Every variable below is read by at least one service in the stack. Sources cited inline. Authoritative files: \`packages/lib/src/config/env-validation.ts\` (web), \`.env.example\` (dev template), and the deploy repo's \`docker-compose.prod.yml\`.
 
-## Database
+PageSpace runs entirely on Postgres — no Redis, no external cache. Rate limits, session revocation, handoff tokens, and permissions all live in the same database.
+
+## Deployment mode
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| \`DEPLOYMENT_MODE\` | No | \`cloud\` | \`cloud\` · \`onprem\` · \`tenant\`. Controls which routes and features are active. |
+| \`NEXT_PUBLIC_DEPLOYMENT_MODE\` | No | \`cloud\` | Client-visible mirror; set to the same value. |
+
+Source: \`packages/lib/src/deployment-mode.ts\`. \`onprem\` disables Stripe, OAuth, and self-registration. \`tenant\` expects an external control plane for billing.
+
+## Required secrets
+
+Web refuses to boot if either of these is missing or under 32 characters in non-test environments (\`packages/lib/src/config/env-validation.ts:67-82\`):
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`DATABASE_URL\` | Yes | PostgreSQL connection string |
+| \`DATABASE_URL\` | Yes | PostgreSQL connection string (must start with \`postgresql://\` or \`postgres://\`). |
+| \`CSRF_SECRET\` | Yes | CSRF token signing key. Min 32 chars. |
+| \`ENCRYPTION_KEY\` | Yes | AES key for encrypting per-user AI provider keys at rest. Min 32 chars. |
+
+Generate each with \`openssl rand -hex 32\`. Never reuse across environments.
 
 \`\`\`bash
-DATABASE_URL=postgresql://user:password@localhost:5432/pagespace
+DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+CSRF_SECRET=$(openssl rand -hex 32)
+ENCRYPTION_KEY=$(openssl rand -hex 32)
 \`\`\`
 
-PageSpace runs entirely on Postgres — no Redis or other external cache is required. Rate limits, session revocation, and handoff tokens all live in the same database.
+There is no \`JWT_SECRET\`, \`SESSION_SECRET\`, or \`SERVICE_SECRET\`. Sessions use opaque tokens hashed in the \`sessions\` table; service-to-service auth uses short-lived \`ps_svc_*\` tokens, not a shared secret.
 
-## Authentication
+## Application URLs
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`SESSION_SECRET\` | Yes | Secret for session token signing (min 32 chars) |
-| \`COOKIE_DOMAIN\` | No | Domain for server-side authentication cookies |
-| \`NEXT_PUBLIC_COOKIE_DOMAIN\` | No | Domain for client-side cookies (theme sync) |
-| \`GOOGLE_CLIENT_ID\` | No | Google OAuth client ID |
-| \`GOOGLE_CLIENT_SECRET\` | No | Google OAuth client secret |
+| \`WEB_APP_URL\` | Yes (prod) | Canonical origin for the web service. Used for CSRF origin validation. |
+| \`NEXT_PUBLIC_APP_URL\` | Yes | Public URL users see in links and OAuth redirects. |
+| \`NEXT_PUBLIC_REALTIME_URL\` | Yes | Public WebSocket URL (same origin as the app if Caddy proxies \`/socket.io/*\`). |
+| \`INTERNAL_REALTIME_URL\` | No | Web → realtime URL inside the Docker network (e.g. \`http://realtime:3001\`). Falls back to the public URL if unset. |
+| \`PROCESSOR_URL\` | Yes | Web → processor URL inside the Docker network (e.g. \`http://processor:3003\`). |
+| \`CORS_ORIGIN\` | Yes | Allowed origin on the realtime service (normally equals \`WEB_APP_URL\`). |
+| \`ADDITIONAL_ALLOWED_ORIGINS\` | No | Comma-separated extra origins for multi-domain deployments. |
+| \`ORIGIN_VALIDATION_MODE\` | No | \`block\` (default) or \`warn\` for CSRF origin checks. Use \`warn\` only for debugging. |
+
+Source: \`.env.example:16-48\`, \`packages/lib/src/notifications/notifications.ts:14\`.
+
+## Cookies
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`COOKIE_DOMAIN\` | No | Domain for server-side auth cookies. Set to \`.example.com\` for cross-subdomain SSO. |
+| \`NEXT_PUBLIC_COOKIE_DOMAIN\` | No | Same value for client-side theme-sync cookies. |
+
+## Service-to-service and broadcast auth
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`REALTIME_BROADCAST_SECRET\` | Yes (realtime broadcasts) | Min 32 chars. Web uses this to authenticate broadcast writes to the realtime service. |
+| \`CRON_SECRET\` | Yes (cron container) | Random string; the cron container uses it to authenticate to web endpoints. |
+| \`INTERNAL_API_SECRET\` | No | Used by marketing → web internal calls. |
+
+Source: \`packages/lib/src/config/env-validation.ts:60-62\`, \`.env.example:126-134\`.
+
+## File storage
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| \`FILE_STORAGE_PATH\` | Yes | — | Directory on the shared volume. Web: \`/app/storage\`. Processor: \`/data/files\`. |
+| \`CACHE_PATH\` | No (processor) | \`/data/cache\` | Scratch directory for image/PDF processing. |
+| \`STORAGE_MAX_FILE_SIZE_MB\` | No | \`20\` | Per-file upload cap, in MB. |
+| \`NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB\` | No | \`20\` | Client-visible mirror; set to the same value. |
+| \`STORAGE_DEFAULT_QUOTA_MB\` | No | \`500\` | Per-user quota default. |
+| \`STORAGE_MAX_CONCURRENT_UPLOADS\` | No | \`5\` | Parallel upload cap. |
+| \`STORAGE_MIN_FREE_MEMORY_MB\` | No | \`500\` | Refuse uploads below this free-memory threshold. |
+| \`STORAGE_ENABLE_QUOTAS\` | No | \`true\` | Toggle quota enforcement. |
+
+Source: \`.env.example:22-31\`, \`apps/processor/src/api/upload.ts:89\`. There is no \`UPLOAD_DIR\` or \`MAX_FILE_SIZE\` — nothing reads those names.
+
+## Processor configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| \`PROCESSOR_AUTH_REQUIRED\` | No | \`true\` | Set to \`false\` in development only to skip bearer-token auth. Throws at startup if set in production. |
+| \`PROCESSOR_UPLOAD_RATE_LIMIT\` | No | \`100\` | Per-window upload count cap. |
+| \`PROCESSOR_UPLOAD_RATE_WINDOW\` | No | \`3600\` | Window length in seconds. |
+| \`ENABLE_OCR\` | No | \`false\` | Enable local OCR (Tesseract). |
+| \`ENABLE_EXTERNAL_OCR\` | No | \`false\` | Enable Gemini-backed OCR. Requires \`GOOGLE_AI_DEFAULT_API_KEY\`. |
+
+Source: \`.env.example:4-7\`, \`apps/processor/src/middleware/auth.ts:10-22\`.
+
+## AI providers
+
+End users configure their own keys in Settings > AI; values are encrypted at rest with \`ENCRYPTION_KEY\`. The variables below set optional defaults so new users land on a working provider.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`GOOGLE_AI_DEFAULT_API_KEY\` | No | Default Gemini key for the built-in PageSpace provider. |
+| \`GLM_DEFAULT_API_KEY\` | No | Default GLM key. |
+| \`OPENROUTER_DEFAULT_API_KEY\` | No | Default OpenRouter key (legacy; prefer \`GOOGLE_AI_DEFAULT_API_KEY\`). |
+| \`BRAVE_API_KEY\` | No | Enables the web-search tool. |
+
+Source: \`packages/lib/src/config/env-validation.ts:44-45\`, \`.env.example:50-62\`.
+
+## OAuth and magic links
+
+OAuth is disabled automatically when \`DEPLOYMENT_MODE=onprem\`. Cloud deployments need:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`GOOGLE_OAUTH_CLIENT_ID\` | No | Web OAuth client ID. |
+| \`GOOGLE_OAUTH_CLIENT_SECRET\` | No | Web OAuth client secret. |
+| \`GOOGLE_OAUTH_REDIRECT_URI\` | No | e.g. \`https://pagespace.example.com/api/auth/google/callback\`. |
+| \`NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID\` | No | Client-side mirror for One Tap. Must match the server value. |
+| \`GOOGLE_OAUTH_IOS_CLIENT_ID\` / \`NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID\` | No | Native iOS Google Sign-In client IDs. |
+| \`APPLE_SERVICE_ID\` | No | Apple Sign-In service ID. |
+| \`OAUTH_STATE_SECRET\` | Yes (any OAuth) | Min 32 chars. Signs OAuth state parameters. Required for integration OAuth flows (GitHub, etc.). |
+
+## Email (Resend)
+
+PageSpace sends magic links and notifications via [Resend](https://resend.com). There is no SMTP client; do not set \`SMTP_HOST\` etc.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`RESEND_API_KEY\` | Yes (for email) | Resend API key (\`re_*\`). |
+| \`FROM_EMAIL\` | Yes (for email) | Sender, e.g. \`PageSpace <noreply@example.com>\`. |
+| \`CONTACT_EMAIL\` | No | Where contact-form submissions go. |
+
+Source: \`.env.example:86-89\`, deploy compose \`marketing\` service.
+
+## Stripe (cloud mode only)
+
+Ignored when \`DEPLOYMENT_MODE\` is \`onprem\` or \`tenant\`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`STRIPE_SECRET_KEY\` | Yes (cloud) | \`sk_*\`. |
+| \`STRIPE_WEBHOOK_SECRET\` | Yes (cloud) | \`whsec_*\`. |
+| \`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY\` | Yes (cloud) | \`pk_*\`. |
+| \`NEXT_PUBLIC_STRIPE_PRICE_ID_PRO\` / \`_FOUNDER\` / \`_BUSINESS\` | Yes (cloud) | Stripe price IDs for checkout. |
+
+## Monitoring and logging
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| \`LOG_LEVEL\` | No | \`info\` | \`debug\` · \`info\` · \`warn\` · \`error\`. Use \`warn\` in prod. |
+| \`LOG_DESTINATION\` | No | \`both\` | \`stdout\` · \`db\` · \`both\`. |
+| \`LOG_BATCH_SIZE\` | No | \`50\` | Batch size for async log flushes. |
+| \`LOG_FLUSH_INTERVAL\` | No | \`5000\` | Flush interval in ms. |
+| \`MONITORING_INGEST_KEY\` | Recommended | — | Authenticates the internal monitoring ingest endpoint. Without it, API metrics silently drop and \`/api/health\` reports degraded. |
+| \`MONITORING_INGEST_PATH\` | No | \`/api/internal/monitoring/ingest\` | Override for the ingest path. |
+| \`MONITORING_INGEST_DISABLED\` | No | — | Set to \`true\` to silence missing-key warnings explicitly. |
+| \`RETENTION_API_METRICS_DAYS\` / \`_SYSTEM_LOGS_DAYS\` / \`_ERROR_LOGS_DAYS\` / \`_USER_ACTIVITIES_DAYS\` | No | see defaults | Monitoring-table retention overrides. |
+
+## Image registry
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \`REGISTRY_TOKEN\` | Yes (GHCR pulls) | GitHub PAT with \`packages:read\`. Used for \`docker login ghcr.io\`. |
+| \`GITHUB_USERNAME\` | Yes (prod compose) | Owner segment of the GHCR image names. |
+
+## Example \`.env\` (on-prem)
 
 \`\`\`bash
-SESSION_SECRET=your-random-secret-at-least-32-characters-long
+# Deployment
+DEPLOYMENT_MODE=onprem
+NEXT_PUBLIC_DEPLOYMENT_MODE=onprem
+
+# Database
+DATABASE_URL=postgresql://pagespace:$(openssl rand -hex 16)@postgres:5432/pagespace
+
+# Required secrets
+CSRF_SECRET=$(openssl rand -hex 32)
+ENCRYPTION_KEY=$(openssl rand -hex 32)
+REALTIME_BROADCAST_SECRET=$(openssl rand -hex 32)
+CRON_SECRET=$(openssl rand -hex 32)
+OAUTH_STATE_SECRET=$(openssl rand -hex 32)
+
+# URLs
+WEB_APP_URL=https://pagespace.example.com
+NEXT_PUBLIC_APP_URL=https://pagespace.example.com
+NEXT_PUBLIC_REALTIME_URL=https://pagespace.example.com
+INTERNAL_REALTIME_URL=http://realtime:3001
+PROCESSOR_URL=http://processor:3003
+CORS_ORIGIN=https://pagespace.example.com
 COOKIE_DOMAIN=.example.com
 NEXT_PUBLIC_COOKIE_DOMAIN=.example.com
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# Storage
+FILE_STORAGE_PATH=/app/storage
+STORAGE_MAX_FILE_SIZE_MB=20
+NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
+
+# Optional: default AI provider
+GOOGLE_AI_DEFAULT_API_KEY=
+
+# Logging
+LOG_LEVEL=warn
+MONITORING_INGEST_KEY=$(openssl rand -hex 32)
 \`\`\`
 
-## Service URLs
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`NEXT_PUBLIC_APP_URL\` | Yes | Public URL of the web app |
-| \`REALTIME_URL\` | Yes | Internal URL of the realtime service |
-| \`PROCESSOR_URL\` | Yes | Internal URL of the processor service |
-| \`SERVICE_SECRET\` | Yes | Shared secret for service-to-service auth |
+## Generating secrets
 
 \`\`\`bash
-NEXT_PUBLIC_APP_URL=https://pagespace.example.com
-REALTIME_URL=http://realtime:3001
-PROCESSOR_URL=http://processor:3003
-SERVICE_SECRET=your-service-to-service-secret
+# Any 32+ char secret
+openssl rand -hex 32
+
+# Or with Node
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 \`\`\`
-
-## AI Providers
-
-AI provider keys are configured per-user in the web UI, not via environment variables. However, the default PageSpace provider uses:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`OPENROUTER_API_KEY\` | No | OpenRouter API key for the built-in PageSpace provider |
-| \`ENCRYPTION_KEY\` | Yes | Key for encrypting user AI API keys at rest |
-
-\`\`\`bash
-OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
-ENCRYPTION_KEY=your-32-byte-encryption-key
-\`\`\`
-
-Users configure their own API keys via Settings > AI. These are encrypted with \`ENCRYPTION_KEY\` before storage.
-
-## File Storage
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`UPLOAD_DIR\` | Yes | Directory for uploaded files (processor service) |
-| \`MAX_FILE_SIZE\` | No | Maximum upload size in bytes (default: 104857600 / 100 MB) |
-
-\`\`\`bash
-UPLOAD_DIR=/data/uploads
-MAX_FILE_SIZE=104857600
-\`\`\`
-
-## Email
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`SMTP_HOST\` | No | SMTP server hostname |
-| \`SMTP_PORT\` | No | SMTP server port |
-| \`SMTP_USER\` | No | SMTP authentication user |
-| \`SMTP_PASSWORD\` | No | SMTP authentication password |
-| \`EMAIL_FROM\` | No | Sender email address |
-
-Email is used for invitations and notifications. If not configured, email features are disabled.
-
-## Monitoring
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| \`LOG_LEVEL\` | No | Logging level: \`debug\`, \`info\`, \`warn\`, \`error\` (default: \`info\`) |
-
-## Example .env
-
-\`\`\`bash
-# Database
-DATABASE_URL=postgresql://pagespace:secret@localhost:5432/pagespace
-
-# Auth
-SESSION_SECRET=generate-a-random-string-at-least-32-characters
-ENCRYPTION_KEY=generate-another-random-32-byte-key
-
-# Service URLs
-NEXT_PUBLIC_APP_URL=https://pagespace.example.com
-REALTIME_URL=http://localhost:3001
-PROCESSOR_URL=http://localhost:3003
-SERVICE_SECRET=generate-a-service-secret
-
-# File storage
-UPLOAD_DIR=./uploads
-
-# Optional: Google OAuth
-GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-secret
-
-# Optional: Default AI provider
-OPENROUTER_API_KEY=sk-or-v1-your-key
-\`\`\`
-
-## Generating Secrets
-
-Use a cryptographically secure random generator:
-
-\`\`\`bash
-# Generate a 32-byte random secret
-openssl rand -base64 32
-
-# Or using Node.js
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-\`\`\`
-
-Never reuse secrets across environments. Each deployment should have unique values for \`SESSION_SECRET\`, \`ENCRYPTION_KEY\`, and \`SERVICE_SECRET\`.
 `;
 
 export default function EnvironmentPage() {
