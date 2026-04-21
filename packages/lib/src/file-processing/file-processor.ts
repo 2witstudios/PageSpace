@@ -363,7 +363,7 @@ export class FileProcessor {
       // Check if we have API keys configured
       const openaiKey = process.env.OPENAI_API_KEY;
       const anthropicKey = process.env.ANTHROPIC_API_KEY;
-      const openrouterKey = process.env.OPENROUTER_API_KEY;
+      const openrouterKey = process.env.OPENROUTER_DEFAULT_API_KEY;
       
       if (!openaiKey && !anthropicKey && !openrouterKey) {
         console.log(`No AI API keys configured for OCR. Marking page ${pageId} as visual.`);

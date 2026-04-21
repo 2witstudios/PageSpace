@@ -65,11 +65,11 @@ AI provider keys are configured per-user in the web UI, not via environment vari
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| \`OPENROUTER_API_KEY\` | No | OpenRouter API key for the built-in PageSpace provider |
+| \`OPENROUTER_DEFAULT_API_KEY\` | No | OpenRouter API key for the built-in PageSpace provider |
 | \`ENCRYPTION_KEY\` | Yes | Key for encrypting user AI API keys at rest |
 
 \`\`\`bash
-OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+OPENROUTER_DEFAULT_API_KEY=sk-or-v1-your-openrouter-key
 ENCRYPTION_KEY=your-32-byte-encryption-key
 \`\`\`
 
@@ -129,7 +129,7 @@ GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-secret
 
 # Optional: Default AI provider
-OPENROUTER_API_KEY=sk-or-v1-your-key
+OPENROUTER_DEFAULT_API_KEY=sk-or-v1-your-key
 \`\`\`
 
 ## Generating Secrets
