@@ -18,7 +18,6 @@ import {
   MessageSquare,
   Search,
   UserCog,
-  Bell,
 } from "lucide-react";
 
 export interface NavItem {
@@ -76,7 +75,6 @@ export const docsNav: NavSection[] = [
       { title: "Files", href: "/docs/api/files", icon: FileText },
       { title: "Search", href: "/docs/api/search", icon: Search },
       { title: "Users", href: "/docs/api/users", icon: UserCog },
-      { title: "Admin", href: "/docs/api/admin", icon: Bell },
     ],
   },
   {

@@ -83,7 +83,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/api/files",
     "/docs/api/search",
     "/docs/api/users",
-    "/docs/api/admin",
     // Security
     "/docs/security",
     "/docs/security/authentication",

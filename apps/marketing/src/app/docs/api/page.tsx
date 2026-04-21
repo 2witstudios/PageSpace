@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, KeyRound, FileText, HardDrive, Sparkles, MessageSquare, Server, Search, UserCog, Bell } from "lucide-react";
+import { ArrowRight, KeyRound, FileText, HardDrive, Sparkles, MessageSquare, Server, Search, UserCog } from "lucide-react";
 import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "API Reference",
-  description: "PageSpace REST API reference. Authentication, pages, drives, AI, channels, MCP, files, search, users, and admin endpoints.",
+  description: "PageSpace REST API reference. Authentication, pages, drives, AI, channels, MCP, files, search, and user endpoints.",
   path: "/docs/api",
   keywords: ["API", "REST", "endpoints", "reference", "integration"],
 });
@@ -19,7 +19,6 @@ const domains = [
   { title: "Files", href: "/docs/api/files", icon: FileText, description: "Upload, serving, processing status, conversion" },
   { title: "Search", href: "/docs/api/search", icon: Search, description: "Global search, multi-drive search, mentions" },
   { title: "Users", href: "/docs/api/users", icon: UserCog, description: "Account management, user search, connections" },
-  { title: "Admin", href: "/docs/api/admin", icon: Bell, description: "User management, audit logs, monitoring, notifications" },
 ];
 
 export default function ApiIndexPage() {
