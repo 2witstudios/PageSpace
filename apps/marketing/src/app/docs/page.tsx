@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Book, Sparkles, Server, Code2, Shield, HardDrive } from "lucide-react";
+import { ArrowRight, Book, Sparkles, Server, Code2, Shield } from "lucide-react";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.docs;
@@ -63,18 +63,6 @@ const sections = [
       { title: "Zero-Trust", href: "/docs/security/zero-trust" },
     ],
   },
-  {
-    title: "Self-Hosting",
-    description: "Deploy PageSpace on your own infrastructure with Docker, environment variables, and service architecture.",
-    icon: HardDrive,
-    href: "/docs/self-hosting",
-    links: [
-      { title: "Overview", href: "/docs/self-hosting" },
-      { title: "Docker Setup", href: "/docs/self-hosting/docker" },
-      { title: "Environment", href: "/docs/self-hosting/environment" },
-      { title: "Architecture", href: "/docs/self-hosting/architecture" },
-    ],
-  },
 ];
 
 export default function DocsPage() {
@@ -84,7 +72,7 @@ export default function DocsPage() {
         Documentation
       </h1>
       <p className="text-lg text-muted-foreground mb-10">
-        Technical documentation for PageSpace. Covers the REST API, AI system, security model, self-hosting, and MCP integration.
+        Technical documentation for PageSpace. Covers the REST API, AI system, security model, and MCP integration.
       </p>
 
       <div className="grid gap-6 sm:grid-cols-2">
