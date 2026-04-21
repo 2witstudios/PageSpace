@@ -16,10 +16,9 @@ A drive is a PageSpace workspace — the top-level container that holds a page t
 ## What you can do
 
 - Create a new drive for a team, project, or client, and build its page tree from scratch.
-- Keep a private drive for yourself; the name \`Personal\` is reserved so no other drive can take it.
 - Invite people by email and pick what they land on — full drive access, admin rights, or access to specific pages.
 - Define custom roles like "Editor" or "Reviewer" with preset view, edit, and share permissions, then hand out that role when inviting people.
-- Connect a drive to Google Drive, GitHub, a calendar, or another OAuth provider once, and every member can use that connection through AI.
+- Attach [integrations](/docs/integrations) to a drive so agents working inside it can reach external tools.
 - Write a drive prompt — custom AI instructions that AI Chat pages in the drive can opt into.
 - Take a snapshot backup of a drive before a risky import, rename, or restructure.
 - See who accessed the drive recently and jump back into the ones you touched today.
@@ -38,8 +37,6 @@ There are four distinct ways to have access to a drive, and the difference matte
 
 Invitations are a two-step handshake. When someone is invited, a pending membership is created — they appear on the member list but their access isn't active until they accept. Until then, permission checks treat them as if they're not there.
 
-Integrations (Google Drive, GitHub, calendars, and so on) are attached to the drive, not to you personally. You connect your Google account to the drive once, and from that point any member can use that connection — an AI agent pulling a file from Drive uses the drive's connection, not whoever happens to be chatting. Detaching the connection removes that ability for everyone in the drive at the same time.
-
 Backups are point-in-time snapshots of the drive — every page, every permission grant, every member, every custom role, and every file reference. Only owners and admins can trigger or view them. A backup gives you a rollback point before a risky change.
 
 ## Good to know
@@ -51,7 +48,8 @@ Backups are point-in-time snapshots of the drive — every page, every permissio
 
 - [Pages](/docs/features/pages) — what lives inside a drive.
 - [Sharing & Permissions](/docs/features/sharing) — how roles, page grants, and invitations combine in practice.
-- [AI in your Workspace](/docs/features/ai) — how the drive prompt and drive-scoped integrations shape what AI can see and do.
+- [AI in your Workspace](/docs/features/ai) — how the drive prompt shapes what AI can see and do.
+- [Integrations](/docs/integrations) — the external tools a drive can connect to.
 `;
 
 export default function HowItWorksDrivesPage() {

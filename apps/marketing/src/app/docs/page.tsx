@@ -31,11 +31,12 @@ const referenceSections = [
   },
   {
     title: "Integrations",
-    description: "Connect Claude Desktop, Cursor, or your own MCP client to your PageSpace workspace.",
+    description: "Google Calendar and GitHub for your agents, plus MCP for external AI clients connecting in.",
     icon: Plug,
     href: "/docs/integrations",
     links: [
-      { title: "Overview", href: "/docs/integrations" },
+      { title: "Google Calendar", href: "/docs/integrations/google-calendar" },
+      { title: "GitHub", href: "/docs/integrations/github" },
       { title: "MCP", href: "/docs/integrations/mcp" },
       { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop" },
     ],

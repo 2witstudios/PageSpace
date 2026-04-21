@@ -84,6 +84,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/features/accounts",
     // Integrations
     "/docs/integrations",
+    "/docs/integrations/google-calendar",
+    "/docs/integrations/github",
     "/docs/integrations/mcp",
     "/docs/integrations/mcp/desktop",
     // Security & Trust

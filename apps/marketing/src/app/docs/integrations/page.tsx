@@ -1,15 +1,17 @@
 import Link from "next/link";
-import { ArrowRight, Server, Monitor } from "lucide-react";
+import { ArrowRight, Calendar, Github, Server, Monitor } from "lucide-react";
 import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Integrations",
-  description: "Connect external AI clients and tools to your PageSpace workspace.",
+  description: "Google Calendar, GitHub, and MCP — the three ways PageSpace connects to what lives outside it.",
   path: "/docs/integrations",
-  keywords: ["integrations", "MCP", "Claude Desktop", "Cursor", "desktop app"],
+  keywords: ["integrations", "Google Calendar", "GitHub", "MCP", "Claude Desktop", "Cursor"],
 });
 
 const integrations = [
+  { title: "Google Calendar", href: "/docs/integrations/google-calendar", icon: Calendar, description: "Two-way sync your Google calendars into PageSpace — agents read availability, create events, invite attendees." },
+  { title: "GitHub", href: "/docs/integrations/github", icon: Github, description: "Give agents a GitHub identity — browse repos, leave PR reviews, file issues, all under your account." },
   { title: "MCP", href: "/docs/integrations/mcp", icon: Server, description: "Connect Claude Desktop, Cursor, or any MCP client to your workspace using a scoped token." },
   { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop", icon: Monitor, description: "Run local MCP servers inside the PageSpace desktop app — your AI chats get the same external tools you use everywhere else." },
 ];
@@ -19,7 +21,7 @@ export default function IntegrationsIndexPage() {
     <div>
       <h1 className="text-3xl font-bold tracking-tight mb-4">Integrations</h1>
       <p className="text-lg text-muted-foreground mb-8">
-        PageSpace integrates with external AI clients through the Model Context Protocol (MCP). Generate a token, point your client at PageSpace, and your AI tool can read, search, and edit your workspace.
+        PageSpace connects outward and inward. Outward — your agents reach into <strong>Google Calendar</strong> and <strong>GitHub</strong> on your behalf. Inward — external AI clients connect in through <strong>MCP</strong>. That&apos;s the full list.
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">

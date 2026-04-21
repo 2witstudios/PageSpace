@@ -23,6 +23,8 @@ import {
   Bot,
   Layers,
   Plug,
+  Calendar,
+  Github,
 } from "lucide-react";
 
 export interface NavItem {
@@ -81,6 +83,8 @@ export const docsNav: NavSection[] = [
     icon: Plug,
     items: [
       { title: "Overview", href: "/docs/integrations", icon: Plug },
+      { title: "Google Calendar", href: "/docs/integrations/google-calendar", icon: Calendar },
+      { title: "GitHub", href: "/docs/integrations/github", icon: Github },
       { title: "MCP", href: "/docs/integrations/mcp", icon: Server },
       { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop", icon: Monitor },
     ],
