@@ -3,21 +3,19 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "AI System",
-  description: "PageSpace AI architecture: multi-provider support, contextual intelligence, database-first persistence, tool calling, and agent collaboration.",
+  description: "PageSpace AI architecture: AI conversations as pages, 12-provider support, 37 workspace tools, and agent collaboration.",
   path: "/docs/ai",
-  keywords: ["AI", "artificial intelligence", "LLM", "providers", "tool calling", "agents"],
+  keywords: ["AI", "LLM", "providers", "tool calling", "agents"],
 });
 
 const content = `
 # AI System
 
-PageSpace treats AI not as an isolated chatbot, but as **contextual intelligence embedded within the workspace hierarchy**. AI conversations are pages, they inherit context from their location, and they participate in the same collaborative, permission-based ecosystem as documents, folders, and channels.
+AI conversations in PageSpace are pages, not a separate chatbot. They live inside drives and folders, inherit permissions, show up in search, and use the same tools that operate on the rest of your workspace.
 
-## Architecture
+## AI conversations are pages
 
-### Pages as AI Containers
-
-AI conversations are \`AI_CHAT\` page types — first-class citizens in the PageSpace ecosystem:
+Each AI chat is an \`AI_CHAT\` page type. It sits in the tree next to documents, folders, and channels:
 
 \`\`\`
 📁 Project Alpha/
@@ -25,114 +23,94 @@ AI conversations are \`AI_CHAT\` page types — first-class citizens in the Page
 ├── 📁 Research/
 │   ├── 🤖 Research Assistant    ← AI_CHAT page
 │   └── 📄 Market Analysis.md
-└── 🤖 Project Planning AI      ← AI_CHAT page
+└── 🤖 Project Planning AI       ← AI_CHAT page
 \`\`\`
 
-This means:
-- AI conversations inherit permissions from their drive
-- AI can reference and understand sibling documents
-- AI conversations appear in search, mentions, and navigation
-- Multiple AI contexts can exist at different hierarchy levels
+Consequences:
 
-### Database-First Message Persistence
+- AI inherits drive and page permissions — it can only see content the calling user can see.
+- AI conversations are searchable and mentionable like any other page.
+- Different parts of a workspace can host different agents with different configs.
 
-Every message is immediately persisted to PostgreSQL as an individual row:
+## Message persistence
 
-\`\`\`sql
-chat_messages:
-  id        | pageId   | userId | role      | content          | toolCalls | agentRole
-  msg-1     | page-123 | user-1 | user      | "Analyze this"   | NULL      | PARTNER
-  msg-2     | page-123 | NULL   | assistant | "Here's my..."   | [{...}]   | PARTNER
-  msg-3     | page-123 | user-2 | user      | "Also check..."  | NULL      | PARTNER
-\`\`\`
+Every message — user or assistant — is a row in \`chat_messages\`. Columns used today:
 
-This enables:
-- **Multi-user collaboration** — multiple people chat with the same AI
-- **Real-time sync** — all participants see messages as they arrive
-- **Message attribution** — clear record of who said what
-- **Cross-conversation search** — find information across all AI interactions
-- **Tool call persistence** — tool calls and results stored for context and debugging
-- **Message versioning** — support for editing and regeneration via \`isActive\` flag
+| Column | Purpose |
+|---|---|
+| \`id\` | Message id |
+| \`pageId\` | Owning AI_CHAT page |
+| \`conversationId\` | Groups messages into a session within a page |
+| \`role\` | \`user\` or \`assistant\` |
+| \`content\` | Message text |
+| \`toolCalls\`, \`toolResults\` | JSONB tool-call payloads |
+| \`userId\` | Who sent it (null for assistant) |
+| \`sourceAgentId\` | Set when one agent sent on behalf of another via \`ask_agent\` |
+| \`messageType\` | \`standard\` or \`todo_list\` |
+| \`isActive\`, \`editedAt\` | Edit / regenerate support |
+| \`createdAt\` | Timestamp |
 
-### Contextual Intelligence
+Source: \`packages/db/src/schema/core.ts\`.
 
-AI conversations understand their position in the workspace hierarchy:
+Persisting per-message enables multi-user conversations (several people sharing one agent), real-time sync via Socket.IO, and full tool-call history for debugging and context.
 
-\`\`\`
-📁 Marketing Campaign/
-├── 📄 Brand Guidelines
-├── 📄 Target Audience
-└── 🤖 Campaign AI          ← Sees Brand Guidelines and Target Audience
-\`\`\`
+## Context inheritance
 
-Context flows upward: an AI can reference parent and sibling pages (with permission). Context is limited by the user's access permissions — AI can only see what you can see.
+Every tool call receives an execution context with the caller's user id, timezone, active provider and model, and the page + drive it is running inside. Agents use this context to scope search, resolve "here", and pick the correct drive for new pages. Source: \`apps/web/src/lib/ai/core/types.ts\`.
 
-## Multi-Provider Support
+## Providers and models
 
-PageSpace supports 7 AI providers with a unified interface via the Vercel AI SDK:
+PageSpace routes AI through the Vercel AI SDK across 12 providers:
 
-| Provider | Key Models | Key Required |
-|----------|-----------|--------------|
-| PageSpace | Free models via OpenRouter | No |
-| OpenRouter | 200+ models including Claude, GPT, Gemini | User's key |
-| Google AI | Gemini 2.5 Pro, Gemini Flash | User's key |
-| OpenAI | GPT-5, GPT-4.1, o3 | User's key |
-| Anthropic | Claude 4.1 Opus, Claude Sonnet | User's key |
-| xAI | Grok 4 | User's key |
-| Ollama | Any local model | Self-hosted |
+| Provider | Default model | Who supplies the key |
+|---|---|---|
+| PageSpace | \`glm-4.7\` (Standard), \`glm-5\` (Pro) | Built-in (GLM backend) |
+| OpenRouter (Paid) | user-selected | User |
+| OpenRouter (Free) | user-selected | User (no cost) |
+| Google AI | \`gemini-2.5-flash\` | User |
+| OpenAI | user-selected | User |
+| Anthropic | user-selected | User |
+| xAI (Grok) | user-selected | User |
+| GLM (Coder Plan) | user-selected | User |
+| MiniMax | user-selected | User |
+| Ollama | discovered from local instance | Self-hosted |
+| LM Studio | discovered from local instance | Self-hosted |
+| Azure OpenAI | user's deployment name | User |
 
-API keys are stored encrypted per-provider. You can set different providers per drive or per individual AI page.
+Full list with model IDs: \`apps/web/src/lib/ai/core/ai-providers-config.ts\`. On-prem deployments restrict the set to Ollama, LM Studio, and Azure OpenAI.
 
-## Tool Calling
+## Tools
 
-AI agents have access to **13+ workspace automation tools** organized into 6 categories:
+AI has access to 37 workspace tools. They cover page reads and writes, drive management, search, calendar, channels, tasks, agent discovery and consultation, activity queries, and web search. See [Tool Calling](/docs/ai/tool-calling) for the full reference.
 
-| Category | Tools | Capability |
-|----------|-------|-----------|
-| Core Page Ops | \`list_drives\`, \`list_pages\`, \`read_page\`, \`create_page\`, \`rename_page\`, \`move_page\` | Navigate and manage workspace |
-| Content Editing | \`replace_lines\` | Precise line-based document editing |
-| Trash Ops | \`trash\`, \`restore\` | Soft delete and recovery |
-| Search | \`regex_search\`, \`glob_search\`, \`multi_drive_search\` | Pattern and cross-workspace search |
-| Task Management | \`update_task\` | Create and update tasks on task lists |
-| Agent Management | \`list_agents\`, \`multi_drive_list_agents\`, \`ask_agent\`, \`update_agent_config\` | Agent discovery and collaboration |
+Tools run with the calling user's permissions. An AI cannot read, write, or delete anything the user cannot.
 
-Tools are filtered by agent role and can be customized per page. See [Tool Calling](/docs/ai/tool-calling) for details.
+## Read-only and web-search toggles
 
-## Agent Roles
+Each AI_CHAT page exposes two runtime toggles that filter the tool set:
 
-Three built-in agent roles with different capabilities:
+- **Read-only mode** — excludes every write tool (create, edit, delete, send). The agent can still read, search, and plan.
+- **Web search enabled** — includes \`web_search\`; off by default.
 
-| Role | Read | Write | Delete | Use Case |
-|------|------|-------|--------|----------|
-| PARTNER | Yes | Yes | Yes | Collaborative AI partner with full capabilities |
-| PLANNER | Yes | No | No | Strategic planning — read-only analysis |
-| WRITER | Yes | Yes | Yes | Execution-focused — minimal conversation, maximum output |
+Source: \`apps/web/src/lib/ai/core/tool-filtering.ts\`. A page can also pin a specific subset of tools via \`enabledTools\` on the page config.
 
-Each role gets a different system prompt and filtered set of tools. You can further customize by setting \`enabledTools\` on individual AI pages.
+## Agent-to-agent consultation
 
-## Real-Time Collaboration
+An agent can call another agent via \`ask_agent\`, passing a question and optional context. Target agent loads its conversation history, runs with its own system prompt and tools, persists the exchange, and returns a response. A depth limit of 2 prevents chains deeper than the original → first sub-agent. Source: \`apps/web/src/lib/ai/tools/agent-communication-tools.ts\`.
 
-AI messages are broadcast to all conversation participants via Socket.IO:
+## Real-time collaboration
 
-- User A sends a message → saved to database → broadcast to all users
-- AI responds → response streamed to all users in real-time
-- User B can continue the conversation immediately
-- Tool calls and results are visible to all participants
+AI messages are broadcast over Socket.IO to every user viewing the AI_CHAT page. Tool calls, tool results, and streaming response deltas all reach connected clients. Multi-user chat with a single agent works out of the box.
 
-## Model Capability Detection
+## Model capability detection
 
-PageSpace automatically detects model capabilities:
+Before running a tool-capable workflow, PageSpace checks whether the selected model supports tool calling and vision. If tools aren't supported, the stream falls back to text-only and the UI suggests tool-capable alternatives from the same provider. OpenRouter capability is queried at runtime; other providers use pattern matching on the model id.
 
-- **Vision**: Whether a model can process images (checked via static maps and pattern matching)
-- **Tool calling**: Whether a model supports function calling (checked via OpenRouter API for OpenRouter models, pattern-based for others)
+## Learn more
 
-If a model doesn't support tools, PageSpace falls back to text-only mode and suggests tool-capable alternatives.
-
-## Learn More
-
-- **[Providers & Models](/docs/ai/providers)** — Detailed provider configuration and model list
-- **[Tool Calling](/docs/ai/tool-calling)** — Complete tool reference with parameters and examples
-- **[Agents](/docs/ai/agents)** — Custom agents, system prompts, and agent-to-agent communication
+- **[Providers & Models](/docs/ai/providers)** — per-provider setup, model ids, and API-key storage.
+- **[Tool Calling](/docs/ai/tool-calling)** — the 37-tool catalog, execution context, retries, and custom tool sets.
+- **[Agents](/docs/ai/agents)** — configuring AI_CHAT pages, system prompts, and agent-to-agent flows.
 `;
 
 export default function AIPage() {
