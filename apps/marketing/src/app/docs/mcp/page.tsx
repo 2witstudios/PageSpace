@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "MCP Integration",
-  description: "Connect AI tools like Claude, Cursor, and Claude Code to PageSpace via MCP. Set up tokens, configure servers, and use available operations.",
+  description: "Connect AI tools like Claude Desktop, Claude Code, and Cursor to PageSpace via the Model Context Protocol. Create tokens, configure servers, and wire up external clients.",
   path: "/docs/mcp",
   keywords: ["MCP", "Model Context Protocol", "AI integration", "Claude", "Cursor", "API tokens"],
 });
@@ -11,34 +11,28 @@ export const metadata = createMetadata({
 const content = `
 # MCP Integration
 
-PageSpace implements the **Model Context Protocol (MCP)** — an open standard for connecting AI tools to external data sources. This lets tools like Claude Desktop, Claude Code, and Cursor read and write to your PageSpace workspace.
-
-## How It Works
-
-MCP uses a client-server architecture:
-
-1. **Your AI tool** (Claude, Cursor, etc.) is the MCP client
-2. **PageSpace MCP server** (\`pagespace-mcp\`) runs locally and connects to PageSpace
-3. The server authenticates with an **MCP token** you create in PageSpace
+PageSpace speaks the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) — an open standard for giving AI tools access to external data and actions. The companion \`pagespace-mcp\` npm package runs locally as an MCP server and lets tools like Claude Desktop, Claude Code, and Cursor read and write your PageSpace workspace.
 
 \`\`\`
-AI Tool (Client) → pagespace-mcp (Server) → PageSpace API
-                                              ↓
-                                        Your workspace data
+AI tool (MCP client)  →  pagespace-mcp (MCP server)  →  PageSpace API
+                                                         ↓
+                                                    Your workspace
 \`\`\`
 
-## Step 1: Create an MCP Token
+Tokens authenticate as your user. Every operation runs with your permissions; drive-scoped tokens restrict access further.
 
-1. Open **Settings > MCP** in PageSpace
-2. Click **Create Token** and give it a descriptive name
-3. Copy the token — it starts with \`mcp_\` and is only shown once
-4. Optionally scope the token to specific drives
+## Step 1: Create an MCP token
 
-Tokens authenticate as your user. Any operation the MCP server performs runs with your permissions.
+1. Open **Settings > MCP** in PageSpace.
+2. Click **Create Token** and give it a name.
+3. Copy the token. It starts with \`mcp_\` and is shown **once** — only the SHA-256 hash is stored server-side.
+4. Optionally scope the token to specific drives. Scoped tokens cannot create new drives.
 
-## Step 2: Configure Your AI Tool
+See the [Auth API](/docs/api/auth#mcp-tokens) for programmatic token management (\`POST/GET/DELETE /api/auth/mcp-tokens\`).
 
-Add the PageSpace MCP server to your tool's configuration:
+## Step 2: Configure your AI tool
+
+The config format follows the standard MCP \`mcpServers\` schema:
 
 \`\`\`json
 {
@@ -57,7 +51,7 @@ Add the PageSpace MCP server to your tool's configuration:
 
 ### Claude Desktop
 
-Add the config to \`claude_desktop_config.json\`:
+Edit \`claude_desktop_config.json\`:
 - **macOS**: \`~/Library/Application Support/Claude/claude_desktop_config.json\`
 - **Windows**: \`%APPDATA%\\\\Claude\\\\claude_desktop_config.json\`
 
@@ -67,60 +61,46 @@ Add the config to \`claude_desktop_config.json\`:
 claude mcp add pagespace -- npx -y pagespace-mcp@latest
 \`\`\`
 
-Then set the environment variables \`PAGESPACE_API_URL\` and \`PAGESPACE_AUTH_TOKEN\`.
+Then set \`PAGESPACE_API_URL\` and \`PAGESPACE_AUTH_TOKEN\` in your environment.
 
 ### Cursor
 
-Go to **Settings > MCP Servers** and add the server configuration.
+**Settings > MCP Servers** → add the \`mcpServers\` block above.
 
-## Step 3: Available Operations
+## Step 3: Capabilities
 
-Once connected, your AI tool can use these PageSpace operations:
+Once connected, \`pagespace-mcp\` exposes tools that wrap the PageSpace API. The exact tool list ships with the npm package and evolves independently; the [pagespace-mcp README](https://www.npmjs.com/package/pagespace-mcp) is the authoritative reference.
 
-| Operation | Description |
-|-----------|-------------|
-| \`list_drives\` | List all accessible workspaces |
-| \`read_page\` | Read page content (documents, sheets, code) |
-| \`create_page\` | Create new pages of any type |
-| \`replace_lines\` | Edit document content by line range |
-| \`search\` | Find pages across drives by title or content |
-| \`update_task\` | Create and manage tasks on task lists |
-| \`list_pages\` | Navigate page hierarchies within drives |
+At a minimum the server covers:
 
-All operations respect your user permissions. The MCP server cannot access drives or pages you don't have permission to view or edit.
+- **Drives** — list accessible drives; create new drives (unscoped tokens only). Backed by \`/api/mcp/drives\`.
+- **Pages** — list and navigate the page tree, create pages, read page content, perform line operations and sheet cell edits (\`read\`, \`replace\`, \`insert\`, \`delete\`, \`edit-cells\`). Backed by \`/api/mcp/documents\` and \`/api/pages\`.
+- **Search** — global and multi-drive search. Backed by \`/api/search\` and \`/api/search/multi-drive\`.
+- **Tasks** — query and manage tasks on \`TASK_LIST\` pages. Backed by \`/api/pages/[pageId]/tasks\`.
 
-## Token Security
+Every tool respects the caller's permissions. If you cannot view a page in the web UI, the MCP server cannot see it either.
 
-- **Scoped access**: Tokens can be restricted to specific drives
-- **Instant revocation**: Revoke any token from Settings > MCP
-- **Audit logging**: All MCP operations are logged with the token identifier
-- **No expiration**: Tokens don't expire automatically — rotate them on your own schedule
-- **Hash-only storage**: Token values are stored as SHA-256 hashes in the database
+## Token security
 
-## Self-Hosted Configuration
+- **Scoped access** — restrict a token to specific drives at creation.
+- **Instant revocation** — revoke from **Settings > MCP** or \`DELETE /api/auth/mcp-tokens/[tokenId]\`.
+- **Audit logging** — token create/revoke/use events land in the audit log with the token identifier.
+- **Hash-only storage** — the database stores a SHA-256 hash, never the raw token. Losing a token means creating a new one.
+- **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
 
-If you're self-hosting PageSpace, point the MCP server at your instance:
+## Custom instance URLs
 
-\`\`\`json
-{
-  "env": {
-    "PAGESPACE_API_URL": "https://your-pagespace-instance.com",
-    "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
-  }
-}
-\`\`\`
-
-The MCP server communicates with the PageSpace API over HTTPS. Ensure your instance is accessible from the machine running the MCP server.
+Set \`PAGESPACE_API_URL\` to whichever PageSpace instance the token belongs to. The MCP server talks to that instance over HTTPS.
 
 ## Troubleshooting
 
-**Token not working**: Verify the token hasn't been revoked in Settings > MCP. Tokens are prefixed with \`mcp_\`.
+**Token rejected**: confirm it hasn't been revoked in **Settings > MCP** and that it starts with \`mcp_\`.
 
-**Connection refused**: Check that \`PAGESPACE_API_URL\` is correct and accessible. For self-hosted instances, ensure HTTPS is configured.
+**Connection refused**: check \`PAGESPACE_API_URL\` is correct and reachable from the machine running the MCP server.
 
-**Permission denied**: MCP tokens inherit your user permissions. If you can't access a drive in the web UI, you can't access it via MCP either.
+**Permission denied**: MCP inherits your user permissions. If you lost access to a drive, the token stops seeing it too.
 
-**Server not starting**: Run \`npx -y pagespace-mcp@latest --help\` to verify the package installs correctly.
+**Server fails to start**: run \`npx -y pagespace-mcp@latest --help\` to confirm the package installs.
 `;
 
 export default function MCPPage() {
