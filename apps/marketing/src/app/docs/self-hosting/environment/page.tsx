@@ -18,14 +18,12 @@ Complete reference for all PageSpace configuration variables.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | \`DATABASE_URL\` | Yes | PostgreSQL connection string |
-| \`REDIS_URL\` | No | Redis connection string (for permission caching) |
 
 \`\`\`bash
 DATABASE_URL=postgresql://user:password@localhost:5432/pagespace
-REDIS_URL=redis://localhost:6379
 \`\`\`
 
-If \`REDIS_URL\` is not set, the permission cache falls back to in-memory only. This works for single-instance deployments but won't share cache across multiple web instances.
+PageSpace runs entirely on Postgres — no Redis or other external cache is required. Rate limits, session revocation, and handoff tokens all live in the same database.
 
 ## Authentication
 
@@ -112,7 +110,6 @@ Email is used for invitations and notifications. If not configured, email featur
 \`\`\`bash
 # Database
 DATABASE_URL=postgresql://pagespace:secret@localhost:5432/pagespace
-REDIS_URL=redis://localhost:6379
 
 # Auth
 SESSION_SECRET=generate-a-random-string-at-least-32-characters

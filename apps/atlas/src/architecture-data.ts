@@ -103,7 +103,7 @@ export const overviewStats = [
   { label: 'Product apps', value: '7', note: 'marketing, web, realtime, processor, desktop, iOS, android' },
   { label: 'Shared packages', value: '2', note: 'db schema + shared domain library' },
   { label: 'Runtime services', value: '4', note: 'web, realtime, processor, cron' },
-  { label: 'State planes', value: '4', note: 'Postgres, Redis cache, Redis session, local volumes' },
+  { label: 'State planes', value: '2', note: 'Postgres, local volumes' },
 ];
 
 export const runtimeOnlyEntities: AtlasEntity[] = [
@@ -165,7 +165,7 @@ export const systems: AtlasSystem[] = [
     summary: 'Main Next.js 15 workspace. It serves the UI shell, route handlers, page rendering, AI orchestration, auth, billing, and exports.',
     boundary: 'This is the orchestration brain of the product and the closest application surface to the page kernel.',
     owns: ['App Router UI shell', 'API routes', 'Page-type rendering', 'AI and billing integrations'],
-    dependsOn: ['packages/lib', 'packages/db', 'realtime', 'processor', 'Postgres', 'Redis', 'external APIs'],
+    dependsOn: ['packages/lib', 'packages/db', 'realtime', 'processor', 'Postgres', 'external APIs'],
     touchpoints: ['apps/web/src/app', 'apps/web/src/services/api', 'apps/web/src/components/layout', 'apps/web/src/lib/ai'],
     tree: [
       {
@@ -273,7 +273,7 @@ export const systems: AtlasSystem[] = [
     summary: 'Socket.IO service for presence, rooms, page updates, auth-checked event fanout, and live collaboration signals.',
     boundary: 'Broadcast and presence, not business truth. It should mirror state after web/db decisions, not invent state.',
     owns: ['Socket rooms', 'Presence tracking', 'Per-event auth', 'Broadcast signature checks'],
-    dependsOn: ['packages/lib permissions + auth', 'packages/db queries', 'Redis', 'Postgres'],
+    dependsOn: ['packages/lib permissions + auth', 'packages/db queries', 'Postgres'],
     touchpoints: ['apps/realtime/src/index.ts', 'apps/realtime/src/per-event-auth.ts', 'apps/realtime/src/presence-tracker.ts'],
     tree: [
       {
@@ -303,7 +303,7 @@ export const systems: AtlasSystem[] = [
     summary: 'Standalone Express service for upload, optimization, OCR, text extraction, file serving, and page/file resource binding.',
     boundary: 'Heavy file work and content transformation. It should not own workspace navigation or page truth.',
     owns: ['Upload/ingest endpoints', 'OCR/text workers', 'File/cache volumes', 'Resource-bound auth'],
-    dependsOn: ['packages/db', 'packages/lib auth/permissions/security', 'Postgres', 'Redis session plane', 'local volumes'],
+    dependsOn: ['packages/db', 'packages/lib auth/permissions/security', 'Postgres', 'local volumes'],
     touchpoints: ['apps/processor/src/server.ts', 'apps/processor/src/api', 'apps/processor/src/services', 'apps/processor/src/workers'],
     tree: [
       {
@@ -402,8 +402,8 @@ export const systems: AtlasSystem[] = [
     group: 'Shared Code + Kernel',
     summary: 'Shared services for permissions, monitoring, auth, content rules, security, caching, notifications, storage limits, and AI support code.',
     boundary: 'Domain logic shared across apps. Good home for invariants that must be reused consistently.',
-    owns: ['Permissions API', 'Monitoring and audit helpers', 'Shared Redis/cache helpers', 'Content and page-type helpers'],
-    dependsOn: ['packages/db for schema-backed queries', 'Redis when available', 'env-configured external services'],
+    owns: ['Permissions API', 'Monitoring and audit helpers', 'Content and page-type helpers'],
+    dependsOn: ['packages/db for schema-backed queries', 'env-configured external services'],
     touchpoints: ['packages/lib/src/permissions', 'packages/lib/src/monitoring', 'packages/lib/src/services', 'packages/lib/src/content'],
     tree: [
       {
@@ -419,7 +419,7 @@ export const systems: AtlasSystem[] = [
       {
         label: 'src/services',
         path: 'packages/lib/src/services',
-        note: 'Redis/cache adapters, version storage, member services, rate limits, and storage utilities.',
+        note: 'Version storage, member services, and storage utilities.',
       },
       {
         label: 'src/content',
@@ -485,60 +485,6 @@ export const systems: AtlasSystem[] = [
         label: 'packages/db/drizzle',
         path: 'packages/db/drizzle',
         note: 'Migration history applied on startup by the migrate service.',
-      },
-    ],
-  },
-  {
-    id: 'redis-cache',
-    title: 'Redis Cache Plane',
-    shortLabel: 'redis service',
-    eyebrow: 'L2 cache + fanout support',
-    tone: 'data',
-    group: 'State + Storage',
-    summary: 'Shared Redis used for cache-backed read acceleration and realtime scale-out support.',
-    boundary: 'Acceleration and coordination only. Loss should degrade performance, not destroy workspace truth.',
-    owns: ['Cross-process cache store', 'Shared Redis client', 'Ephemeral coordination layer'],
-    dependsOn: ['REDIS_URL', 'packages/lib shared-redis adapter', 'realtime + web consumers'],
-    touchpoints: ['docker-compose.yml: redis', 'packages/lib/src/services/shared-redis.ts'],
-    tree: [
-      {
-        label: 'shared-redis.ts',
-        path: 'packages/lib/src/services/shared-redis.ts',
-        note: 'Central Redis connection and fallback-to-memory behavior.',
-      },
-      {
-        label: 'docker-compose redis service',
-        path: 'docker-compose.yml',
-        note: 'Dedicated Redis container with LRU memory policy for cache-style usage.',
-      },
-    ],
-  },
-  {
-    id: 'redis-sessions',
-    title: 'Redis Session Plane',
-    shortLabel: 'redis-sessions service',
-    eyebrow: 'Session + rate limit state',
-    tone: 'data',
-    group: 'State + Storage',
-    summary: 'Separate Redis instance used for auth/session data and rate limiting across web, realtime, and processor.',
-    boundary: 'Ephemeral security and throttling state, deliberately separated from the cache plane.',
-    owns: ['Session store', 'Rate limit buckets', 'Security-adjacent ephemeral state'],
-    dependsOn: ['REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'auth and rate limit consumers'],
-    touchpoints: ['docker-compose.yml: redis-sessions', 'web env vars', 'processor env vars', 'realtime env vars'],
-    tree: [
-      {
-        label: 'docker-compose redis-sessions service',
-        path: 'docker-compose.yml',
-        note: 'Separate Redis process with smaller memory budget for session/rate-limit concerns.',
-      },
-      {
-        label: 'session + rate limit env wiring',
-        note: 'Used by web, processor, and realtime via dedicated connection strings.',
-      },
-      {
-        label: 'packages/lib cache helpers',
-        path: 'packages/lib/src/services',
-        note: 'Rate limit and permission/session-adjacent helpers sit in the shared library.',
       },
     ],
   },
@@ -792,24 +738,6 @@ export const runtimeGraph: GraphDefinition = {
       width: 230,
     },
     {
-      id: 'redis-cache',
-      title: 'Redis Cache',
-      subtitle: 'L2 cache + coordination',
-      description: 'Shared Redis for cache-backed acceleration',
-      tone: 'data',
-      position: { x: 960, y: 280 },
-      width: 230,
-    },
-    {
-      id: 'redis-sessions',
-      title: 'Redis Session',
-      subtitle: 'Auth + rate limit plane',
-      description: 'Separate Redis for session and throttling state',
-      tone: 'data',
-      position: { x: 960, y: 470 },
-      width: 230,
-    },
-    {
       id: 'file-storage',
       title: 'Local Volumes',
       subtitle: 'Files + processor cache',
@@ -855,17 +783,12 @@ export const runtimeGraph: GraphDefinition = {
     { id: 'web-realtime', source: 'web', target: 'realtime', label: 'socket tokens + broadcasts', kind: 'events' },
     { id: 'web-processor', source: 'web', target: 'processor', label: 'upload / OCR / convert', kind: 'storage' },
     { id: 'web-postgres', source: 'web', target: 'postgres', label: 'Drizzle reads + writes', kind: 'storage' },
-    { id: 'web-redis-cache', source: 'web', target: 'redis-cache', label: 'cache + coordination', kind: 'storage' },
-    { id: 'web-redis-sessions', source: 'web', target: 'redis-sessions', label: 'sessions + rate limits', kind: 'storage' },
     { id: 'web-files', source: 'web', target: 'file-storage', label: 'file viewers + metadata', kind: 'storage' },
     { id: 'web-ai', source: 'web', target: 'ai-providers', label: 'stream + tools', kind: 'external' },
     { id: 'web-stripe', source: 'web', target: 'stripe', label: 'billing lifecycle', kind: 'external' },
     { id: 'web-google', source: 'web', target: 'google-services', label: 'OAuth + calendar', kind: 'external' },
     { id: 'realtime-postgres', source: 'realtime', target: 'postgres', label: 'room auth + reads', kind: 'storage' },
-    { id: 'realtime-redis-cache', source: 'realtime', target: 'redis-cache', label: 'presence + scale', kind: 'events' },
-    { id: 'realtime-redis-sessions', source: 'realtime', target: 'redis-sessions', label: 'session validation', kind: 'storage' },
     { id: 'processor-postgres', source: 'processor', target: 'postgres', label: 'file/page metadata', kind: 'storage' },
-    { id: 'processor-redis-sessions', source: 'processor', target: 'redis-sessions', label: 'service auth + rate limit', kind: 'storage' },
     { id: 'processor-files', source: 'processor', target: 'file-storage', label: 'blob + cache IO', kind: 'storage' },
     { id: 'cron-web', source: 'cron', target: 'web', label: 'signed cron routes', kind: 'ops' },
   ],
@@ -1105,7 +1028,7 @@ export const operationalCurrents: OperationalCurrent[] = [
     title: 'Event current',
     caption: 'Live collaboration is a secondary plane that mirrors truth after auth and persistence.',
     tone: 'service',
-    steps: ['apps/web', 'auth / socket tokens', 'apps/realtime', 'Redis cache', 'connected clients'],
+    steps: ['apps/web', 'auth / socket tokens', 'apps/realtime', 'connected clients'],
   },
   {
     id: 'current-files',
