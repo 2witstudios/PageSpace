@@ -75,9 +75,6 @@ pnpm test:coverage
 
 **Required Environment Variables:**
 ```bash
-JWT_SECRET=test-secret-key-minimum-32-characters-long
-JWT_ISSUER=pagespace-test
-JWT_AUDIENCE=pagespace-test-users
 DATABASE_URL=postgresql://test:test@localhost:5432/pagespace_test
 ```
 
@@ -131,7 +128,7 @@ When executing tests, you must:
 - Fix: Start PostgreSQL with `docker compose up postgres -d`
 
 **Missing Environment Variables:**
-- Symptom: "JWT_SECRET is required" or undefined env vars
+- Symptom: undefined env vars on startup
 - Fix: Verify test setup files have proper env var configuration
 
 **Async/Await Issues:**
@@ -145,10 +142,6 @@ When executing tests, you must:
 **Permission Test Failures:**
 - Symptom: Expected access denied, got access granted
 - Fix: Verify permission logic, check drive owner status
-
-**JWT Token Issues:**
-- Symptom: Token validation failures, signature errors
-- Fix: Check JWT_SECRET consistency, verify claims
 
 **Rate Limiting Flakiness:**
 - Symptom: Intermittent failures in rate limit tests

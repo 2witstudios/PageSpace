@@ -18,14 +18,6 @@ services:
       timeout: 3s
       retries: 5
 
-  redis-test:
-    image: redis:7.4-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   processor-test:
     image: ${IMAGE_PREFIX:-ghcr.io/2witstudios/pagespace}-processor:${IMAGE_TAG:-latest}
     environment:
@@ -51,18 +43,10 @@ services:
       WEB_APP_URL: https://test.example.com
       PORT: "3000"
       NODE_ENV: production
-      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-testing
-      JWT_ISSUER: pagespace-test
-      JWT_AUDIENCE: pagespace-test-users
       CSRF_SECRET: test-csrf-secret-minimum-32-characters-long-for-testing
       ENCRYPTION_KEY: test-encryption-key-32-chars-minimum-required-xxxx
-      REDIS_URL: redis://redis-test:6379
-      REDIS_SESSION_URL: redis://redis-test:6379/0
-      REDIS_RATE_LIMIT_URL: redis://redis-test:6379/1
     depends_on:
       postgres-test:
-        condition: service_healthy
-      redis-test:
         condition: service_healthy
 
   realtime-test:
@@ -72,15 +56,7 @@ services:
       CORS_ORIGIN: https://test.example.com
       PORT: "3001"
       NODE_ENV: production
-      JWT_SECRET: test-jwt-secret-minimum-32-characters-long-for-testing
-      JWT_ISSUER: pagespace-test
-      JWT_AUDIENCE: pagespace-test-users
-      REDIS_URL: redis://redis-test:6379
-      REDIS_SESSION_URL: redis://redis-test:6379/0
-      REDIS_RATE_LIMIT_URL: redis://redis-test:6379/1
       REALTIME_BROADCAST_SECRET: test-realtime-broadcast-secret-32-chars-minimum-xxxx
     depends_on:
       postgres-test:
-        condition: service_healthy
-      redis-test:
         condition: service_healthy

@@ -74,16 +74,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -109,14 +99,12 @@ jobs:
         run: pnpm --filter @pagespace/lib vitest run src/security/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run auth module tests
         run: pnpm --filter @pagespace/lib vitest run src/auth/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run security utility tests
@@ -131,14 +119,12 @@ jobs:
           pnpm --filter @pagespace/lib vitest run src/__tests__/rate-limit-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run multi-tenant isolation tests
         run: pnpm --filter @pagespace/lib vitest run src/__tests__/multi-tenant-isolation.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run permission tests
@@ -146,28 +132,24 @@ jobs:
           pnpm --filter @pagespace/lib vitest run src/__tests__/permissions.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run web app auth route tests
         run: pnpm --filter web vitest run src/app/api/auth/__tests__/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run web app auth library tests
         run: pnpm --filter web vitest run src/lib/auth/__tests__/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run security headers tests
         run: pnpm --filter web vitest run src/middleware/__tests__/security-headers.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
-          REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
       - name: Run database transaction security tests

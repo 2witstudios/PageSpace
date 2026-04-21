@@ -61,7 +61,7 @@ describe('TenantLifecycle', () => {
       }
     })
 
-    test('given an active tenant, should keep postgres and redis running', async () => {
+    test('given an active tenant, should keep postgres running', async () => {
       const deps = makeDeps()
       const lifecycle = createTenantLifecycle(deps)
 
@@ -71,7 +71,6 @@ describe('TenantLifecycle', () => {
         (call: unknown[]) => (call[0] as string).includes('stop')
       )
       expect(stopCall![0]).not.toMatch(/\bpostgres\b/)
-      expect(stopCall![0]).not.toMatch(/\bredis\b/)
     })
 
     test('given an active tenant, should update status to suspended', async () => {

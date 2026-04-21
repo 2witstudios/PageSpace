@@ -61,9 +61,6 @@
   ],
   "globalEnv": [
     "DATABASE_URL",
-    "JWT_SECRET",
-    "JWT_ISSUER",
-    "JWT_AUDIENCE",
     "CSRF_SECRET",
     "ENCRYPTION_KEY",
     "WEB_APP_URL",
@@ -77,9 +74,6 @@
     "OPENROUTER_API_KEY",
     "OPENROUTER_DEFAULT_API_KEY",
     "PAGESPACE_URL",
-    "NEXT_PUBLIC_*",
-    "REDIS_URL",
-    "REDIS_SESSION_URL",
-    "REDIS_RATE_LIMIT_URL"
+    "NEXT_PUBLIC_*"
   ]
 }

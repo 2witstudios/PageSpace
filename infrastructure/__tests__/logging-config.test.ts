@@ -30,8 +30,6 @@ describe('Tenant logging configuration', () => {
   // Long-running services that produce ongoing logs
   const longRunningServices = [
     'postgres',
-    'redis',
-    'redis-sessions',
     'processor',
     'web',
     'realtime',

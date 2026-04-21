@@ -89,7 +89,7 @@ const runtimeGraphCompact: GraphDefinition = {
     {
       id: 'runtime-compact-state',
       title: 'State Plane',
-      subtitle: 'Postgres plus both Redis roles and local volumes.',
+      subtitle: 'Postgres plus local volumes.',
       tone: 'data',
       position: { x: 640, y: 10 },
       width: 300,
@@ -115,12 +115,10 @@ const runtimeGraphCompact: GraphDefinition = {
     { ...runtimeGraph.nodes.find((node) => node.id === 'processor')!, position: { x: 330, y: 620 }, width: 260 },
     { ...runtimeGraph.nodes.find((node) => node.id === 'cron')!, position: { x: 330, y: 810 }, width: 260 },
     { ...runtimeGraph.nodes.find((node) => node.id === 'postgres')!, position: { x: 670, y: 20 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'redis-cache')!, position: { x: 670, y: 210 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'redis-sessions')!, position: { x: 670, y: 400 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'file-storage')!, position: { x: 670, y: 590 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'ai-providers')!, position: { x: 670, y: 850 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'stripe')!, position: { x: 670, y: 1040 }, width: 250 },
-    { ...runtimeGraph.nodes.find((node) => node.id === 'google-services')!, position: { x: 670, y: 1230 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'file-storage')!, position: { x: 670, y: 210 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'ai-providers')!, position: { x: 670, y: 470 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'stripe')!, position: { x: 670, y: 660 }, width: 250 },
+    { ...runtimeGraph.nodes.find((node) => node.id === 'google-services')!, position: { x: 670, y: 850 }, width: 250 },
   ],
 };
 

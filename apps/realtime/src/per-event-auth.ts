@@ -8,7 +8,7 @@
  * might have been kicked from the permission system but their socket
  * hasn't been kicked from the room yet.
  *
- * Stale-window analysis (post-Redis-deprecation, direct-to-Postgres):
+ * Stale-window analysis:
  * - Write operations (per-event auth): 0s — always hits DB directly
  * - Room joins: immediate at kick time (kick handler evicts sockets)
  */

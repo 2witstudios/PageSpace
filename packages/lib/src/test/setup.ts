@@ -3,11 +3,6 @@
  * Sets required environment variables for testing
  */
 
-// JWT authentication environment variables
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-minimum-32-characters-long-for-testing'
-process.env.JWT_ISSUER = process.env.JWT_ISSUER || 'pagespace-test'
-process.env.JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'pagespace-test-users'
-
 // Encryption environment variables
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-32-chars-minimum-required-length'
 

@@ -66,12 +66,8 @@ POSTGRES_PASSWORD=$(alnum_secret 32)
 # --- Security Secrets ---
 ENCRYPTION_KEY=$(hex_secret 32)
 CSRF_SECRET=$(hex_secret 32)
-JWT_SECRET=$(hex_secret 64)
-JWT_ISSUER=pagespace
-JWT_AUDIENCE=pagespace-users
 CRON_SECRET=$(hex_secret 32)
 REALTIME_BROADCAST_SECRET=$(hex_secret 32)
-REDIS_PASSWORD=$(alnum_secret 32)
 
 # --- Application URLs ---
 WEB_APP_URL=${TENANT_URL}

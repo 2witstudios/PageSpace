@@ -22,9 +22,6 @@ vi.mock('next/navigation', () => ({
 }))
 
 // Mock environment variables - only set if not already provided (allows CI to override)
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-minimum-32-characters-long'
-process.env.JWT_ISSUER = process.env.JWT_ISSUER || 'pagespace-test'
-process.env.JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'pagespace-test-users'
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://test:test@localhost:5432/pagespace_test'
 process.env.CSRF_SECRET = process.env.CSRF_SECRET || 'test-csrf-secret-key-minimum-32-characters'
 process.env.REALTIME_BROADCAST_SECRET = process.env.REALTIME_BROADCAST_SECRET || 'test-realtime-broadcast-secret-32chars'
