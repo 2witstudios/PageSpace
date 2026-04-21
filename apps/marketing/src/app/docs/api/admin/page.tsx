@@ -3,142 +3,155 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Admin API",
-  description: "PageSpace admin API: user management, monitoring, notifications, and system diagnostics.",
+  description: "PageSpace admin API: user management, audit logs, monitoring, notifications, and operational utilities.",
   path: "/docs/api/admin",
-  keywords: ["API", "admin", "monitoring", "notifications", "diagnostics"],
+  keywords: ["API", "admin", "audit logs", "monitoring", "notifications"],
 });
 
 const content = `
 # Admin API
 
-Administrative endpoints for user management, monitoring, notifications, and system health.
+Endpoints restricted to users with the \`admin\` role (\`withAdminAuth\`). Unless otherwise noted these require a session + CSRF token.
 
-## User Management
+## User management
 
 ### GET /api/admin/users
 
-List all users with statistics.
-
-**Auth:** Admin role required.
-
-**Response:**
-\`\`\`json
-[{
-  "id": "string",
-  "name": "string",
-  "email": "string",
-  "role": "user | admin",
-  "driveCount": 3,
-  "pageCount": 45,
-  "messageCount": 120,
-  "aiProvider": "string",
-  "createdAt": "string"
-}]
-\`\`\`
+List every user with rollup stats.
 
 ---
 
-### GET /api/admin/schema
+### POST /api/admin/users/create
 
-Get database schema information for administrative tools.
+Create a user account (admin-provisioning flow).
 
-**Auth:** Admin role required.
+---
+
+### GET /api/admin/users/[userId]/export
+
+Export a user's data archive (for DSR requests).
+
+---
+
+### DELETE /api/admin/users/[userId]/data
+
+Delete a user's data (the anonymization step of account removal).
+
+---
+
+### PUT /api/admin/users/[userId]/subscription
+
+Override a user's subscription tier.
+
+---
+
+### POST /api/admin/users/[userId]/gift-subscription
+
+Gift a subscription to a user.
+
+---
+
+### DELETE /api/admin/users/[userId]/gift-subscription
+
+Revoke a previously gifted subscription.
+
+## Audit logs
+
+Append-only log of security-relevant events, hashed for integrity.
+
+### GET /api/admin/audit-logs
+
+List audit log entries. Supports filters (event type, actor, target, time range) — see the route handler for the canonical query param list.
+
+---
+
+### GET /api/admin/audit-logs/integrity
+
+Verify the hash chain across the returned window.
+
+---
+
+### GET /api/admin/audit-logs/export
+
+Stream an audit log export (CSV).
 
 ## Monitoring
 
 ### GET /api/monitoring/[metric]
 
-System monitoring and analytics.
+System monitoring data.
 
 **Supported metrics:**
-- \`system-health\` — Server status, uptime, memory
-- \`api-metrics\` — Request counts, latency percentiles
-- \`user-activity\` — Active users, session counts
-- \`ai-usage\` — AI calls, tokens, costs by provider
-- \`error-logs\` — Recent errors with stack traces
-- \`performance\` — Database query times, cache hit rates
+- \`system-health\` — service status, uptime, memory
+- \`api-metrics\` — request counts and latency percentiles
+- \`user-activity\` — active users, sessions
+- \`ai-usage\` — AI calls, tokens, and costs by provider
+- \`error-logs\` — recent errors
+- \`performance\` — \`responseTimes\` (hourly average/max/min), \`slowQueries\` (>5s endpoints), and per-endpoint \`metricTypes\` stats
 
-**Query params:** \`timeRange\` (1h, 24h, 7d, 30d)
-
-**Auth:** Admin role required.
-
-## Notifications
-
-### GET /api/notifications
-
-List notifications for the current user.
-
-**Query params:** \`countOnly\` (boolean), \`limit\`, \`offset\`
+**Query params:** \`range\` — \`24h\` (default), \`7d\`, \`30d\`, or \`all\`.
 
 **Response:**
 \`\`\`json
 {
-  "notifications": [{
-    "id": "string",
-    "type": "string",
-    "title": "string",
-    "message": "string",
-    "read": false,
-    "createdAt": "string"
-  }],
-  "totalCount": 15,
-  "unreadCount": 3
+  "data": {},
+  "range": "24h",
+  "startDate": "string | null",
+  "endDate": "string"
 }
 \`\`\`
 
----
+## Notifications
 
-### POST /api/notifications/[id]/read
+Per-user in-app notifications. Read routes require a session; no admin role needed.
 
-Mark a notification as read.
+| Route | Method | Purpose |
+|---|---|---|
+| \`/api/notifications\` | GET | List notifications (\`countOnly=true\` returns counts only; supports \`limit\`, \`offset\`) |
+| \`/api/notifications/[id]\` | DELETE | Delete a notification |
+| \`/api/notifications/[id]/read\` | PATCH | Mark one notification read |
+| \`/api/notifications/read-all\` | PATCH | Mark all notifications read |
+| \`/api/notifications/push-tokens\` | GET | List the caller's push tokens |
+| \`/api/notifications/push-tokens\` | POST | Register a push token |
+| \`/api/notifications/push-tokens\` | DELETE | Unregister a push token |
+| \`/api/notifications/unsubscribe/[token]\` | GET | One-click email unsubscribe (public) |
 
----
+## Admin utilities
 
-### POST /api/notifications/read-all
+### GET /api/admin/schema
 
-Mark all notifications as read.
-
----
-
-### DELETE /api/notifications/[id]
-
-Delete a notification.
-
-## Utility
-
-### POST /api/track
-
-Client-side event tracking for analytics.
-
-**Body:**
-\`\`\`json
-{
-  "event": "string",
-  "properties": {}
-}
-\`\`\`
-
-Fire-and-forget — always returns 200.
+Introspect the PostgreSQL schema (used by internal tools).
 
 ---
+
+### GET /api/admin/global-prompt
+
+Return the complete context window sent to the AI — full system prompt, tool definitions, location context, and token estimates.
+
+---
+
+### GET /api/admin/contact
+
+List submissions from the public \`/api/contact\` form.
+
+## Trash management
 
 ### DELETE /api/trash/[pageId]
 
-Permanently delete a page from trash (irreversible).
+Permanently delete a trashed page (recursively). Session only, CSRF required.
 
 ---
 
 ### DELETE /api/trash/drives/[driveId]
 
-Permanently delete a trashed drive.
+Permanently delete a trashed drive. Session only; caller must be the drive owner.
 
----
+## Public utilities
 
 ### POST /api/contact
 
-Submit a contact form or support request.
+Submit a contact form (no auth). Body:
 
-**Body:**
 \`\`\`json
 {
   "name": "string",
@@ -147,6 +160,12 @@ Submit a contact form or support request.
   "message": "string"
 }
 \`\`\`
+
+---
+
+### POST /api/track
+
+Client-side event tracking. Fire-and-forget; always returns \`200\`.
 `;
 
 export default function AdminApiPage() {
