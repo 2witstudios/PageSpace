@@ -121,7 +121,7 @@ ask_agent({
 
 Agent communication includes depth tracking to prevent infinite loops:
 
-- Maximum depth: **3 levels** (Agent A → Agent B → Agent C)
+- Maximum depth: **2 levels** (Agent A → Agent B)
 - Each nested call increments a depth counter
 - Exceeding the limit returns an error instead of making another call
 

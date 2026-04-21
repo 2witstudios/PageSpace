@@ -25,7 +25,9 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/server';
 
-// Constants
+// Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
+// until inner stepCountIs budget is reworked — see PR #713. Raising this without
+// also lowering stepCountIs risks 10k+ tool executions per top-level call.
 const MAX_AGENT_DEPTH = 2;
 
 /**
