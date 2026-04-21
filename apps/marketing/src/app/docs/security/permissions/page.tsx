@@ -3,153 +3,158 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Permissions",
-  description: "PageSpace RBAC permission model: drive ownership, direct page permissions, boolean flags, cache strategy, and authorization flow.",
+  description: "PageSpace access model: drive ownership, drive admin membership, direct page permissions with optional expiry, and per-drive role templates.",
   path: "/docs/security/permissions",
-  keywords: ["permissions", "RBAC", "authorization", "access control", "drive membership"],
+  keywords: ["permissions", "authorization", "access control", "drive membership", "RBAC"],
 });
 
 const content = `
 # Permissions
 
-PageSpace uses a direct permission model built on three concepts: **drive ownership**, **drive membership**, and **page-level permissions**.
+PageSpace resolves page access against three primitives, checked in order on every request. There is no permission cache; every check queries Postgres directly.
 
-## Core Concepts
+Source: \`packages/lib/src/permissions/permissions.ts\`, \`packages/db/drizzle/0102_accessible_page_ids_for_user.sql\`, \`packages/db/src/schema/members.ts\`.
 
-### Drive Ownership
+## The Three Primitives
 
-Every drive has a single owner with irrevocable full access. The owner can:
-- View, edit, share, and delete any page in the drive
-- Manage drive members and their roles
-- Configure drive-level AI settings
-- This cannot be overridden by any other permission setting
+### 1. Drive ownership — \`drives.ownerId\`
 
-### Drive Membership
+Every drive has exactly one owner, recorded directly on the \`drives\` row. The owner has unconditional \`canView\`, \`canEdit\`, \`canShare\`, and \`canDelete\` on every page in the drive. Ownership cannot be overridden by any other record.
 
-Users can be added to drives with one of three roles:
+Ownership is tracked on \`drives.ownerId\`, not on \`drive_members\`.
 
-| Role | Capabilities |
-|------|-------------|
-| OWNER | Full access to everything in the drive |
-| ADMIN | Drive management, member management |
-| MEMBER | Basic drive visibility, page access based on page permissions |
+### 2. Drive admin membership — \`drive_members\`
 
-### Page Permissions
+Users added to a drive get a \`drive_members\` row:
 
-Direct user-to-page permissions with boolean flags:
+| Column | Notes |
+|--------|-------|
+| \`role\` | \`ADMIN\` or \`MEMBER\`. The canonical viewer only elevates \`ADMIN\`. |
+| \`acceptedAt\` | Must be non-null — pending invitations do not grant access. |
+| \`customRoleId\` | Optional reference to a drive-scoped role template (see below). |
+| \`invitedBy\` / \`invitedAt\` | Audit fields. |
 
-| Flag | Description |
-|------|-------------|
+An accepted \`ADMIN\` row grants full page access across the whole drive, equivalent to the owner for day-to-day operations. \`MEMBER\` rows are a membership record only — they do not grant page-level access by themselves. Page-level access for members is carried by \`page_permissions\` rows.
+
+### 3. Direct page permissions — \`page_permissions\`
+
+Per-user, per-page flags:
+
+| Flag | Action |
+|------|--------|
 | \`canView\` | Read page content |
-| \`canEdit\` | Modify page content |
-| \`canShare\` | Manage page permissions (share with other users) |
-| \`canDelete\` | Move page to trash |
+| \`canEdit\` | Modify content |
+| \`canShare\` | Grant / revoke permissions on the page |
+| \`canDelete\` | Send page to trash |
 
-Each permission is a direct relationship — User X has specific permissions on Page Y. There is no permission inheritance from parent pages.
+Additional columns:
+
+- \`expiresAt\` — optional. A row is only honored while \`expiresAt IS NULL OR expiresAt > now()\`. Expired grants are ignored automatically and can be kept for audit.
+- \`grantedBy\` / \`grantedAt\` — who granted the permission and when.
+- \`note\` — free-text annotation for the grant.
+
+There is no inheritance from parent pages. A grant on a folder does not imply a grant on any page inside it. Each page is checked independently.
 
 ## Authorization Flow
 
-When a user requests access to a page:
-
-1. **Check drive ownership**: If the user owns the drive, grant full access immediately
-2. **Check direct permissions**: Look up the user's permission record on the specific page
-3. **Return permissions**: If a record exists, return the boolean flags
-4. **Deny access**: If no record exists, deny access
+When a user requests access to a page, the server applies these checks in order:
 
 \`\`\`
-User requests Page Y
-  └→ Is user the drive owner?
-      ├→ Yes → Full access (view, edit, share, delete)
-      └→ No → Check pagePermissions table
-               ├→ Record found → Return { canView, canEdit, canShare, canDelete }
-               └→ No record → Access denied
+User → Page Y
+  ├─ Drive.ownerId === user? ─────────── yes → full access
+  ├─ drive_members row for this drive where
+  │    userId=user AND role='ADMIN' AND acceptedAt IS NOT NULL? ─ yes → full access
+  ├─ page_permissions row for (userId=user, pageId=Y) where
+  │    expiresAt IS NULL OR expiresAt > now()? ─────── yes → return the stored flags
+  └─ otherwise ─────────────────────────────────────── deny
 \`\`\`
+
+This is implemented both in TypeScript (\`getUserAccessLevel\` in \`packages/lib/src/permissions/permissions.ts\`) and in the Postgres function \`accessible_page_ids_for_user(uid)\` (migration \`0102_accessible_page_ids_for_user.sql\`) for bulk queries.
 
 ### Example
 
 Drive A is owned by Alice. It contains Folder X, which contains Document Y.
 
-- **Alice** requests Document Y → Full access (drive owner)
-- **Bob** has \`canView: true, canEdit: true\` on Document Y → Can view and edit
-- **Charlie** has permissions on Folder X but not Document Y → Access denied (no inheritance)
+- **Alice** requests Document Y → full access via drive ownership.
+- **Bob**, accepted \`ADMIN\` of Drive A, requests Document Y → full access via drive admin membership.
+- **Carol**, \`MEMBER\` of Drive A, has \`page_permissions\` on Document Y with \`canView=true, canEdit=true\`, no \`expiresAt\` → view and edit.
+- **Dan**, \`MEMBER\` of Drive A, has \`canView=true\` on Folder X but no row on Document Y → denied (no inheritance).
+- **Eve** has a \`page_permissions\` row on Document Y with \`canView=true\` and \`expiresAt\` yesterday → denied (expired).
+
+## Role Templates — \`drive_roles\`
+
+Drive owners and admins can define custom role templates, scoped to a single drive, that bundle page-level capability flags:
+
+\`\`\`typescript
+// packages/db/src/schema/members.ts
+drive_roles: {
+  id, driveId, name, description, color,
+  isDefault: boolean,
+  permissions: Record<string, { canView, canEdit, canShare }>,
+  position, createdAt, updatedAt
+}
+\`\`\`
+
+A \`drive_members\` row can reference a template via \`customRoleId\`. Templates are a convenience layer on top of \`drive_members.role\` + \`page_permissions\`; the canonical access check still resolves against the three primitives above.
 
 ## Permission Management
 
-### Granting Permissions
+### Granting
 
-\`\`\`typescript
+\`\`\`
 POST /api/pages/{pageId}/permissions
 {
-  "userId": "user-bob-123",
+  "userId": "user_...",
   "canView": true,
   "canEdit": true,
   "canShare": false,
-  "canDelete": false
+  "canDelete": false,
+  "expiresAt": "2026-06-01T00:00:00.000Z"  // optional
 }
 \`\`\`
 
-Requires: Drive owner or \`canShare\` permission on the page.
+Requires drive ownership, drive admin membership, or \`canShare\` on the target page.
 
-### Revoking Permissions
+### Revoking
 
-\`\`\`typescript
+\`\`\`
 DELETE /api/pages/{pageId}/permissions
-{
-  "userId": "user-bob-123"
-}
+{ "userId": "user_..." }
 \`\`\`
 
-### Checking Permissions
+### Checking
 
-\`\`\`typescript
+\`\`\`
 GET /api/pages/{pageId}/permissions/check
-// Returns: { canView: true, canEdit: true, canShare: false, canDelete: false }
+// → { canView, canEdit, canShare, canDelete } for the current user
 \`\`\`
 
-### Drive Permission Tree
+### Drive-wide View
 
-Drive owners can view a hierarchical permissions overview:
-
-\`\`\`typescript
-GET /api/drives/{driveId}/permissions-tree?userId=user-bob-123
-// Returns all pages with Bob's permission status
+\`\`\`
+GET /api/drives/{driveId}/permissions-tree?userId=user_...
+// → per-page permission status for the named user across the whole drive
 \`\`\`
 
-## Permission Cache
+Requires drive ownership or admin membership.
 
-Permissions are cached using a two-tier strategy:
+### Batch Updates
 
-| Tier | Storage | TTL | Max Entries |
-|------|---------|-----|-------------|
-| L1 | In-memory Map | 60s | 1,000 |
-| L2 | Redis | 60s | Unlimited |
-
-### Cache Behavior
-
-- **Read operations** (viewing pages): Use cache — stale data is acceptable
-- **Write operations** (editing, deleting): Bypass cache — must verify current permissions
-- **Permission changes** (grant/revoke): Bypass cache + invalidate existing entries
-
-### Failure Behavior
-
-| Scenario | Behavior |
-|----------|----------|
-| Cache miss | Falls through to database query, result cached |
-| Redis unavailable | L1 cache still operates, no denial of service |
-| Invalidation failure | Logged, stale entry expires within 60s TTL |
-| Database error | Returns null (access denied) |
-
-Cache failures never result in unauthorized access — the system always falls through to the database on error.
+\`\`\`
+POST /api/permissions/batch
+// Apply multiple page-permission changes in one request
+\`\`\`
 
 ## API Routes
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | \`/api/pages/{id}/permissions\` | List all permissions for a page |
-| POST | \`/api/pages/{id}/permissions\` | Grant or update permissions |
-| DELETE | \`/api/pages/{id}/permissions\` | Revoke user's permissions |
-| GET | \`/api/pages/{id}/permissions/check\` | Check current user's permissions |
-| GET | \`/api/drives/{id}/permissions-tree\` | Hierarchical permissions view |
-| POST | \`/api/permissions/batch\` | Batch permission updates |
+| GET | \`/api/pages/{id}/permissions\` | List grants on a page (for users who can share) |
+| POST | \`/api/pages/{id}/permissions\` | Grant or update a user's permissions on a page |
+| DELETE | \`/api/pages/{id}/permissions\` | Revoke a user's permissions on a page |
+| GET | \`/api/pages/{id}/permissions/check\` | Current user's flags on a page |
+| GET | \`/api/drives/{id}/permissions-tree\` | Per-page status across a drive |
+| POST | \`/api/permissions/batch\` | Apply multiple page-permission changes atomically |
 `;
 
 export default function PermissionsPage() {

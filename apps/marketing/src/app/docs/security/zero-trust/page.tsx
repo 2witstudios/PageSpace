@@ -3,135 +3,166 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Zero-Trust Architecture",
-  description: "PageSpace zero-trust security: opaque tokens, service-to-service auth, session management, audit logging, and rate limiting.",
+  description: "PageSpace zero-trust security: opaque session tokens, opaque service tokens for service-to-service auth, session lifecycle, rate limiting, and tamper-evident audit logs.",
   path: "/docs/security/zero-trust",
-  keywords: ["zero trust", "security architecture", "opaque tokens", "audit logging", "rate limiting"],
+  keywords: ["zero trust", "security architecture", "opaque tokens", "service tokens", "audit logging", "rate limiting"],
 });
 
 const content = `
 # Zero-Trust Architecture
 
-PageSpace implements a zero-trust security model where every request is authenticated and authorized independently. No request is trusted based on network location or prior authentication alone.
+Every request is authenticated and authorized independently. Internal services do not trust network location, prior hops, or a shared secret — they validate the same kind of opaque token the browser sends, with scopes reduced to what the calling user actually has.
 
 ## Token Architecture
 
 ### Why Opaque Tokens
 
-PageSpace migrated from JWTs to opaque session tokens for several security advantages:
+PageSpace migrated off JWTs. Every authentication token is now an opaque random string, hashed at rest, validated by database lookup.
 
-| Concern | JWT | Opaque Token |
-|---------|-----|-------------|
-| Payload exposure | Token contains user data | Token is a random string |
-| Revocation | Requires blocklist or short expiry | Instant — delete from database |
-| Token size | Large (1KB+) | Small (~60 bytes) |
-| Validation | Cryptographic signature check | Hash lookup in database |
-| Stolen token | Valid until expiry | Revocable immediately |
+| Concern | JWT | Opaque token (current) |
+|---------|-----|------------------------|
+| Payload | Encoded claims, verifiable offline | Random string; claims come from the DB row |
+| Revocation | Blocklist or short expiry | Delete the row — effective on the next request |
+| Size | ~1 KB typical | ~60 bytes |
+| Theft of a valid token | Valid until expiry / cache flush | Revocable immediately; \`tokenVersion\` also invalidates all user sessions at once |
+| Storage | Not stored (stateless) | Only the SHA-256 hash is stored |
 
-### Token Format
+### Token Generator
 
-\`\`\`
-ps_sess_<32 bytes of randomness, base64url encoded>
-\`\`\`
+The core generator lives at \`packages/lib/src/auth/opaque-tokens.ts\`. It produces tokens in the shape \`ps_{type}_{base64url}\` with 32 bytes (256 bits) of entropy, where \`{type}\` is one of \`sess\`, \`svc\`, \`mcp\`, or \`dev\`.
 
-- **Prefix**: Identifies token type (\`ps_sess_\`, \`ps_dev_\`, \`ps_sock_\`, \`ps_unsub_\`)
-- **Entropy**: 32 bytes (256 bits) of cryptographic randomness
-- **Storage**: Only the SHA-256 hash is stored in the database
-- **Comparison**: Constant-time comparison prevents timing attacks
+Two other paths use their own generators for historical or technical reasons:
+
+| Token | Prefix | Generator | Entropy |
+|-------|--------|-----------|---------|
+| MCP | \`mcp_\` | \`generateToken('mcp')\` from \`token-utils.ts\` | 256 bits |
+| Socket | \`ps_sock_\` | Route-local \`randomBytes(24)\` in \`/api/auth/socket-token\` | 192 bits |
+| Magic link | \`ps_magic_\` | \`generateToken('ps_magic')\` | 256 bits |
+| Unsubscribe | \`ps_unsub_\` | Route-local \`randomBytes(24)\` | 192 bits |
+
+MCP tokens intentionally omit the \`ps_\` prefix because they're presented in external clients; the separation helps logs and regex filters distinguish user-issued API tokens from web sessions.
+
+All tokens are:
+
+- Stored as SHA-256 hashes, with a 12-character prefix alongside the hash for log correlation.
+- Validated by hashing the presented value and looking up the hash.
+- Compared in constant time inside \`crypto.createHash(...)\` or database index lookups — no string-compare timing exposure.
 
 ## Service-to-Service Authentication
 
-Internal services (web, realtime, processor) authenticate with each other using shared secrets:
+Internal services — web, realtime, processor — authenticate each other with **opaque service tokens**, not shared secrets. There is no \`SERVICE_SECRET\` or equivalent environment variable in the repo.
 
-\`\`\`
-Web App ←→ Realtime Service (Socket.IO)
-Web App ←→ Processor Service (File Processing)
-\`\`\`
+### How it works
 
-- Shared secrets are configured via environment variables
-- Internal API calls include the secret in request headers
-- Services validate the secret before processing requests
-- No user tokens are passed between services — only the shared secret and user context
+1. The web app needs to call the processor for a specific user and resource (e.g., ingest an upload for page X).
+2. It calls \`createValidatedServiceToken({ userId, resourceType, resourceId, requestedScopes })\` (\`packages/lib/src/services/validated-service-token.ts\`).
+3. That helper:
+   - Loads the user's actual permissions on the resource.
+   - Filters the requested scopes down to those the user is authorized for.
+   - Creates a session of type \`service\` (claims scoped to that resource, those granted scopes, and a short TTL — 5 minutes by default, 30 days cap).
+   - Returns a \`ps_svc_...\` token.
+4. The web app forwards the token as \`Authorization: Bearer ps_svc_...\` to the processor.
+5. The processor's \`authenticateService\` middleware (\`apps/processor/src/middleware/auth.ts\`) calls \`sessionService.validateSession\` and rejects anything whose \`claims.type !== 'service'\`.
+6. Per-route middleware (\`requireScope('files:write')\`) asserts the claim carries the scope the operation needs.
+
+The user's identity flows through the claims on the service token. The processor does not hold a secret; it holds a connection to Postgres and uses the same session validation the web app uses for user sessions.
+
+### What this buys you
+
+- **Instant revocation of cross-service capability.** Deleting the session row disables the token in flight.
+- **Least privilege.** A service token for page X with \`files:read\` cannot be replayed to write files or to access page Y.
+- **Audit completeness.** Every service call carries a \`sessionId\` you can trace in \`security_audit_log\`.
+- **No env-var sprawl.** New services need DB access, not another secret to rotate.
 
 ## Session Management
 
-### Session Lifecycle
+### Session Lifecycle (web)
 
-1. **Login**: Generate opaque token → hash → store hash in DB → set HTTP-only cookie
-2. **Request**: Read cookie → hash → look up in DB → validate expiration → authorize
-3. **Refresh**: Validate refresh token → issue new session → rotate refresh token
-4. **Logout**: Delete session from DB → clear cookies
+1. **Login** — issue \`ps_sess_...\`; store hash in \`sessions\`; set \`HttpOnly; Secure; SameSite=strict\` cookie (\`lax\` only when \`COOKIE_DOMAIN\` is configured in production).
+2. **Request** — read cookie; hash; look up \`sessions\` row; check \`expiresAt\`; check \`users.tokenVersion\` match; check \`suspendedAt IS NULL\`; enforce optional idle timeout.
+3. **Logout** — delete the session row; clear cookies.
+
+There is no access/refresh pair on web sessions. A session is a single opaque token.
+
+### Device Token Rotation
+
+Device tokens — desktop and mobile clients — **do** rotate. The client presents its current token to \`POST /api/auth/device/refresh\` or \`POST /api/auth/mobile/refresh\`; the server issues a new token, marks the old one \`replacedByTokenId\`, and keeps it valid for a brief grace window so concurrent requests don't fail.
+
+Rapid refresh attempts (same device re-refreshing within 60s of last use) lower the device's \`trustScore\`; combined with user-agent or IP changes, the score can drop low enough for an operator to force re-auth.
+
+Source: \`packages/lib/src/auth/device-auth-utils.ts\`, \`packages/lib/src/auth/device-fingerprint-utils.ts\`.
 
 ### Global Invalidation
 
-The \`tokenVersion\` field enables instant invalidation of all sessions:
+\`users.tokenVersion\` is the kill-switch. Every session row stores the user's \`tokenVersion\` at creation. On validation, \`sessionService\` compares the two and rejects any mismatch.
 
 \`\`\`
-Password change → Increment tokenVersion → All existing sessions invalid
-"Logout all devices" → Increment tokenVersion → All sessions invalid
+Force logout everywhere → UPDATE users SET tokenVersion = tokenVersion + 1
+                          → every existing session is rejected on next request
 \`\`\`
 
-Every token validation checks the user's \`tokenVersion\`. If the stored version doesn't match, the session is rejected.
+Bumping \`tokenVersion\` is used by "log out everywhere", passkey/credential reset, and admin suspension.
 
 ## Rate Limiting
 
-### Endpoint Protection
+Rate limits are stored in Postgres (\`rate_limit_buckets\`) as a weighted two-bucket sliding window. The design is an ≈-Cloudflare/nginx sliding-window approximation — a single \`INSERT ... ON CONFLICT DO UPDATE\` per check, with the previous bucket weighted by how far into the current window the request is.
 
-| Endpoint | Strategy | Purpose |
-|----------|----------|---------|
-| Login | Per-IP + per-email | Prevent brute force |
-| Signup | Per-IP | Prevent mass account creation |
-| Token refresh | Per-user | Prevent token abuse |
-| API routes | Per-user | Prevent API abuse |
+| Endpoint | Scope | Purpose |
+|----------|-------|---------|
+| Login | Per-IP + per-email | Throttle credential stuffing |
+| Signup | Per-IP | Limit account creation |
+| Magic-link send | Per-email + per-IP | Limit email-flood vectors |
+| Token refresh (device / mobile) | Per-user | Limit rotation abuse |
+| API routes | Per-user (route-specific) | Limit hot-looping |
 
-### Implementation
+Exceeding a bucket returns HTTP 429 with \`Retry-After\`. Progressive blocking extends the ban for repeated violators. In production, a storage-layer failure fails **closed** (deny with \`Retry-After\`) rather than opening the floodgates.
 
-Rate limits use a sliding window algorithm. Exceeding the limit returns HTTP 429 with a \`Retry-After\` header. Successful authentication resets the counter.
+Source: \`packages/lib/src/security/distributed-rate-limit.ts\`.
 
 ## Audit Logging
 
-### What's Logged
+\`security_audit_log\` captures authentication, authorization, data access, and admin events. Entries are linked into a SHA-256 hash chain — each row's \`eventHash\` incorporates the previous row's hash — so tampering with history is detectable by rehashing and comparing.
 
-| Event | Data Captured |
-|-------|--------------|
-| Login attempt | Email, IP, user agent, success/failure |
-| Signup | Email, IP, provider (email/Google) |
-| Password change | User ID, IP |
-| Token refresh | User ID, device, IP |
-| Permission change | Granter, grantee, page, flags |
-| MCP token usage | Token ID, operation, timestamp |
-| AI tool execution | User, tool name, page context, success |
+A Postgres advisory lock serializes chain writes so concurrent inserts can't race and produce a fork.
 
-### Security Alerts
+### Event Taxonomy
 
-- **Token reuse detected**: Potential token theft — all sessions invalidated
-- **Rate limit exceeded**: Potential brute force — logged with IP
-- **Permission cache invalidation failure**: Stale permissions may persist for up to 60s
+The full enum lives at \`packages/db/src/schema/security-audit.ts\`. The categories you'll see:
+
+| Category | Example events |
+|----------|----------------|
+| Authentication | \`auth.login.success\`, \`auth.login.failure\`, \`auth.logout\`, \`auth.session.created\`, \`auth.session.revoked\` |
+| Tokens | \`auth.token.created\`, \`auth.token.revoked\`, \`auth.token.refreshed\` (emitted on device-token rotation, not on web sessions) |
+| Devices | \`auth.device.registered\`, \`auth.device.revoked\` |
+| Authorization | \`authz.access.granted\`, \`authz.access.denied\`, \`authz.permission.granted\`, \`authz.permission.revoked\`, \`authz.role.assigned\`, \`authz.role.removed\` |
+| Data | \`data.read\`, \`data.write\`, \`data.delete\`, \`data.export\`, \`data.share\` |
+| Admin | \`admin.user.suspended\`, \`admin.user.reactivated\`, \`admin.settings.changed\` |
+| Security signals | \`security.anomaly.detected\`, \`security.rate.limited\`, \`security.brute.force.detected\`, \`security.suspicious.activity\` |
+
+Each entry carries user ID (nullable for unauthenticated failures), IP, user agent, session ID, a resource reference where applicable, and a \`riskScore\` for downstream alerting.
 
 ## CSRF Protection
 
-State-changing requests require a CSRF token:
+State-changing requests must present a CSRF token bound to the current session.
 
-1. Client requests token: \`GET /api/auth/csrf\`
-2. Server generates token bound to the session
-3. Client includes token in subsequent POST/PATCH/DELETE requests
-4. Server validates token before processing
+1. Client calls \`GET /api/auth/csrf\`.
+2. Server validates the session cookie, then returns an HMAC-signed token that encodes the session ID.
+3. Client includes the token in subsequent POST/PATCH/DELETE requests (header or body).
+4. Server verifies the signature, checks the token binds to the active session, and rejects mismatches.
+
+Source: \`packages/lib/src/auth/csrf-utils.ts\`, \`apps/web/src/app/api/auth/csrf/route.ts\`.
 
 ## Content Security
 
 ### HTML Sanitization
 
-User-generated HTML content is sanitized to prevent XSS:
-- Canvas pages use Shadow DOM isolation
-- Document content is rendered through controlled components
-- Mentions and links are validated before rendering
+User-generated HTML is sanitized before render. Canvas pages render inside Shadow DOM, isolating arbitrary author styles and scripts from the rest of the app. Mentions and links are validated server-side before rendering.
 
 ### API Key Encryption
 
-AI provider API keys are encrypted at rest in the database. Keys are:
-- Encrypted on write with server-side encryption
-- Decrypted only when making provider API calls
-- Never exposed in API responses
-- Deletable by the user at any time
+AI provider API keys are encrypted with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Keys are decrypted only on the request path that makes the provider call, never exposed in API responses, and deletable by the user at any time.
+
+Source: \`packages/lib/src/encryption/encryption-utils.ts\`, \`packages/db/src/schema/ai.ts\` (\`user_ai_settings.encryptedApiKey\`).
 `;
 
 export default function ZeroTrustPage() {
