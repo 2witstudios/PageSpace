@@ -29,7 +29,7 @@ Upload a file into a drive, optionally creating or positioning a \`FILE\` page.
 - \`position\` — \`"before"\` or \`"after"\` to insert relative to another sibling
 - \`afterNodeId\` — sibling page ID referenced by \`position\`
 
-**Size cap:** controlled by \`STORAGE_MAX_FILE_SIZE_MB\` (default \`20\` in the shipped env templates). The processor enforces the cap and rejects larger uploads.
+**Size cap:** 20 MB by default, configurable per deployment. The processor enforces the cap and rejects larger uploads.
 
 **Auth:** session or MCP bearer. MCP tokens scoped to specific drives can only upload into those drives. Per-user storage quota and per-tier concurrency limits are enforced.
 

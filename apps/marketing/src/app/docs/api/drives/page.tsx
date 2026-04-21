@@ -201,7 +201,7 @@ Hierarchical view of pages with permission status. Drive owner only.
 
 ## Integrations
 
-OAuth-backed drive integrations (GitHub, calendars, Drive, etc.). See \`packages/lib/src/integrations/\` for provider implementations.
+OAuth-backed drive integrations (GitHub, calendars, Drive, etc.).
 
 ### GET /api/drives/[driveId]/integrations
 

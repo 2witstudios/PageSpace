@@ -31,7 +31,7 @@ Local MCP servers are bound to the desktop app on your machine. They are not exp
 2. Paste a standard MCP \`mcpServers\` configuration (same shape as Claude Desktop's \`claude_desktop_config.json\`).
 3. Servers start on launch and shut down with the app.
 
-The desktop app stores the config at \`~/.pagespace/local-mcp-config.json\` (or the platform userData equivalent) and validates every entry before spawning a subprocess. See \`apps/desktop/src/main/mcp-manager.ts\` for the implementation.
+The desktop app stores the config at \`~/.pagespace/local-mcp-config.json\` (or the platform userData equivalent) and validates every entry before spawning a subprocess.
 
 ## Configuration format
 

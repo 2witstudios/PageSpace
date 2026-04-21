@@ -104,7 +104,7 @@ Clients join a Socket.IO room for each channel they view. The realtime service b
 | \`reaction_added\` / \`reaction_removed\` | Reaction payload |
 | \`typing\` | \`{ userId }\` |
 
-See \`apps/realtime/src/\` for the authoritative event list.
+Event names follow the pattern shown above; additional events may be added over time.
 `;
 
 export default function ChannelsApiPage() {

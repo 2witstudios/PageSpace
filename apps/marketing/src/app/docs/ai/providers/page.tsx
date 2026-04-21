@@ -25,14 +25,14 @@ Three levels, most specific wins:
 
 ### PageSpace (default)
 
-Built-in. No key required. Runs against a GLM backend (\`getBackendProvider('pagespace') → 'glm'\`).
+Built-in. No key required. Backed by a GLM inference provider.
 
 | Alias | Model | Tier |
 |---|---|---|
 | \`standard\` | \`glm-4.7\` | Free, Pro, Founder, Business |
 | \`pro\` | \`glm-5\` | Pro, Founder, Business |
 
-Aliases resolve at call time via \`PAGESPACE_MODEL_ALIASES\`, so an agent pinned to \`standard\` stays on whatever backend model the team ships today.
+Aliases resolve at call time, so an agent pinned to \`standard\` or \`pro\` stays on whatever backend model the team ships today.
 
 Daily call limits by plan:
 

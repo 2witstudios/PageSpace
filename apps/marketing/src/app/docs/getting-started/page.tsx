@@ -76,7 +76,7 @@ PageSpace routes every model through the Vercel AI SDK across 12 providers:
 | Ollama | Models discovered from a local Ollama server | Local server URL |
 | LM Studio | Models discovered from a running LM Studio server | Local server URL |
 
-The full provider + model list lives in \`apps/web/src/lib/ai/core/ai-providers-config.ts\`. To configure a provider, go to **Settings > AI** and enter your key. You can set different providers per drive or per page.
+To configure a provider, go to **Settings > AI** and enter your key. You can set different providers per drive or per page. The full list of available models updates as providers publish new ones.
 
 ## 5. Create an AI Agent
 

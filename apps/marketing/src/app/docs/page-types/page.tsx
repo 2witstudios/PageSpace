@@ -13,7 +13,7 @@ const content = `
 
 Everything in PageSpace is a **page**. Pages are the universal content primitive — they form a recursive tree, inherit permissions from their drive, and participate in search, mentions, and AI context.
 
-There are 9 built-in page types, each designed for a different kind of work. A tenth type — \`TERMINAL\` — ships as experimental and is hidden from the create menu (\`packages/lib/src/content/page-types.config.ts\`).
+There are 9 built-in page types, each designed for a different kind of work. A tenth type — \`TERMINAL\` — ships as experimental and is hidden from the create menu.
 
 ## DOCUMENT
 
@@ -29,7 +29,7 @@ Rich text documents powered by TipTap with full markdown support.
 
 To bring AI into a document, @mention an AI_CHAT page or ask an agent from a sibling page to read and edit it via \`read_page\` / \`replace_lines\`.
 
-Documents support headings, lists, code blocks, tables, blockquotes, and embedded files. Each page stores its content in one of two modes — HTML (default) or Markdown — controlled by the \`contentMode\` column on the \`pages\` table.
+Documents support headings, lists, code blocks, tables, blockquotes, and embedded files. Each page stores its content in one of two modes — HTML (default) or Markdown.
 
 ## FOLDER
 
@@ -50,7 +50,7 @@ Dedicated AI conversation pages with full tool calling support.
 | Feature | Detail |
 |---------|--------|
 | Providers | 12 providers wired through the Vercel AI SDK |
-| Tools | 38 workspace tools (see \`apps/web/src/lib/ai/tools/*.ts\`) |
+| Tools | 38 workspace tools, covering page reads and writes, search, tasks, calendar, channels, and agent coordination |
 | Modes | \`isReadOnly\` toggle (explore-only) and \`webSearchEnabled\` toggle (enables \`web_search\`) |
 | Multi-user | Multiple people can chat with the same AI |
 | Context | System prompt includes drive, breadcrumb path, and page type |
@@ -88,7 +88,7 @@ Real-time team messaging pages.
 | Reactions | Emoji reactions on messages |
 | Uploads | Inline file attachments per message |
 
-Channels function like team chat but live inside your workspace tree. @mention any AI agent to pull it into the conversation; AI-posted messages carry sender metadata (\`aiMeta\`) so it's clear who spoke.
+Channels function like team chat but live inside your workspace tree. @mention any AI agent to pull it into the conversation; AI-posted messages carry sender metadata so it's clear who spoke.
 
 ## CANVAS
 
@@ -109,9 +109,9 @@ Uploaded files with automatic processing.
 
 | Feature | Detail |
 |---------|--------|
-| Max size | 20 MB by default (set \`STORAGE_MAX_FILE_SIZE_MB\` to change) |
-| Processing | Image optimization, OCR, text extraction (\`apps/processor/src/workers/\`) |
-| Storage | Content-addressed — files deduped by \`contentHash\` |
+| Max size | 20 MB by default (configurable per deployment) |
+| Processing | Image optimization, OCR, and text extraction run in the background after upload |
+| Storage | Content-addressed — identical bytes are stored once regardless of how many places reference them |
 | Convert | Files can be converted to DOCUMENT pages |
 
 Files are processed by the dedicated processor service. Images are optimized, OCR runs on scanned content, text is extracted from documents, and metadata is stored in PostgreSQL. Content-addressed storage means identical bytes are stored once regardless of how many places they're linked from.
@@ -137,10 +137,10 @@ Project management with structured task tracking.
 |---------|--------|
 | Views | Table view and kanban board (toggled in the header) |
 | Fields | Title, priority (\`low\`/\`medium\`/\`high\`), due date, and multiple assignees (users or AI agents) |
-| Custom statuses | Each list defines its own status set — name, color, and group (\`todo\` / \`in_progress\` / \`done\`) — stored in \`task_status_configs\` |
+| Custom statuses | Each list defines its own status set — name, color, and group (\`todo\` / \`in_progress\` / \`done\`) |
 | AI | Agents create and update tasks via \`update_task\` and pick up assigned work via \`get_assigned_tasks\` |
-| Real-time | Yes — live status updates via Socket.IO |
-| Linked pages | Page-based tasks have an optional linked DOCUMENT for notes (\`taskItems.pageId\`) |
+| Real-time | Yes — live status updates |
+| Linked pages | Page-based tasks can have an optional linked DOCUMENT for notes |
 
 Task lists are first-class AI citizens — agents can add tasks, change status, and work through a list of assignments that were routed to them.
 
