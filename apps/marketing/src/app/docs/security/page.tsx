@@ -3,9 +3,9 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Security",
-  description: "PageSpace security overview: opaque session tokens, direct-permission RBAC, encrypted API keys, rate limiting, and tamper-evident audit logs.",
+  description: "PageSpace security overview: opaque session tokens, direct-permission RBAC, account lockout, OAuth PKCE, encrypted API keys, rate limiting, continuously verified audit logs, SSRF and path-traversal hardening.",
   path: "/docs/security",
-  keywords: ["security", "authentication", "permissions", "encryption", "audit log"],
+  keywords: ["security", "authentication", "permissions", "encryption", "audit log", "account lockout", "PKCE", "SSRF", "path traversal", "HMAC cron"],
 });
 
 const content = `
@@ -22,7 +22,10 @@ This section documents PageSpace's authentication system, permission model, and 
 - **Instant revocation** — deleting the session row immediately invalidates the token on the next request.
 - **Global invalidation** — bumping \`users.tokenVersion\` rejects every existing session on validation.
 - **Device-token theft detection** — device (desktop/mobile) tokens rotate; mismatched user agent, IP change, or rapid refresh lowers a per-device \`trustScore\`.
-- **Rate limiting** — login, signup, and token refresh are rate-limited in Postgres via a weighted sliding window (see [Zero-Trust](/docs/security/zero-trust)).
+- **Account lockout** — 10 consecutive failed attempts lock the account for 15 minutes. DB-backed, so it persists across restarts and survives attacker IP rotation. Complements rate limiting — rate limits throttle traffic, lockout halts the targeted account.
+- **OAuth 2.1 PKCE** — Google and Apple flows use RFC 7636 with a server-stored \`code_verifier\`. An intercepted authorization code is unusable without it.
+- **Timing-safe comparisons** — every secret comparison (magic-link verify, device-token lookup, auth headers, CSRF) goes through a SHA-256 pre-hash + \`timingSafeEqual\`, so length and prefix structure leak no timing.
+- **Rate limiting** — login, signup, magic-link send, and token refresh are rate-limited in Postgres via a weighted sliding window (see [Zero-Trust](/docs/security/zero-trust#rate-limiting)).
 
 ### Authorization
 
@@ -43,7 +46,11 @@ This section documents PageSpace's authentication system, permission model, and 
 ### Infrastructure
 
 - **Service-to-service auth** — internal services (web, realtime, processor) authenticate each other with opaque service tokens (\`ps_svc_*\`) issued by the web app, validated by the same \`sessionService\` that validates user sessions, and scoped to a specific resource and capability.
-- **Tamper-evident audit log** — security events are written to \`security_audit_log\` with a SHA-256 hash chain over the prior event, serialized by a Postgres advisory lock.
+- **JTI revocation** — every service token's JTI is tracked in \`revoked_service_tokens\`; unknown or expired JTIs fail closed.
+- **Continuously verified audit log** — security events are written to \`security_audit_log\` with a SHA-256 hash chain over the prior event, serialized by a Postgres advisory lock. A cron route re-verifies the chain on a schedule, and the SIEM delivery worker re-verifies each batch synchronously before emitting it — a detected break stops the emission.
+- **SSRF protection** — outbound URL fetches run through a validator that blocks localhost, RFC1918 private ranges, link-local addresses, and cloud metadata endpoints (AWS, GCP, Azure, Alibaba — including IPv6 variants), and verifies every DNS-resolved IP, not just the first.
+- **Path-traversal protection** — file paths from uploads and avatars run through a validator that blocks \`../\`, URL-encoded and double-encoded variants, null bytes, and symlink escape via \`realpath\`.
+- **HMAC-signed cron endpoints** — internal cron routes require HMAC-SHA256 headers (timestamp, nonce, signature). In production, missing \`CRON_SECRET\` fails closed.
 - **Distributed rate limiting** — Postgres-backed, works across multiple instances; fails closed in production.
 
 ## Known Tradeoffs

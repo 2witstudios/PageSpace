@@ -3,9 +3,9 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Authentication",
-  description: "PageSpace authentication: opaque session tokens, magic links, Google and Apple OAuth, passkeys, device tokens, MCP tokens, and the full auth API.",
+  description: "PageSpace authentication: opaque session tokens, magic links (5-minute), OAuth 2.1 PKCE on Google and Apple, passkeys with conditional UI, device tokens, MCP tokens, account lockout, and the full auth API.",
   path: "/docs/security/authentication",
-  keywords: ["authentication", "session tokens", "OAuth", "passkeys", "magic links", "MCP tokens"],
+  keywords: ["authentication", "session tokens", "OAuth", "PKCE", "passkeys", "magic links", "MCP tokens", "account lockout", "WebAuthn"],
 });
 
 const content = `
@@ -24,7 +24,7 @@ Source: \`packages/lib/src/auth/session-service.ts\`, \`packages/lib/src/auth/op
 | Device | \`ps_dev_\` | \`generateOpaqueToken('dev')\` | 256 bits | Long-lived, rotates on refresh | Desktop / mobile persistent auth |
 | MCP | \`mcp_\` | \`generateToken('mcp')\` | 256 bits | No expiry; revoked explicitly | External MCP clients |
 | Socket | \`ps_sock_\` | Route-local \`randomBytes(24)\` | 192 bits | 5 minutes | Cross-origin Socket.IO handshake |
-| Magic link | \`ps_magic_\` | \`generateToken('ps_magic')\` | 256 bits | Configurable, single-use | Email login link |
+| Magic link | \`ps_magic_\` | \`generateToken('ps_magic')\` | 256 bits | 5 minutes, single-use | Email login link |
 | Unsubscribe | \`ps_unsub_\` | Route-local \`randomBytes(24)\` | 192 bits | 365 days, single-use | One-click email unsubscribe |
 
 All tokens are opaque — they carry no embedded claims. The prefix is for logs and debugging; validation is a hash lookup.
@@ -57,10 +57,12 @@ PageSpace is passwordless. There is no password column on the user record. Accou
 
 ### Magic Links
 
-Passwordless email login. The server generates a single-use token, emails a signed URL, and issues a session when the link is opened.
+Passwordless email login. The server generates a single-use token (5-minute TTL), emails a signed URL, and issues a session when the link is opened. The verify endpoint compares the presented token via timing-safe comparison before creating the session.
 
 - \`POST /api/auth/magic-link/send\` — email a login link
 - \`GET  /api/auth/magic-link/verify\` — redirect endpoint; verifies the token, creates a session, sets the cookie
+
+Source: \`packages/lib/src/auth/magic-link-service.ts\` (\`MAGIC_LINK_EXPIRY_MINUTES = 5\`).
 
 ### Google OAuth
 
@@ -75,14 +77,29 @@ Passwordless email login. The server generates a single-use token, emails a sign
 - \`POST /api/auth/apple/callback\` — Apple form-post callback
 - \`POST /api/auth/apple/native\` — native (iOS) identity-token exchange
 
+### OAuth PKCE
+
+Both Google and Apple flows use RFC 7636 (Proof Key for Code Exchange). On \`signin\`, the server generates a \`code_verifier\` + \`code_challenge\` (S256) and stores the verifier in \`auth_handoff_tokens\` (\`kind='pkce'\`) with a 10-minute TTL. The callback retrieves and consumes the verifier to complete the token exchange — an intercepted authorization code alone is useless.
+
+Source: \`packages/lib/src/auth/pkce.ts\`.
+
 ### Passkeys (WebAuthn)
 
-Hardware-backed authentication. Supports Touch ID, Face ID, Windows Hello, and cross-device passkeys.
+Hardware-backed authentication. Supports Touch ID, Face ID, Windows Hello, and cross-device passkeys. Conditional UI (browser autofill) is supported — the challenge is issued against a fixed system user so the browser can surface saved passkeys without the user typing an email first.
 
 - \`GET /api/auth/passkey\` — list the current user's passkeys
 - \`POST /api/auth/passkey/register/options\` + \`/register\` — registration challenge and verification
 - \`POST /api/auth/passkey/authenticate/options\` + \`/authenticate\` — login challenge and verification
 - \`DELETE /api/auth/passkey/{id}\` — revoke a passkey
+
+**Operational limits** (\`packages/lib/src/auth/passkey-service.ts\` \`PASSKEY_CONFIG\`):
+
+| Limit | Value |
+|---|---|
+| Passkeys per user | 10 |
+| WebAuthn timeout | 60 s |
+| Challenge TTL | 5 minutes |
+| Max passkey name length | 255 chars |
 
 ## Session Management
 
@@ -122,6 +139,18 @@ Source: \`packages/lib/src/auth/constants.ts\`.
 Rate limiting is backed by Postgres (\`rate_limit_buckets\`) using a weighted sliding-window algorithm. In production, rate-limit storage failures fail closed and return \`Retry-After\`.
 
 Source: \`packages/lib/src/security/distributed-rate-limit.ts\`.
+
+### Account Lockout
+
+Rate limiting throttles traffic; account lockout targets the account under attack. After **10 consecutive failed authentication attempts** against a single account, the account is locked for **15 minutes**, regardless of attempt source. State is kept on the \`users\` row (\`failedLoginAttempts\`, \`lockedUntil\`) so:
+
+- the lock persists across server restarts,
+- the lock is unaffected by an attacker cycling IPs,
+- failed attempts across all auth methods feed the same counter.
+
+A successful authentication resets the counter. Every failed attempt and every lock transition is recorded in \`security_audit_log\`.
+
+Source: \`packages/lib/src/auth/account-lockout.ts\` (\`MAX_FAILED_ATTEMPTS = 10\`, \`LOCKOUT_DURATION_MS = 15 * 60 * 1000\`).
 
 ## MCP Tokens
 
