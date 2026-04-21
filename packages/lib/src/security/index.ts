@@ -14,7 +14,6 @@ export {
   recordJTI,
   isJTIRevoked,
   revokeJTI,
-  revokeAllUserJTIs,
   sweepExpiredRevokedJTIs,
 } from './jti-revocation';
 

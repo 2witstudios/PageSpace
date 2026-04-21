@@ -140,15 +140,3 @@ export async function sweepExpiredRevokedJTIs(): Promise<number> {
     return 0;
   }
 }
-
-/**
- * Revoke all JTIs for a user by bumping their token version.
- * This is handled at the database level via `users.tokenVersion` — this
- * function exists for API consistency and emits an audit log line.
- */
-export async function revokeAllUserJTIs(userId: string): Promise<void> {
-  // JTI revocation for all user tokens is handled by bumping tokenVersion
-  // in the users table. This causes all existing JTIs to fail validation
-  // when the tokenVersion is checked.
-  loggers.api.info('User token version will be bumped for JTI revocation', { userId });
-}
