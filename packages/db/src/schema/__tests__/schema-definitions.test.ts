@@ -63,6 +63,8 @@ import * as personalization from '../personalization';
 import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
+// Agent runs schema
+import * as agentRuns from '../agent-runs';
 
 describe('Schema definitions', () => {
   describe('auth schema', () => {
@@ -513,6 +515,23 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflows.workflowsRelations).toBeDefined();
+    });
+  });
+
+  describe('agent-runs schema', () => {
+    it('exports enums', () => {
+      expect(agentRuns.agentRunStatus).toBeDefined();
+      expect(agentRuns.agentRunEventType).toBeDefined();
+    });
+
+    it('exports tables', () => {
+      expect(agentRuns.agentRuns).toBeDefined();
+      expect(agentRuns.agentRunEvents).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(agentRuns.agentRunsRelations).toBeDefined();
+      expect(agentRuns.agentRunEventsRelations).toBeDefined();
     });
   });
 });
