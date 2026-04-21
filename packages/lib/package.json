@@ -139,11 +139,6 @@
       "import": "./dist/services/memory-monitor.js",
       "require": "./dist/services/memory-monitor.js"
     },
-    "./services/permission-cache": {
-      "types": "./dist/services/permission-cache.d.ts",
-      "import": "./dist/services/permission-cache.js",
-      "require": "./dist/services/permission-cache.js"
-    },
     "./services/drive-service": {
       "types": "./dist/services/drive-service.d.ts",
       "import": "./dist/services/drive-service.js",
@@ -158,11 +153,6 @@
       "types": "./dist/services/validated-service-token.d.ts",
       "import": "./dist/services/validated-service-token.js",
       "require": "./dist/services/validated-service-token.js"
-    },
-    "./permissions-cached": {
-      "types": "./dist/permissions/permissions-cached.d.ts",
-      "import": "./dist/permissions/permissions-cached.js",
-      "require": "./dist/permissions/permissions-cached.js"
     },
     "./permissions": {
       "types": "./dist/permissions/index.d.ts",
@@ -366,9 +356,6 @@
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
       ],
-      "services/permission-cache": [
-        "./dist/services/permission-cache.d.ts"
-      ],
       "services/drive-service": [
         "./dist/services/drive-service.d.ts"
       ],
@@ -377,9 +364,6 @@
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"
-      ],
-      "permissions-cached": [
-        "./dist/permissions/permissions-cached.d.ts"
       ],
       "permissions": [
         "./dist/permissions/index.d.ts"

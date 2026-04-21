@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers, auditRequest, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
+import { loggers, auditRequest } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
@@ -101,12 +101,6 @@ export async function POST(
         driveName: drive.name
       })
     );
-
-    // Invalidate permission caches so user immediately sees their new access
-    await Promise.all([
-      invalidateUserPermissions(invitedUserId),
-      invalidateDrivePermissions(driveId),
-    ]);
 
     // Validate that all pageIds belong to this drive
     const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));

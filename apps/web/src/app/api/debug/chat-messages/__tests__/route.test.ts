@@ -300,7 +300,7 @@ describe('POST /api/debug/chat-messages', () => {
       const request = createPostRequest({ pageId: mockPageId });
       await POST(request);
 
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId, { bypassCache: true });
+      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
     });
   });
 

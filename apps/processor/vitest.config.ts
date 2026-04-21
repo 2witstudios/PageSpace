@@ -33,7 +33,7 @@ export default defineConfig({
     alias: {
       '@pagespace/db': path.resolve(packagesDir, 'db/src'),
       '@pagespace/lib/logger-config': path.resolve(packagesDir, 'lib/src/logging/logger-config'),
-      '@pagespace/lib/permissions-cached': path.resolve(packagesDir, 'lib/src/permissions/permissions-cached'),
+      '@pagespace/lib/permissions': path.resolve(packagesDir, 'lib/src/permissions'),
       '@pagespace/lib/security': path.resolve(packagesDir, 'lib/src/security'),
       '@pagespace/lib': path.resolve(packagesDir, 'lib/src'),
     },

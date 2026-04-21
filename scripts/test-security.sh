@@ -92,8 +92,6 @@ echo "------------------------------------------"
 
 run_test_suite "Multi-Tenant Isolation" "@pagespace/lib" "src/__tests__/multi-tenant-isolation.test.ts"
 run_test_suite "Permissions" "@pagespace/lib" "src/__tests__/permissions.test.ts"
-run_test_suite "Permissions (Cached)" "@pagespace/lib" "src/__tests__/permissions-cached.test.ts"
-run_test_suite "Permission Cache" "@pagespace/lib" "src/__tests__/permission-cache.test.ts"
 
 # =============================================================================
 # Web App Auth Route Tests

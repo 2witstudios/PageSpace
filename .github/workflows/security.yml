@@ -144,8 +144,6 @@ jobs:
       - name: Run permission tests
         run: |
           pnpm --filter @pagespace/lib vitest run src/__tests__/permissions.test.ts
-          pnpm --filter @pagespace/lib vitest run src/__tests__/permissions-cached.test.ts
-          pnpm --filter @pagespace/lib vitest run src/__tests__/permission-cache.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           REDIS_URL: redis://localhost:6379

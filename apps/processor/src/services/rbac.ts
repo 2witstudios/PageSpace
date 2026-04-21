@@ -1,6 +1,6 @@
 import { db, channelMessages, eq, filePages, files, pages } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
-import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions-cached';
+import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions';
 import type { EnforcedAuthContext } from '../middleware/auth';
 import { getLinksForFile, type FileLink } from './file-links';
 

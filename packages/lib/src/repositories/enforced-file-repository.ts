@@ -9,7 +9,7 @@
 
 import { db, files, filePages, eq, and } from '@pagespace/db';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
-import { getUserDrivePermissions } from '../permissions/permissions-cached';
+import { getUserDrivePermissions } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';
 
 /**

@@ -1059,7 +1059,7 @@ export const kernelSatellites: KernelSatellite[] = [
     id: 'kernel-perms',
     title: 'Permissions',
     summary: 'Drive and page access checks that guard the kernel boundary.',
-    path: 'packages/lib/src/permissions/permissions-cached.ts',
+    path: 'packages/lib/src/permissions/permissions.ts',
     slot: 'bottom-center',
   },
   {

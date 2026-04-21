@@ -123,7 +123,7 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user has permission to edit this page
-    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
+    const canEdit = await canUserEditPage(userId, pageId);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },

@@ -2,11 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db, users, pages, drives, pagePermissions, driveMembers, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
-import { getUserDrivePermissions } from '../permissions/permissions-cached';
+import { getUserAccessLevel, getUserDriveAccess, getUserDrivePermissions } from '../permissions/permissions';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import type { SessionClaims } from '../auth/session-service';
-import { PermissionCache } from '../services/permission-cache';
 
 function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   return {
@@ -34,8 +32,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
   let mallory: Awaited<ReturnType<typeof factories.createUser>>;
 
   beforeEach(async () => {
-    await PermissionCache.getInstance().clearAll();
-
     alice = await factories.createUser();
     bob = await factories.createUser();
     mallory = await factories.createUser();
@@ -48,7 +44,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
   });
 
   afterEach(async () => {
-    await PermissionCache.getInstance().clearAll();
     // Clean up only our test data to avoid interfering with parallel tests
     if (driveA) {
       await db.delete(pagePermissions).where(eq(pagePermissions.pageId, pageA.id)).catch(() => {});

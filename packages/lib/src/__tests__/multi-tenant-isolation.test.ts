@@ -66,19 +66,15 @@ const mockCanUserEditPage = vi.fn();
 const mockCanUserDeletePage = vi.fn();
 const mockGetUserDriveAccess = vi.fn();
 
+// Mock drive permission lookup
+const mockGetUserDrivePermissions = vi.fn();
+
 vi.mock('../permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   canUserViewPage: (...args: unknown[]) => mockCanUserViewPage(...args),
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   canUserDeletePage: (...args: unknown[]) => mockCanUserDeletePage(...args),
   getUserDriveAccess: (...args: unknown[]) => mockGetUserDriveAccess(...args),
-}));
-
-// Mock cached permissions
-const mockGetUserDrivePermissions = vi.fn();
-
-vi.mock('../permissions/permissions-cached', () => ({
-  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 
@@ -395,7 +391,7 @@ describe('Multi-Tenant Isolation', () => {
         mockGetUserDrivePermissions.mockResolvedValue(null);
 
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
         const permissions = await getUserDrivePermissions(
           TENANT_A.ownerId,
@@ -613,7 +609,7 @@ describe('Multi-Tenant Isolation', () => {
     describe('given a drive member trying to access another drive', () => {
       it('should not allow MEMBER role to access other drives', async () => {
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
 
         // Member has permissions on Tenant A
@@ -644,7 +640,7 @@ describe('Multi-Tenant Isolation', () => {
 
       it('should not allow ADMIN role from one drive to access another drive', async () => {
         const { getUserDrivePermissions } = await import(
-          '../permissions/permissions-cached'
+          '../permissions/permissions'
         );
 
         // Admin has full permissions on Tenant A

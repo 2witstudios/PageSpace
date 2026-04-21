@@ -1,5 +1,7 @@
 # Permission Cache Threat Model
 
+> **Historical — no longer applicable.** The permission cache (both L1 in-memory and L2 Redis tiers) was removed in PR 4/5 of the Redis-deprecation series. All permission lookups now go directly to Postgres, so the stale-window threat analysed below no longer exists. This document is retained as a record of the prior decision and is preserved verbatim for historical reference; see `docs/2.0-architecture/2.2-backend/permissions.md` for the current design.
+
 ## Overview
 
 PageSpace caches permission lookups in a two-tier cache (in-memory L1 + Redis L2) with a 60-second TTL. This document analyzes the security implications of the stale window and records the decision to accept this tradeoff.

@@ -25,18 +25,8 @@ export { getOnPremUserDefaults, getOnPremOllamaSettings } from './onprem-default
 // Content processing
 export * from './content';
 
-// Permissions (export cached version by default)
-export * from './permissions/permissions-cached'; // Server-only: cached permissions (preferred)
-export type { DrivePermissionLevel } from './permissions/permissions-cached';
-
-// Export specific functions from original permissions that aren't in cached version
-export {
-  getDriveIdsForUser,
-  getUserAccessiblePagesInDriveWithDetails,
-  getUserAccessiblePagesInDrive,
-  isDriveOwnerOrAdmin,
-  isUserDriveMember,
-} from './permissions/permissions';
+// Permissions (single canonical source after Redis cache removal)
+export * from './permissions/permissions';
 
 // Utilities
 export * from './utils';
