@@ -64,6 +64,17 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/docs/getting-started",
     "/docs/core-concepts",
     "/docs/page-types",
+    // How it Works
+    "/docs/how-it-works",
+    "/docs/how-it-works/pages",
+    "/docs/how-it-works/drives",
+    "/docs/how-it-works/ai",
+    "/docs/how-it-works/channels",
+    "/docs/how-it-works/task-lists",
+    "/docs/how-it-works/files",
+    "/docs/how-it-works/search",
+    "/docs/how-it-works/sharing",
+    "/docs/how-it-works/accounts",
     // AI
     "/docs/ai",
     "/docs/ai/providers",

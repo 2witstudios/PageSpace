@@ -18,6 +18,9 @@ import {
   MessageSquare,
   Search,
   UserCog,
+  Lightbulb,
+  ListChecks,
+  Upload,
 } from "lucide-react";
 
 export interface NavItem {
@@ -41,6 +44,22 @@ export const docsNav: NavSection[] = [
       { title: "Quick Start", href: "/docs/getting-started", icon: Book },
       { title: "Core Concepts", href: "/docs/core-concepts", icon: Blocks },
       { title: "Page Types", href: "/docs/page-types", icon: LayoutGrid },
+    ],
+  },
+  {
+    title: "How it Works",
+    icon: Lightbulb,
+    items: [
+      { title: "Overview", href: "/docs/how-it-works", icon: Lightbulb },
+      { title: "Pages", href: "/docs/how-it-works/pages", icon: FileText },
+      { title: "Drives & Workspaces", href: "/docs/how-it-works/drives", icon: HardDrive },
+      { title: "AI in your Workspace", href: "/docs/how-it-works/ai", icon: Sparkles },
+      { title: "Channels", href: "/docs/how-it-works/channels", icon: MessageSquare },
+      { title: "Task Lists", href: "/docs/how-it-works/task-lists", icon: ListChecks },
+      { title: "Files & Uploads", href: "/docs/how-it-works/files", icon: Upload },
+      { title: "Search", href: "/docs/how-it-works/search", icon: Search },
+      { title: "Sharing & Permissions", href: "/docs/how-it-works/sharing", icon: Users },
+      { title: "Accounts & Sign In", href: "/docs/how-it-works/accounts", icon: KeyRound },
     ],
   },
   {

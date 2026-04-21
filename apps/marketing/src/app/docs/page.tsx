@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Book, Sparkles, Server, Code2, Shield } from "lucide-react";
+import { ArrowRight, Book, Lightbulb, Sparkles, Server, Code2, Shield } from "lucide-react";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.docs;
@@ -14,6 +14,18 @@ const sections = [
       { title: "Quick Start", href: "/docs/getting-started" },
       { title: "Core Concepts", href: "/docs/core-concepts" },
       { title: "Page Types", href: "/docs/page-types" },
+    ],
+  },
+  {
+    title: "How it Works",
+    description: "Plain-language feature reference — what each feature does, how it works, and what it doesn't do.",
+    icon: Lightbulb,
+    href: "/docs/how-it-works",
+    links: [
+      { title: "Overview", href: "/docs/how-it-works" },
+      { title: "Pages", href: "/docs/how-it-works/pages" },
+      { title: "AI in your Workspace", href: "/docs/how-it-works/ai" },
+      { title: "Sharing & Permissions", href: "/docs/how-it-works/sharing" },
     ],
   },
   {
@@ -72,7 +84,7 @@ export default function DocsPage() {
         Documentation
       </h1>
       <p className="text-lg text-muted-foreground mb-10">
-        Technical documentation for PageSpace. Covers the REST API, AI system, security model, and MCP integration.
+        Documentation for PageSpace — a plain-language feature reference, the REST API, the AI system, the security model, and MCP integration.
       </p>
 
       <div className="grid gap-6 sm:grid-cols-2">
