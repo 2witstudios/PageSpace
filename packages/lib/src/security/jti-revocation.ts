@@ -123,8 +123,9 @@ export async function revokeJTI(jti: string, reason: string): Promise<boolean> {
  * Delete revoked-JTI rows whose `expires_at` is in the past.
  * Runs on the cron sweeper; returns the number of rows deleted.
  *
- * Not fail-closed: the sweeper is best-effort cleanup. In production we
- * still re-throw so the cron handler can surface a 500 and page ops.
+ * Best-effort cleanup: in production we re-throw so the cron handler can
+ * surface a 500 and page ops; in dev we swallow so local work continues
+ * when the DB is down.
  */
 export async function sweepExpiredRevokedJTIs(): Promise<number> {
   try {

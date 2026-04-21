@@ -794,7 +794,6 @@ package's `package.json` `license` field.
 | @ionic/utils-stream | 3.1.7 | MIT |
 | @ionic/utils-subprocess | 3.0.1 | MIT |
 | @ionic/utils-terminal | 2.3.5 | MIT |
-| @ioredis/commands | 1.4.0 | MIT |
 | @isaacs/balanced-match | 4.0.1 | MIT |
 | @isaacs/brace-expansion | 5.0.0 | MIT |
 | @isaacs/cliui | 8.0.2 | ISC |
@@ -1499,7 +1498,6 @@ package's `package.json` `license` field.
 | delaunator | 5.0.1 | ISC |
 | delayed-stream | 1.0.0 | MIT |
 | delegates | 1.0.0 | MIT |
-| denque | 2.1.0 | Apache-2.0 |
 | depd | 2.0.0 | MIT |
 | dequal | 2.0.3 | MIT |
 | detect-libc | 2.1.1 | Apache-2.0 |
@@ -1810,7 +1808,6 @@ package's `package.json` `license` field.
 | internal-slot | 1.1.0 | MIT |
 | internmap | 1.0.1 | ISC |
 | internmap | 2.0.3 | ISC |
-| ioredis | 5.8.0 | MIT |
 | ip-address | 10.0.1 | MIT |
 | ip-address | 10.1.0 | MIT |
 | ipaddr.js | 1.9.1 | MIT |
@@ -2335,8 +2332,6 @@ package's `package.json` `license` field.
 | recharts | 3.2.1 | MIT |
 | recharts-scale | 0.4.5 | MIT |
 | redent | 3.0.0 | MIT |
-| redis-errors | 1.2.0 | MIT |
-| redis-parser | 3.0.0 | MIT |
 | redux | 5.0.1 | MIT |
 | redux-thunk | 3.1.0 | MIT |
 | reflect-metadata | 0.2.2 | Apache-2.0 |
@@ -2466,7 +2461,6 @@ package's `package.json` `license` field.
 | stable-hash | 0.0.5 | MIT |
 | stack-utils | 2.0.6 | MIT |
 | stackback | 0.0.2 | MIT |
-| standard-as-callback | 2.1.0 | MIT |
 | stat-mode | 1.0.0 | MIT |
 | state-local | 1.0.7 | MIT |
 | statuses | 2.0.1 | MIT |
