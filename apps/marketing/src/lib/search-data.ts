@@ -54,7 +54,7 @@ const docsEntries: SearchEntry[] = [
     title: "MCP Integration",
     description:
       "Connect AI tools to your PageSpace workspace using Model Context Protocol, or add external MCP servers to PageSpace Desktop.",
-    href: "/docs/mcp",
+    href: "/docs/integrations/mcp",
     category: "Docs",
     keywords:
       "mcp model context protocol token claude cursor desktop npx pagespace-mcp server filesystem github postgresql tools",

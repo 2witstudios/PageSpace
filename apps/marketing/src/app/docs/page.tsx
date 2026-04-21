@@ -1,43 +1,47 @@
 import Link from "next/link";
-import { ArrowRight, Book, Lightbulb, LayoutGrid, Server, Shield } from "lucide-react";
+import { ArrowRight, Book, LayoutGrid, Lightbulb, Plug, Shield } from "lucide-react";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.docs;
 
 const referenceSections = [
   {
-    title: "How it Works",
-    description: "Plain-language reference for every feature — what each one does, how it works, and what it doesn't do.",
-    icon: Lightbulb,
-    href: "/docs/how-it-works",
-    links: [
-      { title: "Overview", href: "/docs/how-it-works" },
-      { title: "Pages", href: "/docs/how-it-works/pages" },
-      { title: "AI in your Workspace", href: "/docs/how-it-works/ai" },
-      { title: "Sharing & Permissions", href: "/docs/how-it-works/sharing" },
-    ],
-  },
-  {
     title: "Page Types",
-    description: "The 9 built-in page types at a glance — documents, folders, AI chats, channels, canvases, sheets, task lists, code, and files.",
+    description: "The 9 built-in page types at a glance — documents, folders, AI chats, channels, sheets, canvases, code, task lists, and files.",
     icon: LayoutGrid,
     href: "/docs/page-types",
     links: [
       { title: "Overview", href: "/docs/page-types" },
+      { title: "Document", href: "/docs/page-types/document" },
+      { title: "AI Chat", href: "/docs/page-types/ai-chat" },
+      { title: "Channel", href: "/docs/page-types/channel" },
     ],
   },
   {
-    title: "MCP Integration",
-    description: "Connect Claude Desktop, Cursor, or your own MCP client to your PageSpace workspace.",
-    icon: Server,
-    href: "/docs/mcp",
+    title: "Features",
+    description: "How the behaviours every page shares actually work — pages, drives, AI, sharing, search, and accounts.",
+    icon: Lightbulb,
+    href: "/docs/features",
     links: [
-      { title: "MCP Overview", href: "/docs/mcp" },
-      { title: "Desktop MCP", href: "/docs/mcp/desktop" },
+      { title: "Pages", href: "/docs/features/pages" },
+      { title: "AI in your Workspace", href: "/docs/features/ai" },
+      { title: "Sharing & Permissions", href: "/docs/features/sharing" },
+      { title: "Drives & Workspaces", href: "/docs/features/drives" },
     ],
   },
   {
-    title: "Security & Auth",
+    title: "Integrations",
+    description: "Connect Claude Desktop, Cursor, or your own MCP client to your PageSpace workspace.",
+    icon: Plug,
+    href: "/docs/integrations",
+    links: [
+      { title: "Overview", href: "/docs/integrations" },
+      { title: "MCP", href: "/docs/integrations/mcp" },
+      { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop" },
+    ],
+  },
+  {
+    title: "Security & Trust",
     description: "How authentication, permissions, and session handling work — for procurement and curious users.",
     icon: Shield,
     href: "/docs/security",
