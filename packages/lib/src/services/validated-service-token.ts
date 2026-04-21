@@ -149,7 +149,7 @@ export interface ValidatedTokenOptions {
  * Result of a validated token creation
  */
 export interface ValidatedTokenResult {
-  /** The signed JWT token */
+  /** The opaque session token */
   token: string;
   /** Scopes that were actually granted (may be subset of requested) */
   grantedScopes: ServiceScope[];

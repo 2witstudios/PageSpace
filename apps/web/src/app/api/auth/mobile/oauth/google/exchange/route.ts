@@ -2,7 +2,7 @@
  * Mobile Google OAuth Token Exchange Endpoint
  *
  * This endpoint accepts an ID token from the iOS Google Sign-In SDK,
- * verifies it server-side, and returns JWT tokens for authentication.
+ * verifies it server-side, and returns an opaque session token.
  *
  * Flow:
  * 1. iOS app uses GoogleSignIn SDK to authenticate user
@@ -10,7 +10,7 @@
  * 3. iOS app sends ID token to this endpoint
  * 4. Server verifies ID token with Google
  * 5. Server creates/links user account
- * 6. Server returns JWT access + refresh tokens
+ * 6. Server returns an opaque session token (device tokens handle refresh on mobile)
  *
  * Security Model:
  *

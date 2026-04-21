@@ -57,7 +57,7 @@ export async function POST(
       source: 'system',
     });
     
-    // Create service JWT token for processor authentication (validates page permissions)
+    // Create opaque service token for processor authentication (validates page permissions)
     const { token: serviceToken } = await createPageServiceToken(
       userId,
       pageId,

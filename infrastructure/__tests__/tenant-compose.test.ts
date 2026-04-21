@@ -44,7 +44,7 @@ describe('Tenant docker-compose configuration', () => {
 
   describe('services', () => {
     const requiredServices = [
-      'postgres', 'redis', 'redis-sessions', 'migrate',
+      'postgres', 'migrate',
       'web', 'processor', 'realtime', 'cron',
     ];
 
@@ -58,6 +58,14 @@ describe('Tenant docker-compose configuration', () => {
     it('given the tenant compose, should define the processor-permissions init container', () => {
       expect(compose.services['processor-permissions']).toBeDefined();
     });
+
+    const removedServices = ['redis', 'redis-sessions'];
+    it.each(removedServices)(
+      'given the tenant compose, should NOT define the %s service (Redis was deprecated)',
+      (svc) => {
+        expect(compose.services[svc]).toBeUndefined();
+      },
+    );
   });
 
   describe('image references', () => {
@@ -87,20 +95,14 @@ describe('Tenant docker-compose configuration', () => {
       expect(compose.services.postgres.image).toBe('postgres:17.5-alpine');
     });
 
-    it('given the redis service, should use redis:7.4-alpine', () => {
-      expect(compose.services.redis.image).toBe('redis:7.4-alpine');
-    });
-
-    it('given the redis-sessions service, should use redis:7.4-alpine', () => {
-      expect(compose.services['redis-sessions'].image).toBe('redis:7.4-alpine');
+    it('given the raw YAML, should not contain any redis image references', () => {
+      expect(getRawYaml()).not.toMatch(/redis:/i);
     });
   });
 
   describe('resource limits', () => {
     const limits: [string, string][] = [
       ['postgres', '200M'],
-      ['redis', '160M'],
-      ['redis-sessions', '96M'],
       ['web', '768M'],
       ['processor', '1280M'],
       ['realtime', '256M'],
@@ -122,28 +124,28 @@ describe('Tenant docker-compose configuration', () => {
       expect(deps?.postgres?.condition).toBe('service_healthy');
     });
 
-    it('given the web service, should depend on migrate completed, processor healthy, redis healthy, redis-sessions healthy', () => {
+    it('given the web service, should depend on migrate completed and processor healthy only', () => {
       const deps = compose.services.web.depends_on;
       expect(deps?.migrate?.condition).toBe('service_completed_successfully');
       expect(deps?.processor?.condition).toBe('service_healthy');
-      expect(deps?.redis?.condition).toBe('service_healthy');
-      expect(deps?.['redis-sessions']?.condition).toBe('service_healthy');
+      expect(deps?.redis).toBeUndefined();
+      expect(deps?.['redis-sessions']).toBeUndefined();
     });
 
-    it('given the processor service, should depend on migrate completed, postgres healthy, redis healthy, processor-permissions completed, redis-sessions healthy', () => {
+    it('given the processor service, should depend on migrate completed, postgres healthy, and processor-permissions completed (no redis deps)', () => {
       const deps = compose.services.processor.depends_on;
       expect(deps?.migrate?.condition).toBe('service_completed_successfully');
       expect(deps?.postgres?.condition).toBe('service_healthy');
-      expect(deps?.redis?.condition).toBe('service_healthy');
       expect(deps?.['processor-permissions']?.condition).toBe('service_completed_successfully');
-      expect(deps?.['redis-sessions']?.condition).toBe('service_healthy');
+      expect(deps?.redis).toBeUndefined();
+      expect(deps?.['redis-sessions']).toBeUndefined();
     });
 
-    it('given the realtime service, should depend on migrate completed, redis healthy, redis-sessions healthy', () => {
+    it('given the realtime service, should depend on migrate completed only (no redis deps)', () => {
       const deps = compose.services.realtime.depends_on;
       expect(deps?.migrate?.condition).toBe('service_completed_successfully');
-      expect(deps?.redis?.condition).toBe('service_healthy');
-      expect(deps?.['redis-sessions']?.condition).toBe('service_healthy');
+      expect(deps?.redis).toBeUndefined();
+      expect(deps?.['redis-sessions']).toBeUndefined();
     });
 
     it('given the cron service, should depend on web being started', () => {
@@ -229,7 +231,7 @@ describe('Tenant docker-compose configuration', () => {
       }
     });
 
-    const internalOnly = ['postgres', 'redis', 'redis-sessions', 'migrate', 'processor', 'cron'];
+    const internalOnly = ['postgres', 'migrate', 'processor', 'cron'];
 
     it.each(internalOnly)(
       'given the %s service, should only join the internal network',
@@ -283,11 +285,9 @@ describe('Tenant docker-compose configuration', () => {
   describe('no hardcoded secrets', () => {
     it('given the raw YAML, should not contain literal passwords or secrets', () => {
       const raw = getRawYaml();
-      // Should not have hardcoded password values (but ${VAR} references are fine)
       const lines = raw.split('\n');
       for (const line of lines) {
         if (line.trim().startsWith('#')) continue;
-        // Check for PASSWORD: or SECRET: with a literal value (not ${VAR})
         if (/(?:PASSWORD|SECRET):\s+[^$\s{]/.test(line)) {
           expect.fail(`Found hardcoded secret in line: ${line.trim()}`);
         }
@@ -301,16 +301,13 @@ describe('Tenant docker-compose configuration', () => {
 
     it('given the raw YAML, all secret references should use variable interpolation', () => {
       const raw = getRawYaml();
-      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'JWT_SECRET', 'REDIS_PASSWORD', 'POSTGRES_PASSWORD'];
+      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'POSTGRES_PASSWORD'];
       for (const v of secretVars) {
-        // Find lines containing this var name as a value (not as a key)
         const lines = raw.split('\n').filter(l => !l.trim().startsWith('#'));
         for (const line of lines) {
-          // Match lines where var appears as a value assignment
           const assignMatch = line.match(new RegExp(`${v}:\\s+(.+)`));
           if (assignMatch) {
             const value = assignMatch[1].trim();
-            // Value must contain ${...} interpolation, not a literal
             expect(value).toMatch(/\$\{/);
           }
         }
@@ -358,11 +355,25 @@ describe('Tenant docker-compose configuration', () => {
       expect(dbUrl).toContain('${POSTGRES_PASSWORD');
     });
 
-    it('given the web service, REDIS_URL should reference internal redis with password variable', () => {
-      const redisUrl = getEnv('web').REDIS_URL;
-      expect(redisUrl).toContain('@redis:');
-      expect(redisUrl).toContain('${REDIS_PASSWORD');
-    });
+    const redisEnvVars = ['REDIS_URL', 'REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'REDIS_PASSWORD'];
+    const jwtEnvVars = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
+    const servicesWithEnv = Object.keys(compose.services).filter(
+      (svc) => compose.services[svc].environment !== undefined,
+    );
+
+    it.each(servicesWithEnv.flatMap(svc => redisEnvVars.map(v => [svc, v] as const)))(
+      'given the %s service, should NOT set %s (Redis was deprecated)',
+      (svc, v) => {
+        expect(getEnv(svc)).not.toHaveProperty(v);
+      },
+    );
+
+    it.each(servicesWithEnv.flatMap(svc => jwtEnvVars.map(v => [svc, v] as const)))(
+      'given the %s service, should NOT set %s (JWT is vestigial; auth uses opaque session tokens)',
+      (svc, v) => {
+        expect(getEnv(svc)).not.toHaveProperty(v);
+      },
+    );
   });
 
   describe('healthchecks', () => {
@@ -370,20 +381,6 @@ describe('Tenant docker-compose configuration', () => {
       const test = compose.services.postgres.healthcheck?.test;
       const testStr = Array.isArray(test) ? test.join(' ') : test;
       expect(testStr).toContain('pg_isready');
-    });
-
-    it('given the redis service, should use redis-cli ping', () => {
-      const test = compose.services.redis.healthcheck?.test;
-      const testStr = Array.isArray(test) ? test.join(' ') : test;
-      expect(testStr).toContain('redis-cli');
-      expect(testStr).toContain('ping');
-    });
-
-    it('given the redis-sessions service, should use redis-cli ping', () => {
-      const test = compose.services['redis-sessions'].healthcheck?.test;
-      const testStr = Array.isArray(test) ? test.join(' ') : test;
-      expect(testStr).toContain('redis-cli');
-      expect(testStr).toContain('ping');
     });
 
     it('given the processor service, should check HTTP health on port 3003', () => {
@@ -396,8 +393,6 @@ describe('Tenant docker-compose configuration', () => {
   describe('volumes', () => {
     const requiredVolumes = [
       'postgres_data',
-      'redis_data',
-      'redis_sessions_data',
       'file_storage',
       'cache_storage',
     ];
@@ -406,6 +401,14 @@ describe('Tenant docker-compose configuration', () => {
       'given the compose file, should define the %s volume',
       (vol) => {
         expect(compose.volumes).toHaveProperty(vol);
+      },
+    );
+
+    const removedVolumes = ['redis_data', 'redis_sessions_data'];
+    it.each(removedVolumes)(
+      'given the compose file, should NOT define the %s volume (Redis was deprecated)',
+      (vol) => {
+        expect(compose.volumes ?? {}).not.toHaveProperty(vol);
       },
     );
   });

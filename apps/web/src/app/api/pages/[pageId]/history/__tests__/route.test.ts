@@ -121,7 +121,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       expect(getPageVersionHistory).not.toHaveBeenCalled();
     });
 
-    it('allows JWT and MCP auth', async () => {
+    it('allows session and MCP auth', async () => {
       const request = createRequest();
       await GET(request, { params: mockParams });
 

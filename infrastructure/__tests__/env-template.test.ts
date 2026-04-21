@@ -48,8 +48,6 @@ describe('Tenant env template', () => {
   const secretVars = [
     'ENCRYPTION_KEY',
     'CSRF_SECRET',
-    'JWT_SECRET',
-    'REDIS_PASSWORD',
     'POSTGRES_PASSWORD',
     'CRON_SECRET',
     'REALTIME_BROADCAST_SECRET',
@@ -59,6 +57,15 @@ describe('Tenant env template', () => {
     'given the %s secret, should be marked __GENERATE__',
     (v) => {
       expect(templateVars.get(v)).toBe('__GENERATE__');
+    },
+  );
+
+  const removedSecrets = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE', 'REDIS_PASSWORD'];
+
+  it.each(removedSecrets)(
+    'given the template, should NOT contain %s (vestigial after Redis + JWT deprecation)',
+    (v) => {
+      expect(templateVars.has(v)).toBe(false);
     },
   );
 

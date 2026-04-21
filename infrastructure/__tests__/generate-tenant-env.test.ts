@@ -101,16 +101,6 @@ describe('generate-tenant-env.sh', () => {
       expect(env.get('CSRF_SECRET')).toMatch(/^[0-9a-f]{64}$/);
     });
 
-    it('given JWT_SECRET, should be 128 hex characters', () => {
-      expect(env.get('JWT_SECRET')).toMatch(/^[0-9a-f]{128}$/);
-    });
-
-    it('given REDIS_PASSWORD, should be at least 24 alphanumeric characters', () => {
-      const val = env.get('REDIS_PASSWORD') ?? '';
-      expect(val.length).toBeGreaterThanOrEqual(24);
-      expect(val).toMatch(/^[a-zA-Z0-9]+$/);
-    });
-
     it('given POSTGRES_PASSWORD, should be at least 24 alphanumeric characters', () => {
       const val = env.get('POSTGRES_PASSWORD') ?? '';
       expect(val.length).toBeGreaterThanOrEqual(24);
@@ -121,8 +111,6 @@ describe('generate-tenant-env.sh', () => {
       const secrets = [
         env.get('ENCRYPTION_KEY'),
         env.get('CSRF_SECRET'),
-        env.get('JWT_SECRET'),
-        env.get('REDIS_PASSWORD'),
         env.get('POSTGRES_PASSWORD'),
         env.get('CRON_SECRET'),
         env.get('REALTIME_BROADCAST_SECRET'),
@@ -130,14 +118,21 @@ describe('generate-tenant-env.sh', () => {
       const unique = new Set(secrets);
       expect(unique.size).toBe(secrets.length);
     });
+
+    const removedSecrets = ['REDIS_PASSWORD', 'JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
+    it.each(removedSecrets)(
+      'given the output, should NOT emit %s (vestigial after Redis + JWT deprecation)',
+      (key) => {
+        expect(env.has(key)).toBe(false);
+      },
+    );
   });
 
   describe('uniqueness across runs', () => {
-    it('given two runs, should produce different secrets', () => {
+    it('given two runs, should produce different ENCRYPTION_KEY values', () => {
       const env1 = parseEnv(runScript('unique-test').stdout);
       const env2 = parseEnv(runScript('unique-test').stdout);
-      // At minimum JWT_SECRET (128 hex chars) should differ
-      expect(env1.get('JWT_SECRET')).not.toBe(env2.get('JWT_SECRET'));
+      expect(env1.get('ENCRYPTION_KEY')).not.toBe(env2.get('ENCRYPTION_KEY'));
     });
   });
 

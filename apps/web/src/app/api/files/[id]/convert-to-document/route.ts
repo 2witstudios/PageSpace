@@ -90,7 +90,7 @@ export async function POST(
       processorUrl: `${PROCESSOR_URL}/cache/${contentHash}/original`,
     });
 
-    // Create service JWT token for processor authentication (validates page permissions)
+    // Create opaque service token for processor authentication (validates page permissions)
     const { token: serviceToken } = await createPageServiceToken(
       userId,
       filePage.id,

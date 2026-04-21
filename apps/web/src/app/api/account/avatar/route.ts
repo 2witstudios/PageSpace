@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
     processorFormData.append('file', file);
     processorFormData.append('userId', userId);
 
-    // Create service JWT token for processor authentication
+    // Create opaque service token for processor authentication
     const { token: serviceToken } = await createAvatarServiceToken(userId, '5m');
 
     const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;

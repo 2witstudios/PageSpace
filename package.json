@@ -6,7 +6,7 @@
     "dev": "turbo dev --filter=!control-plane",
     "dev:atlas": "pnpm --filter atlas dev",
     "dev:db": "docker compose up postgres migrate seed -d",
-    "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres redis processor realtime -d",
+    "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres processor realtime -d",
     "build": "turbo build",
     "build:atlas": "pnpm --filter atlas build",
     "lint": "turbo lint",
