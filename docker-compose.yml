@@ -105,9 +105,15 @@ services:
       - internal
 
   processor:
+    # @tensorflow/tfjs-node has no Linux-arm64 prebuild. CI + prod build on
+    # ubuntu-latest (amd64); pin here so local builds on Apple Silicon
+    # produce an amd64 image (runs via Rosetta 2). No-op on amd64 hosts.
+    platform: linux/amd64
     build:
       context: .
       dockerfile: apps/processor/Dockerfile
+      platforms:
+        - linux/amd64
     ports:
       - "3003:3003"
     depends_on:

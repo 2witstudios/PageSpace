@@ -90,7 +90,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
-  const { hiddenCalendars, toggleCalendar, showAll, hideAll, isVisible } =
+  const { hiddenCalendars, toggleCalendar, showAll, hideAll } =
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -120,7 +120,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         key: 'personal',
         name: 'Personal',
         color: driveColorMap.get(null)!,
-        visible: isVisible('personal'),
+        visible: !hiddenCalendars.includes('personal'),
       },
     ];
     for (const drive of drives) {
@@ -128,22 +128,22 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         key: drive.id,
         name: drive.name,
         color: driveColorMap.get(drive.id)!,
-        visible: isVisible(drive.id),
+        visible: !hiddenCalendars.includes(drive.id),
       });
     }
     return entries;
-  }, [isUserContext, driveColorMap, drives, isVisible, hiddenCalendars]);
+  }, [isUserContext, driveColorMap, drives, hiddenCalendars]);
 
   // Filter events and tasks by visibility
   const filteredEvents = useMemo(() => {
     if (!isUserContext) return events;
-    return events.filter((e) => isVisible(e.driveId ?? 'personal'));
-  }, [isUserContext, events, isVisible, hiddenCalendars]);
+    return events.filter((e) => !hiddenCalendars.includes(e.driveId ?? 'personal'));
+  }, [isUserContext, events, hiddenCalendars]);
 
   const filteredTasks = useMemo(() => {
     if (!isUserContext) return tasks;
-    return tasks.filter((t) => isVisible(t.driveId));
-  }, [isUserContext, tasks, isVisible, hiddenCalendars]);
+    return tasks.filter((t) => !hiddenCalendars.includes(t.driveId));
+  }, [isUserContext, tasks, hiddenCalendars]);
 
   const allCalendarKeys = useMemo(
     () => calendarEntries.map((c) => c.key),
