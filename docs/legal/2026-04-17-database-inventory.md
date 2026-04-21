@@ -21,7 +21,7 @@ Fly Postgres, etc.) and no databases on any other cloud or physical host.
 ## Handover mechanism
 
 Handover at cutover is specified in the main IP/OSS disclosure
-(`docs/legal/2026-04-16-oss-compliance-report.md`):
+(`docs/legal/2026-04-17-oss-compliance-report.md`):
 
 - **Postgres**: §4.5 *User-data handover* — `pg_dump` from the Hetzner
   Postgres container to a buyer-provided Postgres instance over an
