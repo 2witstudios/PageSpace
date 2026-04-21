@@ -13,8 +13,8 @@ const productLinks = [
 const resourceLinks = [
   { label: "Documentation", href: "/docs" },
   { label: "Getting Started", href: "/docs/getting-started" },
-  { label: "API Reference", href: "/docs/api" },
-  { label: "MCP Integration", href: "/docs/integrations/mcp" },
+  { label: "Page Types", href: "/docs/page-types" },
+  { label: "Integrations", href: "/docs/integrations" },
 ];
 
 const companyLinks = [
