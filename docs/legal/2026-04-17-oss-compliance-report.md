@@ -393,7 +393,7 @@ and the seller rotates or retires keys.
 
 | Item | Reason |
 |---|---|
-| Production VPS (Postgres + Redis) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
+| Production VPS (Postgres) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
 | BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | Encrypted at rest in `user_ai_settings.encryptedApiKey` (`packages/db/src/schema/ai.ts`); handover handled as part of the database migration in §4.5. |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
 
@@ -431,9 +431,8 @@ table list: from `packages/db/src/schema/`.
 
 **Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
 buyer-provided Postgres over an encrypted transfer channel (SSH tunnel
-or signed S3-compatible upload with a short-lived credential). Redis is not
-migrated — it contains only ephemeral session / pub-sub state and is
-reconstituted empty on buyer infrastructure.
+or signed S3-compatible upload with a short-lived credential). The production
+stack runs on Postgres only — there is no secondary datastore to coordinate.
 
 **BYOK keys — encryption at rest and handover options.** The
 `user_ai_settings.encryptedApiKey` column is encrypted with a symmetric key

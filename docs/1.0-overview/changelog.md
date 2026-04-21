@@ -1,5 +1,49 @@
 ## 2026-04-20
 
+### Redis Infrastructure Deleted From Main Repo (Redis Deprecation PR 5)
+
+Completes the Redis deprecation in this repository. Every functional Redis
+consumer has already been migrated (PR 1 caches, PR 2 JTI revocation, PR 3
+distributed rate limits, PR 4 permission cache, PR 6 AI-usage rate limits,
+PR 7 auth handoff tokens). This PR deletes the now-orphaned Redis client
+plumbing, test files, env reads, and the `ioredis` dependency. After this
+lands, the main repo has zero `ioredis` imports, zero Redis singletons, and
+zero `REDIS_*` env reads in `packages/` and `apps/`.
+
+#### Removed
+
+- **Redis client plumbing**: `packages/lib/src/services/shared-redis.ts` and
+  `packages/lib/src/security/security-redis.ts` deleted, along with their
+  unit/integration test files. The JTI helpers that previously lived in
+  `security-redis.ts` (Postgres-backed since PR 2) moved to a canonical
+  `packages/lib/src/security/jti-revocation.ts` and the `@pagespace/lib/security`
+  barrel re-exports them unchanged — existing callers still import from the
+  barrel and keep compiling.
+- **Anomaly-detection module**: `packages/lib/src/security/anomaly-detection.ts`
+  and its test deleted. Audit confirmed zero production callers — the module
+  was orphaned code whose only link to the rest of the system was its Redis
+  client. Kept-in-the-repo for no reason after PR 3.
+- **`ioredis` dependency**: removed from `@pagespace/lib`. `pnpm-lock.yaml`
+  no longer lists `ioredis` or `@ioredis/commands`.
+- **`REDIS_URL` / `REDIS_SESSION_URL` / `REDIS_RATE_LIMIT_URL` env reads**:
+  stripped from `packages/lib/src/test/setup.ts`, `packages/lib/.env.test*`,
+  `apps/atlas/src/architecture-data.ts` (diagram nodes + edges dropped),
+  and the self-hosting marketing docs (`environment/page.tsx`,
+  `docker/page.tsx`).
+
+#### Changed
+
+- **Legal docs**: `docs/legal/2026-04-17-oss-compliance-report.md` §4.3 and
+  §4.5 updated to describe a Postgres-only production stack with no secondary
+  datastore to migrate. `docs/legal/2026-04-17-database-inventory.md` drops
+  the `redis` and `redis-sessions` rows — there is now a single Postgres
+  instance on the VPS.
+- **PageSpace-Deploy companion PR** (separate repo, user-managed): drops the
+  `redis` and `redis-sessions` services from `docker-compose.prod.yml` and
+  removes the matching env passthroughs from `web` / `realtime` / `processor`.
+  Merges strictly AFTER this PR is in production — running services must stop
+  referencing Redis before the compose file drops the services.
+
 ### Auth Handoffs: Migrated From Redis to Postgres (Redis Deprecation PR 7)
 
 Three short-lived auth-handoff stores — PKCE verifier, OAuth exchange code, and desktop passkey register handoff (incl. the one-options-per-mint replay marker) — now live in the new `auth_handoff_tokens` Postgres table instead of Redis. Continues the Redis-deprecation series (PR 1 caches, PR 2 JTI revocation, PR 3 rate limits).
