@@ -3,21 +3,21 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Users API",
-  description: "PageSpace users API: account management, user search, connections, and profile updates.",
+  description: "PageSpace users API: account, avatars, devices, data export, user search, and connections.",
   path: "/docs/api/users",
-  keywords: ["API", "users", "account", "profile", "connections"],
+  keywords: ["API", "users", "account", "profile", "devices", "connections"],
 });
 
 const content = `
 # Users API
 
-Account management, user search, and connections.
+Account management, user search, and connections between users.
 
 ## Account
 
 ### GET /api/account
 
-Get the current user's profile.
+Return the current user's core profile.
 
 **Response:**
 \`\`\`json
@@ -25,51 +25,98 @@ Get the current user's profile.
   "id": "string",
   "name": "string",
   "email": "string",
-  "image": "string | null",
-  "provider": "email | google | both",
-  "role": "user | admin"
+  "image": "string | null"
 }
 \`\`\`
+
+Role and verification state live on \`/api/auth/me\`. Avatars served through external HTTP URLs (e.g. Google) are normalized to \`null\` here — use \`/api/avatar/[userId]/[filename]\` for the canonical image path.
 
 ---
 
 ### PATCH /api/account
 
-Update name and email with validation.
+Update the current user's name and email.
 
 **Body:**
 \`\`\`json
-{
-  "name": "string (optional)",
-  "email": "string (optional)"
-}
+{ "name": "string", "email": "string" }
 \`\`\`
+
+Both fields are required. Email must be unique and is lowercased on save.
 
 ---
 
-### POST /api/account/avatar
+### DELETE /api/account
 
-Upload a new avatar image.
+Permanently delete the account and anonymize the actor record.
 
-**Content-Type:** \`multipart/form-data\`
+### Avatars
 
-## User Search
+| Route | Method | Purpose |
+|---|---|---|
+| \`/api/account/avatar\` | POST | Upload avatar (\`multipart/form-data\`) |
+| \`/api/account/avatar\` | DELETE | Remove avatar |
+| \`/api/avatar/[userId]/[filename]\` | GET | Serve an avatar image |
+
+### Devices
+
+### GET /api/account/devices
+
+List the caller's registered devices (desktop + mobile sessions).
+
+---
+
+### DELETE /api/account/devices
+
+Revoke one or more devices. Body:
+
+\`\`\`json
+{ "deviceIds": ["string"] }
+\`\`\`
+
+### Data export
+
+### GET /api/account/export
+
+Return a signed download URL for a personal data export (async job).
+
+### Verification status
+
+### GET /api/account/verification-status
+
+Return whether the caller's email is verified and any pending state.
+
+### Drives status
+
+### GET /api/account/drives-status
+
+Return a lightweight rollup of the caller's drives (names, roles, last-accessed) for post-login routing.
+
+### Claim drive
+
+### POST /api/account/handle-drive
+
+Claim or link an email-invited drive after sign-in.
+
+## User search
 
 ### GET /api/users/search
 
 Search users for mentions and collaboration.
 
-**Query params:** \`q\` (searches username, display name, email)
+**Query params:** \`q\` — matched against username, display name, and email.
 
-Results respect privacy controls — only users who have opted into discovery are returned.
+Results respect privacy settings — only users who opted into discovery are returned.
 
 ---
 
 ### GET /api/users/find
 
-Find users by specific criteria. Used for administrative functions.
+Look up users by exact criteria. Used by admin and internal flows.
 
 ## Connections
+
+A "connection" is a two-sided link between user accounts used for collaboration and suggestions.
 
 ### GET /api/connections
 
@@ -79,13 +126,19 @@ List the current user's connections.
 
 ### POST /api/connections
 
-Create a new connection with another user.
+Create a connection with another user.
 
 ---
 
 ### GET /api/connections/search
 
-Search for users to connect with.
+Search for users you can connect with.
+
+---
+
+### PATCH /api/connections/[connectionId]
+
+Update a connection's state (for example, accept a pending request).
 
 ---
 
