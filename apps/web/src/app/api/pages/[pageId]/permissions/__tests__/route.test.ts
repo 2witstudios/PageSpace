@@ -69,6 +69,7 @@ vi.mock('@pagespace/db', () => ({
 vi.mock('@/lib/websocket', () => ({
   kickUserFromPage: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
   kickUserFromPageActivity: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+  kickUserFromAgentRunsForPage: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { permissionManagementService } from '@/services/api';

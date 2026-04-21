@@ -736,6 +736,13 @@
       "when": 1776725637300,
       "tag": "0104_futuristic_dragon_lord",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1776738769114,
+      "tag": "0105_sticky_genesis",
+      "breakpoints": true
     }
   ]
 }

@@ -17,6 +17,7 @@ import {
   kickUserFromDriveActivity,
   kickUserFromPage,
   kickUserFromPageActivity,
+  kickUserFromAgentRunsForDrive,
 } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
@@ -340,6 +341,11 @@ export async function DELETE(
       ]);
       await Promise.all(pageKickPromises);
     }
+
+    // And kick from any agent-run rooms tied to drive/page conversations
+    // in this drive — long-lived sockets must stop receiving run events
+    // the moment the authorization gate closes.
+    await kickUserFromAgentRunsForDrive(driveId, targetUserId, 'member_removed');
 
     // Note: No in-app notification sent for removal - the broadcast event
     // will trigger a page refresh/redirect for the removed user, and the

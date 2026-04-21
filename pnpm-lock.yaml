@@ -518,16 +518,25 @@ importers:
       '@pagespace/lib':
         specifier: workspace:*
         version: link:../../packages/lib
+      '@socket.io/postgres-adapter':
+        specifier: ^0.5.0
+        version: 0.5.0(socket.io-adapter@2.5.5)
       cookie:
         specifier: 1.0.2
         version: 1.0.2
       dotenv:
         specifier: ^17.2.0
         version: 17.2.2
+      pg:
+        specifier: ^8.16.3
+        version: 8.16.3
       socket.io:
         specifier: ^4.7.5
         version: 4.8.1
     devDependencies:
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.15.5
       tsx:
         specifier: ^4.16.2
         version: 4.20.6
@@ -2847,6 +2856,10 @@ packages:
       react: ^19.1.2
       react-dom: ^19.1.2
 
+  '@msgpack/msgpack@2.8.0':
+    resolution: {integrity: sha512-h9u4u/jiIRKbq25PM+zymTyW6bhTzELvOoUd+AvYriWOAKpLGnIamaET3pnHYoI5iYphAHBI4ayx0MehR+VVPQ==}
+    engines: {node: '>= 10'}
+
   '@mswjs/interceptors@0.39.7':
     resolution: {integrity: sha512-sURvQbbKsq5f8INV54YJgJEdk8oxBanqkTiXXd33rKmofFCwZLhLRszPduMZ9TA9b8/1CHc/IJmOlBHJk2Q5AQ==}
     engines: {node: '>=18'}
@@ -4299,6 +4312,12 @@ packages:
 
   '@socket.io/component-emitter@3.1.2':
     resolution: {integrity: sha512-9BCxFwvbGg/RsZK9tjXd8s4UcwR0MWeFQ1XEKIQVVvAGJyINdrqKMcTRyLoK8Rse1GjzLV9cwjWV1olXRWEXVA==}
+
+  '@socket.io/postgres-adapter@0.5.0':
+    resolution: {integrity: sha512-s1vFsatB4lS429ZbeAi8ju+mZMgtgdSmi9UsZsdcEG++vVtX5z10yDEt4TV8saePscvvGjs6uXvJfMCxz8+M2Q==}
+    engines: {node: '>=12.0.0'}
+    peerDependencies:
+      socket.io-adapter: ^2.5.4
 
   '@standard-schema/spec@1.0.0':
     resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
@@ -13285,6 +13304,8 @@ snapshots:
       react: 19.2.1
       react-dom: 19.2.1(react@19.2.1)
 
+  '@msgpack/msgpack@2.8.0': {}
+
   '@mswjs/interceptors@0.39.7':
     dependencies:
       '@open-draft/deferred-promise': 2.2.0
@@ -14683,6 +14704,17 @@ snapshots:
   '@sindresorhus/merge-streams@4.0.0': {}
 
   '@socket.io/component-emitter@3.1.2': {}
+
+  '@socket.io/postgres-adapter@0.5.0(socket.io-adapter@2.5.5)':
+    dependencies:
+      '@msgpack/msgpack': 2.8.0
+      '@types/pg': 8.15.5
+      debug: 4.3.7
+      pg: 8.16.3
+      socket.io-adapter: 2.5.5
+    transitivePeerDependencies:
+      - pg-native
+      - supports-color
 
   '@standard-schema/spec@1.0.0': {}
 

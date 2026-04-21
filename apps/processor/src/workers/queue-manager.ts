@@ -80,6 +80,7 @@ export class QueueManager {
       await this.boss.createQueue('text-extract');
       await this.boss.createQueue('ocr-process');
       await this.boss.createQueue('siem-delivery');
+      await this.boss.createQueue('agent-run.reap');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -199,6 +200,19 @@ export class QueueManager {
 
     // Schedule SIEM delivery every 30 seconds
     await this.boss.schedule('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
+
+    // Agent run reaper — flips runs with stale heartbeats to failed
+    const { reapStaleRuns } = await import('@pagespace/lib/ai/runs');
+    await this.boss.work('agent-run.reap',
+      async () => {
+        const result = await reapStaleRuns();
+        if (result.reapedRunIds.length > 0) {
+          console.log(`agent-run.reap: reaped ${result.reapedRunIds.length} stale run(s)`);
+        }
+      }
+    );
+    // Every minute at second 0
+    await this.boss.schedule('agent-run.reap', '* * * * *', {}, { retryLimit: 0 });
   }
 
   async addJob<Q extends QueueName>(

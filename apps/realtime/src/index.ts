@@ -18,6 +18,13 @@ import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
+import { createAdapter as createPostgresAdapter } from '@socket.io/postgres-adapter';
+import { Pool } from 'pg';
+import {
+  startAgentRunBridge,
+  validateRunId,
+  isAgentRunAccessibleDefault,
+} from './agent-run-bridge';
 
 dotenv.config({ path: '../../.env' });
 
@@ -371,6 +378,31 @@ const io = new Server(httpServer, {
   },
 });
 
+// Postgres-backed Socket.IO adapter so emissions to a room reach subscribers
+// on every realtime instance, not just the one that received the broadcast.
+// Runs over pg_notify; adds no infrastructure beyond the existing database.
+const adapterPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: false,
+  max: 5,
+});
+io.adapter(createPostgresAdapter(adapterPool));
+
+// Dedicated pool for the LISTEN client. A single connection holds the LISTEN
+// for the lifetime of the process; sharing the adapter pool would risk a
+// checkout swap losing the LISTEN.
+const bridgePool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: false,
+  max: 1,
+});
+
+// Startup is fire-and-forget — bridge errors log via loggers.realtime.error.
+// The room emissions are a no-op if no client is subscribed.
+void startAgentRunBridge({ pool: bridgePool, io }).catch((err) => {
+  loggers.realtime.error('Failed to start agent-run bridge', err as Error);
+});
+
 // AuthSocket is imported from per-event-auth.ts
 
 /**
@@ -624,6 +656,51 @@ io.on('connection', (socket: AuthSocket) => {
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
     loggers.realtime.debug('User left DM room', { userId, room });
+  });
+
+  socket.on('join_agent_run', async (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateRunId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_agent_run payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_agent_run', validation.error);
+      return;
+    }
+    const runId = validation.value;
+
+    try {
+      const allowed = await isAgentRunAccessibleDefault(userId, runId);
+      if (!allowed) {
+        loggers.realtime.warn('User denied access to agent run', { userId, runId });
+        return;
+      }
+      const room = `agent-run:${runId}`;
+      socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
+      loggers.realtime.debug('User joined agent run room', { userId, runId });
+    } catch (error) {
+      loggers.realtime.error('Error joining agent run', error as Error, { runId });
+    }
+  });
+
+  socket.on('leave_agent_run', (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateRunId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_agent_run payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_agent_run', validation.error);
+      return;
+    }
+    const runId = validation.value;
+
+    const room = `agent-run:${runId}`;
+    socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
+    loggers.realtime.debug('User left agent run room', { userId, runId });
   });
 
   socket.on('leave_drive', (payload: unknown) => {

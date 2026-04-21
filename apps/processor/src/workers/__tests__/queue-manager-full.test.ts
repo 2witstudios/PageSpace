@@ -50,6 +50,10 @@ vi.mock('../image-processor', () => ({
   processImage: vi.fn().mockResolvedValue({ success: true, cached: false, url: '/cache/hash/preset' }),
 }));
 
+vi.mock('@pagespace/lib/ai/runs', () => ({
+  reapStaleRuns: vi.fn().mockResolvedValue({ reapedRunIds: [] }),
+}));
+
 vi.mock('../ocr-processor', () => ({
   processOCR: vi.fn().mockResolvedValue({ success: true, cached: false, text: 'ocr text', provider: 'tesseract' }),
 }));
@@ -98,19 +102,22 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(5);
+      expect(mockBossWork).toHaveBeenCalledTimes(6);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
       expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
       expect(mockBossWork.mock.calls[4][0]).toBe('siem-delivery');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(5);
+      expect(mockBossWork.mock.calls[5][0]).toBe('agent-run.reap');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(6);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('agent-run.reap');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
+      expect(mockBossSchedule).toHaveBeenCalledWith('agent-run.reap', '* * * * *', {}, { retryLimit: 0 });
     });
 
     it('handles queue creation errors gracefully', async () => {
@@ -127,6 +134,21 @@ describe('QueueManager', () => {
       expect(mockBossOn).toHaveBeenCalledTimes(1);
       expect(mockBossOn.mock.calls[0][0]).toBe('monitor-states');
       expect(typeof mockBossOn.mock.calls[0][1]).toBe('function');
+    });
+
+    it('given the agent-run.reap worker runs, should invoke reapStaleRuns', async () => {
+      const { reapStaleRuns } = await import('@pagespace/lib/ai/runs');
+      let reapHandler: (() => Promise<unknown>) | null = null;
+      mockBossWork.mockImplementation(async (queue: string, handler: () => Promise<unknown>) => {
+        if (queue === 'agent-run.reap') reapHandler = handler;
+      });
+
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      expect(reapHandler).not.toBeNull();
+      await reapHandler!();
+      expect(reapStaleRuns).toHaveBeenCalled();
     });
 
     it('updates cachedStates when monitor-states fires', async () => {
