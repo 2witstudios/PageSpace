@@ -36,9 +36,10 @@ export async function reapStaleRuns(
       });
       reapedRunIds.push(runId);
     } catch {
-      // Skip: a concurrent transition (e.g. finish arriving at the same time)
-      // made the run non-terminal before we could reap it. Leaving it for the
-      // next tick is safer than crashing the reaper and blocking other runs.
+      // Skip: the run may have reached a terminal status between our SELECT
+      // and the appendEvent (the worker's finish/error/aborted won the race),
+      // in which case appendEvent throws TerminalRunError. Other transient
+      // errors are also skipped so one bad run can't stall the reaper.
     }
   }
 
