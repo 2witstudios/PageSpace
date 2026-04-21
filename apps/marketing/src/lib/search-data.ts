@@ -129,17 +129,17 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "What plans are available?",
-    description: "Free, Pro, and Team plans available.",
+    description: "Free, Pro, Founder, and Business plans available.",
     href: "/faq",
     category: "FAQ",
-    keywords: "pricing plans free pro team",
+    keywords: "pricing plans free pro founder business",
   },
 ];
 
 const pageEntries: SearchEntry[] = [
   {
     title: "Pricing",
-    description: "Compare Free, Pro, and Team plans.",
+    description: "Compare Free, Pro, Founder, and Business plans.",
     href: "/pricing",
     category: "Pages",
     keywords: "plans cost billing subscription",

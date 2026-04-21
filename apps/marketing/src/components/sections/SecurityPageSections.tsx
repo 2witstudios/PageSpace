@@ -40,7 +40,7 @@ export function SecurityHero() {
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild>
-              <Link href="/blog/security-architecture-deep-dive">Read the Deep Dive</Link>
+              <Link href="/docs/security/zero-trust">Zero-Trust Architecture</Link>
             </Button>
           </div>
         </div>
@@ -81,8 +81,8 @@ export function SessionSecuritySection() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold mb-4">Opaque Session Tokens</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Unlike JWTs that can be decoded by anyone, PageSpace uses opaque tokens with
-              hash-only storage for maximum security.
+              PageSpace uses opaque session tokens with hash-only storage. Tokens carry no
+              embedded claims — everything is validated server-side on every request.
             </p>
           </div>
 
@@ -90,14 +90,14 @@ export function SessionSecuritySection() {
             <FeatureCard
               icon={Key}
               title="Hash-Only Storage"
-              description="We never store your actual session token—only a SHA-256 hash. Even if our database were compromised, attackers couldn't use the hashes."
-              items={["256 bits of entropy per token", "SHA-256 one-way hashing", "Stateful validation on every request"]}
+              description="We never store the session token itself — only its SHA-256 hash. A compromised database snapshot does not yield usable tokens."
+              items={["High-entropy random tokens", "SHA-256 one-way hashing", "Server-side validation on every request"]}
             />
             <FeatureCard
               icon={Timer}
               title="Instant Revocation"
-              description="Sessions can be revoked immediately—no waiting for token expiration. Security actions invalidate all existing sessions."
-              items={["Revoke individual sessions or all sessions", "Token versioning for global session invalidation", "Admin role versioning prevents privilege escalation"]}
+              description="Sessions can be revoked immediately — no waiting for expiry. Administrative actions invalidate every outstanding session for a user atomically."
+              items={["Revoke individual sessions or all sessions", "Atomic log-out-everywhere for credential reset and suspension", "Timing-safe comparisons prevent leaking info via response time"]}
             />
           </div>
         </div>
@@ -108,9 +108,9 @@ export function SessionSecuritySection() {
 
 export function WebSocketSecuritySection() {
   const features = [
-    { icon: Server, title: "Write Authorization", desc: "Document updates, file uploads, and task changes are re-authorized on every event—not just at connection time." },
-    { icon: Shield, title: "Short-Lived Tokens", desc: "Socket tokens expire in 5 minutes, limiting exposure if intercepted. Connection requires fresh authentication." },
-    { icon: Globe, title: "Signed Broadcasts", desc: "Inter-service communication uses HMAC-SHA256 signatures with timestamp validation to prevent replay attacks." },
+    { icon: Server, title: "Write Authorization", desc: "Document updates, file uploads, and task changes are re-authorized on every event — not just at connection time." },
+    { icon: Shield, title: "Short-Lived Tokens", desc: "Socket tokens are short-lived and single-purpose, limiting exposure if intercepted. Connection requires fresh authentication." },
+    { icon: Globe, title: "Signed Broadcasts", desc: "Inter-service communication is signed and replay-protected so messages cannot be forged or re-sent by an intermediary." },
   ];
 
   return (
@@ -142,15 +142,15 @@ export function WebSocketSecuritySection() {
 
 export function RateLimitingSection() {
   const protections = [
-    { title: "Login protection", desc: "5 attempts per 15 minutes, per IP and per email" },
-    { title: "Account lockout", desc: "15-minute lockout after 10 failed attempts (database-backed)" },
-    { title: "Signup throttling", desc: "3 signups per hour to prevent abuse" },
+    { title: "Login protection", desc: "Per-IP and per-email sliding-window limits throttle credential stuffing" },
+    { title: "Account lockout", desc: "Accounts facing repeated failed authentication are temporarily locked, regardless of source IP" },
+    { title: "Signup throttling", desc: "Per-IP limits on signup prevent automated account creation" },
   ];
 
   const whyDbBacked = [
     { icon: Activity, title: "Persists across restarts", desc: "Lockout state isn't lost when servers restart" },
     { icon: ShieldCheck, title: "Works across IPs", desc: "Attackers can't bypass by changing IP addresses" },
-    { icon: Timer, title: "Automatic unlock", desc: "Lockout expires automatically after 15 minutes" },
+    { icon: Timer, title: "Automatic unlock", desc: "Lockout expires on its own — no manual intervention needed" },
   ];
 
   return (
@@ -207,8 +207,8 @@ export function AuthenticationSection() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold mb-4">Authentication</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Multiple secure passwordless authentication methods with
-              OAuth integration.
+              Passwordless by design: passkeys and magic links, with Google and Apple OAuth.
+              There's no password to phish, guess, or leak.
             </p>
           </div>
 
@@ -216,15 +216,15 @@ export function AuthenticationSection() {
             <FeatureCard
               icon={Lock}
               title="Passwordless Email"
-              description="Secure magic link authentication with rate limiting and one-time-use tokens."
-              items={["One-time-use tokens", "Configurable expiry", "Rate-limited delivery"]}
+              description="Secure magic link authentication with single-use tokens and rate-limited delivery."
+              items={["Single-use tokens — consumed on open", "Short-lived, timing-safe verification", "Per-email and per-IP rate limiting"]}
               small
             />
             <FeatureCard
               icon={Globe}
               title="OAuth (Google & Apple)"
-              description="Secure OAuth flows with signed state parameters and strict redirect validation."
-              items={["HMAC-signed state parameters", "Strict redirect URL validation", "Authorization code flow only (no implicit)"]}
+              description="Industry-standard OAuth 2.1 flows with signed state, PKCE, and strict redirect validation."
+              items={["Signed state parameters", "RFC 7636 PKCE — intercepted codes alone are useless", "Authorization code flow only — no implicit grant"]}
               small
             />
           </div>

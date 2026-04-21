@@ -70,7 +70,7 @@ const faqs: FAQItem[] = [
   {
     question: "What plans are available?",
     answer:
-      "PageSpace offers Free, Pro, and Team plans. Free is great for getting started, Pro unlocks more AI power and storage for individuals, and Team adds collaboration features for groups. Visit the Pricing page for full details.",
+      "PageSpace offers Free, Pro, Founder, and Business plans. Free is great for getting started, Pro unlocks more AI calls and storage for individuals, Founder is sized for power users and small teams, and Business is for organizations that need maximum capacity and priority support. Visit the Pricing page for full details.",
     category: "Pricing and Plans",
   },
   {
