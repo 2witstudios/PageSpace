@@ -19,6 +19,7 @@ import { createHash } from 'crypto';
 import { db, securityAuditLog, desc, sql } from '@pagespace/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
 import { queryAuditEvents } from './audit-query';
+import { stableStringify } from '../utils/stable-stringify';
 
 /**
  * Audit event input structure
@@ -61,17 +62,6 @@ export interface QueryEventsOptions {
  * Included: eventType, serviceId, resourceType, resourceId, details,
  *           riskScore, anomalyFlags, timestamp, previousHash
  */
-
-// Serialize to canonical JSON: every plain object's keys are sorted at every
-// depth so the output is identical regardless of insertion order (e.g. after a
-// Postgres JSONB round-trip re-orders keys in `details`).
-function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_, v) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
-      : v
-  );
-}
 
 /**
  * Compute SHA-256 hash for a security event.

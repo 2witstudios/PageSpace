@@ -1,15 +1,5 @@
 import { createHash } from 'crypto';
-
-// Mirrors the stableStringify helper in packages/lib — sorts object keys at
-// every depth so key insertion order (e.g. Postgres JSONB round-trip) never
-// changes the serialized output.
-function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_, v) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
-      : v
-  );
-}
+import { stableStringify } from '@pagespace/lib/utils/stable-stringify';
 
 /**
  * Per-source hash recomputation strategies for the SIEM delivery preflight.

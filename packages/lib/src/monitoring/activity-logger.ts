@@ -10,6 +10,7 @@ import { db, activityLogs, users, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
+import { stableStringify } from '../utils/stable-stringify';
 
 /**
  * Advisory lock key for serializing activity log hash chain writes.
@@ -113,17 +114,6 @@ export function computeHash(data: string, previousHash: string): string {
   return createHash('sha256')
     .update(previousHash + data)
     .digest('hex');
-}
-
-// Serialize to canonical JSON: every plain object's keys are sorted at every
-// depth so the output is identical regardless of insertion order (e.g. after a
-// Postgres JSONB round-trip re-orders keys in `previousValues` or `metadata`).
-function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_, v) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
-      : v
-  );
 }
 
 /**
