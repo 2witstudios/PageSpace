@@ -76,6 +76,10 @@ Native desktop apps that connect to your PageSpace cloud workspace.
 - [Download DEB](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.deb) — Debian/Ubuntu
 - [Download RPM](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.rpm) — Fedora/RHEL
 
+**Mobile**
+- **iOS** — Available via [TestFlight](https://www.pagespace.ai/downloads)
+- **Android** — In progress
+
 **Features:**
 - Native desktop integration with system tray
 - Minimize to tray, deep linking support
@@ -125,7 +129,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 ## Core Features
 
 ### AI Agent Infrastructure
-- **33 workspace tools** for AI to manipulate content directly
+- **37 workspace tools** for AI to manipulate content directly
 - **Tool permissions**: Control what each AI can do in your workspace
 - **MCP protocol support**: Connect external AI tools like Claude Desktop and Cursor
 
