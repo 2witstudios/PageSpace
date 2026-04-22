@@ -17,7 +17,7 @@ A Channel is a page you can chat in. It sits in your drive's page tree alongside
 
 - Create a channel anywhere in a drive — at the root, inside a folder, or as a child of another page.
 - Post messages with markdown formatting, emoji, and line breaks.
-- Drag a file straight into the message box to attach it. Images preview inline, other files show as a download card.
+- Attach a file to a message from the attach icon in the input. Images preview inline, other files show as a download card.
 - React to any message with an emoji. Click a reaction again to take yours back.
 - Type @ to mention a person or an AI agent in your message — mentioning an agent pulls it into the conversation to reply.
 - See who else is reading the channel right now.
@@ -26,7 +26,7 @@ A Channel is a page you can chat in. It sits in your drive's page tree alongside
 
 ## How it works
 
-A channel is just a page with the type "Channel." That means the people who can see the channel are exactly the people who can see the page — drive members inherit access, and you can grant or revoke it per-page the same way you do for documents. View access lets someone read messages; edit access lets them post.
+A channel is just a page with the type "Channel." That means the people who can see the channel are exactly the people who can see the page — drive owners and admins automatically, plus anyone you grant per-page access to. View access lets someone read messages; edit access lets them post.
 
 When you send a message, it's saved to the channel and broadcast over a live connection to everyone currently looking at it. The same connection carries new reactions and the list of viewers at the top of the page. If the connection drops, messages still arrive the next time you open the channel — the saved record is the source of truth, the live stream is just the fast path.
 

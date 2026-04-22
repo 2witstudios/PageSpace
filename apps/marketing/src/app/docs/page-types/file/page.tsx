@@ -45,7 +45,7 @@ Size and concurrency are bounded by your tier. Free gives you 500 MB of storage 
 - **Not every file type is accepted.** Executables (Windows, macOS, Linux, Android), raw HTML, SVG, and scripts are rejected for security. If the content classifier can't identify a file confidently, the upload is refused rather than stored as an unknown blob.
 - **Not every document format is text-extracted.** Text extraction covers PDF, Word, plain text, Markdown, CSV, and JSON. Rich Text Format, Apple Pages, PowerPoint, Excel, EPUB, and legacy binary formats are stored and downloadable but not indexed for AI.
 - **OCR runs locally with Tesseract.** The extracted text is good enough to make scanned pages searchable; handwriting, unusual scripts, and low-contrast scans will miss words. Don't treat OCR output as a transcript.
-- **Deduplication is account-wide.** Two users uploading the same bytes share one stored blob. Permissions still apply — you can't see each other's files — but storage is shared.
+- **Deduplication is platform-wide and permission-isolated.** Two users uploading the same bytes share one stored blob. Permissions still apply — you can't see each other's files — but storage is shared.
 
 ## Related
 
