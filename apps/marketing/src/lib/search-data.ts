@@ -101,74 +101,120 @@ const faqEntries: SearchEntry[] = [
   {
     title: "What is PageSpace?",
     description:
-      "AI-powered workspace where you, your team, and AI work together.",
-    href: "/faq",
+      "AI-native workspace where pages and AI agents share the same tree.",
+    href: "/faq#what-is-pagespace",
     category: "FAQ",
   },
   {
-    title: "Can I try PageSpace for free?",
+    title: "What makes PageSpace different?",
     description:
-      "Free plan includes 500 MB storage, 50 AI interactions per day, and all core features.",
-    href: "/faq",
+      "Pages and AI share one tree, permissions don't cascade, and security primitives are inspectable.",
+    href: "/faq#what-makes-pagespace-different",
     category: "FAQ",
+    keywords: "difference compare notion docs obsidian alternative",
   },
   {
-    title: "What are Page Agents?",
+    title: "Is PageSpace open source?",
     description:
-      "Specialized AI helpers that live in your workspace with custom system prompts and workspace context.",
-    href: "/faq",
+      "PageSpace is proprietary. Self-hosting is available as a deployment option.",
+    href: "/faq#is-pagespace-open-source",
     category: "FAQ",
-    keywords: "agent ai custom prompt role marketing expert project manager",
+    keywords: "open source license proprietary oss",
+  },
+  {
+    title: "Do permissions cascade down the tree?",
+    description:
+      "No. Every page has its own access list — sharing a folder doesn't share its children.",
+    href: "/faq#no-permission-inheritance",
+    category: "FAQ",
+    keywords: "permissions inheritance folder sharing tree cascade",
+  },
+  {
+    title: "What are AI agents?",
+    description:
+      "AI Chat pages placed in your tree with a role, model, and tool allow-list — context from their position.",
+    href: "/faq#what-are-ai-agents",
+    category: "FAQ",
+    keywords: "agent ai chat role system prompt tools model",
   },
   {
     title: "What is the Global Assistant?",
     description:
-      "Personal AI that follows you across all workspaces and remembers preferences.",
-    href: "/faq",
+      "Personal AI that follows you across every drive you're a member of.",
+    href: "/faq#what-is-global-assistant",
     category: "FAQ",
   },
   {
-    title: "Is my data safe?",
-    description: "Data encrypted in transit and at rest with industry-standard security.",
-    href: "/faq",
-    category: "FAQ",
-    keywords: "security encryption privacy",
-  },
-  {
-    title: "Is my content used to train AI?",
+    title: "What does Bring Your Own Key mean?",
     description:
-      "No. Workspace content is never used to train AI models.",
-    href: "/faq",
+      "Plug in your own provider API keys to bypass daily AI limits. Encrypted at rest with AES-256-GCM.",
+    href: "/faq#what-is-byok",
     category: "FAQ",
-    keywords: "training data privacy",
+    keywords: "byok bring your own key api anthropic openai google openrouter",
   },
   {
-    title: "Can multiple people edit at the same time?",
-    description: "Real-time collaboration with live cursors and changes.",
-    href: "/faq",
+    title: "Is my content used to train AI models?",
+    description:
+      "No. Workspace content is never used to train AI models, ours or anyone else's.",
+    href: "/faq#content-training",
     category: "FAQ",
-    keywords: "collaboration real-time simultaneous editing",
+    keywords: "training data privacy ai",
+  },
+  {
+    title: "How is my data encrypted?",
+    description:
+      "TLS in transit, volume encryption at rest, AES-256-GCM for secrets.",
+    href: "/faq#how-is-data-encrypted",
+    category: "FAQ",
+    keywords: "encryption security tls aes at rest in transit",
+  },
+  {
+    title: "What's the audit log?",
+    description:
+      "SHA-256 hash-chain over security events, re-verified on a schedule and before external delivery.",
+    href: "/faq#audit-log",
+    category: "FAQ",
+    keywords: "audit log siem hash chain security events compliance",
+  },
+  {
+    title: "Can I export my data?",
+    description:
+      "Markdown/.docx for docs, CSV/XLSX for sheets, source files for code, originals for uploads.",
+    href: "/faq#can-i-export-data",
+    category: "FAQ",
+    keywords: "export data portability markdown docx csv",
+  },
+  {
+    title: "Can I connect PageSpace to Claude or Cursor?",
+    description:
+      "Yes — via the PageSpace MCP server. Issue a scoped token and point your client at the endpoint.",
+    href: "/faq#connect-to-claude-cursor",
+    category: "FAQ",
+    keywords: "mcp claude cursor anthropic client external ai",
+  },
+  {
+    title: "Can I self-host PageSpace?",
+    description:
+      "Yes — on-prem deployment mode runs the full stack in your own infrastructure.",
+    href: "/faq#self-host",
+    category: "FAQ",
+    keywords: "self host on prem self-hosted deployment infrastructure",
   },
   {
     title: "Is there a desktop app?",
-    description: "Desktop apps for macOS, Windows, and Linux with offline support.",
-    href: "/faq",
+    description:
+      "Yes — macOS, Windows, Linux. Deeper OS integration than the browser allows.",
+    href: "/faq#desktop-app",
     category: "FAQ",
-    keywords: "download mac windows linux electron offline",
+    keywords: "download mac windows linux electron desktop",
   },
   {
     title: "Can I use PageSpace on my phone?",
-    description: "iOS app via TestFlight, Android coming soon, web works on mobile.",
-    href: "/faq",
+    description:
+      "iOS via TestFlight, Android in progress, web works in any modern mobile browser.",
+    href: "/faq#mobile-app",
     category: "FAQ",
     keywords: "mobile ios android phone testflight",
-  },
-  {
-    title: "What plans are available?",
-    description: "Free, Pro, Founder, and Business plans available.",
-    href: "/faq",
-    category: "FAQ",
-    keywords: "pricing plans free pro founder business",
   },
 ];
 
