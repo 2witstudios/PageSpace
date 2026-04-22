@@ -3,23 +3,22 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Desktop MCP Servers",
-  description: "Run local MCP servers from PageSpace Desktop — filesystem, GitHub, databases, and any other MCP-compatible tool.",
+  description: "Run local MCP servers from PageSpace Desktop — filesystem access, documentation lookup, and any other MCP-compatible tool.",
   path: "/docs/integrations/mcp/desktop",
-  keywords: ["MCP", "desktop", "local servers", "filesystem", "GitHub", "PostgreSQL"],
+  keywords: ["MCP", "desktop", "local servers", "filesystem", "context7", "npx"],
 });
 
 const content = `
 # Desktop MCP Servers
 
-PageSpace Desktop can run **local MCP servers**, giving your workspace AI access to external systems like the filesystem, GitHub, and databases.
+PageSpace Desktop can run **local MCP servers**, giving your workspace AI access to external tools — files on your machine, library documentation lookup, web fetch, or anything else in the MCP ecosystem.
 
 This is the inverse of the [PageSpace MCP server](/docs/integrations/mcp): that flow lets external tools read your PageSpace; this flow lets PageSpace call out to external tools.
 
 \`\`\`
-PageSpace Desktop AI  →  Local MCP server  →  External system
+PageSpace Desktop AI  →  Local MCP server  →  External tool
                                                ├── Filesystem
-                                               ├── GitHub
-                                               ├── PostgreSQL
+                                               ├── Documentation (Context7)
                                                └── Any MCP server
 \`\`\`
 
@@ -40,15 +39,11 @@ The desktop app stores the config at \`~/.pagespace/local-mcp-config.json\` (or 
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"],
-      "env": {}
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
     },
-    "github": {
+    "context7": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_TOKEN": "ghp_your_token_here"
-      }
+      "args": ["-y", "@upstash/context7-mcp"]
     }
   }
 }
@@ -67,44 +62,20 @@ Read and write local files. Scope the directory you pass.
 }
 \`\`\`
 
-### GitHub
+### Context7
 
-Repositories, issues, and pull requests.
-
-\`\`\`json
-{
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-github"],
-  "env": {
-    "GITHUB_TOKEN": "ghp_your_token_here"
-  }
-}
-\`\`\`
-
-### PostgreSQL
-
-Query and mutate PostgreSQL databases.
+Up-to-date library documentation lookup — the agent can pull current docs for the framework or package it's working with instead of guessing from its training data.
 
 \`\`\`json
 {
   "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+  "args": ["-y", "@upstash/context7-mcp"]
 }
 \`\`\`
 
-### Brave Search
+### Anything else
 
-Web search via Brave's API.
-
-\`\`\`json
-{
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-  "env": {
-    "BRAVE_API_KEY": "your_key_here"
-  }
-}
-\`\`\`
+The [MCP ecosystem](https://github.com/modelcontextprotocol/servers) has servers for databases, code hosts, search, email, and more. Any server that speaks MCP and runs as a subprocess can drop into the config above — \`command\` + \`args\` + an optional \`env\` block for credentials. If a server needs an API key or token, it goes in \`env\`.
 
 ## Trust model
 
