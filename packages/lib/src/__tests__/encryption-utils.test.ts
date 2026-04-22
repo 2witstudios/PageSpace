@@ -162,8 +162,13 @@ describe('encryption-utils', () => {
       const encrypted = await encrypt(testData)
       const parts = encrypted.split(':')
 
-      // Tamper with ciphertext but keep auth tag
-      parts[3] = parts[3].substring(0, parts[3].length - 2) + 'FF'
+      // Tamper with ciphertext but keep auth tag.
+      // XOR the last byte with 0xFF to guarantee the byte changes regardless
+      // of its original value (avoids the ~0.4% flake where the last byte was
+      // already 0xFF and replacing with 'FF' is a no-op).
+      const lastByte = parseInt(parts[3].slice(-2), 16);
+      const flipped = (lastByte ^ 0xff).toString(16).padStart(2, '0');
+      parts[3] = parts[3].slice(0, -2) + flipped;
       const tampered = parts.join(':')
 
       // Should fail authentication

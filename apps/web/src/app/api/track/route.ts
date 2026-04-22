@@ -110,10 +110,11 @@ export async function POST(request: Request) {
 
     const userAgent = request.headers.get('user-agent') || 'unknown';
 
+    // ip and userAgent are passed as top-level fields to logActivity where they
+    // land in dedicated PII columns excluded from the hash chain. Keeping them
+    // out of enrichedData prevents them from entering the hashed metadata JSONB.
     const enrichedData = {
       ...data,
-      ip,
-      userAgent,
       timestamp: new Date().toISOString(),
     };
 

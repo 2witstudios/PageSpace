@@ -166,12 +166,10 @@ describe('recomputeSecurityAuditHash', () => {
     });
   });
 
-  it('null hashable fields round-trip as undefined (JSON-stringify omission)', () => {
-    // At write time, AuditEvent's optional fields are `undefined` when not
-    // passed, so JSON.stringify omits them. The DB stores null. When we read
-    // back, null must be treated as "field was undefined at write time" —
-    // i.e. omitted from the serialized object — otherwise the recomputed hash
-    // would include "riskScore":null etc. and diverge.
+  it('null hashable fields round-trip correctly with stableStringify', () => {
+    // Both sides normalize optional fields to null via `?? null` before
+    // stableStringify — so "riskScore":null is included in the serialized
+    // object on both the write side and the read side, and they match.
     const timestamp = new Date('2026-04-10T00:00:00.000Z');
     const event: AuditEvent = {
       eventType: 'auth.logout',

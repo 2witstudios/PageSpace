@@ -86,6 +86,7 @@ import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
 } from '../security-audit-chain-verifier';
+import { computeSecurityEventHash, type AuditEvent } from '../security-audit';
 
 describe('security-audit-chain-verifier', () => {
   beforeEach(() => {
@@ -223,6 +224,65 @@ describe('security-audit-chain-verifier', () => {
       expect(result.isValid).toBe(true);
       expect(result.entriesVerified).toBe(5);
       expect(result.validEntries).toBe(5);
+      expect(result.invalidEntries).toBe(0);
+      expect(result.breakPoint).toBeNull();
+    });
+
+    // Regression test for the canonical-serialization bug: when Postgres returns a
+    // JSONB column with keys in a different order than they were written, the
+    // verifier must still compute the same hash. stableStringify sorts keys at
+    // every depth, so insertion order must not matter.
+    it('verifies chain when Postgres JSONB round-trip reorders details keys', async () => {
+      const timestamp0 = new Date('2026-01-25T10:00:00.000Z');
+      const timestamp1 = new Date('2026-01-25T10:00:01.000Z');
+
+      const event0 = {
+        eventType: 'auth.login.success' as const,
+        serviceId: 'web',
+        details: { action: 'export', format: 'pdf', count: 3 },
+      } satisfies AuditEvent;
+      const event1 = {
+        eventType: 'data.read' as const,
+        serviceId: 'web',
+        details: { resource: 'page', nested: { z: 1, a: 2 } },
+      } satisfies AuditEvent;
+
+      const hash0 = computeSecurityEventHash(event0, 'genesis', timestamp0);
+      const hash1 = computeSecurityEventHash(event1, hash0, timestamp1);
+
+      // Simulate Postgres JSONB returning keys in a different order than written
+      mockEntries = [
+        {
+          id: 'audit-1',
+          eventType: 'auth.login.success',
+          userId: null, sessionId: null, serviceId: 'web',
+          resourceType: null, resourceId: null,
+          ipAddress: null, userAgent: null, geoLocation: null,
+          details: { count: 3, format: 'pdf', action: 'export' }, // reversed
+          riskScore: null, anomalyFlags: null,
+          timestamp: timestamp0,
+          previousHash: 'genesis',
+          eventHash: hash0,
+        },
+        {
+          id: 'audit-2',
+          eventType: 'data.read',
+          userId: null, sessionId: null, serviceId: 'web',
+          resourceType: null, resourceId: null,
+          ipAddress: null, userAgent: null, geoLocation: null,
+          details: { nested: { a: 2, z: 1 }, resource: 'page' }, // reversed
+          riskScore: null, anomalyFlags: null,
+          timestamp: timestamp1,
+          previousHash: hash0,
+          eventHash: hash1,
+        },
+      ];
+
+      const result = await verifySecurityAuditChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.entriesVerified).toBe(2);
+      expect(result.validEntries).toBe(2);
       expect(result.invalidEntries).toBe(0);
       expect(result.breakPoint).toBeNull();
     });

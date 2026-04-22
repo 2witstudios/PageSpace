@@ -19,6 +19,7 @@ import { createHash } from 'crypto';
 import { db, securityAuditLog, desc, sql } from '@pagespace/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
 import { queryAuditEvents } from './audit-query';
+import { stableStringify } from '../utils/stable-stringify';
 
 /**
  * Audit event input structure
@@ -77,19 +78,19 @@ export function computeSecurityEventHash(
   previousHash: string,
   timestamp: Date
 ): string {
-  const data = JSON.stringify({
+  const payload = {
+    anomalyFlags: event.anomalyFlags ?? null,
+    details: event.details ?? null,
     eventType: event.eventType,
-    serviceId: event.serviceId,
-    resourceType: event.resourceType,
-    resourceId: event.resourceId,
-    details: event.details,
-    riskScore: event.riskScore,
-    anomalyFlags: event.anomalyFlags,
-    timestamp: timestamp.toISOString(),
     previousHash,
-  });
+    resourceId: event.resourceId ?? null,
+    resourceType: event.resourceType ?? null,
+    riskScore: event.riskScore ?? null,
+    serviceId: event.serviceId ?? null,
+    timestamp: timestamp.toISOString(),
+  };
 
-  return createHash('sha256').update(data).digest('hex');
+  return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
 /**
@@ -124,7 +125,7 @@ export class SecurityAuditService {
   private async _doInitialize(): Promise<void> {
     try {
       const lastEvent = await db.query.securityAuditLog.findFirst({
-        orderBy: desc(securityAuditLog.timestamp),
+        orderBy: [desc(securityAuditLog.chainSeq)],
         columns: { eventHash: true },
       });
 
@@ -169,7 +170,7 @@ export class SecurityAuditService {
       const lastRecord = await tx.execute(sql`
         SELECT event_hash
         FROM security_audit_log
-        ORDER BY timestamp DESC
+        ORDER BY chain_seq DESC
         LIMIT 1
       `);
 

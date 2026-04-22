@@ -1,18 +1,14 @@
 /**
  * Cron Authentication Utility
  *
- * Security model:
- *   1. Primary: HMAC-SHA256 signed requests with anti-replay protection
- *   2. Defense-in-depth: Internal network header checks
+ * Security model: HMAC-SHA256 signed requests with anti-replay protection.
  *
- * Production (CRON_SECRET required):
+ * Production / staging (CRON_SECRET required):
  *   - Requests MUST include valid signed headers (timestamp, nonce, signature)
- *   - Rejects if CRON_SECRET not configured (fail-closed)
- *   - Internal network checks still apply as additional layer
+ *   - Rejects if CRON_SECRET not configured (fail-closed for any non-dev env)
  *
- * Development (CRON_SECRET optional):
- *   - Falls back to internal network checks only
- *   - Logs a warning on first request
+ * Local development / test (CRON_SECRET optional):
+ *   - All requests allowed with a one-time warning
  */
 
 import { createHmac } from 'crypto';
@@ -20,51 +16,6 @@ import { NextResponse } from 'next/server';
 import { secureCompare } from '@pagespace/lib';
 
 let cronSecretWarningLogged = false;
-
-/**
- * Check if request originates from internal network (not proxied from outside)
- *
- * Returns true if:
- * - No X-Forwarded-For header (not proxied from external source)
- * - Host is localhost, internal docker service name, or IP
- *
- * IMPORTANT: This check is defense-in-depth behind HMAC validation. The host header
- * and absence of x-forwarded-for can be spoofed by attackers connecting directly.
- * Infrastructure (reverse proxy/load balancer) MUST set x-forwarded-for on all
- * inbound requests for this check to be meaningful.
- */
-export function isInternalRequest(request: Request): boolean {
-  const host = request.headers.get('host') ?? '';
-  const forwardedFor = request.headers.get('x-forwarded-for');
-
-  // If there's a forwarded-for header, request came through a proxy/load balancer
-  // from an external source - reject it
-  if (forwardedFor) {
-    return false;
-  }
-
-  // Allow localhost (dev/testing) - anchor to port separator or end-of-string
-  // to prevent matching localhost.evil.com
-  if (
-    /^localhost(:\d+)?$/.test(host) ||
-    /^127\.0\.0\.1(:\d+)?$/.test(host) ||
-    /^\[::1\](:\d+)?$/.test(host)
-  ) {
-    return true;
-  }
-
-  // Allow internal docker service names (e.g., web:3000, web)
-  // These are only reachable from within the docker network
-  if (host.startsWith('web:') || host === 'web') {
-    return true;
-  }
-
-  return false;
-}
-
-// Alias for backward compatibility with tests
-export const isLocalhostRequest = isInternalRequest;
-
 
 // ============================================================
 // HMAC-Signed Request Validation (anti-replay upgrade)
@@ -146,12 +97,11 @@ export function _resetWarningFlag(): void {
  *   X-Cron-Signature: HMAC-SHA256(CRON_SECRET, `${timestamp}:${nonce}:${method}:${path}`)
  *
  * Validation:
- *   1. Reject if CRON_SECRET not configured (fail-closed in production)
+ *   1. Reject if CRON_SECRET not configured (fail-closed for any non-development/test env)
  *   2. Reject if any required header is missing
  *   3. Reject if timestamp older than 5 minutes (anti-replay)
  *   4. Recompute signature and timing-safe compare
  *   5. Reject if nonce already seen (recorded after signature verified)
- *   6. Defense-in-depth: require internal network origin
  *
  * Returns null on success, 403 NextResponse on failure.
  */
@@ -159,25 +109,20 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
   const cronSecret = process.env.CRON_SECRET;
 
   if (!cronSecret) {
-    // Fail-closed in production: CRON_SECRET must be configured
-    if (process.env.NODE_ENV === 'production') {
+    // Fail-closed for all non-local envs: staging, custom NODE_ENV, etc.
+    const isLocalDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+    if (!isLocalDev) {
       return NextResponse.json(
-        { error: 'Forbidden - CRON_SECRET must be configured in production' },
+        { error: 'Forbidden - CRON_SECRET must be configured' },
         { status: 403 }
       );
     }
-    // Development fallback: network-only auth
+    // Local dev/test only: allow with a one-time warning
     if (!cronSecretWarningLogged) {
       console.warn(
-        '[cron-auth] CRON_SECRET is not configured. Falling back to network-only auth. Set CRON_SECRET in production.'
+        '[cron-auth] CRON_SECRET is not configured. All cron requests allowed in local dev/test. Set CRON_SECRET in all deployed environments.'
       );
       cronSecretWarningLogged = true;
-    }
-    if (!isInternalRequest(request)) {
-      return NextResponse.json(
-        { error: 'Forbidden - cron endpoints only accessible from internal network' },
-        { status: 403 }
-      );
     }
     return null;
   }
@@ -221,14 +166,6 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
   if (!checkAndRecordNonce(nonce)) {
     return NextResponse.json(
       { error: 'Forbidden - cron request nonce already used' },
-      { status: 403 }
-    );
-  }
-
-  // Defense-in-depth: require internal network origin
-  if (!isInternalRequest(request)) {
-    return NextResponse.json(
-      { error: 'Forbidden - cron endpoints only accessible from internal network' },
       { status: 403 }
     );
   }

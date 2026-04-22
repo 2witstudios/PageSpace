@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { stableStringify } from '@pagespace/lib/utils/stable-stringify';
 
 /**
  * Per-source hash recomputation strategies for the SIEM delivery preflight.
@@ -65,37 +66,27 @@ export interface SecurityAuditHashableFields {
  * Recompute the expected `logHash` for an activity_logs entry.
  *
  * Mirrors serializeLogDataForHash + computeLogHash in activity-logger.ts:
- *   1. Build a hashable object with fields in the exact same key set the
- *      write side uses, coercing undefined → null the same way.
- *   2. JSON.stringify with sorted keys (deterministic output).
+ *   1. Build hashable object with the same field set (PII excluded).
+ *   2. stableStringify — sorts keys at every depth for deterministic output.
  *   3. SHA-256 of `previousHash + serialized`.
- *
- * IMPORTANT: the order of property writes in `hashableObject` does not
- * matter because JSON.stringify is called with a sorted replacer-array
- * argument; it's the sorted-keys guarantee that makes this deterministic.
  */
 export function recomputeActivityLogHash(
   data: ActivityLogHashableFields,
   previousHash: string
 ): string {
-  const hashableObject = {
-    id: data.id,
-    timestamp: data.timestamp.toISOString(),
-    operation: data.operation,
-    resourceType: data.resourceType,
-    resourceId: data.resourceId,
-    driveId: data.driveId,
-    pageId: data.pageId ?? null,
+  const serialized = stableStringify({
     contentSnapshot: data.contentSnapshot ?? null,
-    previousValues: data.previousValues ?? null,
-    newValues: data.newValues ?? null,
+    driveId: data.driveId,
+    id: data.id,
     metadata: data.metadata ?? null,
-  };
-
-  const serialized = JSON.stringify(
-    hashableObject,
-    Object.keys(hashableObject).sort()
-  );
+    newValues: data.newValues ?? null,
+    operation: data.operation,
+    pageId: data.pageId ?? null,
+    previousValues: data.previousValues ?? null,
+    resourceId: data.resourceId,
+    resourceType: data.resourceType,
+    timestamp: data.timestamp.toISOString(),
+  });
 
   return createHash('sha256').update(previousHash + serialized).digest('hex');
 }
@@ -104,31 +95,26 @@ export function recomputeActivityLogHash(
  * Recompute the expected `eventHash` for a security_audit_log entry.
  *
  * Mirrors computeSecurityEventHash in security-audit.ts:
- *   - Flat JSON.stringify (no sorted-keys replacer — V8 insertion order is
- *     relied on by the write side).
+ *   - stableStringify sorts keys at every depth (including inside `details`).
  *   - SHA-256 of the serialized object; `previousHash` is a field INSIDE the
  *     serialized object, not prepended like activity_logs.
- *
- * Nullable fields map back to undefined so JSON.stringify omits them — the
- * write-side AuditEvent uses optional fields, so `undefined` at write time
- * becomes column-null in the DB. Reconstructing as `undefined` restores the
- * original serialized shape. The key order here MUST match the write-side
- * object literal exactly.
+ *   - Nullable DB columns normalize to null (not undefined) — the write side
+ *     uses `?? null` so JSON.stringify includes them explicitly.
  */
 export function recomputeSecurityAuditHash(
   data: SecurityAuditHashableFields,
   previousHash: string
 ): string {
-  const serialized = JSON.stringify({
+  const serialized = stableStringify({
+    anomalyFlags: data.anomalyFlags ?? null,
+    details: data.details ?? null,
     eventType: data.eventType,
-    serviceId: data.serviceId ?? undefined,
-    resourceType: data.resourceType ?? undefined,
-    resourceId: data.resourceId ?? undefined,
-    details: data.details ?? undefined,
-    riskScore: data.riskScore ?? undefined,
-    anomalyFlags: data.anomalyFlags ?? undefined,
-    timestamp: data.timestamp.toISOString(),
     previousHash,
+    resourceId: data.resourceId ?? null,
+    resourceType: data.resourceType ?? null,
+    riskScore: data.riskScore ?? null,
+    serviceId: data.serviceId ?? null,
+    timestamp: data.timestamp.toISOString(),
   });
 
   return createHash('sha256').update(serialized).digest('hex');

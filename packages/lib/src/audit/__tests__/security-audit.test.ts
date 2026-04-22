@@ -169,6 +169,48 @@ describe('Security Audit Service', () => {
       expect(hash).toHaveLength(64);
       expect(typeof hash).toBe('string');
     });
+
+    it('produces the same hash regardless of key order in details (canonical JSON)', () => {
+      const timestamp = new Date('2026-01-25T10:00:00Z');
+      const base = {
+        eventType: 'auth.login.success' as const,
+        serviceId: 'web',
+        resourceType: 'page',
+        resourceId: 'page-1',
+      };
+
+      // Simulate write-time key order vs Postgres JSONB read-back with different order
+      const hashA = computeSecurityEventHash(
+        { ...base, details: { action: 'export', format: 'pdf', userId: 'u1' } },
+        'genesis',
+        timestamp
+      );
+      const hashB = computeSecurityEventHash(
+        { ...base, details: { userId: 'u1', format: 'pdf', action: 'export' } },
+        'genesis',
+        timestamp
+      );
+
+      expect(hashA).toBe(hashB);
+    });
+
+    it('produces the same hash regardless of key order in nested details objects', () => {
+      const timestamp = new Date('2026-01-25T10:00:00Z');
+      const base = { eventType: 'data.read' as const };
+
+      const hashA = computeSecurityEventHash(
+        { ...base, details: { meta: { z: 1, a: 2 }, top: 'value' } },
+        'prev',
+        timestamp
+      );
+      const hashB = computeSecurityEventHash(
+        { ...base, details: { top: 'value', meta: { a: 2, z: 1 } } },
+        'prev',
+        timestamp
+      );
+
+      expect(hashA).toBe(hashB);
+    });
   });
 
   describe('initialize', () => {

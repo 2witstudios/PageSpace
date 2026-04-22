@@ -743,6 +743,34 @@
       "when": 1776813426712,
       "tag": "0105_drop_password_auth_enums",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1776813486712,
+      "tag": "0106_reset_activity_log_chain",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1776813546712,
+      "tag": "0107_truncate_security_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1776813606712,
+      "tag": "0108_cleanup_ephemeral_task_lists",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1776876262098,
+      "tag": "0109_add_chain_seq",
+      "breakpoints": true
     }
   ]
 }

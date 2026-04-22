@@ -189,6 +189,11 @@
       "import": "./dist/utils/language-detection.js",
       "require": "./dist/utils/language-detection.js"
     },
+    "./utils/stable-stringify": {
+      "types": "./dist/utils/stable-stringify.d.ts",
+      "import": "./dist/utils/stable-stringify.js",
+      "require": "./dist/utils/stable-stringify.js"
+    },
     "./pages/circular-reference-guard": {
       "types": "./dist/pages/circular-reference-guard.d.ts",
       "import": "./dist/pages/circular-reference-guard.js",
@@ -385,6 +390,9 @@
       ],
       "utils/language-detection": [
         "./dist/utils/language-detection.d.ts"
+      ],
+      "utils/stable-stringify": [
+        "./dist/utils/stable-stringify.d.ts"
       ],
       "pages/circular-reference-guard": [
         "./dist/pages/circular-reference-guard.d.ts"

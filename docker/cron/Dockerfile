@@ -4,7 +4,7 @@
 FROM alpine:3.21
 
 # Install curl for making HTTP requests
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl openssl
 
 # Create log directory
 RUN mkdir -p /var/log/cron
