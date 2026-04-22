@@ -18,6 +18,7 @@ import {
   real,
   jsonb,
   index,
+  bigserial,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -103,6 +104,11 @@ export const securityAuditLog = pgTable('security_audit_log', {
 
   // Timing
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
+
+  // Monotonically-increasing commit-order key; predecessor SELECT uses this
+  // instead of timestamp to avoid forking when timestamps are pre-assigned
+  // before the advisory lock is acquired.
+  chainSeq: bigserial('chain_seq', { mode: 'number' }),
 
   // Hash chain integrity
   previousHash: text('previous_hash').notNull(),

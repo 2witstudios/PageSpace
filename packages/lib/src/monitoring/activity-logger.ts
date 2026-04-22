@@ -164,7 +164,7 @@ export async function getLatestLogHashWithTx(tx: typeof db): Promise<{
   try {
     const latestEntry = await tx.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [desc(activityLogs.timestamp)],
+      orderBy: [desc(activityLogs.chainSeq)],
       columns: { logHash: true },
     });
 

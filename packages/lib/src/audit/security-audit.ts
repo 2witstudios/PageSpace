@@ -169,7 +169,7 @@ export class SecurityAuditService {
       const lastRecord = await tx.execute(sql`
         SELECT event_hash
         FROM security_audit_log
-        ORDER BY timestamp DESC
+        ORDER BY chain_seq DESC
         LIMIT 1
       `);
 

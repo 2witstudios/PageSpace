@@ -13,7 +13,8 @@ import {
   uniqueIndex,
   real,
   pgEnum,
-  check
+  check,
+  bigserial,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -346,6 +347,11 @@ export const activityLogs = pgTable('activity_logs', {
 
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
+
+  // Monotonically-increasing commit-order key; predecessor SELECT uses this
+  // instead of timestamp to avoid forking when timestamps are pre-assigned
+  // before the advisory lock is acquired.
+  chainSeq: bigserial('chainSeq', { mode: 'number' }),
 
   // Hash chain fields for tamper-evidence (Advanced Audit Logging)
   previousLogHash: text('previousLogHash'),  // Hash of previous log entry (null for first entry in chain)

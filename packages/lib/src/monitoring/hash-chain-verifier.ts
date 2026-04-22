@@ -205,7 +205,7 @@ export async function verifyHashChain(
       // Fetch batch of entries ordered by timestamp
       const entries = await db.query.activityLogs.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [asc(activityLogs.timestamp)],
+        orderBy: [asc(activityLogs.timestamp), asc(activityLogs.chainSeq)],
         offset,
         limit: currentBatchSize,
         columns: {
