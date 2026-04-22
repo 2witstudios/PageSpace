@@ -18,6 +18,7 @@ import {
   real,
   jsonb,
   index,
+  bigserial,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -104,6 +105,9 @@ export const securityAuditLog = pgTable('security_audit_log', {
   // Timing
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
 
+  // BIGSERIAL for commit-order predecessor lookup — timestamps are pre-assigned before the advisory lock.
+  chainSeq: bigserial('chain_seq', { mode: 'number' }).notNull(),
+
   // Hash chain integrity
   previousHash: text('previous_hash').notNull(),
   eventHash: text('event_hash').notNull(),
@@ -120,6 +124,8 @@ export const securityAuditLog = pgTable('security_audit_log', {
   ipTimestampIdx: index('idx_security_audit_ip').on(table.ipAddress, table.timestamp),
   // Hash chain verification
   eventHashIdx: index('idx_security_audit_event_hash').on(table.eventHash),
+  // Predecessor lookup (ORDER BY chain_seq DESC LIMIT 1 inside advisory lock)
+  chainSeqIdx: index('idx_security_audit_chain_seq').on(table.chainSeq),
   // High-risk event queries
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
