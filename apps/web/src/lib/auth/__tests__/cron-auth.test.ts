@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  isLocalhostRequest,
-  isInternalRequest,
   computeCronSignature,
   checkAndRecordNonce,
   validateSignedCronRequest,
@@ -10,98 +8,6 @@ import {
 } from '../cron-auth';
 
 describe('cron-auth', () => {
-  describe('isInternalRequest', () => {
-    it('should return true for localhost host header', () => {
-      const request = new Request('http://localhost:3000/api/cron/test', {
-        headers: { host: 'localhost:3000' },
-      });
-
-      expect(isInternalRequest(request)).toBe(true);
-    });
-
-    it('should return true for 127.0.0.1 host header', () => {
-      const request = new Request('http://127.0.0.1:3000/api/cron/test', {
-        headers: { host: '127.0.0.1:3000' },
-      });
-
-      expect(isInternalRequest(request)).toBe(true);
-    });
-
-    it('should return true for IPv6 localhost [::1]', () => {
-      const request = new Request('http://[::1]:3000/api/cron/test', {
-        headers: { host: '[::1]:3000' },
-      });
-
-      expect(isInternalRequest(request)).toBe(true);
-    });
-
-    it('should return true for docker internal hostname web:3000', () => {
-      const request = new Request('http://web:3000/api/cron/test', {
-        headers: { host: 'web:3000' },
-      });
-
-      expect(isInternalRequest(request)).toBe(true);
-    });
-
-    it('should return true for docker internal hostname web (no port)', () => {
-      const request = new Request('http://web/api/cron/test', {
-        headers: { host: 'web' },
-      });
-
-      expect(isInternalRequest(request)).toBe(true);
-    });
-
-    it('should return false for external host', () => {
-      const request = new Request('https://pagespace.ai/api/cron/test', {
-        headers: { host: 'pagespace.ai' },
-      });
-
-      expect(isInternalRequest(request)).toBe(false);
-    });
-
-    it('should return false for localhost.evil.com (prefix attack)', () => {
-      const request = new Request('https://localhost.evil.com/api/cron/test', {
-        headers: { host: 'localhost.evil.com' },
-      });
-
-      expect(isInternalRequest(request)).toBe(false);
-    });
-
-    it('should return false when x-forwarded-for header is present', () => {
-      const request = new Request('http://localhost:3000/api/cron/test', {
-        headers: {
-          host: 'localhost:3000',
-          'x-forwarded-for': '203.0.113.195',
-        },
-      });
-
-      expect(isInternalRequest(request)).toBe(false);
-    });
-
-    it('should return false when x-forwarded-for present even with docker host', () => {
-      const request = new Request('http://web:3000/api/cron/test', {
-        headers: {
-          host: 'web:3000',
-          'x-forwarded-for': '203.0.113.195',
-        },
-      });
-
-      expect(isInternalRequest(request)).toBe(false);
-    });
-
-    it('should return false for missing host header', () => {
-      const request = new Request('http://localhost:3000/api/cron/test');
-
-      expect(isInternalRequest(request)).toBe(false);
-    });
-  });
-
-  describe('isLocalhostRequest (alias)', () => {
-    it('should be an alias for isInternalRequest', () => {
-      expect(isLocalhostRequest).toBe(isInternalRequest);
-    });
-  });
-
   describe('computeCronSignature', () => {
     it('given valid inputs, should produce deterministic HMAC', () => {
       const sig1 = computeCronSignature('secret', '1000', 'nonce-1', 'POST', '/api/cron/test');
@@ -199,8 +105,25 @@ describe('cron-auth', () => {
       return new Request(`http://${host}${path}`, { method, headers });
     }
 
-    it('given valid signature + timestamp + nonce + internal, should return null (pass)', () => {
+    it('given valid signature + timestamp + nonce, should return null (pass)', () => {
       const request = createSignedRequest();
+      expect(validateSignedCronRequest(request)).toBeNull();
+    });
+
+    it('given valid signature with x-forwarded-for set (Next.js 15 behavior), should return null', () => {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const nonce = `nonce-${Math.random()}`;
+      const signature = computeCronSignature(TEST_SECRET, timestamp, nonce, 'POST', '/api/cron/test');
+      const request = new Request('http://web:3000/api/cron/test', {
+        method: 'POST',
+        headers: {
+          host: 'web:3000',
+          'x-forwarded-for': '172.18.0.1', // Docker bridge peer IP injected by Next.js 15
+          'x-cron-timestamp': timestamp,
+          'x-cron-nonce': nonce,
+          'x-cron-signature': signature,
+        },
+      });
       expect(validateSignedCronRequest(request)).toBeNull();
     });
 
@@ -333,7 +256,21 @@ describe('cron-auth', () => {
         expect(response!.status).toBe(403);
 
         const data = await response!.json();
-        expect(data.error).toContain('CRON_SECRET must be configured in production');
+        expect(data.error).toContain('CRON_SECRET must be configured');
+      });
+
+      it('given staging/unknown NODE_ENV, should reject request (fail-closed)', async () => {
+        (process.env as Record<string, string | undefined>).NODE_ENV = 'staging';
+        const request = new Request('http://localhost:3000/api/cron/test', {
+          headers: { host: 'localhost:3000' },
+        });
+        const response = validateSignedCronRequest(request);
+
+        expect(response).not.toBeNull();
+        expect(response!.status).toBe(403);
+
+        const data = await response!.json();
+        expect(data.error).toContain('CRON_SECRET must be configured');
       });
 
       it('given test mode, should allow all requests with warning', () => {
