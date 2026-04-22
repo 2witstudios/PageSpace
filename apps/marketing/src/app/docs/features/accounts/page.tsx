@@ -39,9 +39,7 @@ You don't have a password. There is no password stored for your account — ther
 
 **Desktop and mobile apps** don't use the web cookie. When you sign in inside the app, it trades your sign-in for a long-lived **device token** that rotates every time it refreshes. If a token ever leaks, the old one is already retired.
 
-**Too many failed attempts** against the same account — ten in a row — lock the account for 15 minutes, regardless of which IP the attempts came from. A successful sign-in clears the counter.
-
-**Deployment changes what's on the sign-in screen.** On the hosted pagespace.ai service you see passkey, magic link, Google, and Apple, and anyone can create an account. On a self-hosted install, Google and Apple sign-in aren't available and self-signup is turned off — your administrator creates the account and you sign in with a passkey or magic link. Self-hosted installs also idle sessions out after 15 minutes of inactivity by default.
+**Too many failed attempts** against the same account trigger a temporary lock, regardless of which IP the attempts came from. A successful sign-in clears the counter.
 
 ## Related
 
