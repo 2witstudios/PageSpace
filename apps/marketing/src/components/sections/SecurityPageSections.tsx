@@ -223,8 +223,8 @@ export function AuthenticationSection() {
             <FeatureCard
               icon={Globe}
               title="OAuth (Google & Apple)"
-              description="Industry-standard OAuth 2.1 flows with signed state, PKCE, and strict redirect validation."
-              items={["Signed state parameters", "RFC 7636 PKCE — intercepted codes alone are useless", "Authorization code flow only — no implicit grant"]}
+              description="Industry-standard OAuth flows with signed state and strict redirect validation. Google uses RFC 7636 PKCE; Apple relies on ID-token signature validation."
+              items={["Signed state parameters on every flow", "Authorization code flow only — no implicit grant", "Google: RFC 7636 PKCE — intercepted codes alone are useless", "Apple: ID-token signature validation on every callback"]}
               small
             />
           </div>
