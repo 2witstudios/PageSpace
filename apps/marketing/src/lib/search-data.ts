@@ -51,10 +51,46 @@ const docsEntries: SearchEntry[] = [
       "folder document channel ai chat canvas file sheet task list code tiptap monaco spreadsheet",
   },
   {
+    title: "Features",
+    description:
+      "Behaviours every page shares — pages, drives, AI, sharing, search, accounts.",
+    href: "/docs/features",
+    category: "Docs",
+    keywords:
+      "features pages drives workspaces ai sharing permissions search accounts sign in",
+  },
+  {
+    title: "Integrations",
+    description:
+      "Google Calendar, GitHub, and MCP — the three ways PageSpace connects outward and inward.",
+    href: "/docs/integrations",
+    category: "Docs",
+    keywords:
+      "integrations google calendar github mcp desktop external tools connect",
+  },
+  {
+    title: "Google Calendar Integration",
+    description:
+      "Two-way sync of Google calendars into PageSpace; agents read availability and schedule.",
+    href: "/docs/integrations/google-calendar",
+    category: "Docs",
+    keywords:
+      "google calendar events schedule availability meetings sync",
+  },
+  {
+    title: "GitHub Integration",
+    description:
+      "Give agents a GitHub identity to browse repos, file issues, and leave PR reviews.",
+    href: "/docs/integrations/github",
+    category: "Docs",
+    keywords:
+      "github repositories issues pull requests code review oauth",
+  },
+  {
     title: "MCP Integration",
     description:
       "Connect AI tools to your PageSpace workspace using Model Context Protocol, or add external MCP servers to PageSpace Desktop.",
-    href: "/docs/mcp",
+    href: "/docs/integrations/mcp",
     category: "Docs",
     keywords:
       "mcp model context protocol token claude cursor desktop npx pagespace-mcp server filesystem github postgresql tools",

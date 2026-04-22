@@ -23,7 +23,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 
 No credit card required. The free tier includes 500 MB storage, 50 AI calls per day, and a 20 MB max file size.
 
-After signup, PageSpace creates a **personal drive** (workspace) for you.
+After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 
 ## 2. Understand Drives and Pages
 
@@ -76,7 +76,7 @@ PageSpace routes every model through the Vercel AI SDK across 12 providers:
 | Ollama | Models discovered from a local Ollama server | Local server URL |
 | LM Studio | Models discovered from a running LM Studio server | Local server URL |
 
-To configure a provider, go to **Settings > AI** and enter your key. You can set different providers per drive or per page. The full list of available models updates as providers publish new ones.
+To configure a provider, go to **Settings > AI** and enter your key. The provider and model default to your account-level choice, and any individual AI Chat page can override both. The full list of available models updates as providers publish new ones.
 
 ## 5. Create an AI Agent
 
@@ -85,7 +85,7 @@ AI Chat pages are specialized AI conversations with custom configuration:
 1. Right-click in the file tree and select **New AI Chat**
 2. Open the agent's settings to configure:
    - **System prompt**: custom instructions for the agent's behavior
-   - **Enabled tools**: which of the 38 workspace tools the agent can call
+   - **Enabled tools**: which of the 37 workspace tools the agent can call
    - **Read-only toggle**: when on, the agent can only read and search — no writes, no trash, no task updates
    - **Web search toggle**: enables the \`web_search\` tool
    - **Provider / Model**: which AI model powers this agent
@@ -115,7 +115,7 @@ If you use Claude Desktop, Claude Code, Cursor, or other MCP-compatible tools, y
 }
 \`\`\`
 
-See the [MCP Integration guide](/docs/mcp) for full details.
+See the [MCP Integration guide](/docs/integrations/mcp) for full details.
 
 ## 7. Invite Your Team
 
@@ -131,9 +131,9 @@ Members can collaborate in real-time on documents, channels, and AI conversation
 ## Next Steps
 
 - **[Core Concepts](/docs/core-concepts)** — pages as primitives, context inheritance, the tree model
-- **[Page Types](/docs/page-types)** — the 9 built-in page types in detail
-- **[AI System](/docs/ai)** — multi-provider AI, tool calling, and agents
-- **[API Reference](/docs/api)** — the PageSpace REST API
+- **[Page Types](/docs/page-types)** — the 9 built-in page types and what each one is for
+- **[Features](/docs/features)** — plain-language reference for the behaviours every page shares
+- **[MCP Integration](/docs/integrations/mcp)** — connect Claude Desktop, Cursor, or your own MCP client
 `;
 
 export default function GettingStartedPage() {

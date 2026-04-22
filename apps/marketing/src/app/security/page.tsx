@@ -3,6 +3,9 @@ import { SiteFooter } from "@/components/SiteFooter";
 import {
   SecurityHero,
   SecurityKeyFeatures,
+  VerifiableAuditSection,
+  PermissionModelSection,
+  InputSafetySection,
   SessionSecuritySection,
   WebSocketSecuritySection,
   RateLimitingSection,
@@ -24,10 +27,13 @@ export default function SecurityPage() {
       <SiteNavbar />
       <SecurityHero />
       <SecurityKeyFeatures />
+      <VerifiableAuditSection />
+      <PermissionModelSection />
+      <InputSafetySection />
+      <AuthenticationSection />
       <SessionSecuritySection />
       <WebSocketSecuritySection />
       <RateLimitingSection />
-      <AuthenticationSection />
       <SecurityCTA />
       <SiteFooter />
     </div>

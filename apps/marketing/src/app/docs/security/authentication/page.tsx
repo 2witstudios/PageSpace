@@ -53,7 +53,7 @@ Passwordless email login. The server generates a single-use token, emails a sign
 
 ### OAuth PKCE
 
-Both Google and Apple flows use OAuth 2.1 with RFC 7636 Proof Key for Code Exchange. The server generates a \`code_verifier\` and \`code_challenge\` (S256) at signin; the callback consumes the verifier to complete the token exchange. An intercepted authorization code alone is useless without the verifier.
+The Google sign-in flow uses OAuth 2.1 with RFC 7636 Proof Key for Code Exchange. The server generates a \`code_verifier\` and \`code_challenge\` (S256) at signin; the callback consumes the verifier to complete the token exchange. An intercepted authorization code alone is useless without the verifier. Sign in with Apple doesn't expose a PKCE parameter, so it's not covered by this path — it relies on ID-token signature validation instead. If the PKCE store is unreachable at verification time the exchange fails open; rare, but worth knowing.
 
 ### Passkeys (WebAuthn)
 
