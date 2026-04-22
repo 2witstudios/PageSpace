@@ -87,13 +87,7 @@ Benefits:
 - **Real-time sync**: Socket.IO broadcasts database changes to all connected users
 - **No data loss**: Messages are never stored only in memory
 
-## 7. Tags Are Orthogonal Context
-
-While the tree encodes **structural** meaning (this document belongs to this project), tags encode **cross-cutting** context (this document is a draft, high priority, or tagged "Q1").
-
-Tags are additive metadata — they never override structural meaning. Pages can be filtered, grouped, or surfaced across the tree using tags.
-
-## 8. Recursive UI Mirrors the Data Model
+## 7. Recursive UI Mirrors the Data Model
 
 The frontend isn't a set of disjoint apps — it's a recursive viewer of a recursive model. The same page tree powers:
 
