@@ -62,6 +62,17 @@ export interface QueryEventsOptions {
  *           riskScore, anomalyFlags, timestamp, previousHash
  */
 
+// Serialize to canonical JSON: every plain object's keys are sorted at every
+// depth so the output is identical regardless of insertion order (e.g. after a
+// Postgres JSONB round-trip re-orders keys in `details`).
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
+      : v
+  );
+}
+
 /**
  * Compute SHA-256 hash for a security event.
  * Includes previous hash to create the chain link.
@@ -77,19 +88,19 @@ export function computeSecurityEventHash(
   previousHash: string,
   timestamp: Date
 ): string {
-  const data = JSON.stringify({
+  const payload = {
+    anomalyFlags: event.anomalyFlags ?? null,
+    details: event.details ?? null,
     eventType: event.eventType,
-    serviceId: event.serviceId,
-    resourceType: event.resourceType,
-    resourceId: event.resourceId,
-    details: event.details,
-    riskScore: event.riskScore,
-    anomalyFlags: event.anomalyFlags,
-    timestamp: timestamp.toISOString(),
     previousHash,
-  });
+    resourceId: event.resourceId ?? null,
+    resourceType: event.resourceType ?? null,
+    riskScore: event.riskScore ?? null,
+    serviceId: event.serviceId ?? null,
+    timestamp: timestamp.toISOString(),
+  };
 
-  return createHash('sha256').update(data).digest('hex');
+  return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
 /**

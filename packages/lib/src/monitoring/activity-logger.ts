@@ -115,27 +115,35 @@ export function computeHash(data: string, previousHash: string): string {
     .digest('hex');
 }
 
+// Serialize to canonical JSON: every plain object's keys are sorted at every
+// depth so the output is identical regardless of insertion order (e.g. after a
+// Postgres JSONB round-trip re-orders keys in `previousValues` or `metadata`).
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]]))
+      : v
+  );
+}
+
 /**
  * Serialize log entry data for hashing.
- * Creates a deterministic JSON string with sorted keys.
+ * Creates a deterministic canonical JSON string with sorted keys at every depth.
  */
 export function serializeLogDataForHash(data: HashableLogData): string {
-  const hashableObject = {
-    id: data.id,
-    timestamp: data.timestamp.toISOString(),
-    operation: data.operation,
-    resourceType: data.resourceType,
-    resourceId: data.resourceId,
-    driveId: data.driveId,
-    pageId: data.pageId ?? null,
+  return stableStringify({
     contentSnapshot: data.contentSnapshot ?? null,
-    previousValues: data.previousValues ?? null,
-    newValues: data.newValues ?? null,
+    driveId: data.driveId,
+    id: data.id,
     metadata: data.metadata ?? null,
-  };
-
-  // JSON.stringify with sorted keys for deterministic output
-  return JSON.stringify(hashableObject, Object.keys(hashableObject).sort());
+    newValues: data.newValues ?? null,
+    operation: data.operation,
+    pageId: data.pageId ?? null,
+    previousValues: data.previousValues ?? null,
+    resourceId: data.resourceId,
+    resourceType: data.resourceType,
+    timestamp: data.timestamp.toISOString(),
+  });
 }
 
 /**
