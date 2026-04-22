@@ -29,12 +29,12 @@ export function SecurityHero() {
             Defense in Depth
           </div>
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl mb-6">
-            Security that holds up
+            The safe place to do
             <br />
-            <span className="text-primary">to review</span>
+            <span className="text-primary">serious work with AI</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
-            Every claim on this page maps to a function, a test, or a commit. Hand the URL to your security team — that&apos;s the point.
+            Hash-chain audit logs, content-aware upload safety, explicit per-page permissions — real security primitives, engineered in. Every claim on this page maps to source you can inspect.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" asChild>
