@@ -22,472 +22,238 @@ const docsLink = (href: string, label: string) => (
 );
 
 const faqs: FAQItem[] = [
-  // About PageSpace
+  // What is PageSpace?
   {
     id: "what-is-pagespace",
     question: "What is PageSpace?",
     answer:
-      "PageSpace is an AI-native workspace where everything is a page — documents, sheets, code, AI chats, channels, task lists, canvases, folders, and files — and those pages live in a tree that humans and AI agents read and edit together. It replaces the \"document in a folder somewhere\" model with one structured space where your work and the AI that helps with it share the same material.",
-    category: "About PageSpace",
+      "PageSpace is a workspace for writing, tasks, and team communication — with AI built in as a collaborator, not a chatbot sidebar. Your documents, spreadsheets, chats, and code files all live in the same place, and AI agents can read and edit them the same way your teammates do.",
+    category: "What is PageSpace?",
   },
   {
-    id: "who-is-pagespace-for",
-    question: "Who is PageSpace for?",
-    answer:
-      "Individuals, founders, and teams who want real AI collaboration — not a chat sidebar bolted onto a document editor. PageSpace is designed for people who want AI to pick up context from where it's sitting in their workspace and actually change things on their behalf.",
-    category: "About PageSpace",
-  },
-  {
-    id: "what-makes-pagespace-different",
-    question: "What makes PageSpace different from the document tools I'm already using?",
+    id: "how-is-it-different",
+    question: "How is it different from tools like Notion or Google Docs?",
     answer: (
       <>
-        Three things. (1) Pages and AI share the same tree — an agent inside a
-        project folder knows it&apos;s in that project. (2) Permissions are explicit per
-        page, not inherited from parents — you can&apos;t accidentally share a
-        subtree. (3) Security primitives are real and inspectable: a hash-chain
-        audit log, content-aware upload safety, and code you can read. Start with{" "}
-        {docsLink("/docs/core-concepts", "Core Concepts")} and{" "}
-        {docsLink("/security", "Security")}.
+        In most tools, AI is a panel that talks about your content. In PageSpace,
+        AI agents are actual workspace participants — they can create pages,
+        rewrite sections, file GitHub issues, schedule meetings, and ask each
+        other for help. The content model is also unified: one search, one
+        permission system, one tree of pages regardless of type.
       </>
     ),
-    category: "About PageSpace",
+    category: "What is PageSpace?",
   },
   {
-    id: "is-pagespace-open-source",
-    question: "Is PageSpace open source?",
+    id: "solo-or-teams",
+    question: "Is it just for teams, or can I use it on my own?",
     answer:
-      "No. PageSpace is proprietary software.",
-    category: "About PageSpace",
+      "Both. Individuals use it as a personal AI-powered notebook and task system. Teams use it for real-time collaboration. You can start solo and add people whenever.",
+    category: "What is PageSpace?",
   },
 
-  // Getting Started
+  // Pricing and plans
   {
-    id: "how-do-i-sign-up",
-    question: "How do I sign up?",
-    answer: (
-      <>
-        Passkey (Touch ID, Face ID, Windows Hello), magic link (a short-lived
-        sign-in email), or Google / Apple sign-in. There are no passwords to set,
-        remember, or leak. More detail in{" "}
-        {docsLink("/docs/features/accounts", "Accounts & Sign In")}.
-      </>
-    ),
-    category: "Getting Started",
-  },
-  {
-    id: "what-should-i-do-first",
-    question: "What should I do first?",
+    id: "is-there-a-free-plan",
+    question: "Is there a free plan?",
     answer:
-      "Create your first drive, drop a few pages into it — a document, an AI chat, maybe a task list — and ask the AI to help with something real (draft a task list from a brief, summarize a thread, rewrite a section). PageSpace gets more useful the more you organize, because agents inherit context from where they sit in the tree.",
-    category: "Getting Started",
+      "Yes. The Free plan includes 500 MB of storage and 50 AI calls per day. No credit card required.",
+    category: "Pricing and plans",
   },
   {
-    id: "do-i-need-a-credit-card",
-    question: "Do I need a credit card?",
-    answer:
-      "No. The Free plan doesn't require a credit card.",
-    category: "Getting Started",
-  },
-  {
-    id: "where-do-i-download",
-    question: "Where do I download the desktop or mobile apps?",
+    id: "what-do-paid-plans-include",
+    question: "What do the paid plans include?",
     answer: (
       <>
-        The {docsLink("/downloads", "Downloads page")} has builds for macOS (Apple
-        Silicon and Intel), Windows, Linux, and iOS (via TestFlight). Android is in
-        progress.
+        More AI calls and storage. Pro is $15/month, Founder is $50/month,
+        Business is $100/month. All plans include real-time collaboration, AI
+        agents, and the ability to bring your own API key. Full comparison on
+        the {docsLink("/pricing", "Pricing page")}.
       </>
     ),
-    category: "Getting Started",
-  },
-
-  // How PageSpace is organized
-  {
-    id: "drive-vs-page",
-    question: "What's a drive vs a page?",
-    answer: (
-      <>
-        A drive is a top-level workspace you own — think of it as the root of a
-        filesystem. A page is anything inside a drive: a document, folder, sheet,
-        AI chat, channel, task list, canvas, code file, or uploaded file. Pages
-        nest inside each other to form a tree. See{" "}
-        {docsLink("/docs/core-concepts", "Core Concepts")} for the model.
-      </>
-    ),
-    category: "How PageSpace is organized",
-  },
-  {
-    id: "what-page-types",
-    question: "What page types can I create?",
-    answer: (
-      <>
-        Nine: Document, Folder, Sheet, Canvas, Code, Task List, Channel, AI Chat,
-        and File (uploads). Every page type lives in the same tree and can be
-        nested inside any other. Full list and capabilities in{" "}
-        {docsLink("/docs/page-types", "Page Types")}.
-      </>
-    ),
-    category: "How PageSpace is organized",
-  },
-  {
-    id: "can-i-move-pages",
-    question: "Can I move and nest pages freely?",
-    answer:
-      "Yes. Drag pages between parents, reorder siblings, move whole subtrees. Moving a page updates its breadcrumb path, which updates the context any AI agent underneath it inherits.",
-    category: "How PageSpace is organized",
-  },
-  {
-    id: "no-permission-inheritance",
-    question: "If I share a folder with someone, do they get access to everything inside it?",
-    answer: (
-      <>
-        No. Sharing a folder only gives access to that folder — pages inside
-        it each need their own grant. For teammates who need full access to a
-        drive, use the Owner or Admin role; those cover every page automatically.
-        For selective access, grant per page with view, edit, share, or delete
-        rights and an optional expiry. More in{" "}
-        {docsLink("/docs/features/sharing", "Sharing & Permissions")}.
-      </>
-    ),
-    category: "How PageSpace is organized",
-  },
-
-  // AI in PageSpace
-  {
-    id: "what-can-ai-do",
-    question: "What can the AI actually do in my workspace?",
-    answer: (
-      <>
-        Read pages, edit pages, create new pages, move and rename them, search
-        across content, run sheet formulas, attach files, consult other agents,
-        and call out to integrations like Google Calendar and GitHub. AI
-        isn&apos;t a sidebar that explains your content — it&apos;s a collaborator
-        that changes it. See {docsLink("/docs/features/ai", "AI in your Workspace")}.
-      </>
-    ),
-    category: "AI in PageSpace",
-  },
-  {
-    id: "what-are-ai-agents",
-    question: "What are AI agents and how do I create one?",
-    answer: (
-      <>
-        An AI agent is an AI Chat page you place somewhere in your tree. Give it a
-        role (system prompt), pick a provider and model, and decide which tools it
-        can use. Because it lives in the tree, it picks up context from wherever
-        it sits — an agent inside a project folder knows it&apos;s in that project.{" "}
-        {docsLink("/docs/page-types/ai-chat", "AI Chat")} covers the full
-        configuration.
-      </>
-    ),
-    category: "AI in PageSpace",
-  },
-  {
-    id: "what-is-global-assistant",
-    question: "What's the Global Assistant, and how is it different from an agent?",
-    answer:
-      "The Global Assistant is a personal AI that follows you across every drive you're a member of. Use it for cross-drive questions, quick one-off tasks, or anything that isn't scoped to a single project. An agent on a page is scoped to that spot in the tree; the Global Assistant isn't.",
-    category: "AI in PageSpace",
-  },
-  {
-    id: "which-models-providers",
-    question: "Which AI models and providers can I use?",
-    answer: (
-      <>
-        Several providers across multiple hosted models, plus bring-your-own-key
-        support if you prefer to pay your provider directly. Full list and per-plan
-        limits on {docsLink("/pricing", "Pricing")} and{" "}
-        {docsLink("/docs/features/ai", "AI in your Workspace")}.
-      </>
-    ),
-    category: "AI in PageSpace",
-  },
-  {
-    id: "what-is-byok",
-    question: "What does \"Bring Your Own Key\" mean?",
-    answer: (
-      <>
-        You plug in your own API keys for providers like OpenAI, Anthropic, Google,
-        or OpenRouter. Your keys are encrypted at rest with AES-256-GCM and used
-        to make AI calls on your behalf — which bypasses PageSpace&apos;s daily AI
-        call limits entirely. BYOK is available on every plan, including Free. See{" "}
-        {docsLink("/pricing", "Pricing")} for the full comparison.
-      </>
-    ),
-    category: "AI in PageSpace",
-  },
-  {
-    id: "ai-access-to-content",
-    question: "Does AI see content I haven't given it access to?",
-    answer: (
-      <>
-        No. Agents act as the user who invoked them. If you can&apos;t read a
-        page, an agent acting on your behalf can&apos;t read it either.{" "}
-        {docsLink("/docs/features/sharing", "Sharing & Permissions")} covers how
-        this resolves in practice.
-      </>
-    ),
-    category: "AI in PageSpace",
-  },
-  {
-    id: "content-training",
-    question: "Is my content used to train AI models?",
-    answer:
-      "No. Your workspace content is never used to train models — ours or anyone else's. When PageSpace sends content to a model provider, it goes through that provider's API under terms that prohibit training on customer data.",
-    category: "AI in PageSpace",
-  },
-  {
-    id: "undo-ai-changes",
-    question: "Can I undo something AI changed?",
-    answer:
-      "Yes. Pages keep version history — roll back any AI (or human) edit with a click.",
-    category: "AI in PageSpace",
-  },
-
-  // Working with a team
-  {
-    id: "how-invite-teammates",
-    question: "How do I invite teammates to a drive?",
-    answer:
-      "Invite by email from the drive settings. Invitees get a link that sets up their account (passkey or magic link) and drops them into the drive with the role you assigned.",
-    category: "Working with a team",
-  },
-  {
-    id: "drive-roles",
-    question: "What are the drive roles?",
-    answer: (
-      <>
-        Owner (unconditional full access, can delete the drive), Admin (full
-        access to every page in the drive once the invite is accepted), and Member
-        (no default page access — individual pages must be granted explicitly).{" "}
-        {docsLink("/docs/features/drives", "Drives & Workspaces")} has the full
-        breakdown.
-      </>
-    ),
-    category: "Working with a team",
-  },
-  {
-    id: "real-time-editing",
-    question: "Can two people edit the same page at once?",
-    answer:
-      "Yes. Real-time collaboration with live cursors and presence indicators works on documents, sheets, and canvases. Channels and AI chats broadcast new messages the moment they're sent.",
-    category: "Working with a team",
-  },
-  {
-    id: "share-single-page",
-    question: "How do I share a single page without sharing the whole drive?",
-    answer: (
-      <>
-        Use per-page grants. Pick a page, choose a user (or apply a role template),
-        set view / edit / share / delete flags, and optionally an expiry. The
-        grant applies only to that page — see the permission-cascade question
-        above. Details in {docsLink("/docs/features/sharing", "Sharing & Permissions")}.
-      </>
-    ),
-    category: "Working with a team",
-  },
-  {
-    id: "how-channels-work",
-    question: "How do channels work?",
-    answer: (
-      <>
-        Channels are real-time message threads that live as pages in the tree.
-        Post messages, react with emoji, attach files, and @mention other users
-        or AI agents. Because channels are pages, they&apos;re searchable,
-        shareable, and permissioned just like documents. More in{" "}
-        {docsLink("/docs/page-types/channel", "Channels")}.
-      </>
-    ),
-    category: "Working with a team",
-  },
-  {
-    id: "agents-in-channels",
-    question: "Can agents join channels and respond when @mentioned?",
-    answer:
-      "Yes. Put an AI Chat in the same drive and @mention it in a channel — it reads the recent conversation as context and replies inline. Mentioning an agent runs it with your permissions, not a shared service identity.",
-    category: "Working with a team",
-  },
-
-  // Security and privacy
-  {
-    id: "how-is-data-encrypted",
-    question: "How is my data encrypted?",
-    answer: (
-      <>
-        TLS in transit for every request; volume-level encryption at rest for page
-        content and file uploads; app-layer AES-256-GCM for secrets like OAuth
-        tokens and stored API keys. Full posture on{" "}
-        {docsLink("/security", "Security")}.
-      </>
-    ),
-    category: "Security and privacy",
-  },
-  {
-    id: "where-does-content-live",
-    question: "Where does my content actually live?",
-    answer:
-      "On PostgreSQL instances managed by PageSpace for cloud customers, or on your own infrastructure if you self-host. Content is stored queryable so AI agents can read and edit it directly — the alternative (searchable-encryption schemes) would trade significant capability for protection the volume encryption already provides.",
-    category: "Security and privacy",
-  },
-  {
-    id: "upload-malware-check",
-    question: "How are uploaded files checked for malware?",
-    answer: (
-      <>
-        Every upload runs through a content-based classifier (Magika). It inspects
-        the bytes of the file, not the extension — so a Windows PE binary renamed
-        to <code className="rounded bg-muted px-1 py-0.5 text-xs">.txt</code> still
-        gets rejected, along with Linux ELF, macOS Mach-O, Android DEX, raw HTML,
-        SVG, and JavaScript. See {docsLink("/security", "Security")} for the
-        details.
-      </>
-    ),
-    category: "Security and privacy",
-  },
-  {
-    id: "audit-log",
-    question: "What's the audit log?",
-    answer: (
-      <>
-        Security events (authentication, permission changes, data access, admin
-        actions) are written to a SHA-256 hash chain. A background job
-        re-verifies the chain on a schedule, and any batch emitted to external
-        SIEM tools is re-verified again before delivery. A detected break halts
-        emission. Full design in{" "}
-        {docsLink("/docs/security/zero-trust", "Zero-Trust Architecture")}.
-      </>
-    ),
-    category: "Security and privacy",
-  },
-  {
-    id: "can-i-export-data",
-    question: "Can I export my data?",
-    answer: (
-      <>
-        Yes. Documents export to Markdown and .docx, sheets to CSV and XLSX, code
-        pages as source files, and uploaded files as their originals. It comes
-        out the way it went in. See{" "}
-        {docsLink("/docs/features/pages", "Pages")} for what ships with each page
-        type.
-      </>
-    ),
-    category: "Security and privacy",
-  },
-  {
-    id: "cancel-account",
-    question: "What happens if I cancel my account?",
-    answer: (
-      <>
-        Export anything you want to keep before cancelling. For specific questions
-        about data deletion timelines,{" "}
-        {docsLink("/contact", "please get in touch")}.
-      </>
-    ),
-    category: "Security and privacy",
-  },
-
-  // Integrations and extensibility
-  {
-    id: "what-integrations",
-    question: "What does PageSpace integrate with today?",
-    answer: (
-      <>
-        Google Calendar (two-way sync with agent tools for availability and
-        scheduling), GitHub (per-user repo access with agent tools for issues,
-        PRs, and code review), and MCP (connect PageSpace to any AI client that
-        speaks the Model Context Protocol). Full list on{" "}
-        {docsLink("/docs/integrations", "Integrations")}.
-      </>
-    ),
-    category: "Integrations and extensibility",
-  },
-  {
-    id: "connect-to-claude-cursor",
-    question: "Can I connect PageSpace to Claude, Cursor, or other AI clients?",
-    answer: (
-      <>
-        Yes — PageSpace ships an MCP server. Issue a scoped token, point your
-        client at the PageSpace MCP endpoint, and it can read and edit your
-        workspace using the same tools our agents use. Setup in{" "}
-        {docsLink("/docs/integrations/mcp", "MCP Integration")}.
-      </>
-    ),
-    category: "Integrations and extensibility",
-  },
-  {
-    id: "use-local-tools",
-    question: "Can PageSpace use my local tools?",
-    answer: (
-      <>
-        Yes, in PageSpace Desktop. Configure local MCP servers in Settings and
-        the desktop app spawns them as subprocesses — filesystem access,
-        documentation lookup (Context7), or any MCP-compatible server. Desktop
-        only; not exposed to the web app. See{" "}
-        {docsLink("/docs/integrations/mcp/desktop", "Desktop MCP Servers")}.
-      </>
-    ),
-    category: "Integrations and extensibility",
-  },
-  {
-    id: "own-oauth-credentials",
-    question: "Can I use my own OAuth credentials?",
-    answer:
-      "No. PageSpace ships with built-in Google and Apple sign-in, plus the integrations listed above. We don't support bring-your-own OAuth providers today.",
-    category: "Integrations and extensibility",
-  },
-
-  // Plans, platforms, and self-hosting
-  {
-    id: "what-plans",
-    question: "What plans are available?",
-    answer: (
-      <>
-        Free, Pro, Founder, and Business, plus an Enterprise track with SSO,
-        custom limits, and an SLA. The full comparison is on{" "}
-        {docsLink("/pricing", "Pricing")}.
-      </>
-    ),
-    category: "Plans and platforms",
+    category: "Pricing and plans",
   },
   {
     id: "hit-daily-ai-limit",
-    question: "What happens when I hit my daily AI limit?",
+    question: "What happens when I run out of AI calls for the day?",
     answer:
-      "AI features pause until the next day when your limit resets. The rest of PageSpace — documents, sheets, channels, collaboration — keeps working. Upgrading your plan or adding your own API keys (BYOK) gets you more, and BYOK is effectively unlimited.",
-    category: "Plans and platforms",
+      "Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until your limit resets the next day. Add your own API key (see below) and there's no daily limit.",
+    category: "Pricing and plans",
   },
   {
-    id: "change-plans-later",
-    question: "Can I change plans later?",
+    id: "bring-your-own-key",
+    question: "Can I use my own OpenAI or Anthropic key instead of the built-in limits?",
+    answer: (
+      <>
+        Yes. Paste your API key into Settings and PageSpace will use it for your
+        AI calls instead of counting against your daily limit. Available on
+        every plan including Free. See {docsLink("/pricing", "Pricing")} for
+        the full comparison.
+      </>
+    ),
+    category: "Pricing and plans",
+  },
+
+  // Getting started
+  {
+    id: "how-do-i-sign-up",
+    question: "How do I sign up?",
     answer:
-      "Yes. Upgrades take effect immediately with prorated billing; downgrades apply at the end of the current billing period.",
-    category: "Plans and platforms",
+      "With a passkey (Touch ID, Face ID, Windows Hello), a magic link emailed to you, or Google or Apple sign-in. There are no passwords to create or remember.",
+    category: "Getting started",
+  },
+  {
+    id: "how-do-i-get-my-team-in",
+    question: "How do I get my team in?",
+    answer:
+      "Invite teammates by email from your drive settings. They get a link, set up their account (passkey or magic link), and land directly in your workspace. Admins get access to everything in the drive; regular members only see pages you specifically share with them.",
+    category: "Getting started",
   },
   {
     id: "desktop-app",
     question: "Is there a desktop app?",
     answer: (
       <>
-        Yes — macOS (Apple Silicon + Intel), Windows, and Linux. The desktop app
-        gives you deeper OS integration (local MCP servers, native windows,
-        direct file access) that the browser sandbox doesn&apos;t allow. Downloads
-        on the {docsLink("/downloads", "Downloads page")}.
+        Yes — macOS (Apple Silicon and Intel), Windows, and Linux. There&apos;s
+        also an iOS app via TestFlight, and PageSpace works in any web browser.
+        Android is in progress. See the{" "}
+        {docsLink("/downloads", "Downloads page")}.
       </>
     ),
-    category: "Plans and platforms",
+    category: "Getting started",
+  },
+
+  // Working with AI
+  {
+    id: "what-can-ai-do",
+    question: "What can the AI actually do?",
+    answer:
+      "It can draft and edit documents, build task lists from briefs, summarize threads, search your workspace, update spreadsheets, schedule meetings, file GitHub issues, and ask other agents for help. It makes changes — it doesn't just answer questions.",
+    category: "Working with AI",
   },
   {
-    id: "mobile-app",
-    question: "Can I use PageSpace on my phone?",
+    id: "specialized-ai-assistant",
+    question: "Can I create a specialized AI assistant for a specific project or role?",
+    answer:
+      "Yes. You can place an AI agent anywhere in your workspace and give it a role — a marketing agent in your campaigns folder, a code reviewer in your engineering drive. It picks up context from where it sits, so it already knows what project it's working on.",
+    category: "Working with AI",
+  },
+  {
+    id: "which-models-available",
+    question: "Which AI models are available?",
+    answer:
+      "You can pick from models across OpenAI, Anthropic, Google, xAI, OpenRouter, and others, or run a local model via Ollama. Each agent in your workspace can use a different model.",
+    category: "Working with AI",
+  },
+  {
+    id: "ai-access-to-content",
+    question: "Will the AI touch content I haven't given it access to?",
+    answer:
+      "No. Agents act as the user who asked them — they can only see and edit what you can see and edit.",
+    category: "Working with AI",
+  },
+  {
+    id: "content-training",
+    question: "Is my content used to train AI models?",
+    answer:
+      "No. Your content goes to model providers through APIs under terms that prohibit training on customer data. We don't use it to train anything either.",
+    category: "Working with AI",
+  },
+
+  // Collaboration and sharing
+  {
+    id: "real-time-editing",
+    question: "Can multiple people edit the same document at the same time?",
+    answer:
+      "Yes — real-time editing with live cursors on documents, spreadsheets, and canvases. Messages in channels and AI chats appear instantly for everyone.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "no-permission-inheritance",
+    question: "If I share a folder with someone, do they get access to everything inside it?",
+    answer:
+      "No. Sharing a folder only gives access to that folder — pages inside each need their own share. Admins and owners are the exception; they get access to everything in the drive automatically.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "how-channels-work",
+    question: "How do team chat channels work?",
     answer: (
       <>
-        iOS is available now through TestFlight — join from the{" "}
-        {docsLink("/downloads", "Downloads page")}. Android is in progress.
-        PageSpace also runs in any modern mobile browser in the meantime.
+        Channels are message threads that live in your workspace just like any
+        other page — searchable, shareable, permissioned the same way. You can
+        @mention teammates or AI agents, attach files, and react with emoji.
       </>
     ),
-    category: "Plans and platforms",
+    category: "Collaboration and sharing",
+  },
+
+  // Privacy and security
+  {
+    id: "is-my-data-private",
+    question: "Is my data private?",
+    answer: (
+      <>
+        Yes. Content is encrypted at rest and in transit. Stored credentials
+        like API keys get an additional layer of encryption. More on the{" "}
+        {docsLink("/security", "Security page")}.
+      </>
+    ),
+    category: "Privacy and security",
+  },
+  {
+    id: "content-training-privacy",
+    question: "Is my content used to train AI models?",
+    answer:
+      "No — worth repeating since it comes up often. Your content is never used for training, by PageSpace or by the model providers we connect to.",
+    category: "Privacy and security",
+  },
+  {
+    id: "can-i-export-data",
+    question: "Can I export everything?",
+    answer:
+      "Yes. Documents export as Markdown or .docx, spreadsheets as CSV or XLSX, code files as source, and uploaded files as their originals.",
+    category: "Privacy and security",
+  },
+  {
+    id: "cancel-account",
+    question: "What happens if I cancel?",
+    answer: (
+      <>
+        Export anything you need before cancelling. For questions about data
+        deletion, {docsLink("/contact", "contact us")}.
+      </>
+    ),
+    category: "Privacy and security",
+  },
+
+  // Integrations
+  {
+    id: "what-integrations",
+    question: "What does PageSpace connect to?",
+    answer: (
+      <>
+        Google Calendar (two-way sync; agents can check your availability and
+        schedule meetings), GitHub (agents can browse repos, open issues, and
+        review PRs), and MCP (plug PageSpace into Claude, Cursor, or any other
+        AI client that supports Model Context Protocol). See the{" "}
+        {docsLink("/docs/integrations", "full list")}.
+      </>
+    ),
+    category: "Integrations",
+  },
+  {
+    id: "connect-to-claude-cursor",
+    question: "Can I connect PageSpace to Claude, Cursor, or other AI tools?",
+    answer: (
+      <>
+        Yes — via the PageSpace MCP server. Create a token in your settings,
+        point your client at the PageSpace MCP endpoint, and it can read and
+        write your workspace using the same tools the built-in agents use.{" "}
+        {docsLink("/docs/integrations/mcp", "Setup guide")}.
+      </>
+    ),
+    category: "Integrations",
   },
 ];
 

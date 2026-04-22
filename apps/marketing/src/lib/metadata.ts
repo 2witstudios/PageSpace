@@ -201,7 +201,7 @@ export const pageMetadata = {
   faq: createMetadata({
     title: "FAQ",
     description:
-      "Answers about how PageSpace works: pages and drives, AI agents, permissions without inheritance, hash-chain audit logs, BYOK, integrations, pricing, and self-hosting.",
+      "Answers about how PageSpace works: AI agents, pricing and plans, permissions, data privacy, integrations, and how to get your team started.",
     path: "/faq",
     keywords: [
       "FAQ",
