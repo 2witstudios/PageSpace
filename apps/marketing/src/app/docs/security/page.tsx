@@ -52,17 +52,17 @@ This section documents PageSpace's authentication system, permission model, and 
 - **Path-traversal protection** — file paths from uploads and user input are validated to reject directory traversal, encoded variants, null-byte injection, and symlink escape.
 - **Distributed rate limiting** — Postgres-backed, works across multiple instances; fails closed in production.
 
-## Known Tradeoffs
+## How content is stored
 
-### Plaintext Page Content
+Page content, conversation messages, and file metadata live in PostgreSQL, encrypted at rest via volume-level encryption and delivered over TLS in transit. Content is stored queryable so full-text search, regex tools, and AI agents can operate on it directly — the alternative (searchable-encryption schemes or decrypt-on-every-query) trades significant latency and capability for protection the volume layer already provides.
 
-Page content, conversation messages, and file metadata are stored as plaintext in PostgreSQL. This is a deliberate choice — it enables full-text search, regex tools, and AI features without the latency of searchable encryption. API keys and credentials are always encrypted at rest; page content is not encrypted at the application layer.
+Secrets are a different story: API keys, OAuth tokens, and stored credentials are encrypted at the application layer with a key PageSpace holds, so losing a disk or leaking a DB dump doesn't leak them.
 
-**Mitigations in place**:
+**What protects page content**:
 
-- **Infrastructure encryption** — data is stored on volume-encrypted disks and transmitted over TLS.
-- **Access controls** — drive ownership, drive admin membership, and direct page permissions; every check hits the DB on every request.
-- **Backup encryption** — backups inherit the same volume-level encryption.
+- **Encryption at rest** — data sits on volume-encrypted disks. Backups inherit the same encryption.
+- **TLS in transit** — every request between browser, web app, realtime service, and processor is encrypted.
+- **Access controls** — drive ownership, drive admin membership, and per-page permissions; every check hits the DB on every request.
 - **Audit logging** — SHA-256 hash-chain log covers authentication, authorization, data access, and admin events.
 - **Network isolation** — realtime and processor run on an internal network; only the web app is reachable from the public edge.
 
