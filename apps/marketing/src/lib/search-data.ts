@@ -101,74 +101,122 @@ const faqEntries: SearchEntry[] = [
   {
     title: "What is PageSpace?",
     description:
-      "AI-powered workspace where you, your team, and AI work together.",
-    href: "/faq",
+      "Workspace for writing, tasks, and team communication with AI built in as a collaborator, not a chatbot sidebar.",
+    href: "/faq#what-is-pagespace",
     category: "FAQ",
+    keywords: "overview introduction what is pagespace",
   },
   {
-    title: "Can I try PageSpace for free?",
+    title: "How is PageSpace different from Notion or Google Docs?",
     description:
-      "Free plan includes 500 MB storage, 50 AI interactions per day, and all core features.",
-    href: "/faq",
+      "AI agents are actual workspace participants — they create pages, file issues, schedule meetings, and ask each other for help.",
+    href: "/faq#how-is-it-different",
     category: "FAQ",
+    keywords: "difference compare notion google docs obsidian alternative",
   },
   {
-    title: "What are Page Agents?",
+    title: "Is there a free plan?",
     description:
-      "Specialized AI helpers that live in your workspace with custom system prompts and workspace context.",
-    href: "/faq",
+      "Yes. Free plan includes 500 MB storage and 50 AI calls per day. No credit card required.",
+    href: "/faq#is-there-a-free-plan",
     category: "FAQ",
-    keywords: "agent ai custom prompt role marketing expert project manager",
+    keywords: "free plan pricing cost no credit card",
   },
   {
-    title: "What is the Global Assistant?",
+    title: "What happens when I run out of AI calls?",
     description:
-      "Personal AI that follows you across all workspaces and remembers preferences.",
-    href: "/faq",
+      "Documents, tasks, channels, and collaboration keep working. AI pauses until your limit resets the next day.",
+    href: "/faq#hit-daily-ai-limit",
     category: "FAQ",
+    keywords: "daily limit ai calls reset quota",
   },
   {
-    title: "Is my data safe?",
-    description: "Data encrypted in transit and at rest with industry-standard security.",
-    href: "/faq",
-    category: "FAQ",
-    keywords: "security encryption privacy",
-  },
-  {
-    title: "Is my content used to train AI?",
+    title: "Can I use my own OpenAI or Anthropic API key?",
     description:
-      "No. Workspace content is never used to train AI models.",
-    href: "/faq",
+      "Yes — paste your key in Settings to bypass daily limits. Available on every plan including Free.",
+    href: "/faq#bring-your-own-key",
     category: "FAQ",
-    keywords: "training data privacy",
+    keywords: "byok bring your own key api anthropic openai google openrouter",
   },
   {
-    title: "Can multiple people edit at the same time?",
-    description: "Real-time collaboration with live cursors and changes.",
-    href: "/faq",
+    title: "How do I sign up?",
+    description:
+      "Passkey (Touch ID, Face ID, Windows Hello), magic link, or Google/Apple sign-in. No passwords.",
+    href: "/faq#how-do-i-sign-up",
     category: "FAQ",
-    keywords: "collaboration real-time simultaneous editing",
+    keywords: "sign up account register passkey magic link google apple",
+  },
+  {
+    title: "How do I get my team in?",
+    description:
+      "Invite by email from drive settings. Admins get full drive access; members only see pages you share.",
+    href: "/faq#how-do-i-get-my-team-in",
+    category: "FAQ",
+    keywords: "invite team members email drive admin",
+  },
+  {
+    title: "What can the AI actually do?",
+    description:
+      "Draft docs, build task lists, summarize threads, update spreadsheets, schedule meetings, file GitHub issues, and more.",
+    href: "/faq#what-can-ai-do",
+    category: "FAQ",
+    keywords: "ai capabilities agent tools actions workspace",
+  },
+  {
+    title: "Can I create a specialized AI assistant?",
+    description:
+      "Yes — place an AI agent anywhere and give it a role. It picks up context from where it sits in your workspace.",
+    href: "/faq#specialized-ai-assistant",
+    category: "FAQ",
+    keywords: "agent ai chat role system prompt project assistant",
+  },
+  {
+    title: "Is my content used to train AI models?",
+    description:
+      "No. Your content is never used for training by PageSpace or by the model providers.",
+    href: "/faq#content-training",
+    category: "FAQ",
+    keywords: "training data privacy ai content",
+  },
+  {
+    title: "If I share a folder, do people get access to everything inside it?",
+    description:
+      "No — pages inside each need their own share. Admins and owners are the exception.",
+    href: "/faq#no-permission-inheritance",
+    category: "FAQ",
+    keywords: "permissions inheritance folder sharing drive roles owner admin member",
+  },
+  {
+    title: "Is my data private?",
+    description:
+      "Yes. Encrypted at rest and in transit. API keys get an additional AES-256-GCM layer.",
+    href: "/faq#is-my-data-private",
+    category: "FAQ",
+    keywords: "encryption security tls aes at rest in transit privacy",
+  },
+  {
+    title: "Can I export my data?",
+    description:
+      "Markdown/.docx for docs, CSV/XLSX for sheets, source files for code, originals for uploads.",
+    href: "/faq#can-i-export-data",
+    category: "FAQ",
+    keywords: "export data portability markdown docx csv",
   },
   {
     title: "Is there a desktop app?",
-    description: "Desktop apps for macOS, Windows, and Linux with offline support.",
-    href: "/faq",
+    description:
+      "Yes — macOS, Windows, Linux. iOS via TestFlight. Android in progress.",
+    href: "/faq#desktop-app",
     category: "FAQ",
-    keywords: "download mac windows linux electron offline",
+    keywords: "download mac windows linux ios android electron desktop",
   },
   {
-    title: "Can I use PageSpace on my phone?",
-    description: "iOS app via TestFlight, Android coming soon, web works on mobile.",
-    href: "/faq",
+    title: "Can I connect PageSpace to Claude, Cursor, or other AI tools?",
+    description:
+      "Yes — via the PageSpace MCP server. Create a token, point your client at the endpoint.",
+    href: "/faq#connect-to-claude-cursor",
     category: "FAQ",
-    keywords: "mobile ios android phone testflight",
-  },
-  {
-    title: "What plans are available?",
-    description: "Free, Pro, Founder, and Business plans available.",
-    href: "/faq",
-    category: "FAQ",
-    keywords: "pricing plans free pro founder business",
+    keywords: "mcp claude cursor anthropic client external ai model context protocol",
   },
 ];
 
