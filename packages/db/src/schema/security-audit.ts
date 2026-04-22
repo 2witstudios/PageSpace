@@ -126,6 +126,8 @@ export const securityAuditLog = pgTable('security_audit_log', {
   ipTimestampIdx: index('idx_security_audit_ip').on(table.ipAddress, table.timestamp),
   // Hash chain verification
   eventHashIdx: index('idx_security_audit_event_hash').on(table.eventHash),
+  // Predecessor lookup (ORDER BY chain_seq DESC LIMIT 1 inside advisory lock)
+  chainSeqIdx: index('idx_security_audit_chain_seq').on(table.chainSeq),
   // High-risk event queries
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking

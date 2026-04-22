@@ -370,6 +370,8 @@ export const activityLogs = pgTable('activity_logs', {
   streamIdx: index('idx_activity_logs_stream').on(table.streamId, table.streamSeq).where(sql`${table.streamId} IS NOT NULL`),
   changeGroupIdx: index('idx_activity_logs_change_group').on(table.changeGroupId).where(sql`${table.changeGroupId} IS NOT NULL`),
   logHashIdx: index('idx_activity_logs_log_hash').on(table.logHash).where(sql`${table.logHash} IS NOT NULL`),
+  // Predecessor lookup (ORDER BY chainSeq DESC LIMIT 1 inside advisory lock)
+  chainSeqIdx: index('idx_activity_logs_chain_seq').on(table.chainSeq),
 }));
 
 /**

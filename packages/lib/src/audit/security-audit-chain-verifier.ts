@@ -146,7 +146,7 @@ export async function verifySecurityAuditChain(
 
       const entries = await db.query.securityAuditLog.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [asc(securityAuditLog.timestamp), asc(securityAuditLog.chainSeq)],
+        orderBy: [asc(securityAuditLog.chainSeq)],
         offset,
         limit: currentBatchSize,
       });
