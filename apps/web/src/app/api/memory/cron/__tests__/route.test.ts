@@ -11,7 +11,7 @@ import { assert } from '@/lib/memory/__tests__/riteway';
  * 4. Compacts fields if needed
  *
  * Key behaviors to test:
- * 1. Only accessible from internal network (CRON_SECRET + network origin check)
+ * 1. Authentication via HMAC-SHA256 + nonce (see cron-auth.ts)
  * 2. Only processes paying users (pro, founder, business)
  * 3. Skips users with personalization disabled
  * 4. Handles errors for individual users without failing entire job
@@ -90,9 +90,14 @@ describe('memory cron route', () => {
     });
   });
 
-  describe('localhost authentication (zero trust)', () => {
-    it('should return 403 when request comes from external host', async () => {
+  describe('cron authentication', () => {
+    it('should return 403 when cron signature headers are missing', async () => {
       const { POST } = await import('../route');
+      // Simulate what happens in non-dev environments: auth requires HMAC headers.
+      // In test mode (no CRON_SECRET) auth is bypassed, so we set a secret to
+      // exercise the rejection path.
+      const originalSecret = process.env.CRON_SECRET;
+      process.env.CRON_SECRET = 'test-secret';
       const request = new Request('https://pagespace.ai/api/memory/cron', {
         method: 'POST',
         headers: { host: 'pagespace.ai' },
@@ -101,38 +106,42 @@ describe('memory cron route', () => {
       const response = await POST(request);
       const data = await response.json();
 
+      process.env.CRON_SECRET = originalSecret;
+
       assert({
-        given: 'request from external host',
+        given: 'request with CRON_SECRET set but no HMAC headers',
         should: 'return 403 status',
         actual: response.status,
         expected: 403,
       });
 
       assert({
-        given: 'request from external host',
-        should: 'return forbidden error mentioning internal network',
-        actual: data.error.includes('internal network'),
+        given: 'request with CRON_SECRET set but no HMAC headers',
+        should: 'return forbidden error mentioning missing headers',
+        actual: data.error.includes('missing cron authentication headers'),
         expected: true,
       });
     });
 
-    it('should return 403 when x-forwarded-for header is present', async () => {
+    it('should proceed when request has x-forwarded-for set (Next.js 15 behavior)', async () => {
       const { POST } = await import('../route');
+      // x-forwarded-for is injected by Next.js 15 on every request; the auth
+      // layer must not reject on its presence.
       const request = new Request('http://localhost:3000/api/memory/cron', {
         method: 'POST',
         headers: {
           host: 'localhost:3000',
-          'x-forwarded-for': '203.0.113.195',
+          'x-forwarded-for': '172.18.0.1',
         },
       });
 
       const response = await POST(request);
 
       assert({
-        given: 'request with x-forwarded-for header (proxied)',
-        should: 'return 403 status',
-        actual: response.status,
-        expected: 403,
+        given: 'request with x-forwarded-for header in test mode',
+        should: 'not return 403 (host check is not a security gate)',
+        actual: response.status !== 403,
+        expected: true,
       });
     });
 
