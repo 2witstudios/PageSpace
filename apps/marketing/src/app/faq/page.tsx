@@ -139,13 +139,14 @@ const faqs: FAQItem[] = [
   },
   {
     id: "no-permission-inheritance",
-    question: "Do permissions cascade down the tree?",
+    question: "If I share a folder with someone, do they get access to everything inside it?",
     answer: (
       <>
-        No. Every page has its own access list — granting access to a parent
-        doesn&apos;t give access to its children. This is a deliberate design
-        choice: you can&apos;t accidentally share a subtree by sharing the folder
-        above it. More in{" "}
+        No. Sharing a folder only gives access to that folder — pages inside
+        it each need their own grant. For teammates who need full access to a
+        drive, use the Owner or Admin role; those cover every page automatically.
+        For selective access, grant per page with view, edit, share, or delete
+        rights and an optional expiry. More in{" "}
         {docsLink("/docs/features/sharing", "Sharing & Permissions")}.
       </>
     ),

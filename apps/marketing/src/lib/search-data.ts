@@ -122,12 +122,12 @@ const faqEntries: SearchEntry[] = [
     keywords: "open source license proprietary oss",
   },
   {
-    title: "Do permissions cascade down the tree?",
+    title: "If I share a folder, do people get access to everything inside it?",
     description:
-      "No. Every page has its own access list — sharing a folder doesn't share its children.",
+      "No — pages inside a folder each need their own grant. Drive Owner and Admin roles cover everything automatically.",
     href: "/faq#no-permission-inheritance",
     category: "FAQ",
-    keywords: "permissions inheritance folder sharing tree cascade",
+    keywords: "permissions inheritance folder sharing drive roles owner admin member",
   },
   {
     title: "What are AI agents?",
