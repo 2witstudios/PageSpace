@@ -21,6 +21,8 @@
     ],
     "paths": {
       "@/*": ["apps/web/src/*"],
+      "@pagespace/lib/*": ["packages/lib/src/*"],
+      "@pagespace/db/*": ["packages/db/src/*"],
       "@pagespace/*": ["packages/*/src"]
     }
   },
