@@ -94,7 +94,7 @@ describe('/api/track', () => {
         undefined,
         'page_view',
         {
-          metadata: { path: '/home', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          metadata: { path: '/home', timestamp: frozenDate.toISOString() },
           ip: '127.0.0.1',
           userAgent: 'unknown',
         }
@@ -108,7 +108,7 @@ describe('/api/track', () => {
       expect(trackFeature).toHaveBeenCalledWith(
         undefined,
         'dark-mode',
-        { feature: 'dark-mode', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() }
+        { feature: 'dark-mode', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -123,7 +123,7 @@ describe('/api/track', () => {
         undefined,
         'js',
         'Uncaught TypeError',
-        { type: 'js', message: 'Uncaught TypeError', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() }
+        { type: 'js', message: 'Uncaught TypeError', timestamp: frozenDate.toISOString() }
       );
     });
 
@@ -136,7 +136,7 @@ describe('/api/track', () => {
         undefined,
         'ui_click',
         {
-          metadata: { label: 'nav-button', ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          metadata: { label: 'nav-button', timestamp: frozenDate.toISOString() },
           ip: '127.0.0.1',
           userAgent: 'unknown',
         }
@@ -152,7 +152,7 @@ describe('/api/track', () => {
         undefined,
         'search',
         {
-          metadata: { ip: '127.0.0.1', userAgent: 'unknown', timestamp: frozenDate.toISOString() },
+          metadata: { timestamp: frozenDate.toISOString() },
           ip: '127.0.0.1',
           userAgent: 'unknown',
         }
