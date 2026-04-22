@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Providers.** PageSpace routes your conversation to one of 12 providers through a single underlying pipe. You pick the provider in settings; models show up once the provider is configured. Keys are encrypted at rest and scoped to your account — they are never shared with teammates, so each user configures their own.
+**Providers.** PageSpace routes your conversation to one of several AI providers through a single underlying pipe. You pick the provider in settings; models show up once the provider is configured. Keys are encrypted at rest and scoped to your account — they are never shared with teammates, so each user configures their own.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 

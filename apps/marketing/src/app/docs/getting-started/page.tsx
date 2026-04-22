@@ -23,7 +23,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 
 No credit card required. The free tier includes 500 MB storage, 50 AI calls per day, and a 20 MB max file size.
 
-After signup, PageSpace creates a **personal drive** (workspace) for you.
+After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 
 ## 2. Understand Drives and Pages
 

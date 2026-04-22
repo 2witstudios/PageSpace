@@ -102,12 +102,15 @@ export default function DocsPage() {
               key={section.title}
               className="rounded-xl border border-border bg-card p-6 hover:border-primary/50 transition-colors"
             >
-              <div className="flex items-center gap-3 mb-3">
+              <Link
+                href={section.href}
+                className="flex items-center gap-3 mb-3 group/title"
+              >
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <Icon className="h-4.5 w-4.5" />
                 </div>
-                <h2 className="text-lg font-semibold">{section.title}</h2>
-              </div>
+                <h2 className="text-lg font-semibold group-hover/title:text-primary transition-colors">{section.title}</h2>
+              </Link>
               <p className="text-sm text-muted-foreground mb-4">{section.description}</p>
               <ul className="space-y-1.5">
                 {section.links.map((link) => (

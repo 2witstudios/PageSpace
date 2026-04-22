@@ -81,7 +81,7 @@ Every tool respects the caller's permissions. If you cannot view a page in the w
 ## Token security
 
 - **Scoped access** — restrict a token to specific drives at creation.
-- **Instant revocation** — revoke from **Settings > MCP** or \`DELETE /api/auth/mcp-tokens/[tokenId]\`.
+- **Instant revocation** — revoke from **Settings > MCP** to cut a token off immediately.
 - **Audit logging** — token create/revoke/use events land in the audit log with the token identifier.
 - **Hash-only storage** — the database stores a SHA-256 hash, never the raw token. Losing a token means creating a new one.
 - **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
