@@ -11,6 +11,11 @@ import {
   ShieldCheck,
   Timer,
   Users,
+  Fingerprint,
+  Share2,
+  ShieldAlert,
+  FileSearch,
+  Link2Off,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -24,13 +29,12 @@ export function SecurityHero() {
             Defense in Depth
           </div>
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl mb-6">
-            Security Built Into
+            Security,
             <br />
-            <span className="text-primary">Every Layer</span>
+            <span className="text-primary">designed for review</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
-            PageSpace uses opaque session tokens, per-event authorization, and distributed
-            rate limiting to protect your data at every step.
+            Every claim on this page maps to a function, a test, or a commit — because your security team is going to look. Verifiable audit trails, content-aware upload safety, hash-only session tokens, and explicit permissions that can&apos;t cascade by accident.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" asChild>
@@ -51,10 +55,13 @@ export function SecurityHero() {
 
 export function SecurityKeyFeatures() {
   const features = [
-    { label: "Hash-Only Token Storage" },
-    { label: "Per-Event Authorization" },
-    { label: "Distributed Rate Limiting" },
-    { label: "TLS Encrypted", icon: Lock },
+    { label: "Hash-chain audit log" },
+    { label: "Content-aware uploads" },
+    { label: "No permission inheritance" },
+    { label: "Hash-only session tokens" },
+    { label: "Per-event authorization" },
+    { label: "Distributed rate limiting" },
+    { label: "TLS encrypted", icon: Lock },
   ];
 
   return (
@@ -236,6 +243,142 @@ export function AuthenticationSection() {
   );
 }
 
+export function VerifiableAuditSection() {
+  const cards = [
+    {
+      icon: Fingerprint,
+      title: "Chained at write time",
+      desc: "Every security event carries the SHA-256 hash of the prior event. Breaking a record in the middle breaks every record after it — tampering is self-evident.",
+    },
+    {
+      icon: Activity,
+      title: "Re-verified continuously",
+      desc: "A background job re-walks the chain on a schedule and alerts on any mismatch. This isn't a one-time integrity check at write — it's ongoing.",
+    },
+    {
+      icon: Link2Off,
+      title: "Halts external delivery on break",
+      desc: "Before any batch ships to an external SIEM, the chain is re-verified. If preflight fails, the batch never leaves — nothing compromised reaches downstream tooling dressed as authentic.",
+    },
+  ];
+
+  return (
+    <section className="py-16 md:py-24">
+      <div className="container mx-auto px-4 md:px-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">An audit log you can actually verify</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              Most audit logs are write-only. Ours is a hash chain re-verified on a schedule, and re-verified again before any batch is emitted to an external SIEM.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6 mb-8">
+            {cards.map((c) => (
+              <div key={c.title} className="rounded-xl border border-border bg-card p-6">
+                <c.icon className="h-8 w-8 text-primary mb-4" />
+                <h3 className="text-lg font-semibold mb-2">{c.title}</h3>
+                <p className="text-sm text-muted-foreground">{c.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-sm text-muted-foreground text-center">
+            Events covered: authentication, authorization, data access, admin actions, and security signals (rate limits, anomalies, brute-force detection).
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function PermissionModelSection() {
+  return (
+    <section className="py-16 md:py-24 bg-muted/30">
+      <div className="container mx-auto px-4 md:px-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">Permissions that can&apos;t cascade by accident</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              Most document products inherit permissions from parent folders. One wrong drag-and-drop and a personal folder is suddenly visible to the whole team. PageSpace doesn&apos;t inherit.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8 mb-6">
+            <div className="rounded-2xl border border-border bg-card p-8">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-6">
+                <Share2 className="h-6 w-6 text-primary" />
+              </div>
+              <h3 className="text-xl font-semibold mb-3">What that means</h3>
+              <p className="text-muted-foreground">
+                Grant access to a folder and the folder page is shared. Every page inside still has its own grant list. No page becomes visible because of where it lives in the tree.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-border bg-card p-8">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-6">
+                <ShieldCheck className="h-6 w-6 text-primary" />
+              </div>
+              <h3 className="text-xl font-semibold mb-3">Why it matters</h3>
+              <p className="text-muted-foreground">
+                The &quot;I shared one subfolder and accidentally gave away the tree&quot; class of incident can&apos;t happen here. Every shared page was shared on purpose.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-sm text-muted-foreground text-center">
+            Drive owners and admins still have full drive access by role — this is no-silent-cascades for end users, not deny-by-default for operators.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function InputSafetySection() {
+  const cards = [
+    {
+      icon: FileSearch,
+      title: "Uploads classified by content, not extension",
+      desc: "The Magika ML classifier inspects the bytes. Windows PE, macOS Mach-O, Linux ELF, Android DEX — all rejected even when renamed to .txt. Same for raw HTML, SVG, and JavaScript, the classic stored-XSS vectors.",
+    },
+    {
+      icon: Globe,
+      title: "SSRF protection that defeats DNS rebinding",
+      desc: "Server-side URL fetches are checked against loopback, RFC 1918 private ranges, link-local, and cloud metadata endpoints. Every DNS-resolved IP is validated, not just the first — an attacker rebinding a hostname after the initial check still gets rejected.",
+    },
+    {
+      icon: ShieldAlert,
+      title: "Path-traversal defense across encodings",
+      desc: "Uploads and user-supplied paths are rejected for ../, URL-encoded variants (%2e%2e, double-encoded), null-byte injection, and symlink escape. Real paths are verified, not string-compared.",
+    },
+  ];
+
+  return (
+    <section className="py-16 md:py-24">
+      <div className="container mx-auto px-4 md:px-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">The boring checklist, done seriously</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              The class of bugs that ship as CVEs in open-source workspace tools — uploaded executables renamed to .txt, SSRF to cloud metadata, path-traversal to read the server filesystem. We did the unglamorous work.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            {cards.map((c) => (
+              <div key={c.title} className="rounded-xl border border-border bg-card p-6">
+                <c.icon className="h-8 w-8 text-primary mb-4" />
+                <h3 className="text-lg font-semibold mb-2">{c.title}</h3>
+                <p className="text-sm text-muted-foreground">{c.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function SecurityCTA() {
   return (
     <section className="py-16 md:py-24 bg-muted/30">
@@ -244,10 +387,9 @@ export function SecurityCTA() {
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 mx-auto mb-6">
             <Users className="h-8 w-8 text-primary" />
           </div>
-          <h2 className="text-3xl font-bold mb-4">Questions About Security?</h2>
+          <h2 className="text-3xl font-bold mb-4">Compare our security to anything else you&apos;re evaluating</h2>
           <p className="text-lg text-muted-foreground mb-8">
-            Read our security documentation or contact us for more details about our security
-            practices.
+            Our docs point straight at the code that implements every claim. Read them, grep them, hand them to your security reviewer.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button size="lg" asChild>
