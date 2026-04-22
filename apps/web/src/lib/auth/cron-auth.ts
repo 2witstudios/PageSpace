@@ -97,7 +97,7 @@ export function _resetWarningFlag(): void {
  *   X-Cron-Signature: HMAC-SHA256(CRON_SECRET, `${timestamp}:${nonce}:${method}:${path}`)
  *
  * Validation:
- *   1. Reject if CRON_SECRET not configured (fail-closed in production)
+ *   1. Reject if CRON_SECRET not configured (fail-closed for any non-development/test env)
  *   2. Reject if any required header is missing
  *   3. Reject if timestamp older than 5 minutes (anti-replay)
  *   4. Recompute signature and timing-safe compare
