@@ -57,7 +57,7 @@ export function SecurityKeyFeatures() {
   const features = [
     { label: "Hash-chain audit log" },
     { label: "Content-aware uploads" },
-    { label: "No permission inheritance" },
+    { label: "Explicit per-page access" },
     { label: "Hash-only session tokens" },
     { label: "Per-event authorization" },
     { label: "Distributed rate limiting" },
