@@ -44,7 +44,7 @@ This spatial-semantic model drives three systems:
 
 ## 3. Context Flows Through the Tree
 
-**Permissions flow downward.** If you own a drive, you own every page in it. Page-level permissions grant specific access to specific users on specific pages.
+**Drive ownership grants access to every page in the drive.** Page-level grants are per-page only — there is no automatic inheritance from a parent page to its children. If you want a teammate to see a whole subtree, grant each page in it.
 
 **AI agents are location-aware.** An agent's system prompt is automatically populated with its drive, its breadcrumb path, and the page it lives on.
 

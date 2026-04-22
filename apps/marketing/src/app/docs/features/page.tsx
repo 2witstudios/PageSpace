@@ -23,7 +23,7 @@ export default function FeaturesIndexPage() {
     <div>
       <h1 className="text-3xl font-bold tracking-tight mb-4">Features</h1>
       <p className="text-lg text-muted-foreground mb-8">
-        Every page type shares the same set of behaviours — sharing, search, AI, versioning, accounts. This section covers what each of those behaviours does, how it works, and what it doesn&apos;t do.
+        Every page type shares the same set of behaviours — sharing, search, AI, accounts. This section covers what each of those behaviours does, how it works, and what it doesn&apos;t do. (Versioning and export are per-type — see the individual <Link href="/docs/page-types" className="underline underline-offset-4">page types</Link> for which ones support them.)
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">

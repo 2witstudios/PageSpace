@@ -76,7 +76,7 @@ PageSpace routes every model through the Vercel AI SDK across 12 providers:
 | Ollama | Models discovered from a local Ollama server | Local server URL |
 | LM Studio | Models discovered from a running LM Studio server | Local server URL |
 
-To configure a provider, go to **Settings > AI** and enter your key. You can set different providers per drive or per page. The full list of available models updates as providers publish new ones.
+To configure a provider, go to **Settings > AI** and enter your key. The provider and model default to your account-level choice, and any individual AI Chat page can override both. The full list of available models updates as providers publish new ones.
 
 ## 5. Create an AI Agent
 
@@ -85,7 +85,7 @@ AI Chat pages are specialized AI conversations with custom configuration:
 1. Right-click in the file tree and select **New AI Chat**
 2. Open the agent's settings to configure:
    - **System prompt**: custom instructions for the agent's behavior
-   - **Enabled tools**: which of the 38 workspace tools the agent can call
+   - **Enabled tools**: which of the 37 workspace tools the agent can call
    - **Read-only toggle**: when on, the agent can only read and search — no writes, no trash, no task updates
    - **Web search toggle**: enables the \`web_search\` tool
    - **Provider / Model**: which AI model powers this agent

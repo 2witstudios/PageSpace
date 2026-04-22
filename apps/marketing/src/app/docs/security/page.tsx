@@ -23,7 +23,7 @@ This section documents PageSpace's authentication system, permission model, and 
 - **Global invalidation** — administrative actions (log-out-everywhere, credential reset, suspension) reject every existing session for a user atomically.
 - **Device-token theft detection** — device (desktop/mobile) tokens rotate; anomalous signals (user-agent change, unexpected IP, refresh-timing anomalies) lower a per-device trust score that operators can gate sensitive actions on.
 - **Account lockout** — accounts facing repeated failed authentication are temporarily locked, regardless of source IP. Lockout state is durable across infrastructure restarts and complements rate limiting: rate limits throttle traffic, lockout halts the targeted account.
-- **OAuth 2.1 PKCE** — Google and Apple flows use RFC 7636 with a server-stored \`code_verifier\`. An intercepted authorization code is unusable without it.
+- **OAuth 2.1 PKCE (Google)** — the Google sign-in flow uses RFC 7636 with a server-stored \`code_verifier\`. An intercepted authorization code is unusable without it. Sign in with Apple doesn't expose PKCE and relies on its ID-token signature validation instead.
 - **Timing-safe comparisons** — every secret comparison (magic-link verify, device-token lookup, auth headers, CSRF) goes through a SHA-256 pre-hash + \`timingSafeEqual\`, so length and prefix structure leak no timing.
 - **Rate limiting** — login, signup, magic-link send, and token refresh are rate-limited in Postgres via a weighted sliding window (see [Zero-Trust](/docs/security/zero-trust#rate-limiting)).
 

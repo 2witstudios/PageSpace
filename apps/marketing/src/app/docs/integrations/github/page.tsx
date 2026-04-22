@@ -28,7 +28,7 @@ Give your agents a GitHub identity. Once connected, they can read repositories, 
 
 **The token is yours. Visibility is the lever.** You control which agents can discover the connection by setting visibility to *private*, *owned drives*, or *all drives* when you connect. But tools always execute with your GitHub token and your GitHub permissions — if a teammate's agent uses your connection, it's still your account on the other end.
 
-**Agents get 24 tools**, split into read and write. Read covers repositories, file trees and contents, branches, commits, code search, issues (get, list, comments), and pull requests (get, list, diffs, reviews, inline review comments). Write covers creating and updating issues, posting comments, creating a PR review, and leaving inline PR review comments. The write set is rate-limited tighter than read — **30 requests per minute** globally, dropping to **10 per minute** for any call that writes.
+**Agents get 19 tools**, split into read and write. Read covers repositories, file trees and contents, branches, commits, code search, issues (get, list, comments), and pull requests (get, list, diffs, reviews, inline review comments). Write covers creating and updating issues, posting comments, creating a PR review, and leaving inline PR review comments. The write set is rate-limited tighter than read — **30 requests per minute** globally, dropping to **10 per minute** for any call that writes.
 
 **Nothing renders inside PageSpace.** GitHub is agent-only — there's no inline PR or issue view on a page, no webhook that files a GitHub issue as a PageSpace task. If you want to see what happened, you look at GitHub.
 

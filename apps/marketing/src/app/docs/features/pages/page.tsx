@@ -37,7 +37,7 @@ Trashing is a soft delete. The page and everything beneath it get marked as tras
 
 Version history is an activity log of the page's edits. You can scroll it, diff any two entries, and roll back any entry to restore the page to that state. Versions are kept for 30 days by default — older ones are cleaned up in the background.
 
-Permissions resolve from two places at once: your role in the drive the page lives in, plus any per-page grants on this page or an ancestor. Every read, save, and export re-checks them, so changing someone's access takes effect on their next action.
+Permissions resolve from two places at once: your role in the drive the page lives in, plus any per-page grant on this specific page. There is no inheritance — a grant on a folder doesn't carry to its children. Every read, save, and export re-checks them, so changing someone's access takes effect on their next action.
 
 ## Good to know
 

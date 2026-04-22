@@ -13,7 +13,7 @@ const content = `
 
 Everything in PageSpace is a **page** — the universal container that forms a recursive tree, inherits permissions from its drive, and participates in search, @mentions, and AI context. For what you do with any page regardless of its type, see [Pages](/docs/features/pages).
 
-There are **9 built-in page types**, each tuned for a different kind of work. Every type behaves like a page — you move it, share it, link to it, export it, trash it — so the differences below are about what you can put *in* each one.
+There are **9 built-in page types**, each tuned for a different kind of work. Every type behaves like a page — you move it, share it, link to it, trash it — so the differences below are about what you can put *in* each one. Export and version history apply to the types that have a meaningful revisable body — Documents and Sheets most broadly.
 
 ## The 9 types
 

@@ -34,7 +34,7 @@ Saving is debounced: as you type, your changes are queued and written shortly af
 
 Every save becomes an entry in version history. You can scroll the history, diff any two points, and roll back to any earlier version. Version entries are retained for 30 days by default; older ones are cleaned up in the background.
 
-Permissions resolve from the drive role plus any per-page grants on this Code page or an ancestor. Every read and save re-checks them, so dropping someone's edit rights takes effect on their next save.
+Permissions resolve from the drive role plus any per-page grant on this specific Code page. There is no inheritance from a parent folder. Every read and save re-checks them, so dropping someone's edit rights takes effect on their next save.
 
 ## Related
 
