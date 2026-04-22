@@ -348,10 +348,8 @@ export const activityLogs = pgTable('activity_logs', {
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
 
-  // Monotonically-increasing commit-order key; predecessor SELECT uses this
-  // instead of timestamp to avoid forking when timestamps are pre-assigned
-  // before the advisory lock is acquired.
-  chainSeq: bigserial('chainSeq', { mode: 'number' }),
+  // BIGSERIAL for commit-order predecessor lookup — timestamps are pre-assigned before the advisory lock.
+  chainSeq: bigserial('chainSeq', { mode: 'number' }).notNull(),
 
   // Hash chain fields for tamper-evidence (Advanced Audit Logging)
   previousLogHash: text('previousLogHash'),  // Hash of previous log entry (null for first entry in chain)
