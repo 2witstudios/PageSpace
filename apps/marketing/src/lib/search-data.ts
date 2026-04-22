@@ -193,14 +193,6 @@ const faqEntries: SearchEntry[] = [
     keywords: "mcp claude cursor anthropic client external ai",
   },
   {
-    title: "Can I self-host PageSpace?",
-    description:
-      "Yes — on-prem deployment mode runs the full stack in your own infrastructure.",
-    href: "/faq#self-host",
-    category: "FAQ",
-    keywords: "self host on prem self-hosted deployment infrastructure",
-  },
-  {
     title: "Is there a desktop app?",
     description:
       "Yes — macOS, Windows, Linux. Deeper OS integration than the browser allows.",

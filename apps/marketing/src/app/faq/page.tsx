@@ -57,7 +57,7 @@ const faqs: FAQItem[] = [
     id: "is-pagespace-open-source",
     question: "Is PageSpace open source?",
     answer:
-      "No. PageSpace is proprietary software. Self-hosting is available as a deployment option for teams that need to run the full stack in their own infrastructure — see the self-hosting question below for details.",
+      "No. PageSpace is proprietary software.",
     category: "About PageSpace",
   },
 
@@ -448,21 +448,21 @@ const faqs: FAQItem[] = [
         {docsLink("/pricing", "Pricing")}.
       </>
     ),
-    category: "Plans, platforms, and self-hosting",
+    category: "Plans and platforms",
   },
   {
     id: "hit-daily-ai-limit",
     question: "What happens when I hit my daily AI limit?",
     answer:
       "AI features pause until the next day when your limit resets. The rest of PageSpace — documents, sheets, channels, collaboration — keeps working. Upgrading your plan or adding your own API keys (BYOK) gets you more, and BYOK is effectively unlimited.",
-    category: "Plans, platforms, and self-hosting",
+    category: "Plans and platforms",
   },
   {
     id: "change-plans-later",
     question: "Can I change plans later?",
     answer:
       "Yes. Upgrades take effect immediately with prorated billing; downgrades apply at the end of the current billing period.",
-    category: "Plans, platforms, and self-hosting",
+    category: "Plans and platforms",
   },
   {
     id: "desktop-app",
@@ -475,7 +475,7 @@ const faqs: FAQItem[] = [
         on the {docsLink("/downloads", "Downloads page")}.
       </>
     ),
-    category: "Plans, platforms, and self-hosting",
+    category: "Plans and platforms",
   },
   {
     id: "mobile-app",
@@ -487,21 +487,7 @@ const faqs: FAQItem[] = [
         PageSpace also runs in any modern mobile browser in the meantime.
       </>
     ),
-    category: "Plans, platforms, and self-hosting",
-  },
-  {
-    id: "self-host",
-    question: "Can I self-host PageSpace?",
-    answer: (
-      <>
-        Yes. PageSpace supports an on-prem deployment mode that runs the full
-        stack in your own infrastructure — useful for teams with regulatory,
-        data-residency, or network-isolation requirements. It&apos;s a
-        proprietary deployment option, not an open-source release.{" "}
-        {docsLink("/contact", "Contact us")} for details.
-      </>
-    ),
-    category: "Plans, platforms, and self-hosting",
+    category: "Plans and platforms",
   },
 ];
 
