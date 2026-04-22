@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+import { FAQHashOpener } from "./hash-opener";
 
 export const metadata = pageMetadata.faq;
 
@@ -509,6 +510,7 @@ export default function FAQPage() {
   return (
     <div className="min-h-screen bg-background">
       <SiteNavbar />
+      <FAQHashOpener />
 
       {/* Hero */}
       <section className="py-16 md:py-24">
