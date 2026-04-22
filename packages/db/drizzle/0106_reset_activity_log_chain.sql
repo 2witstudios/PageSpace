@@ -1,4 +1,4 @@
--- 0107: Reset activity_logs hash chain (PII exclusion)
+-- 0106: Reset activity_logs hash chain (PII exclusion)
 --
 -- The old hash algorithm included userId and actorEmail in each entry's hash.
 -- When a user is deleted (userId → null, actorEmail → anonymized), those hashes

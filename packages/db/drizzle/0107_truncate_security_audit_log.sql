@@ -1,4 +1,4 @@
--- 0108: Truncate security_audit_log
+-- 0107: Truncate security_audit_log
 --
 -- security_audit_log accumulated ~2019 entries with a forked hash chain caused by
 -- the same race condition as activity_logs (Apr 14-22 2026, now fixed). Unlike
