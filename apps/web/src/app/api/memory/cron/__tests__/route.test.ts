@@ -106,7 +106,11 @@ describe('memory cron route', () => {
       const response = await POST(request);
       const data = await response.json();
 
-      process.env.CRON_SECRET = originalSecret;
+      if (originalSecret !== undefined) {
+        process.env.CRON_SECRET = originalSecret;
+      } else {
+        delete process.env.CRON_SECRET;
+      }
 
       assert({
         given: 'request with CRON_SECRET set but no HMAC headers',
