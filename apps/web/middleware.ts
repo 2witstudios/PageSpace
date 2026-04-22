@@ -92,7 +92,7 @@ export async function middleware(req: NextRequest) {
     }
 
     // Public routes that don't require authentication
-    // Note: Cron routes handle their own auth via validateCronRequest (internal network only)
+    // Note: Cron routes handle their own auth via validateSignedCronRequest (HMAC-SHA256 + nonce)
     // Device/mobile auth endpoints authenticate via body tokens (device token, magic link),
     // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
     if (

@@ -1,18 +1,14 @@
 /**
  * Cron Authentication Utility
  *
- * Security model:
- *   1. Primary: HMAC-SHA256 signed requests with anti-replay protection
- *   2. Defense-in-depth: Internal network header checks
+ * Security model: HMAC-SHA256 signed requests with anti-replay protection.
  *
  * Production (CRON_SECRET required):
  *   - Requests MUST include valid signed headers (timestamp, nonce, signature)
  *   - Rejects if CRON_SECRET not configured (fail-closed)
- *   - Internal network checks still apply as additional layer
  *
  * Development (CRON_SECRET optional):
- *   - Falls back to internal network checks only
- *   - Logs a warning on first request
+ *   - All requests allowed with a warning on first request
  */
 
 import { createHmac } from 'crypto';
@@ -151,7 +147,6 @@ export function _resetWarningFlag(): void {
  *   3. Reject if timestamp older than 5 minutes (anti-replay)
  *   4. Recompute signature and timing-safe compare
  *   5. Reject if nonce already seen (recorded after signature verified)
- *   6. Defense-in-depth: require internal network origin
  *
  * Returns null on success, 403 NextResponse on failure.
  */
@@ -166,18 +161,12 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
         { status: 403 }
       );
     }
-    // Development fallback: network-only auth
+    // Development fallback: allow all requests with a warning
     if (!cronSecretWarningLogged) {
       console.warn(
-        '[cron-auth] CRON_SECRET is not configured. Falling back to network-only auth. Set CRON_SECRET in production.'
+        '[cron-auth] CRON_SECRET is not configured. All cron requests allowed in development mode. Set CRON_SECRET in production.'
       );
       cronSecretWarningLogged = true;
-    }
-    if (!isInternalRequest(request)) {
-      return NextResponse.json(
-        { error: 'Forbidden - cron endpoints only accessible from internal network' },
-        { status: 403 }
-      );
     }
     return null;
   }
@@ -221,14 +210,6 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
   if (!checkAndRecordNonce(nonce)) {
     return NextResponse.json(
       { error: 'Forbidden - cron request nonce already used' },
-      { status: 403 }
-    );
-  }
-
-  // Defense-in-depth: require internal network origin
-  if (!isInternalRequest(request)) {
-    return NextResponse.json(
-      { error: 'Forbidden - cron endpoints only accessible from internal network' },
       { status: 403 }
     );
   }

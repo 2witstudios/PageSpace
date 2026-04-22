@@ -297,14 +297,9 @@ describe('cron-auth', () => {
       expect(data.error).toContain('missing');
     });
 
-    it('given valid signature but external request, should return 403', async () => {
+    it('given valid signature from any host, should return null (host is not security-relevant)', () => {
       const request = createSignedRequest({ host: 'pagespace.ai' });
-      const response = validateSignedCronRequest(request);
-
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(403);
-      const data = await response!.json();
-      expect(data.error).toContain('internal network');
+      expect(validateSignedCronRequest(request)).toBeNull();
     });
 
     describe('without CRON_SECRET', () => {
@@ -319,7 +314,7 @@ describe('cron-auth', () => {
         (process.env as Record<string, string | undefined>).NODE_ENV = originalNodeEnv;
       });
 
-      it('given development mode, should fall back to internal network check', () => {
+      it('given development mode, should allow all requests with warning', () => {
         (process.env as Record<string, string | undefined>).NODE_ENV = 'development';
         const request = new Request('http://localhost:3000/api/cron/test', {
           headers: { host: 'localhost:3000' },
@@ -341,7 +336,7 @@ describe('cron-auth', () => {
         expect(data.error).toContain('CRON_SECRET must be configured in production');
       });
 
-      it('given test mode, should fall back to internal network check', () => {
+      it('given test mode, should allow all requests with warning', () => {
         (process.env as Record<string, string | undefined>).NODE_ENV = 'test';
         const request = new Request('http://localhost:3000/api/cron/test', {
           headers: { host: 'localhost:3000' },
