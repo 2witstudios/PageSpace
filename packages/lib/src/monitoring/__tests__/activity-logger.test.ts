@@ -253,6 +253,42 @@ describe('activity-logger', () => {
       const parsed = JSON.parse(serializeLogDataForHash(baseHashData));
       expect(parsed.timestamp).toBe(baseHashData.timestamp.toISOString());
     });
+
+    it('includes nested object content in previousValues, newValues, and metadata', () => {
+      const data = {
+        ...baseHashData,
+        previousValues: { title: 'old', count: 5 },
+        newValues: { title: 'new', count: 6 },
+        metadata: { source: 'api', traceId: 'abc' },
+      };
+      const parsed = JSON.parse(serializeLogDataForHash(data));
+
+      expect(parsed.previousValues).toEqual({ title: 'old', count: 5 });
+      expect(parsed.newValues).toEqual({ title: 'new', count: 6 });
+      expect(parsed.metadata).toEqual({ source: 'api', traceId: 'abc' });
+    });
+
+    it('produces the same serialization regardless of key order in nested objects (canonical JSON)', () => {
+      const dataA = {
+        ...baseHashData,
+        previousValues: { z: 1, a: 2 },
+        metadata: { source: 'api', traceId: 'xyz' },
+      };
+      const dataB = {
+        ...baseHashData,
+        previousValues: { a: 2, z: 1 },
+        metadata: { traceId: 'xyz', source: 'api' },
+      };
+
+      expect(serializeLogDataForHash(dataA)).toBe(serializeLogDataForHash(dataB));
+    });
+
+    it('produces different serialization for different nested object values', () => {
+      const dataA = { ...baseHashData, metadata: { source: 'api' } };
+      const dataB = { ...baseHashData, metadata: { source: 'webhook' } };
+
+      expect(serializeLogDataForHash(dataA)).not.toBe(serializeLogDataForHash(dataB));
+    });
   });
 
   // ── computeLogHash ────────────────────────────────────────────────────────
