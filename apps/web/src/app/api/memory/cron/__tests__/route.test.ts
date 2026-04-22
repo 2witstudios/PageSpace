@@ -1,5 +1,6 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeEach, afterEach } from 'vitest';
 import { assert } from '@/lib/memory/__tests__/riteway';
+import { computeCronSignature } from '@/lib/auth/cron-auth';
 
 /**
  * Memory Cron Route Tests
@@ -73,10 +74,44 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+// Helper that creates a properly HMAC-signed cron request.
+// The route validates HMAC-SHA256 signatures; tests that exercise non-auth
+// behavior must send signed requests when CRON_SECRET is set in the env.
+const TEST_SECRET = 'test-route-cron-secret';
+
+function createSignedCronRequest(opts: {
+  method?: string;
+  url?: string;
+  extraHeaders?: Record<string, string>;
+} = {}): Request {
+  const method = opts.method ?? 'POST';
+  const url = opts.url ?? 'http://web:3000/api/memory/cron';
+  const parsed = new URL(url);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = `nonce-${Math.random()}`;
+  const signature = computeCronSignature(TEST_SECRET, timestamp, nonce, method, parsed.pathname);
+  return new Request(url, {
+    method,
+    headers: {
+      host: parsed.host,
+      'x-cron-timestamp': timestamp,
+      'x-cron-nonce': nonce,
+      'x-cron-signature': signature,
+      ...opts.extraHeaders,
+    },
+  });
+}
+
 describe('memory cron route', () => {
+  let savedCronSecret: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Normalise CRON_SECRET so all tests run against a known secret state.
+    // Tests that need no-secret (dev bypass) must clear it themselves.
+    savedCronSecret = process.env.CRON_SECRET;
+    process.env.CRON_SECRET = TEST_SECRET;
     // Setup default mocks
     mockDbSelect.mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -90,14 +125,18 @@ describe('memory cron route', () => {
     });
   });
 
+  afterEach(() => {
+    if (savedCronSecret !== undefined) {
+      process.env.CRON_SECRET = savedCronSecret;
+    } else {
+      delete process.env.CRON_SECRET;
+    }
+  });
+
   describe('cron authentication', () => {
     it('should return 403 when cron signature headers are missing', async () => {
+      // CRON_SECRET is set by outer beforeEach; omitting HMAC headers must be rejected.
       const { POST } = await import('../route');
-      // Simulate what happens in non-dev environments: auth requires HMAC headers.
-      // In test mode (no CRON_SECRET) auth is bypassed, so we set a secret to
-      // exercise the rejection path.
-      const originalSecret = process.env.CRON_SECRET;
-      process.env.CRON_SECRET = 'test-secret';
       const request = new Request('https://pagespace.ai/api/memory/cron', {
         method: 'POST',
         headers: { host: 'pagespace.ai' },
@@ -105,12 +144,6 @@ describe('memory cron route', () => {
 
       const response = await POST(request);
       const data = await response.json();
-
-      if (originalSecret !== undefined) {
-        process.env.CRON_SECRET = originalSecret;
-      } else {
-        delete process.env.CRON_SECRET;
-      }
 
       assert({
         given: 'request with CRON_SECRET set but no HMAC headers',
@@ -127,56 +160,34 @@ describe('memory cron route', () => {
       });
     });
 
-    it('should proceed when request has x-forwarded-for set (Next.js 15 behavior)', async () => {
+    it('should pass a valid signed request with x-forwarded-for set (Next.js 15 regression)', async () => {
+      // Next.js 15 unconditionally injects x-forwarded-for; the HMAC auth layer
+      // must not be affected by its presence — only the signature headers matter.
       const { POST } = await import('../route');
-      // x-forwarded-for is injected by Next.js 15 on every request; the auth
-      // layer must not reject on its presence.
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: {
-          host: 'localhost:3000',
-          'x-forwarded-for': '172.18.0.1',
-        },
+      const request = createSignedCronRequest({
+        extraHeaders: { 'x-forwarded-for': '172.18.0.1' },
       });
 
       const response = await POST(request);
 
       assert({
-        given: 'request with x-forwarded-for header in test mode',
-        should: 'not return 403 (host check is not a security gate)',
+        given: 'valid signed request with x-forwarded-for header injected',
+        should: 'not return 403 (x-forwarded-for is irrelevant to HMAC auth)',
         actual: response.status !== 403,
         expected: true,
       });
     });
 
-    it('should proceed when request is from localhost', async () => {
+    it('should accept a validly signed request from any origin', async () => {
+      // Origin / host is not part of the HMAC message — only timestamp, nonce,
+      // method, and path are signed.
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
 
       assert({
-        given: 'request from localhost',
-        should: 'not return 403',
-        actual: response.status !== 403,
-        expected: true,
-      });
-    });
-
-    it('should proceed when request is from 127.0.0.1', async () => {
-      const { POST } = await import('../route');
-      const request = new Request('http://127.0.0.1:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: '127.0.0.1:3000' },
-      });
-
-      const response = await POST(request);
-
-      assert({
-        given: 'request from 127.0.0.1',
+        given: 'validly signed cron request',
         should: 'not return 403',
         actual: response.status !== 403,
         expected: true,
@@ -197,10 +208,7 @@ describe('memory cron route', () => {
       });
 
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
       const data = await response.json();
@@ -235,10 +243,7 @@ describe('memory cron route', () => {
         });
 
       const { POST } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'POST',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest();
 
       const response = await POST(request);
       const data = await response.json();
@@ -262,15 +267,12 @@ describe('memory cron route', () => {
   describe('GET support', () => {
     it('should support GET requests for cron services', async () => {
       const { GET } = await import('../route');
-      const request = new Request('http://localhost:3000/api/memory/cron', {
-        method: 'GET',
-        headers: { host: 'localhost:3000' },
-      });
+      const request = createSignedCronRequest({ method: 'GET' });
 
       const response = await GET(request);
 
       assert({
-        given: 'GET request from localhost',
+        given: 'valid signed GET request',
         should: 'return 200 status',
         actual: response.status,
         expected: 200,
