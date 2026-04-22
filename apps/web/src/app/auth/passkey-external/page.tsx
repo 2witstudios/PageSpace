@@ -44,12 +44,6 @@ function PasskeyExternalContent() {
           settleTimer = setTimeout(() => {
             if (unmounted) return;
             setStatus({ kind: 'complete' });
-            try {
-              window.close();
-            } catch {
-              // Best-effort: many browsers refuse window.close() for tabs
-              // not opened via window.open(). The terminal UI is the fallback.
-            }
           }, HANDOFF_SETTLE_MS);
         } else {
           setStatus({ kind: 'error', message: result.error });
