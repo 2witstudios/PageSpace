@@ -124,7 +124,7 @@ export class SecurityAuditService {
   private async _doInitialize(): Promise<void> {
     try {
       const lastEvent = await db.query.securityAuditLog.findFirst({
-        orderBy: desc(securityAuditLog.timestamp),
+        orderBy: [desc(securityAuditLog.chainSeq)],
         columns: { eventHash: true },
       });
 

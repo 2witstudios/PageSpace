@@ -9,7 +9,7 @@
  */
 
 import { db, activityLogs } from '@pagespace/db';
-import { asc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
+import { asc, desc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
 import { computeLogHash } from './activity-logger';
 
 /**
@@ -373,7 +373,7 @@ export async function quickIntegrityCheck(
     // Check first entry for chain seed
     const firstEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       columns: {
         id: true,
         chainSeed: true,
@@ -386,7 +386,7 @@ export async function quickIntegrityCheck(
     // Verify last few entries
     const lastEntries = await db.query.activityLogs.findMany({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       limit: 5,
       columns: {
         id: true,
@@ -463,7 +463,7 @@ export async function getHashChainStats(): Promise<{
     // Get first entry with chain seed
     const firstEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.chainSeed),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [asc(activityLogs.chainSeq)],
       columns: {
         timestamp: true,
         chainSeed: true,
@@ -473,7 +473,7 @@ export async function getHashChainStats(): Promise<{
     // Get last entry
     const lastEntry = await db.query.activityLogs.findFirst({
       where: isNotNull(activityLogs.logHash),
-      orderBy: [asc(activityLogs.timestamp)],
+      orderBy: [desc(activityLogs.chainSeq)],
       columns: {
         timestamp: true,
       },
