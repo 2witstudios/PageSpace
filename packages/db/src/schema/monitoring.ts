@@ -249,50 +249,12 @@ export const errorLogs = pgTable('error_logs', {
   endpointIdx: index('idx_errors_endpoint').on(table.endpoint),
 }));
 
-// Activity logging enums
-export const activityOperationEnum = pgEnum('activity_operation', [
-  'create',
-  'update',
-  'delete',
-  'restore',
-  'reorder',
-  'permission_grant',
-  'permission_update',
-  'permission_revoke',
-  'trash',
-  'move',
-  'agent_config_update',
-  // Membership operations
-  'member_add',
-  'member_remove',
-  'member_role_change',
-  // Authentication/Security operations
-  'login',
-  'logout',
-  'signup',
-  'email_change',
-  'token_create',
-  'token_revoke',
-  // File operations
-  'upload',
-  'convert',
-  // Account operations
-  'account_delete',
-  'profile_update',
-  'avatar_update',
-  // Message operations (Tier 1)
-  'message_update',
-  'message_delete',
-  // Role operations (Tier 1)
-  'role_reorder',
-  // Drive ownership operations (Tier 1)
-  'ownership_transfer',
-  // Version history operations
-  'rollback',
-  // AI conversation undo operations
-  'conversation_undo',
-  'conversation_undo_with_changes'
-]);
+// `activity_operation` is a text column, not an enum. The column stores values
+// constrained at the TS layer via the ActivityOperation string-literal union in
+// packages/lib/src/monitoring/activity-logger.ts. DB-level enum constraint was
+// dropped in migration 0105 to preserve the tamper-evident hash chain when
+// removing legacy values (any DELETE or UPDATE breaks computeLogHash / chain-link
+// verification).
 
 export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
 export const activityChangeGroupTypeEnum = pgEnum('activity_change_group_type', [
@@ -343,7 +305,7 @@ export const activityLogs = pgTable('activity_logs', {
   aiConversationId: text('aiConversationId'),
 
   // Target resource
-  operation: activityOperationEnum('operation').notNull(),
+  operation: text('operation').notNull(),
   resourceType: activityResourceEnum('resourceType').notNull(),
   resourceId: text('resourceId').notNull(),
   resourceTitle: text('resourceTitle'),
@@ -364,7 +326,7 @@ export const activityLogs = pgTable('activity_logs', {
   // Note: rollbackFromActivityId intentionally has no FK constraint to allow rollback
   // provenance to survive source activity deletion (retention policies, compliance)
   rollbackFromActivityId: text('rollbackFromActivityId'),
-  rollbackSourceOperation: activityOperationEnum('rollbackSourceOperation'), // Snapshot of source activity operation
+  rollbackSourceOperation: text('rollbackSourceOperation'), // Snapshot of source activity operation
   rollbackSourceTimestamp: timestamp('rollbackSourceTimestamp', { mode: 'date' }), // Snapshot of source activity timestamp
   rollbackSourceTitle: text('rollbackSourceTitle'), // Snapshot of source resource title
 

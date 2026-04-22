@@ -246,10 +246,10 @@ describe('SessionService', () => {
     it('revokeAllUserSessions_withActiveSessionsExist_returnsRevokedCount', async () => {
       vi.mocked(sessionRepository.revokeAllForUser).mockResolvedValue(3);
 
-      const count = await service.revokeAllUserSessions('user-1', 'password_change');
+      const count = await service.revokeAllUserSessions('user-1', 'admin_action');
 
       expect(count).toBe(3);
-      expect(sessionRepository.revokeAllForUser).toHaveBeenCalledWith('user-1', 'password_change');
+      expect(sessionRepository.revokeAllForUser).toHaveBeenCalledWith('user-1', 'admin_action');
     });
 
     it('revokeAllUserSessions_withNoActiveSessions_returnsZero', async () => {

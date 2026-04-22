@@ -259,7 +259,6 @@ describe('Schema definitions', () => {
     it('exports enums', () => {
       expect(monitoring.logLevelEnum).toBeDefined();
       expect(monitoring.httpMethodEnum).toBeDefined();
-      expect(monitoring.activityOperationEnum).toBeDefined();
       expect(monitoring.activityResourceEnum).toBeDefined();
       expect(monitoring.contentFormatEnum).toBeDefined();
       expect(monitoring.activityChangeGroupTypeEnum).toBeDefined();
@@ -405,12 +404,6 @@ describe('Schema definitions', () => {
   });
 
   describe('security-audit schema', () => {
-    it('exports enums', () => {
-      expect(securityAudit.securityEventTypeEnum).toBeDefined();
-      expect(securityAudit.securityEventTypeEnum.enumValues).toContain('auth.login.success');
-      expect(securityAudit.securityEventTypeEnum.enumValues).toContain('auth.login.failure');
-    });
-
     it('exports tables', () => {
       expect(securityAudit.securityAuditLog).toBeDefined();
     });

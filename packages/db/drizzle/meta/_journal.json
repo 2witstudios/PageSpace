@@ -736,6 +736,13 @@
       "when": 1776725637300,
       "tag": "0104_futuristic_dragon_lord",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1776813426712,
+      "tag": "0105_drop_password_auth_enums",
+      "breakpoints": true
     }
   ]
 }

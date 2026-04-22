@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createValidSecurityChain, type MockSecurityAuditEntry } from './audit-test-helpers';
+import {
+  createValidSecurityChain,
+  createValidSecurityChainWithEventTypes,
+  type MockSecurityAuditEntry,
+} from './audit-test-helpers';
 
 let mockEntries: MockSecurityAuditEntry[] = [];
 
@@ -197,6 +201,48 @@ describe('security-audit-chain-verifier', () => {
       expect(result.verificationStartedAt).toBeInstanceOf(Date);
       expect(result.verificationCompletedAt).toBeInstanceOf(Date);
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    // Migration 0105 converted security_audit_log.event_type from a pg enum to
+    // text so legacy values removed from the TS SecurityEventType union (e.g.
+    // the auth.password.* group dropped with passwordless-only auth) persist
+    // verbatim without DELETE / UPDATE. The verifier reads event_type as an
+    // opaque string and passes it through computeSecurityEventHash — chain
+    // integrity must hold for rows carrying those legacy values.
+    it('verifies a chain that includes legacy event_type values (migration 0105 invariant)', async () => {
+      mockEntries = createValidSecurityChainWithEventTypes([
+        'auth.login.success',
+        'auth.password.changed',
+        'auth.password.reset.requested',
+        'auth.password.reset.completed',
+        'auth.session.created',
+      ]);
+
+      const result = await verifySecurityAuditChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.entriesVerified).toBe(5);
+      expect(result.validEntries).toBe(5);
+      expect(result.invalidEntries).toBe(0);
+      expect(result.breakPoint).toBeNull();
+    });
+
+    it('verifies the chain-link across a legacy event_type row (previousHash continuity)', async () => {
+      // Tighter invariant: not just hash validity of the legacy row, but that
+      // its eventHash chains correctly into the successor row.
+      mockEntries = createValidSecurityChainWithEventTypes([
+        'auth.login.success',
+        'auth.password.changed',
+        'auth.session.created',
+      ]);
+
+      // Precondition: successor points at predecessor's hash.
+      expect(mockEntries[2]!.previousHash).toBe(mockEntries[1]!.eventHash);
+
+      const result = await verifySecurityAuditChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.breakPoint).toBeNull();
     });
   });
 });

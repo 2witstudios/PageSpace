@@ -18,56 +18,53 @@ import {
   real,
   jsonb,
   index,
-  pgEnum,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 
 /**
- * Security event type enum - categorizes all security-relevant events.
+ * Security event types. Stored as text in the DB (see migration 0105): the
+ * column was converted from a pg enum to text so that removing legacy values
+ * doesn't require DELETE / UPDATE on rows that participate in the
+ * tamper-evident hash chain (event_type is part of computeSecurityEventHash).
+ * Writer-side type safety lives here.
  */
-export const securityEventTypeEnum = pgEnum('security_event_type', [
-  // Authentication events
-  'auth.login.success',
-  'auth.login.failure',
-  'auth.logout',
-  'auth.token.created',
-  'auth.token.revoked',
-  'auth.token.refreshed',
-  'auth.mfa.enabled',
-  'auth.mfa.disabled',
-  'auth.mfa.challenged',
-  'auth.mfa.verified',
-  'auth.session.created',
-  'auth.session.revoked',
-  'auth.device.registered',
-  'auth.device.revoked',
-  // Authorization events
-  'authz.access.granted',
-  'authz.access.denied',
-  'authz.permission.granted',
-  'authz.permission.revoked',
-  'authz.role.assigned',
-  'authz.role.removed',
-  // Data access events
-  'data.read',
-  'data.write',
-  'data.delete',
-  'data.export',
-  'data.share',
-  // Admin events
-  'admin.user.created',
-  'admin.user.suspended',
-  'admin.user.reactivated',
-  'admin.user.deleted',
-  'admin.settings.changed',
-  // Security events
-  'security.anomaly.detected',
-  'security.rate.limited',
-  'security.brute.force.detected',
-  'security.suspicious.activity',
-]);
+export type SecurityEventType =
+  | 'auth.login.success'
+  | 'auth.login.failure'
+  | 'auth.logout'
+  | 'auth.token.created'
+  | 'auth.token.revoked'
+  | 'auth.token.refreshed'
+  | 'auth.mfa.enabled'
+  | 'auth.mfa.disabled'
+  | 'auth.mfa.challenged'
+  | 'auth.mfa.verified'
+  | 'auth.session.created'
+  | 'auth.session.revoked'
+  | 'auth.device.registered'
+  | 'auth.device.revoked'
+  | 'authz.access.granted'
+  | 'authz.access.denied'
+  | 'authz.permission.granted'
+  | 'authz.permission.revoked'
+  | 'authz.role.assigned'
+  | 'authz.role.removed'
+  | 'data.read'
+  | 'data.write'
+  | 'data.delete'
+  | 'data.export'
+  | 'data.share'
+  | 'admin.user.created'
+  | 'admin.user.suspended'
+  | 'admin.user.reactivated'
+  | 'admin.user.deleted'
+  | 'admin.settings.changed'
+  | 'security.anomaly.detected'
+  | 'security.rate.limited'
+  | 'security.brute.force.detected'
+  | 'security.suspicious.activity';
 
 /**
  * Security Audit Log table - tamper-evident security event tracking.
@@ -81,7 +78,7 @@ export const securityAuditLog = pgTable('security_audit_log', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
 
   // Event classification
-  eventType: securityEventTypeEnum('event_type').notNull(),
+  eventType: text('event_type').notNull().$type<SecurityEventType>(),
 
   // Actor (who triggered the event)
   userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -138,11 +135,6 @@ export const securityAuditLogRelations = relations(securityAuditLog, ({ one }) =
     references: [users.id],
   }),
 }));
-
-/**
- * TypeScript type for security event types (for type-safe usage)
- */
-export type SecurityEventType = typeof securityEventTypeEnum.enumValues[number];
 
 /**
  * TypeScript type for inserting audit log entries
