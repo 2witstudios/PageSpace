@@ -230,7 +230,7 @@ export async function GET(req: Request) {
       details: { method: 'Google OAuth' },
     });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'google',
       userAgent: req.headers.get('user-agent')
@@ -268,7 +268,7 @@ export async function GET(req: Request) {
       });
 
       trackAuthEvent(user.id, 'login', {
-        email,
+        email: maskEmail(email),
         ip: clientIP,
         provider: 'google-oauth',
         platform: 'desktop',
@@ -330,7 +330,7 @@ export async function GET(req: Request) {
       });
 
       trackAuthEvent(user.id, 'login', {
-        email,
+        email: maskEmail(email),
         ip: clientIP,
         provider: 'google-oauth',
         platform: 'ios',
