@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { audit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';

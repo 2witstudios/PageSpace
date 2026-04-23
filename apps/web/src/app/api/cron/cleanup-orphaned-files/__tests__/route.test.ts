@@ -24,12 +24,12 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createDriveServiceToken: mockCreateServiceToken,
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createDriveServiceToken: mockCreateServiceToken,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: mockAudit,
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

@@ -13,12 +13,12 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  cleanupExpiredDeviceTokens: mockCleanup,
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    cleanupExpiredDeviceTokens: mockCleanup,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: mockAudit,
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

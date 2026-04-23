@@ -3,7 +3,8 @@ import { db, workflows, taskItems, eq, and, lte, ne, inArray } from '@pagespace/
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_WORKFLOWS = 5;

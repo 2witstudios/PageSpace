@@ -8,8 +8,8 @@
 
 import { z } from 'zod/v4';
 import { db, contactSubmissions } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP } from '@/lib/auth/auth-helpers';
 
 const MAX_PAYLOAD_BYTES = 5 * 1024; // 5KB

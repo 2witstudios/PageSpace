@@ -65,17 +65,29 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: mockLoggers,
-  audit: vi.fn(),
-  auditRequest: mockAuditRequest,
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: mockLoggers,
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: mockAuditRequest,
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
-  verifySignedState: mockVerifySignedState,
-  exchangeOAuthCode: mockExchangeOAuthCode,
-  encryptCredentials: mockEncryptCredentials,
-  getProviderById: mockGetProviderById,
+vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
+    verifySignedState: mockVerifySignedState,
+}));
+vi.mock('@pagespace/lib/integrations/oauth/oauth-handler', () => ({
+    exchangeOAuthCode: mockExchangeOAuthCode,
+}));
+vi.mock('@pagespace/lib/integrations/credentials/encrypt-credentials', () => ({
+    encryptCredentials: mockEncryptCredentials,
+}));
+vi.mock('@pagespace/lib/integrations/repositories/provider-repository', () => ({
+    getProviderById: mockGetProviderById,
+}));
+vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
   createConnection: mockCreateConnection,
   findUserConnection: mockFindUserConnection,
   findDriveConnection: mockFindDriveConnection,

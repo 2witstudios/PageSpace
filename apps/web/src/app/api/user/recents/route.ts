@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, userPageViews, eq, desc } from '@pagespace/db';
-import { PageType } from '@pagespace/lib/client-safe';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

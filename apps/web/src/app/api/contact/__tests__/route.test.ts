@@ -31,8 +31,8 @@ vi.mock('@pagespace/db', () => ({
   contactSubmissions: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -40,11 +40,13 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     CONTACT_FORM: { maxAttempts: 10, windowMs: 60000 },
   },
 }));
@@ -54,8 +56,8 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const validPayload = {
   name: 'John Doe',

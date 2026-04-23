@@ -9,7 +9,7 @@ import {
   lte,
   sql,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 

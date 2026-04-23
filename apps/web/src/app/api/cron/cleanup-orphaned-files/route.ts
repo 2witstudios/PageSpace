@@ -1,10 +1,10 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { db } from '@pagespace/db';
-import { createDriveServiceToken } from '@pagespace/lib';
-import { audit } from '@pagespace/lib/server';
+import { createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import type { ServiceScope } from '@pagespace/lib';
+import type { ServiceScope } from '@pagespace/lib/services/validated-service-token';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];

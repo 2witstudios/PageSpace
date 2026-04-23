@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, userProfiles, users } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {

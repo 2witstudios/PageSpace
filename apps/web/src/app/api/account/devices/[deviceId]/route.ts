@@ -1,7 +1,8 @@
 import { db, eq, deviceTokens } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-import { hashToken } from '@pagespace/lib/auth';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';

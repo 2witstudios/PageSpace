@@ -4,21 +4,23 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockPurge, mockAudit } = vi.hoisted(() => ({
+const { mockPurge, mockAudit, mockAnonymize } = vi.hoisted(() => ({
   mockPurge: vi.fn(),
   mockAudit: vi.fn(),
+  mockAnonymize: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  anonymizeAiUsageContent: mockAnonymize,
   purgeAiUsageLogs: mockPurge,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: mockAudit,
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

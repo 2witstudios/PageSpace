@@ -10,14 +10,20 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 const mockGetBatchPagePermissions = vi.fn();
 
-vi.mock('@pagespace/lib/server', () => ({
-  getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -26,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult } from '@pagespace/lib/server';
+import type { DriveAccessResult } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for POST /api/workflows/[workflowId]/run
@@ -41,14 +41,20 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccess: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    checkDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
@@ -61,7 +67,7 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
 
 import { POST } from '../../run/route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 

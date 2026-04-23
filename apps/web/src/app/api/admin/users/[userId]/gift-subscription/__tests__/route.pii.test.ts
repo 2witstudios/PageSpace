@@ -92,11 +92,7 @@ vi.mock('@/lib/stripe-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       api: {
         info: vi.fn(),
@@ -104,12 +100,12 @@ vi.mock('@pagespace/lib/server', async () => {
         error: vi.fn(),
       },
     },
-    maskEmail,
-  };
-});
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
 
 import { POST, DELETE } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 describe('Gift subscription PII scrub', () => {
   beforeEach(() => {

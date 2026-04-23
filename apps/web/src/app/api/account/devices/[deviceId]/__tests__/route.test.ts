@@ -21,24 +21,28 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/secure-compare', () => ({
   secureCompare: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn((token: string) => `hashed_${token}`),
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn((token: string) => `hashed_${token}`),
 }));
 
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
@@ -54,7 +58,7 @@ import { DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-import { hashToken } from '@pagespace/lib/auth';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { revokeDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 

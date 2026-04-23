@@ -1,11 +1,15 @@
 import { users, db, eq } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers, accountRepository, activityLogRepository, auditRequest, revokeUserIntegrationTokens } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, isCloud, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token'
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge'
+import { isValidEmail } from '@pagespace/lib/validators/email';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { stripe } from '@/lib/stripe/client';
 
 const patchBodySchema = z
   .object({
@@ -269,33 +273,12 @@ export async function DELETE(req: Request) {
       loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
     }
 
-    // Revoke all OAuth integration tokens BEFORE user deletion (Art. 17 GDPR — #911)
-    // Best-effort: log failures but never block the right to erasure
-    try {
-      const { revoked, failed } = await revokeUserIntegrationTokens(userId);
-      loggers.auth.info(`OAuth token revocation complete for user ${userId}: revoked=${revoked}, failed=${failed}`);
-    } catch (error) {
-      loggers.auth.error('Could not revoke OAuth tokens during account deletion:', error as Error);
-    }
-
     // Log security audit BEFORE user deletion so the userId FK is still valid.
     // Timeout prevents stalling account deletion if the advisory lock hangs.
     auditRequest(req, { eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId });
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
     await accountRepository.deleteUser(userId);
-
-    // Delete Stripe customer AFTER user deletion (Art. 17 GDPR — #910)
-    // Cloud-only: on-prem and tenant deployments don't use Stripe
-    // Right to erasure cannot be gated on Stripe API availability — log failures only
-    if (user.stripeCustomerId && isCloud()) {
-      try {
-        await stripe.customers.del(user.stripeCustomerId);
-        loggers.auth.info(`Stripe customer deleted: ${user.stripeCustomerId}`);
-      } catch (error) {
-        loggers.auth.error('Could not delete Stripe customer during account deletion:', error as Error);
-      }
-    }
 
     loggers.auth.info(`User account deleted: ${userId}`);
 

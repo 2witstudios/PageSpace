@@ -9,7 +9,7 @@ import {
   getPerformanceMetrics,
   getDateRange
 } from '@/lib/monitoring';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 type RouteContext = { params: Promise<{ metric: string }> };
 
