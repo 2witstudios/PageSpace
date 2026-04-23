@@ -14,8 +14,6 @@ vi.mock('../file-links', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
-}));
-vi.mock('@pagespace/lib/permissions', () => ({
     getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 

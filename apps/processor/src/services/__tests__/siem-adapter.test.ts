@@ -73,7 +73,7 @@ vi.mock('@pagespace/lib/security/path-validator', () => ({
     return joined.startsWith(base) ? joined : null;
   }),
 }));
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
     validateExternalURL: mockValidateExternalURL,
 }));
 
