@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db, pages, eq, and } from '@pagespace/db';
 

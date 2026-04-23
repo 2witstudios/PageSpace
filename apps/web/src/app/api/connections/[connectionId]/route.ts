@@ -3,7 +3,7 @@ import { db, connections, users, userProfiles, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createNotification } from '@pagespace/lib';
+import { createNotification } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

@@ -64,7 +64,7 @@ vi.mock('ollama-ai-provider-v2', () => ({
 }));
 
 // Mock security validation
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 

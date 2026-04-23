@@ -10,14 +10,16 @@ import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  checkDriveAccessForRoles: vi.fn(),
-  getRoleById: vi.fn(),
-  updateDriveRole: vi.fn(),
-  deleteDriveRole: vi.fn(),
-  validateRolePermissions: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-role-service', () => ({
+    checkDriveAccessForRoles: vi.fn(),
+    getRoleById: vi.fn(),
+    updateDriveRole: vi.fn(),
+    deleteDriveRole: vi.fn(),
+    validateRolePermissions: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({

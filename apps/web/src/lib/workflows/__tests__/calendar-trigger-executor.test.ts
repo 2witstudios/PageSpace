@@ -81,12 +81,11 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id?.slice(-4) || ''}`),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: mockIsUserDriveMember,
-  logger: { child: vi.fn(() => makeChildLogger()) },
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: mockIsUserDriveMember,
 }));
-
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  logger: { child: vi.fn(() => makeChildLogger()) },
   loggers: {
     api: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     ai: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },

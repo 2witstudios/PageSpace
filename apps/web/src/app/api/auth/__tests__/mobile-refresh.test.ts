@@ -28,12 +28,16 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateDeviceToken: vi.fn(),
-  updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-  generateDeviceToken: vi.fn().mockReturnValue('new-device-token'),
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  loggers: {
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    validateDeviceToken: vi.fn(),
+    updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+    generateDeviceToken: vi.fn().mockReturnValue('new-device-token'),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -44,7 +48,11 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  securityAudit: {
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/security-audit', () => ({
+    securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
     logTokenCreated: vi.fn().mockResolvedValue(undefined),
@@ -55,10 +63,12 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn((token) => `hashed-${token}`),
-  getTokenPrefix: vi.fn((token) => token.substring(0, 8)),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn((token) => `hashed-${token}`),
+    getTokenPrefix: vi.fn((token) => token.substring(0, 8)),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_refreshed-token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'nfh0haxfpzowht3oi213ses2',
@@ -72,14 +82,14 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 9,
     retryAfter: undefined,
   }),
-  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-  DISTRIBUTED_RATE_LIMITS: {
+    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
     REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },

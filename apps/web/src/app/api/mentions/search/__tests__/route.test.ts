@@ -26,11 +26,13 @@ vi.mock('next/server', () => {
 // 3. Unauthorized access returns 403, not data
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  getUserAccessLevel: vi.fn(),
-  getUserDriveAccess: vi.fn(),
-  getDriveIdsForUser: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserAccessLevel: vi.fn(),
+    getUserDriveAccess: vi.fn(),
+    getDriveIdsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -38,6 +40,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({

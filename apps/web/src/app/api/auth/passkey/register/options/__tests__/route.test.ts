@@ -8,15 +8,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/lib/auth', () => ({
-  generateRegistrationOptions: vi.fn(),
-  validateCSRFToken: vi.fn(),
-  peekPasskeyRegisterHandoff: vi.fn(),
-  markPasskeyRegisterOptionsIssued: vi.fn(),
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+    generateRegistrationOptions: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    validateCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/passkey-register-handoff', () => ({
+    peekPasskeyRegisterHandoff: vi.fn(),
+    markPasskeyRegisterOptionsIssued: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -24,12 +28,16 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     PASSKEY_REGISTER: { maxAttempts: 5, windowMs: 300000, progressiveDelay: false },
   },
 }));

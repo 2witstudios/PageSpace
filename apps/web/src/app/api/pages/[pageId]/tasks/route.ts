@@ -6,7 +6,8 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { getDefaultContent, PageType } from '@pagespace/lib';
+import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
+import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };

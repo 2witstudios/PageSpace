@@ -1,9 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // Mock the underlying lib security module
-vi.mock('@pagespace/lib/security', () => ({
-  validateExternalURL: vi.fn().mockResolvedValue({ valid: true }),
-  resolvePathWithinSync: vi.fn((base: string, ...segs: string[]) => {
+vi.mock('@pagespace/lib/security/path-validator', () => ({
+    resolvePathWithinSync: vi.fn((base: string, ...segs: string[]) => {
     const path = require('path');
     const joined = path.join(base, ...segs);
     if (
@@ -13,6 +12,9 @@ vi.mock('@pagespace/lib/security', () => ({
     }
     return joined;
   }),
+}));
+vi.mock('@pagespace/lib/security', () => ({
+    validateExternalURL: vi.fn().mockResolvedValue({ valid: true }),
 }));
 
 import {

@@ -12,20 +12,26 @@ import {
 } from '../index';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn().mockReturnValue('mocked-hash'),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn().mockReturnValue('mocked-hash'),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  EnforcedAuthContext: class EnforcedAuthContext {
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
+    EnforcedAuthContext: class EnforcedAuthContext {
     static fromSession(sessionClaims: unknown): unknown {
       return sessionClaims;
     }
   },
-  logSecurityEvent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logSecurityEvent: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/db', () => ({

@@ -1,4 +1,4 @@
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';

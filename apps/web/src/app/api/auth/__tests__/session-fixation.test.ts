@@ -270,20 +270,22 @@ describe('Session Fixation Prevention - CSRF Validation', () => {
         getSessionFromCookies: mockGetSession,
       }));
 
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: mockValidateSession,
         },
+      }));
+      vi.doMock('@pagespace/lib/auth/csrf-utils', () => ({
         validateCSRFToken: vi.fn().mockReturnValue(true),
       }));
-
-      vi.doMock('@pagespace/lib/server', () => ({
+      vi.doMock('@pagespace/lib/logging/logger-config', () => ({
         loggers: {
           auth: {
             warn: vi.fn(),
             debug: vi.fn(),
           },
         },
+        logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
       }));
 
       const { validateCSRF } = await import('@/lib/auth/csrf-validation');

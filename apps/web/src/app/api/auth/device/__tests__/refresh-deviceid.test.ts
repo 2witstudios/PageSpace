@@ -1,33 +1,43 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn((t: string) => `hashed_${t}`),
-  getTokenPrefix: vi.fn((t: string) => t.slice(0, 8)),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn((t: string) => `hashed_${t}`),
+    getTokenPrefix: vi.fn((t: string) => t.slice(0, 8)),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
     validateSession: vi.fn().mockResolvedValue({ sessionId: 'sid_123' }),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateDeviceToken: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    validateDeviceToken: vi.fn().mockResolvedValue({
     id: 'dt_1',
     userId: 'user_1',
     deviceId: 'device_123',
     platform: 'web',
     expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
   }),
-  updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-  generateDeviceToken: vi.fn().mockReturnValue('new_device_token'),
-  generateCSRFToken: vi.fn().mockReturnValue('csrf_token'),
-  loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
-  auditRequest: vi.fn(),
+    updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+    generateDeviceToken: vi.fn().mockReturnValue('new_device_token'),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('csrf_token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
-  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-  DISTRIBUTED_RATE_LIMITS: { REFRESH: { maxAttempts: 10, windowMs: 60000 } },
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
+    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+    DISTRIBUTED_RATE_LIMITS: { REFRESH: { maxAttempts: 10, windowMs: 60000 } },
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({

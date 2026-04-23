@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { generateExcel, sanitizeFilename } from '@pagespace/lib';
+import { generateExcel, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';

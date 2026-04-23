@@ -47,14 +47,20 @@ vi.mock('@pagespace/db', () => ({
   isNull: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn(),
-  sessionService: { validateSession: vi.fn() },
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: { validateSession: vi.fn() },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  EnforcedAuthContext: { fromSession: vi.fn() },
-  logSecurityEvent: vi.fn(),
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
+    EnforcedAuthContext: { fromSession: vi.fn() },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logSecurityEvent: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('../cookie-config', () => ({

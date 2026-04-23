@@ -11,7 +11,7 @@
  */
 
 import { db, googleCalendarConnections, eq, type GoogleCalendarConnection } from '@pagespace/db';
-import { encrypt, decrypt } from '@pagespace/lib';
+import { encrypt, decrypt } from '@pagespace/lib/encryption';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { OAuth2Client } from 'google-auth-library';
 

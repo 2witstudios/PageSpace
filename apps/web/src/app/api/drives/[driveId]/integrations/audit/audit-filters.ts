@@ -1,5 +1,5 @@
 import { and, eq, gte, lte, integrationAuditLog } from '@pagespace/db';
-import { isValidId } from '@pagespace/lib';
+import { isValidId } from '@pagespace/lib/validators/id-validators';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;

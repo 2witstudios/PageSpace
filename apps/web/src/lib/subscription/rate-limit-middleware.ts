@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { incrementUsage } from './usage-service';
-import { getTomorrowMidnightUTC, isBillingEnabled, type ProviderType } from '@pagespace/lib';
+import { getTomorrowMidnightUTC } from '@pagespace/lib/services/date-utils'
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode'
+import type { ProviderType } from '@pagespace/lib/services/rate-limit-cache';
 import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 
 export interface RateLimitResult {

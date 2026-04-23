@@ -23,12 +23,18 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  buildTree: vi.fn((pages: unknown[]) => pages),
-  loggers: {
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn((pages: unknown[]) => pages),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({

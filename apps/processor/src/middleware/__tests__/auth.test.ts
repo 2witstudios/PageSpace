@@ -12,14 +12,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
  */
 
 // Mock all external dependencies that auth.ts imports
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  EnforcedAuthContext: {
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
+    EnforcedAuthContext: {
     fromSession: vi.fn(),
   },
 }));
@@ -28,6 +28,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 describe('AUTH_REQUIRED security behavior', () => {

@@ -15,8 +15,8 @@ vi.mock('@pagespace/db', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn(),
+vi.mock('@pagespace/lib/utils/utils', () => ({
+    slugify: vi.fn(),
 }));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({

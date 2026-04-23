@@ -31,17 +31,19 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserEditPage: vi.fn(),
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+    canUserViewPage: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  loggers: {
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({

@@ -40,6 +40,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     processor: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { ingestRouter } from '../ingest';

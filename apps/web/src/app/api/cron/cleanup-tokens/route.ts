@@ -1,4 +1,4 @@
-import { cleanupExpiredDeviceTokens } from '@pagespace/lib';
+import { cleanupExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';

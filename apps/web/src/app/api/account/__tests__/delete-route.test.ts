@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-// Mock repository seams - the proper architectural boundary
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -12,6 +11,9 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+}));
+
+vi.mock('@pagespace/lib/repositories', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
@@ -22,21 +24,31 @@ vi.mock('@pagespace/lib/server', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
-  revokeUserIntegrationTokens: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
   createUserServiceToken: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
   deleteAiUsageLogsForUser: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
   deleteMonitoringDataForUser: vi.fn(),
-  isCloud: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/revoke-integration-tokens', () => ({
+  revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
+}));
+
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isCloud: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/stripe/client', () => ({
@@ -45,6 +57,16 @@ vi.mock('@/lib/stripe/client', () => ({
       del: vi.fn(),
     },
   },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ email: 'user@example.com', displayName: 'Test User' }),
+  logUserActivity: vi.fn(),
 }));
 
 import { DELETE } from '../route';

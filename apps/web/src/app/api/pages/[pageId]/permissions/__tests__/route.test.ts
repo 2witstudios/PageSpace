@@ -33,15 +33,17 @@ vi.mock('@/lib/auth', () => ({
   isEnforcedAuthError: vi.fn((result) => 'error' in result),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPermissionNotification: vi.fn(),
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+    createPermissionNotification: vi.fn(),
 }));
 
 // Mock zero-trust functions
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -49,8 +51,12 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  grantPagePermission: vi.fn(),
-  revokePagePermission: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/permissions/permission-mutations', () => ({
+    grantPagePermission: vi.fn(),
+    revokePagePermission: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -73,7 +79,7 @@ vi.mock('@/lib/websocket', () => ({
 
 import { permissionManagementService } from '@/services/api';
 import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth';
-import { createPermissionNotification } from '@pagespace/lib';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 
 // Test helpers

@@ -29,14 +29,16 @@ import {
  */
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       warn: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { loggers } from '@pagespace/lib/logging/logger-config';

@@ -38,7 +38,7 @@ import {
 import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
-import { isOnPrem } from '@pagespace/lib';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 function isProviderBlocked(provider: string): boolean {
   return isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(provider);

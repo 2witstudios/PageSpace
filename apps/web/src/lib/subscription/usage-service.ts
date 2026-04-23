@@ -1,8 +1,8 @@
 import { db, eq, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { isBillingEnabled } from '@pagespace/lib';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';
+import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib/services/rate-limit-cache';
 
 // Re-export types for backwards compatibility
 export type { ProviderType, UsageTrackingResult };

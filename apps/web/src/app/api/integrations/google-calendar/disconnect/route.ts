@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { decrypt } from '@pagespace/lib';
+import { decrypt } from '@pagespace/lib/encryption';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { unregisterWebhookChannels } from '@/lib/integrations/google-calendar/sync-service';

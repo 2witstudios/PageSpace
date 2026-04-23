@@ -49,20 +49,19 @@ vi.mock('@pagespace/db', () => ({
   min: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
-  getUserAccessLevel: vi.fn(),
-  getUserAccessiblePagesInDriveWithDetails: vi.fn(),
-  canUserViewPage: vi.fn(),
-  isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
-  isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
-  isChannelPage: vi.fn((type) => type === 'CHANNEL'),
-  getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
-  formatContentForAI: vi.fn((content) => content),
-  formatSheetForAI: vi.fn(),
-  formatTaskListForAI: vi.fn(),
-  getPagePath: vi.fn().mockResolvedValue('/drive/page'),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserDriveAccess: vi.fn(),
+    getUserAccessLevel: vi.fn(),
+    getUserAccessiblePagesInDriveWithDetails: vi.fn(),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
+    isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
+    getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -80,6 +79,14 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/server', () => ({
+    isChannelPage: vi.fn((type) => type === 'CHANNEL'),
+    formatContentForAI: vi.fn((content) => content),
+    formatSheetForAI: vi.fn(),
+    formatTaskListForAI: vi.fn(),
+    getPagePath: vi.fn().mockResolvedValue('/drive/page'),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({

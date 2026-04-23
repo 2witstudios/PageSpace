@@ -5,14 +5,10 @@ import { detectPageContentFormat } from '@pagespace/lib/content/page-content-for
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
 import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
-import {
-  validatePageCreation,
-  validateAIChatTools,
-  getDefaultContent,
-  PageType as PageTypeEnum,
-  isAIChatPage,
-  isDriveOwnerOrAdmin,
-} from '@pagespace/lib';
+import { validatePageCreation, validateAIChatTools } from '@pagespace/lib/content/page-type-validators'
+import { getDefaultContent, isAIChatPage } from '@pagespace/lib/content/page-types.config'
+import { PageType as PageTypeEnum } from '@pagespace/lib/utils/enums'
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';

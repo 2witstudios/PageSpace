@@ -3,7 +3,7 @@ import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/d
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isEmailVerified } from '@pagespace/lib';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ConversationRow } from '@/types/messaging';

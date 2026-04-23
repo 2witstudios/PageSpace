@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { markAllNotificationsAsRead } from '@pagespace/lib';
+import { markAllNotificationsAsRead } from '@pagespace/lib/notifications/notifications';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
