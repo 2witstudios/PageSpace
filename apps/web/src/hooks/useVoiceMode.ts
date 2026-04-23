@@ -271,8 +271,6 @@ export function useVoiceMode({
   // Uses stopListeningRef to access stopListening without circular dependency.
   const setupVAD = useCallback(
     (stream: MediaStream) => {
-      if (interactionMode !== 'barge-in') return;
-
       const audioContext = getAudioContext();
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
@@ -311,7 +309,7 @@ export function useVoiceMode({
 
       vadRefs.current.animationFrame = requestAnimationFrame(checkAudio);
     },
-    [interactionMode, getAudioContext]
+    [getAudioContext]
   );
 
   // Stop listening and process audio
@@ -419,6 +417,8 @@ export function useVoiceMode({
           if (autoSend) {
             callbacksRef.current.onSend?.(transcript);
             setCurrentTranscript('');
+            setVoiceState('waiting');
+            return;
           }
         }
 
@@ -548,6 +548,7 @@ export function useVoiceMode({
       try {
         setError(null);
         const audioId = createId();
+        startSpeakingStore(audioId);
 
         const response = await fetchWithAuth('/api/voice/synthesize', {
           method: 'POST',
@@ -576,9 +577,8 @@ export function useVoiceMode({
 
         const audioBuffer = await audioContext.decodeAudioData(audioData);
 
-        // Stop any existing playback
+        // Stop any existing playback without resetting state (we're already 'speaking')
         stopAudioPlayback();
-        stopSpeakingStore();
 
         // Create and play new source
         const source = audioContext.createBufferSource();
@@ -593,17 +593,18 @@ export function useVoiceMode({
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
-            // In barge-in mode, start listening after speaking
-            if (interactionMode === 'barge-in' && isEnabled) {
+            // Read live store state to avoid stale closure — always auto-listen after TTS
+            const { isEnabled: liveEnabled, interactionMode: liveMode } =
+              useVoiceModeStore.getState();
+            if (liveEnabled && liveMode === 'barge-in') {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
-                startListening();
+                void startListening();
               }, 300);
             }
           }
         };
 
-        startSpeakingStore(audioId);
         source.start();
 
         if (interactionMode === 'barge-in' && isEnabled) {
@@ -634,6 +635,7 @@ export function useVoiceMode({
   );
 
   // Barge-in: interrupt TTS and start listening
+
   const bargeIn = useCallback(() => {
     bargeInStore();
     stopAudioPlayback();
