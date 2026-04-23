@@ -42,7 +42,7 @@ export function DocumentsSection() {
             {[
               { icon: Wand2, title: "AI-Powered Editing", desc: "Talk to AI in the sidebar chat and it edits your document directly. Ask for rewrites, expansions, or tone changes without leaving your page." },
               { icon: PenTool, title: "Rich Text & Markdown", desc: "Toggle between visual editing and markdown with a click. What you see is what you get, or go full keyboard-driven." },
-              { icon: Undo2, title: "One-Click Rollback", desc: "Every AI edit is versioned. Don&apos;t like what AI suggested? Roll back to any previous state instantly—no cherry-picking changes." },
+              { icon: Undo2, title: "One-Click Rollback", desc: "Every AI edit is versioned. Don't like what AI suggested? Roll back to any previous state instantly—no cherry-picking changes." },
               { icon: Edit3, title: "Beyond Documents", desc: "Not just rich text—code blocks, spreadsheets, and custom canvases too. Same AI-powered editing across all your content." },
             ].map((card) => (
               <div key={card.title} className="rounded-xl border border-border bg-card p-4 sm:p-6">

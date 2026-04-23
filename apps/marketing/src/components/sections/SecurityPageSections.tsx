@@ -127,7 +127,7 @@ export function WebSocketSecuritySection() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold mb-4">Per-Event WebSocket Authorization</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Real-time collaboration doesn&apos;t mean relaxed security. Every write operation
+              Real-time collaboration doesn&#39;t mean relaxed security. Every write operation
               is authorized in real-time.
             </p>
           </div>
@@ -215,7 +215,7 @@ export function AuthenticationSection() {
             <h2 className="text-3xl font-bold mb-4">Authentication</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
               Passwordless by design: passkeys and magic links, with Google and Apple OAuth.
-              There&apos;s no password to phish, guess, or leak.
+              There&#39;s no password to phish, guess, or leak.
             </p>
           </div>
 
@@ -298,9 +298,9 @@ export function PermissionModelSection() {
       <div className="container mx-auto px-4 md:px-6">
         <div className="mx-auto max-w-5xl">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold mb-4">Permissions that can&apos;t cascade by accident</h2>
+            <h2 className="text-3xl font-bold mb-4">Permissions that can&#39;t cascade by accident</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Most document products inherit permissions from parent folders. One wrong drag-and-drop and a personal folder is suddenly visible to the whole team. PageSpace doesn&apos;t inherit.
+              Most document products inherit permissions from parent folders. One wrong drag-and-drop and a personal folder is suddenly visible to the whole team. PageSpace doesn&#39;t inherit.
             </p>
           </div>
 
@@ -320,7 +320,7 @@ export function PermissionModelSection() {
               </div>
               <h3 className="text-xl font-semibold mb-3">Why it matters</h3>
               <p className="text-muted-foreground">
-                The &quot;I shared one subfolder and accidentally gave away the tree&quot; class of incident can&apos;t happen here. Every shared page was shared on purpose.
+                The &quot;I shared one subfolder and accidentally gave away the tree&quot; class of incident can&#39;t happen here. Every shared page was shared on purpose.
               </p>
             </div>
           </div>
@@ -387,7 +387,7 @@ export function SecurityCTA() {
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 mx-auto mb-6">
             <Users className="h-8 w-8 text-primary" />
           </div>
-          <h2 className="text-3xl font-bold mb-4">Compare our security to anything else you&apos;re evaluating</h2>
+          <h2 className="text-3xl font-bold mb-4">Compare our security to anything else you&#39;re evaluating</h2>
           <p className="text-lg text-muted-foreground mb-8">
             Our docs point straight at the code that implements every claim. Read them, grep them, hand them to your security reviewer.
           </p>

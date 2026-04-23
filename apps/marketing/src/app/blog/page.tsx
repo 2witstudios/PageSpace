@@ -144,7 +144,7 @@ export default function BlogPage() {
               </div>
               <p className="text-lg font-medium mb-1">More posts coming soon</p>
               <p className="text-sm text-muted-foreground">
-                We&apos;re working on new guides, deep dives, and product updates.
+                We&#39;re working on new guides, deep dives, and product updates.
               </p>
             </div>
           )}
