@@ -81,6 +81,12 @@ export async function GET(request: Request) {
     archive.append(JSON.stringify(data.activity, null, 2), { name: `pagespace-export-${dateStr}/activity.json` });
     archive.append(JSON.stringify(data.aiUsage, null, 2), { name: `pagespace-export-${dateStr}/ai-usage.json` });
     archive.append(JSON.stringify(data.tasks, null, 2), { name: `pagespace-export-${dateStr}/tasks.json` });
+    archive.append(JSON.stringify(data.sessions, null, 2), { name: `pagespace-export-${dateStr}/sessions.json` });
+    archive.append(JSON.stringify(data.notifications, null, 2), { name: `pagespace-export-${dateStr}/notifications.json` });
+    archive.append(JSON.stringify(data.displayPreferences, null, 2), { name: `pagespace-export-${dateStr}/display-preferences.json` });
+    if (data.personalization) {
+      archive.append(JSON.stringify(data.personalization, null, 2), { name: `pagespace-export-${dateStr}/personalization.json` });
+    }
 
     // Finalize the archive (must be called after all data is appended)
     archive.finalize();
