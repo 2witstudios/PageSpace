@@ -74,8 +74,9 @@ describe('findOrphanedFileRecords', () => {
     await expect(findOrphanedFileRecords(db as never)).rejects.toThrow('connection refused');
   });
 
-  it('given_contentHashDedupRequired_queryIncludesContentHashGuard', async () => {
+  it('given_sharedStoragePathDedupRequired_queryIncludesStoragePathGuard', async () => {
     // Ensures the SQL excludes blobs shared with a live sibling file record (#905 gap).
+    // Uses storagePath (the actual CAS key in the files schema) — no contentHash column exists.
     const db = {
       execute: vi.fn().mockResolvedValue({ rows: [] }),
     };
@@ -84,7 +85,7 @@ describe('findOrphanedFileRecords', () => {
 
     const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
     const fullSql = sqlArg.strings.join('');
-    expect(fullSql).toContain('contentHash');
+    expect(fullSql).toContain('storagePath');
   });
 });
 
