@@ -514,7 +514,7 @@ function buildReplacementImports(symbols, barrelMap, barrel) {
   if (unknown.length > 0) {
     const allType = unknown.every(s => s.isType);
     const hasType = unknown.some(s => s.isType);
-    const fallbackPath = `@pagespace/lib/${barrel}`;
+    const fallbackPath = barrel ? `@pagespace/lib/${barrel}` : '@pagespace/lib';
 
     let parts;
     if (allType) {

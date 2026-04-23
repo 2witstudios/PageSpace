@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { MoreHorizontal, Undo2, Trash2, HardDrive } from "lucide-react";
 import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
-import { Drive } from "@pagespace/lib";
+import type { Drive } from '@pagespace/lib/types';
 
 export default function GlobalTrashPage() {
   const drives = useDriveStore((state) => state.drives);

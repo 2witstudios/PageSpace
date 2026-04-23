@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from "@pagespace/lib/security";
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 // Bounded-quantifier RFC 5322 regex — O(N), no ReDoS risk
 const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
