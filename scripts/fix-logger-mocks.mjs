@@ -54,8 +54,9 @@ for (const filePath of testFiles) {
 
   const mockBlock = content.slice(mockIdx, mockEnd + 1);
 
-  // If logger: is already in this block, skip
-  if (/\blogger\s*:/.test(mockBlock)) continue;
+  // Skip if the mock already has loggers: (plural — what logger-config exports)
+  // or logger: (singular — already injected or manually added)
+  if (/\bloggers?\s*:/.test(mockBlock)) continue;
 
   // Use the paren-bounded mock block to inject precisely before the final }))
   // so we never accidentally inject into a nested vi.fn(() => ({ ... })) call.

@@ -433,8 +433,8 @@ function parseImportBlock(source, barrel) {
   // For subpath barrels, match '@pagespace/lib/<barrel>'.
   const escapedBarrel = escapeRegExp(barrel);
   const pattern = barrel === ''
-    ? `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib'`
-    : `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib/${escapedBarrel}'`;
+    ? `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+['"]@pagespace/lib['"]`
+    : `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+['"]@pagespace/lib/${escapedBarrel}['"]`;
   const regex = new RegExp(pattern, 'gs');
 
   let match;
@@ -577,16 +577,19 @@ for (const barrel of targetBarrels) {
 
   // Root barrel is matched as '@pagespace/lib' exactly (no subpath suffix)
   const importPath = barrel === 'ROOT' ? '' : barrel;
-  const importMatch = barrel === 'ROOT'
+  const importMatchSingle = barrel === 'ROOT'
     ? `from '@pagespace/lib'`
     : `from '@pagespace/lib/${barrel}'`;
+  const importMatchDouble = barrel === 'ROOT'
+    ? `from "@pagespace/lib"`
+    : `from "@pagespace/lib/${barrel}"`;
 
   let count = 0;
   console.log(`\nMigrating @pagespace/lib${importPath ? '/' + importPath : ''} barrel...`);
 
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
-    if (!source.includes(importMatch)) continue;
+    if (!source.includes(importMatchSingle) && !source.includes(importMatchDouble)) continue;
 
     const migrated = migrateFile(file, importPath, barrelMap);
     if (migrated) {
