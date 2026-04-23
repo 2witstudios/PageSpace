@@ -510,6 +510,29 @@ describe('POST /api/ai/settings', () => {
       const response = await POST(request);
       expect(response.status).not.toBe(403);
     });
+
+    it('given onprem mode + external provider, should return 403', async () => {
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const request = createPostRequest({ provider: 'openai', apiKey: 'test-key' });
+      const response = await POST(request);
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/not available/i);
+    });
+
+    it('given onprem mode + ollama (allowed), should not return 403', async () => {
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const request = createPostRequest({ provider: 'ollama', baseUrl: 'http://localhost:11434' });
+      const response = await POST(request);
+      expect(response.status).not.toBe(403);
+    });
+
+    it('given tenant mode + external provider, should not return 403 due to mode gate', async () => {
+      process.env.DEPLOYMENT_MODE = 'tenant';
+      const request = createPostRequest({ provider: 'openai', apiKey: 'test-key' });
+      const response = await POST(request);
+      expect(response.status).not.toBe(403);
+    });
   });
 });
 
