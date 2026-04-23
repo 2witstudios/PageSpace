@@ -88,7 +88,7 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db';
-import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/server';
+import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

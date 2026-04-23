@@ -60,7 +60,7 @@ vi.mock('@/lib/integrations/google-calendar/return-url', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const SECRET = 'test-oauth-state-secret';
 

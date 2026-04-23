@@ -54,8 +54,8 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const validPayload = {
   name: 'John Doe',

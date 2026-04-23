@@ -79,7 +79,7 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   getDefaultPageSpaceSettings,
   getUserOpenRouterSettings,

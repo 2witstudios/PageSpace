@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/table';
 import { ListViewProps, SortKey } from './types';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { toTitleCase } from '@/lib/utils/formatters';
 
 export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProps) {

@@ -14,7 +14,8 @@ import {
   count,
 } from '@pagespace/db';
 import { stripe } from '@/lib/stripe';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth';
 

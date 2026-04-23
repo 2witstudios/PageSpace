@@ -72,10 +72,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { generateToken } from '@pagespace/lib/auth';
+import { generateToken } from '@pagespace/lib/auth/token-utils';
 
 describe('/api/auth/mcp-tokens (additional coverage)', () => {
   beforeEach(() => {

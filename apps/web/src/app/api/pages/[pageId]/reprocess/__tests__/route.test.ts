@@ -64,7 +64,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { canUserEditPage } from '@pagespace/lib/permissions';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test helpers

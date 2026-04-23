@@ -69,7 +69,7 @@ vi.mock('@pagespace/db', () => ({
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db';
 
 // Test helpers

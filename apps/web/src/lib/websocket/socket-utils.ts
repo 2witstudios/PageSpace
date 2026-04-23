@@ -113,7 +113,7 @@ export interface InboxEventPayload {
 }
 
 // Presence types - re-export from shared lib
-export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/client-safe';
+export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/types';
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
 

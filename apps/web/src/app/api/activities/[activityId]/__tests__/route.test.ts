@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 const mockActivityId = 'activity-1';

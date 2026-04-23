@@ -1,11 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions';
-import {
-  loggers,
-  getActorInfo,
-  logMessageActivity,
-} from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db, channelMessages, channelReadStatus, pages, driveMembers, eq, and } from '@pagespace/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';

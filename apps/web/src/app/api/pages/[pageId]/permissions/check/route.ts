@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, loggers, auditRequest } from '@pagespace/lib/server';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;

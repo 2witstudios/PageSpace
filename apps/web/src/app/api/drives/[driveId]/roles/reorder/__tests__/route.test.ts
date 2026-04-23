@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveRoleAccessInfo } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles/reorder
@@ -46,10 +46,7 @@ vi.mock('@pagespace/db', () => ({
   asc: vi.fn(),
 }));
 
-import {
-  checkDriveAccessForRoles,
-  reorderDriveRoles,
-} from '@pagespace/lib/server';
+import { checkDriveAccessForRoles, reorderDriveRoles } from '@pagespace/lib/services/drive-role-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 

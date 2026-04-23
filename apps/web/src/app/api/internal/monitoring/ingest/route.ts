@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logging/logger-database';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { secureCompare } from '@pagespace/lib';
 import { sanitizeIngestPayload, type IngestPayload } from '@/lib/monitoring/ingest-sanitizer';
 

@@ -44,8 +44,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createSessionCookie: vi.fn().mockReturnValue('session=mock-session-token; Path=/; HttpOnly'),
 }));
 
-import { consumeExchangeCode } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { consumeExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { POST } from '../route';
 

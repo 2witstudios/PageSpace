@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, drives } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { slugify } from '@pagespace/lib/server';
+import { slugify } from '@pagespace/lib/utils/utils';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';

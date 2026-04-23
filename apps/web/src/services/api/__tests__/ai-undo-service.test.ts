@@ -74,8 +74,8 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { db } from '@pagespace/db';
 import { executeRollback, previewRollback } from '../rollback-service';
-import { logConversationUndo } from '@pagespace/lib/monitoring';
-import { loggers } from '@pagespace/lib/server';
+import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db') above */
 type MockFn = ReturnType<typeof vi.fn>;

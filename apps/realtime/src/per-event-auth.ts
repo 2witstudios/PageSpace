@@ -13,7 +13,7 @@
  * - Room joins: immediate at kick time (kick handler evicts sockets)
  */
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { Socket } from 'socket.io';
 

@@ -43,11 +43,11 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
-import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 
 // ============================================================================
 // Test Helpers

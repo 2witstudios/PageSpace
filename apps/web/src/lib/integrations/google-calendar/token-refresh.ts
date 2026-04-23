@@ -12,7 +12,7 @@
 
 import { db, googleCalendarConnections, eq, type GoogleCalendarConnection } from '@pagespace/db';
 import { encrypt, decrypt } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { OAuth2Client } from 'google-auth-library';
 
 // Buffer time before expiration to refresh (5 minutes)

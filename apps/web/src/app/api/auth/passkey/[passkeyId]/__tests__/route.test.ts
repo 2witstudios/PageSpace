@@ -38,8 +38,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { DELETE, PATCH } from '../route';
-import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { deletePasskey, updatePasskeyName } from '@pagespace/lib/auth/passkey-service'
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';

@@ -26,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

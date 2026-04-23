@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq, and, or, desc, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createNotification, isEmailVerified } from '@pagespace/lib';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

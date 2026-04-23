@@ -150,13 +150,15 @@ vi.mock('@pagespace/db', () => {
 });
 
 // ---------------------------------------------------------------------------
-// @pagespace/lib/security — the worker's delivery path calls validateExternalURL
+// @pagespace/lib/security/url-validator — the worker's delivery path calls validateExternalURL
 // against the webhook URL. Localhost would normally be blocked for SSRF, so
 // override to accept any URL in this test.
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateExternalURL: mockValidateExternalURL,
+}));
+vi.mock('@pagespace/lib/security/path-validator', () => ({
   resolvePathWithinSync: (base: string, ...segs: string[]): string => {
     return [base, ...segs].join('/');
   },
@@ -270,7 +272,8 @@ vi.mock('../../db', () => {
 // Deferred imports so the vi.mock calls above take effect first.
 // ---------------------------------------------------------------------------
 
-import { audit, securityAudit, type AuditEvent } from '@pagespace/lib/audit';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import { securityAudit, type AuditEvent } from '@pagespace/lib/audit/security-audit';
 import { processSiemDelivery } from '../../workers/siem-delivery-worker';
 
 // ---------------------------------------------------------------------------

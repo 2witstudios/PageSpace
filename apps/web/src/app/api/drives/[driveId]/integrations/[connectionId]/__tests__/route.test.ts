@@ -34,13 +34,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET, DELETE } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import {
-  getConnectionById,
-  getConnectionWithProvider,
-  deleteConnection,
-} from '@pagespace/lib/integrations';
+import { getConnectionById, getConnectionWithProvider, deleteConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

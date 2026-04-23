@@ -99,9 +99,11 @@ import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 

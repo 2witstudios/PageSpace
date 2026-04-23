@@ -264,6 +264,376 @@
       "import": "./dist/validators/index.js",
       "require": "./dist/validators/index.js"
     },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js",
+      "default": "./dist/types.js"
+    },
+    "./utils/utils": {
+      "types": "./dist/utils/utils.d.ts",
+      "import": "./dist/utils/utils.js",
+      "require": "./dist/utils/utils.js"
+    },
+    "./utils/hash-utils": {
+      "types": "./dist/utils/hash-utils.d.ts",
+      "import": "./dist/utils/hash-utils.js",
+      "require": "./dist/utils/hash-utils.js"
+    },
+    "./utils/enums": {
+      "types": "./dist/utils/enums.d.ts",
+      "import": "./dist/utils/enums.js",
+      "default": "./dist/utils/enums.js"
+    },
+    "./encryption": {
+      "types": "./dist/encryption/index.d.ts",
+      "import": "./dist/encryption/index.js",
+      "require": "./dist/encryption/index.js"
+    },
+    "./file-processing": {
+      "types": "./dist/file-processing/index.d.ts",
+      "import": "./dist/file-processing/index.js",
+      "require": "./dist/file-processing/index.js"
+    },
+    "./sheets": {
+      "types": "./dist/sheets/index.d.ts",
+      "import": "./dist/sheets/index.js",
+      "default": "./dist/sheets/index.js"
+    },
+    "./repositories": {
+      "types": "./dist/repositories/index.d.ts",
+      "import": "./dist/repositories/index.js",
+      "require": "./dist/repositories/index.js"
+    },
+    "./logging": {
+      "types": "./dist/logging/index.d.ts",
+      "import": "./dist/logging/index.js",
+      "require": "./dist/logging/index.js"
+    },
+    "./config/env-validation": {
+      "types": "./dist/config/env-validation.d.ts",
+      "import": "./dist/config/env-validation.js",
+      "require": "./dist/config/env-validation.js"
+    },
+    "./services/page-content-store": {
+      "types": "./dist/services/page-content-store.d.ts",
+      "import": "./dist/services/page-content-store.js",
+      "require": "./dist/services/page-content-store.js"
+    },
+    "./services/page-version-service": {
+      "types": "./dist/services/page-version-service.d.ts",
+      "import": "./dist/services/page-version-service.js",
+      "require": "./dist/services/page-version-service.js"
+    },
+    "./services/drive-role-service": {
+      "types": "./dist/services/drive-role-service.d.ts",
+      "import": "./dist/services/drive-role-service.js",
+      "require": "./dist/services/drive-role-service.js"
+    },
+    "./services/drive-search-service": {
+      "types": "./dist/services/drive-search-service.d.ts",
+      "import": "./dist/services/drive-search-service.js",
+      "require": "./dist/services/drive-search-service.js"
+    },
+    "./validators/id-validators": {
+      "types": "./dist/validators/id-validators.d.ts",
+      "import": "./dist/validators/id-validators.js",
+      "require": "./dist/validators/id-validators.js"
+    },
+    "./validators/email": {
+      "types": "./dist/validators/email.d.ts",
+      "import": "./dist/validators/email.js",
+      "require": "./dist/validators/email.js"
+    },
+    "./notifications/types": {
+      "types": "./dist/notifications/types.d.ts",
+      "import": "./dist/notifications/types.js",
+      "require": "./dist/notifications/types.js"
+    },
+    "./notifications/guards": {
+      "types": "./dist/notifications/guards.d.ts",
+      "import": "./dist/notifications/guards.js",
+      "require": "./dist/notifications/guards.js"
+    },
+    "./notifications/notifications": {
+      "types": "./dist/notifications/notifications.d.ts",
+      "import": "./dist/notifications/notifications.js",
+      "require": "./dist/notifications/notifications.js"
+    },
+    "./notifications/push-notifications": {
+      "types": "./dist/notifications/push-notifications.d.ts",
+      "import": "./dist/notifications/push-notifications.js",
+      "require": "./dist/notifications/push-notifications.js"
+    },
+    "./content/activity-diff-utils": {
+      "types": "./dist/content/activity-diff-utils.d.ts",
+      "import": "./dist/content/activity-diff-utils.js",
+      "require": "./dist/content/activity-diff-utils.js"
+    },
+    "./content/diff-generator": {
+      "types": "./dist/content/diff-generator.d.ts",
+      "import": "./dist/content/diff-generator.js",
+      "require": "./dist/content/diff-generator.js"
+    },
+    "./content/diff-utils": {
+      "types": "./dist/content/diff-utils.d.ts",
+      "import": "./dist/content/diff-utils.js",
+      "require": "./dist/content/diff-utils.js"
+    },
+    "./content/page-content-format": {
+      "types": "./dist/content/page-content-format.d.ts",
+      "import": "./dist/content/page-content-format.js",
+      "require": "./dist/content/page-content-format.js"
+    },
+    "./content/version-resolver": {
+      "types": "./dist/content/version-resolver.d.ts",
+      "import": "./dist/content/version-resolver.js",
+      "require": "./dist/content/version-resolver.js"
+    },
+    "./content/export-utils": {
+      "types": "./dist/content/export-utils.d.ts",
+      "import": "./dist/content/export-utils.js",
+      "require": "./dist/content/export-utils.js"
+    },
+    "./content/page-types.config": {
+      "types": "./dist/content/page-types.config.d.ts",
+      "import": "./dist/content/page-types.config.js",
+      "default": "./dist/content/page-types.config.js"
+    },
+    "./content/page-type-validators": {
+      "types": "./dist/content/page-type-validators.d.ts",
+      "import": "./dist/content/page-type-validators.js",
+      "default": "./dist/content/page-type-validators.js"
+    },
+    "./content/tree-utils": {
+      "types": "./dist/content/tree-utils.d.ts",
+      "import": "./dist/content/tree-utils.js",
+      "default": "./dist/content/tree-utils.js"
+    },
+    "./audit/audit-log": {
+      "types": "./dist/audit/audit-log.d.ts",
+      "import": "./dist/audit/audit-log.js",
+      "require": "./dist/audit/audit-log.js"
+    },
+    "./audit/audit-query": {
+      "types": "./dist/audit/audit-query.d.ts",
+      "import": "./dist/audit/audit-query.js",
+      "require": "./dist/audit/audit-query.js"
+    },
+    "./audit/security-audit-alerting": {
+      "types": "./dist/audit/security-audit-alerting.d.ts",
+      "import": "./dist/audit/security-audit-alerting.js",
+      "require": "./dist/audit/security-audit-alerting.js"
+    },
+    "./monitoring/change-group": {
+      "types": "./dist/monitoring/change-group.d.ts",
+      "import": "./dist/monitoring/change-group.js",
+      "require": "./dist/monitoring/change-group.js"
+    },
+    "./integrations/types": {
+      "types": "./dist/integrations/types.d.ts",
+      "import": "./dist/integrations/types.js",
+      "require": "./dist/integrations/types.js"
+    },
+    "./integrations/oauth/oauth-state": {
+      "types": "./dist/integrations/oauth/oauth-state.d.ts",
+      "import": "./dist/integrations/oauth/oauth-state.js",
+      "require": "./dist/integrations/oauth/oauth-state.js"
+    },
+    "./integrations/repositories/config-repository": {
+      "types": "./dist/integrations/repositories/config-repository.d.ts",
+      "import": "./dist/integrations/repositories/config-repository.js",
+      "require": "./dist/integrations/repositories/config-repository.js"
+    },
+    "./integrations/repositories/connection-repository": {
+      "types": "./dist/integrations/repositories/connection-repository.d.ts",
+      "import": "./dist/integrations/repositories/connection-repository.js",
+      "require": "./dist/integrations/repositories/connection-repository.js"
+    },
+    "./integrations/repositories/grant-repository": {
+      "types": "./dist/integrations/repositories/grant-repository.d.ts",
+      "import": "./dist/integrations/repositories/grant-repository.js",
+      "require": "./dist/integrations/repositories/grant-repository.js"
+    },
+    "./integrations/repositories/audit-repository": {
+      "types": "./dist/integrations/repositories/audit-repository.d.ts",
+      "import": "./dist/integrations/repositories/audit-repository.js",
+      "require": "./dist/integrations/repositories/audit-repository.js"
+    },
+    "./integrations/resolution/resolve-agent-integrations": {
+      "types": "./dist/integrations/resolution/resolve-agent-integrations.d.ts",
+      "import": "./dist/integrations/resolution/resolve-agent-integrations.js",
+      "require": "./dist/integrations/resolution/resolve-agent-integrations.js"
+    },
+    "./integrations/converter/ai-sdk": {
+      "types": "./dist/integrations/converter/ai-sdk.d.ts",
+      "import": "./dist/integrations/converter/ai-sdk.js",
+      "require": "./dist/integrations/converter/ai-sdk.js"
+    },
+    "./integrations/saga/execute-tool": {
+      "types": "./dist/integrations/saga/execute-tool.d.ts",
+      "import": "./dist/integrations/saga/execute-tool.js",
+      "require": "./dist/integrations/saga/execute-tool.js"
+    },
+    "./integrations/repositories/provider-repository": {
+      "types": "./dist/integrations/repositories/provider-repository.d.ts",
+      "import": "./dist/integrations/repositories/provider-repository.js",
+      "require": "./dist/integrations/repositories/provider-repository.js"
+    },
+    "./integrations/credentials/encrypt-credentials": {
+      "types": "./dist/integrations/credentials/encrypt-credentials.d.ts",
+      "import": "./dist/integrations/credentials/encrypt-credentials.js",
+      "require": "./dist/integrations/credentials/encrypt-credentials.js"
+    },
+    "./integrations/oauth/oauth-handler": {
+      "types": "./dist/integrations/oauth/oauth-handler.d.ts",
+      "import": "./dist/integrations/oauth/oauth-handler.js",
+      "require": "./dist/integrations/oauth/oauth-handler.js"
+    },
+    "./integrations/providers": {
+      "types": "./dist/integrations/providers/index.d.ts",
+      "import": "./dist/integrations/providers/index.js",
+      "require": "./dist/integrations/providers/index.js"
+    },
+    "./integrations/converter/openapi": {
+      "types": "./dist/integrations/converter/openapi.d.ts",
+      "import": "./dist/integrations/converter/openapi.js",
+      "require": "./dist/integrations/converter/openapi.js"
+    },
+    "./security/jti-revocation": {
+      "types": "./dist/security/jti-revocation.d.ts",
+      "import": "./dist/security/jti-revocation.js",
+      "require": "./dist/security/jti-revocation.js"
+    },
+    "./security/distributed-rate-limit": {
+      "types": "./dist/security/distributed-rate-limit.d.ts",
+      "import": "./dist/security/distributed-rate-limit.js",
+      "require": "./dist/security/distributed-rate-limit.js"
+    },
+    "./security/auth-handoff-sweep": {
+      "types": "./dist/security/auth-handoff-sweep.d.ts",
+      "import": "./dist/security/auth-handoff-sweep.js",
+      "require": "./dist/security/auth-handoff-sweep.js"
+    },
+    "./security/url-validator": {
+      "types": "./dist/security/url-validator.d.ts",
+      "import": "./dist/security/url-validator.js",
+      "require": "./dist/security/url-validator.js"
+    },
+    "./security/path-validator": {
+      "types": "./dist/security/path-validator.d.ts",
+      "import": "./dist/security/path-validator.js",
+      "require": "./dist/security/path-validator.js"
+    },
+    "./auth/constants": {
+      "types": "./dist/auth/constants.d.ts",
+      "import": "./dist/auth/constants.js",
+      "require": "./dist/auth/constants.js"
+    },
+    "./auth/account-lockout": {
+      "types": "./dist/auth/account-lockout.d.ts",
+      "import": "./dist/auth/account-lockout.js",
+      "require": "./dist/auth/account-lockout.js"
+    },
+    "./auth/csrf-utils": {
+      "types": "./dist/auth/csrf-utils.d.ts",
+      "import": "./dist/auth/csrf-utils.js",
+      "require": "./dist/auth/csrf-utils.js"
+    },
+    "./auth/oauth-types": {
+      "types": "./dist/auth/oauth-types.d.ts",
+      "import": "./dist/auth/oauth-types.js",
+      "require": "./dist/auth/oauth-types.js"
+    },
+    "./auth/oauth-utils": {
+      "types": "./dist/auth/oauth-utils.d.ts",
+      "import": "./dist/auth/oauth-utils.js",
+      "require": "./dist/auth/oauth-utils.js"
+    },
+    "./auth/opaque-tokens": {
+      "types": "./dist/auth/opaque-tokens.d.ts",
+      "import": "./dist/auth/opaque-tokens.js",
+      "require": "./dist/auth/opaque-tokens.js"
+    },
+    "./auth/rate-limit-utils": {
+      "types": "./dist/auth/rate-limit-utils.d.ts",
+      "import": "./dist/auth/rate-limit-utils.js",
+      "require": "./dist/auth/rate-limit-utils.js"
+    },
+    "./auth/session-service": {
+      "types": "./dist/auth/session-service.d.ts",
+      "import": "./dist/auth/session-service.js",
+      "require": "./dist/auth/session-service.js"
+    },
+    "./auth/token-lookup": {
+      "types": "./dist/auth/token-lookup.d.ts",
+      "import": "./dist/auth/token-lookup.js",
+      "require": "./dist/auth/token-lookup.js"
+    },
+    "./auth/token-utils": {
+      "types": "./dist/auth/token-utils.d.ts",
+      "import": "./dist/auth/token-utils.js",
+      "require": "./dist/auth/token-utils.js"
+    },
+    "./auth/exchange-codes": {
+      "types": "./dist/auth/exchange-codes.d.ts",
+      "import": "./dist/auth/exchange-codes.js",
+      "require": "./dist/auth/exchange-codes.js"
+    },
+    "./auth/passkey-register-handoff": {
+      "types": "./dist/auth/passkey-register-handoff.d.ts",
+      "import": "./dist/auth/passkey-register-handoff.js",
+      "require": "./dist/auth/passkey-register-handoff.js"
+    },
+    "./auth/pkce": {
+      "types": "./dist/auth/pkce.d.ts",
+      "import": "./dist/auth/pkce.js",
+      "require": "./dist/auth/pkce.js"
+    },
+    "./auth/passkey-service": {
+      "types": "./dist/auth/passkey-service.d.ts",
+      "import": "./dist/auth/passkey-service.js",
+      "require": "./dist/auth/passkey-service.js"
+    },
+    "./auth/passkey-client-constants": {
+      "types": "./dist/auth/passkey-client-constants.d.ts",
+      "import": "./dist/auth/passkey-client-constants.js",
+      "default": "./dist/auth/passkey-client-constants.js"
+    },
+    "./permissions/permissions": {
+      "types": "./dist/permissions/permissions.d.ts",
+      "import": "./dist/permissions/permissions.js",
+      "require": "./dist/permissions/permissions.js"
+    },
+    "./permissions/rollback-permissions": {
+      "types": "./dist/permissions/rollback-permissions.d.ts",
+      "import": "./dist/permissions/rollback-permissions.js",
+      "require": "./dist/permissions/rollback-permissions.js"
+    },
+    "./permissions/enforced-context": {
+      "types": "./dist/permissions/enforced-context.d.ts",
+      "import": "./dist/permissions/enforced-context.js",
+      "require": "./dist/permissions/enforced-context.js"
+    },
+    "./permissions/file-access": {
+      "types": "./dist/permissions/file-access.d.ts",
+      "import": "./dist/permissions/file-access.js",
+      "require": "./dist/permissions/file-access.js"
+    },
+    "./permissions/permission-mutations": {
+      "types": "./dist/permissions/permission-mutations.d.ts",
+      "import": "./dist/permissions/permission-mutations.js",
+      "require": "./dist/permissions/permission-mutations.js"
+    },
+    "./permissions/schemas": {
+      "types": "./dist/permissions/schemas.d.ts",
+      "import": "./dist/permissions/schemas.js",
+      "require": "./dist/permissions/schemas.js"
+    },
+    "./permissions/accessible-page-ids": {
+      "types": "./dist/permissions/accessible-page-ids.d.ts",
+      "import": "./dist/permissions/accessible-page-ids.js",
+      "require": "./dist/permissions/accessible-page-ids.js"
+    },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
       "import": "./dist/compliance/retention/retention-engine.js",
@@ -288,6 +658,11 @@
       "types": "./dist/compliance/anonymize.d.ts",
       "import": "./dist/compliance/anonymize.js",
       "require": "./dist/compliance/anonymize.js"
+    },
+    "./compliance/erasure/revoke-integration-tokens": {
+      "types": "./dist/compliance/erasure/revoke-integration-tokens.d.ts",
+      "import": "./dist/compliance/erasure/revoke-integration-tokens.js",
+      "require": "./dist/compliance/erasure/revoke-integration-tokens.js"
     }
   },
   "typesVersions": {
@@ -435,6 +810,228 @@
       ],
       "validators": [
         "./dist/validators/index.d.ts"
+      ],
+      "types": [
+        "./dist/types.d.ts"
+      ],
+      "utils/utils": [
+        "./dist/utils/utils.d.ts"
+      ],
+      "utils/hash-utils": [
+        "./dist/utils/hash-utils.d.ts"
+      ],
+      "utils/enums": [
+        "./dist/utils/enums.d.ts"
+      ],
+      "encryption": [
+        "./dist/encryption/index.d.ts"
+      ],
+      "file-processing": [
+        "./dist/file-processing/index.d.ts"
+      ],
+      "sheets": [
+        "./dist/sheets/index.d.ts"
+      ],
+      "repositories": [
+        "./dist/repositories/index.d.ts"
+      ],
+      "logging": [
+        "./dist/logging/index.d.ts"
+      ],
+      "config/env-validation": [
+        "./dist/config/env-validation.d.ts"
+      ],
+      "services/page-content-store": [
+        "./dist/services/page-content-store.d.ts"
+      ],
+      "services/page-version-service": [
+        "./dist/services/page-version-service.d.ts"
+      ],
+      "services/drive-role-service": [
+        "./dist/services/drive-role-service.d.ts"
+      ],
+      "services/drive-search-service": [
+        "./dist/services/drive-search-service.d.ts"
+      ],
+      "validators/id-validators": [
+        "./dist/validators/id-validators.d.ts"
+      ],
+      "validators/email": [
+        "./dist/validators/email.d.ts"
+      ],
+      "notifications/types": [
+        "./dist/notifications/types.d.ts"
+      ],
+      "notifications/guards": [
+        "./dist/notifications/guards.d.ts"
+      ],
+      "notifications/notifications": [
+        "./dist/notifications/notifications.d.ts"
+      ],
+      "notifications/push-notifications": [
+        "./dist/notifications/push-notifications.d.ts"
+      ],
+      "content/activity-diff-utils": [
+        "./dist/content/activity-diff-utils.d.ts"
+      ],
+      "content/diff-generator": [
+        "./dist/content/diff-generator.d.ts"
+      ],
+      "content/diff-utils": [
+        "./dist/content/diff-utils.d.ts"
+      ],
+      "content/page-content-format": [
+        "./dist/content/page-content-format.d.ts"
+      ],
+      "content/version-resolver": [
+        "./dist/content/version-resolver.d.ts"
+      ],
+      "content/export-utils": [
+        "./dist/content/export-utils.d.ts"
+      ],
+      "content/page-types.config": [
+        "./dist/content/page-types.config.d.ts"
+      ],
+      "content/page-type-validators": [
+        "./dist/content/page-type-validators.d.ts"
+      ],
+      "content/tree-utils": [
+        "./dist/content/tree-utils.d.ts"
+      ],
+      "audit/audit-log": [
+        "./dist/audit/audit-log.d.ts"
+      ],
+      "audit/audit-query": [
+        "./dist/audit/audit-query.d.ts"
+      ],
+      "audit/security-audit-alerting": [
+        "./dist/audit/security-audit-alerting.d.ts"
+      ],
+      "monitoring/change-group": [
+        "./dist/monitoring/change-group.d.ts"
+      ],
+      "integrations/types": [
+        "./dist/integrations/types.d.ts"
+      ],
+      "integrations/oauth/oauth-state": [
+        "./dist/integrations/oauth/oauth-state.d.ts"
+      ],
+      "integrations/repositories/config-repository": [
+        "./dist/integrations/repositories/config-repository.d.ts"
+      ],
+      "integrations/repositories/connection-repository": [
+        "./dist/integrations/repositories/connection-repository.d.ts"
+      ],
+      "integrations/repositories/grant-repository": [
+        "./dist/integrations/repositories/grant-repository.d.ts"
+      ],
+      "integrations/repositories/audit-repository": [
+        "./dist/integrations/repositories/audit-repository.d.ts"
+      ],
+      "integrations/resolution/resolve-agent-integrations": [
+        "./dist/integrations/resolution/resolve-agent-integrations.d.ts"
+      ],
+      "integrations/converter/ai-sdk": [
+        "./dist/integrations/converter/ai-sdk.d.ts"
+      ],
+      "integrations/saga/execute-tool": [
+        "./dist/integrations/saga/execute-tool.d.ts"
+      ],
+      "integrations/repositories/provider-repository": [
+        "./dist/integrations/repositories/provider-repository.d.ts"
+      ],
+      "integrations/credentials/encrypt-credentials": [
+        "./dist/integrations/credentials/encrypt-credentials.d.ts"
+      ],
+      "integrations/oauth/oauth-handler": [
+        "./dist/integrations/oauth/oauth-handler.d.ts"
+      ],
+      "integrations/providers": [
+        "./dist/integrations/providers/index.d.ts"
+      ],
+      "integrations/converter/openapi": [
+        "./dist/integrations/converter/openapi.d.ts"
+      ],
+      "security/jti-revocation": [
+        "./dist/security/jti-revocation.d.ts"
+      ],
+      "security/distributed-rate-limit": [
+        "./dist/security/distributed-rate-limit.d.ts"
+      ],
+      "security/auth-handoff-sweep": [
+        "./dist/security/auth-handoff-sweep.d.ts"
+      ],
+      "security/url-validator": [
+        "./dist/security/url-validator.d.ts"
+      ],
+      "security/path-validator": [
+        "./dist/security/path-validator.d.ts"
+      ],
+      "auth/constants": [
+        "./dist/auth/constants.d.ts"
+      ],
+      "auth/account-lockout": [
+        "./dist/auth/account-lockout.d.ts"
+      ],
+      "auth/csrf-utils": [
+        "./dist/auth/csrf-utils.d.ts"
+      ],
+      "auth/oauth-types": [
+        "./dist/auth/oauth-types.d.ts"
+      ],
+      "auth/oauth-utils": [
+        "./dist/auth/oauth-utils.d.ts"
+      ],
+      "auth/opaque-tokens": [
+        "./dist/auth/opaque-tokens.d.ts"
+      ],
+      "auth/rate-limit-utils": [
+        "./dist/auth/rate-limit-utils.d.ts"
+      ],
+      "auth/session-service": [
+        "./dist/auth/session-service.d.ts"
+      ],
+      "auth/token-lookup": [
+        "./dist/auth/token-lookup.d.ts"
+      ],
+      "auth/token-utils": [
+        "./dist/auth/token-utils.d.ts"
+      ],
+      "auth/exchange-codes": [
+        "./dist/auth/exchange-codes.d.ts"
+      ],
+      "auth/passkey-register-handoff": [
+        "./dist/auth/passkey-register-handoff.d.ts"
+      ],
+      "auth/pkce": [
+        "./dist/auth/pkce.d.ts"
+      ],
+      "auth/passkey-service": [
+        "./dist/auth/passkey-service.d.ts"
+      ],
+      "auth/passkey-client-constants": [
+        "./dist/auth/passkey-client-constants.d.ts"
+      ],
+      "permissions/permissions": [
+        "./dist/permissions/permissions.d.ts"
+      ],
+      "permissions/rollback-permissions": [
+        "./dist/permissions/rollback-permissions.d.ts"
+      ],
+      "permissions/enforced-context": [
+        "./dist/permissions/enforced-context.d.ts"
+      ],
+      "permissions/file-access": [
+        "./dist/permissions/file-access.d.ts"
+      ],
+      "permissions/permission-mutations": [
+        "./dist/permissions/permission-mutations.d.ts"
+      ],
+      "permissions/schemas": [
+        "./dist/permissions/schemas.d.ts"
+      ],
+      "permissions/accessible-page-ids": [
+        "./dist/permissions/accessible-page-ids.d.ts"
       ],
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"

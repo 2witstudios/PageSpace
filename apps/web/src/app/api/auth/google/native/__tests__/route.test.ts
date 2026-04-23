@@ -126,9 +126,12 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, auditRequest, loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';

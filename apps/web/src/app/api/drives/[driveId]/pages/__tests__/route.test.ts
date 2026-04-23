@@ -100,7 +100,8 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // ---------- helpers ----------
 

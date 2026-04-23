@@ -136,7 +136,7 @@ vi.mock('@/lib/auth', async () => {
 });
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 describe('/api/auth/google/callback redirect', () => {

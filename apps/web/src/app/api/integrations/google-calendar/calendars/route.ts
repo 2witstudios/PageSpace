@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getValidAccessToken } from '@/lib/integrations/google-calendar/token-refresh';
 import { listCalendars } from '@/lib/integrations/google-calendar/api-client';
 

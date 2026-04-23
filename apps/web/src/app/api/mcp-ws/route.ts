@@ -25,7 +25,7 @@ import {
   isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections

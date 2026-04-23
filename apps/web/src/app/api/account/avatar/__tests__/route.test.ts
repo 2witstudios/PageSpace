@@ -33,7 +33,7 @@ vi.stubGlobal('fetch', mockFetch);
 import { POST, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Test helpers
 const mockSessionAuth = (userId: string): SessionAuthResult => ({

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, isNull, inArray } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions'
+import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 import {
   syncTaskDueDateTrigger,

@@ -1,5 +1,5 @@
 import { db, pages, users, pagePermissions, driveMembers, eq, and } from '@pagespace/db';
-import { getUserAccessLevel } from '@pagespace/lib/server';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { createId } from '@paralleldrive/cuid2';
 
 /**

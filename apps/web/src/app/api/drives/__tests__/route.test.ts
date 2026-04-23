@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveWithAccess } from '@pagespace/lib/server';
+import type { DriveWithAccess } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
 // Contract Tests for /api/drives
@@ -50,7 +50,8 @@ vi.mock('@/lib/auth', () => ({
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
 }));
 
-import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
+import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';

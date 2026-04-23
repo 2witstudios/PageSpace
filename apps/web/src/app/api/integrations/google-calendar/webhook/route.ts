@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 import { validateWebhookAuth } from '@/lib/integrations/google-calendar/webhook-auth';
 

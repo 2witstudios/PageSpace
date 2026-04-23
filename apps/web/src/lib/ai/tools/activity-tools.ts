@@ -18,13 +18,15 @@ import {
 import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import {
   groupActivitiesForDiff,
-  resolveStackedVersionContent,
+  type ActivityForDiff,
+} from '@pagespace/lib/content/activity-diff-utils';
+import { resolveStackedVersionContent } from '@pagespace/lib/content/version-resolver';
+import {
   generateDiffsWithinBudget,
   calculateDiffBudget,
-  type ActivityForDiff,
   type DiffRequest,
-} from '@pagespace/lib/content';
-import { readPageContent } from '@pagespace/lib/server';
+} from '@pagespace/lib/content/diff-generator';
+import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { type ToolExecutionContext } from '../core';
 
 /**

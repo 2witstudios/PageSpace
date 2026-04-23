@@ -1,11 +1,17 @@
-import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes'
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
@@ -15,7 +21,7 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-import { consumePKCEVerifier } from '@pagespace/lib/auth';
+import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 

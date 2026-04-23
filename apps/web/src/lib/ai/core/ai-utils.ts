@@ -1,7 +1,7 @@
 import { db, userAiSettings, eq, and } from '@pagespace/db';
-import { decrypt } from '@pagespace/lib/server';
+import { decrypt } from '@pagespace/lib/encryption';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const aiLogger = loggers.ai.child({ module: 'ai-utils' });

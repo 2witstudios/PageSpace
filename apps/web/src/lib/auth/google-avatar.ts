@@ -1,5 +1,5 @@
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;

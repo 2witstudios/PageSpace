@@ -6,7 +6,7 @@ import {
   isPublicPageRoute,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import {
   validateOriginForMiddleware,
   isOriginValidationBlocking,

@@ -15,8 +15,8 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { revokeSessionsForLogin, createWebDeviceToken } from '../device-auth-helpers';
-import { sessionService } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 
 describe('device-auth-helpers', () => {
   beforeEach(() => {

@@ -29,7 +29,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 import { verifyToken, markEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/verify-email', () => {

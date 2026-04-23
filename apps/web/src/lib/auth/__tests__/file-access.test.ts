@@ -10,7 +10,7 @@
  * using the same pattern as production, with a structural sync assertion to catch drift.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions';
+import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions/file-access';
 
 const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted(() => ({
   mockWhereFn: vi.fn().mockResolvedValue([]),

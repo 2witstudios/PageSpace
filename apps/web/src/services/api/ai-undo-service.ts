@@ -8,11 +8,11 @@
  */
 
 import { db, chatMessages, messages, activityLogs, eq, and, gte, lt, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   logConversationUndo,
   getActorInfo,
-} from '@pagespace/lib/monitoring';
+} from '@pagespace/lib/monitoring/activity-logger';
 import {
   executeRollback,
   previewRollback,

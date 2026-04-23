@@ -38,7 +38,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
-import { getDriveIdsForUser } from '@pagespace/lib/server';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 
 const mockSessionAuth = {
   userId: 'user_123',

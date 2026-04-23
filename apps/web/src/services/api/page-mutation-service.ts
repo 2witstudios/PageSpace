@@ -1,23 +1,13 @@
 import { db, pages, eq, and } from '@pagespace/db';
-import {
-  logActivityWithTx,
-  type ActivityOperation,
-  type ActivityResourceType,
-  type DeferredWorkflowTrigger,
-  inferChangeGroupType,
-  createChangeGroupId,
-} from '@pagespace/lib/monitoring';
-import {
-  computePageStateHash,
-  createPageVersion,
-  type PageVersionSource,
-  loggers,
-} from '@pagespace/lib/server';
-import { writePageContent } from '@pagespace/lib/server';
-import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content';
-import { hashWithPrefix } from '@pagespace/lib/server';
+import { logActivityWithTx, type ActivityOperation, type ActivityResourceType, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger'
+import { inferChangeGroupType, createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { writePageContent } from '@pagespace/lib/services/page-content-store';
+import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
-import { createMentionNotification } from '@pagespace/lib/notifications';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 
 export class PageRevisionMismatchError extends Error {
   currentRevision: number;

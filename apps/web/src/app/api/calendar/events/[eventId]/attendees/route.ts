@@ -7,7 +7,9 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';

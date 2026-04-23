@@ -60,7 +60,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db';
 
 const mockUserId = 'user_123';

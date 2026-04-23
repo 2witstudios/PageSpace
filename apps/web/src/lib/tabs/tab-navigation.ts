@@ -3,7 +3,7 @@
  * Pure functions for browser-style tab navigation with per-tab history
  */
 
-import type { PageType } from '@pagespace/lib/client-safe';
+import type { PageType } from '@pagespace/lib/utils/enums';
 
 export interface Tab {
   id: string;

@@ -48,7 +48,7 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test helpers

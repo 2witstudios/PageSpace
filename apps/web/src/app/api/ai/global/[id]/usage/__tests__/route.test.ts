@@ -48,7 +48,7 @@ import {
   calculateUsageSummary as mockedCalculateUsageSummary,
 } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 
 // Test fixtures

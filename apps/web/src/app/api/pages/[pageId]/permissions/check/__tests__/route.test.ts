@@ -23,7 +23,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { getUserAccessLevel } from '@pagespace/lib/server';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

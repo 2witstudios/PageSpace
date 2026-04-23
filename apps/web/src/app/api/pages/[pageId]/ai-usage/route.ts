@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
-import { getUserAccessLevel, loggers, auditRequest } from '@pagespace/lib/server';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };

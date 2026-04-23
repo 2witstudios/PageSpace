@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };

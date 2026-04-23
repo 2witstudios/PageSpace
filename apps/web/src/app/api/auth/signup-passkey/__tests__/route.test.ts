@@ -80,14 +80,13 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 import { POST } from '../route';
 import { oauthRepository } from '@/lib/repositories/oauth-repository';
-import {
-  verifySignupRegistration,
-  sessionService,
-  generateCSRFToken,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service'
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';

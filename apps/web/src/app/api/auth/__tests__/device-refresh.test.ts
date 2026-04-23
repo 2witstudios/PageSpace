@@ -74,14 +74,11 @@ vi.mock('@/lib/auth', () => ({
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-  auditRequest,
-  loggers,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { appendSessionCookie } from '@/lib/auth';
 
 describe('/api/auth/device/refresh', () => {

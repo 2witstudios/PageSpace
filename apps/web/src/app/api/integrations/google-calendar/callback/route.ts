@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';

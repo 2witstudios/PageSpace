@@ -88,7 +88,7 @@ import {
   validateMessageSize,
 } from '@/lib/websocket';
 import { sessionService } from '@pagespace/lib';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Mock session expiry (1 hour from now)
 const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);

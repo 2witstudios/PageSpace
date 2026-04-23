@@ -48,14 +48,13 @@ vi.mock('@/lib/stripe/client', () => ({
 }));
 
 import { DELETE } from '../route';
-import {
-  loggers,
-  accountRepository,
-  activityLogRepository,
-  revokeUserIntegrationTokens,
-} from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
+import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteMonitoringDataForUser, isCloud } from '@pagespace/lib';
+import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge'
+import { isCloud } from '@pagespace/lib/deployment-mode';
 import { stripe } from '@/lib/stripe/client';
 
 // Type the mocked repositories

@@ -97,19 +97,16 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
-import {
-  verifyOAuthIdToken,
-  createOrLinkOAuthUser,
-  validateOrCreateDeviceToken,
-  auditRequest,
-  loggers,
-} from '@pagespace/lib/server';
+import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils'
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/mobile/oauth/google/exchange', () => {

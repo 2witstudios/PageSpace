@@ -7,7 +7,8 @@ import {
   inArray,
   pages,
 } from '@pagespace/db';
-import { canUserViewPage, loggers } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import type { ToolExecutionContext } from '@/lib/ai/core';
 

@@ -111,7 +111,7 @@ vi.mock('@pagespace/lib/server', async () => {
 
 // Import after mocks
 import { POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Helper to create mock Stripe event
 const mockStripeEvent = (type: string, data: unknown) => ({

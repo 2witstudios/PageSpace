@@ -45,7 +45,8 @@ vi.mock('@/lib/ai/core', () => ({
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, loggers } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 
 // Test fixtures

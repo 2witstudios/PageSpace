@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
-import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { isFolderPage } from '@pagespace/lib/content/page-types.config';
 import { FolderOpen, FileText } from 'lucide-react';
 
 interface TreeItem {

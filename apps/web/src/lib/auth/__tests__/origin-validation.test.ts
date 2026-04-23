@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 describe('origin-validation', () => {
   // Store original env values

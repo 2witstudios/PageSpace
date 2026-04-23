@@ -7,7 +7,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { searchTools } from '../search-tools';
-import { getUserDriveAccess } from '@pagespace/lib/server';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);

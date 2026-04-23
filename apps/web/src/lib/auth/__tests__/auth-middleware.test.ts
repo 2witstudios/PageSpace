@@ -59,8 +59,8 @@ vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';

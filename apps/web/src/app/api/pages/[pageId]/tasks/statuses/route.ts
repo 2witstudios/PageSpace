@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { db, taskLists, taskStatusConfigs, taskItems, eq, and, asc, desc, inArray } from '@pagespace/db';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };

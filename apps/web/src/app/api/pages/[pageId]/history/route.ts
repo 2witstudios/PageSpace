@@ -3,8 +3,9 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
 import { getPageVersionHistory, getUserRetentionDays } from '@/services/api';
-import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };

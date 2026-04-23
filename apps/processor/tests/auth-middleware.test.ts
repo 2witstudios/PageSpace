@@ -35,7 +35,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   },
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 function createMockRequest(overrides: Partial<Request> = {}): Request {
   return {

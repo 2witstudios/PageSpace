@@ -19,7 +19,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   getUserAccessLevel: vi.fn(),
 }));
 
-import { getUserAccessLevel } from '@pagespace/lib/permissions';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {

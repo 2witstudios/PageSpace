@@ -78,7 +78,7 @@ vi.mock('../../core', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';

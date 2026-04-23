@@ -75,7 +75,7 @@ vi.mock('@pagespace/lib/server', () => ({
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test fixtures

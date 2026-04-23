@@ -61,7 +61,7 @@ vi.mock('@pagespace/db', async () => {
 // Import after all mocks are set up
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/server';
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 

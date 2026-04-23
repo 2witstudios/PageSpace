@@ -14,7 +14,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { createUserServiceToken } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isExternalHttpUrl, resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 describe('google-avatar', () => {

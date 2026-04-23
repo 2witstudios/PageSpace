@@ -84,7 +84,7 @@ vi.mock('@/lib/websocket', () => ({
 
 import { GET, POST, PUT, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 

@@ -73,8 +73,8 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { channelTools } from '../channel-tools';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions';
-import { getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../../core';

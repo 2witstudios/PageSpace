@@ -79,7 +79,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

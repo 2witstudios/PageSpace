@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, activityLogs, eq, and, desc, gte, lt, inArray } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { generateCSV } from '@pagespace/lib/content/export-utils';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { format } from 'date-fns';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };

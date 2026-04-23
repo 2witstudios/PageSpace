@@ -72,7 +72,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { GET, PATCH } from '../route';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Helper to create mock SessionAuthResult

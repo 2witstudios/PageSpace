@@ -6,7 +6,8 @@
  */
 
 import { db, pages, drives, eq, and, asc } from '@pagespace/db';
-import { getUserDriveAccess, loggers } from '@pagespace/lib/server';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree } from '@pagespace/lib';
 
 interface TreeNode {

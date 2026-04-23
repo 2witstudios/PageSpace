@@ -42,7 +42,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 describe('/api/auth/csrf', () => {

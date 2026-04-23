@@ -62,7 +62,8 @@ vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
 import { GET, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { hashToken, isValidTokenFormat, getTokenType } from '@pagespace/lib/auth';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import {
   getUserDeviceTokens,

@@ -45,7 +45,7 @@ vi.mock('@/lib/ai/tools/channel-tools', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {

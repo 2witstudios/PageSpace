@@ -23,7 +23,7 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const validPayload = {
   name: 'John Doe',

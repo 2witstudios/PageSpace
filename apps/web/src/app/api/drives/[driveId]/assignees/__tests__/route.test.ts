@@ -58,7 +58,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

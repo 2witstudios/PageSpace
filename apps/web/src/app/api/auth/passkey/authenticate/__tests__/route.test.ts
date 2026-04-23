@@ -81,15 +81,14 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 import { POST } from '../route';
-import {
-  verifyAuthentication,
-  sessionService,
-  generateCSRFToken,
-  createExchangeCode,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service'
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 

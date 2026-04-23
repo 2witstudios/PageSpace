@@ -3,7 +3,9 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from 
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage, loggers, auditRequest } from '@pagespace/lib/server';
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 interface AgentSummary {
   id: string;

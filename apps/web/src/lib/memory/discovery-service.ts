@@ -22,7 +22,7 @@ import {
   inArray,
 } from '@pagespace/db';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface DiscoveryResult {
   worldview: string[];

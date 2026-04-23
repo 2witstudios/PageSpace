@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
+import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]
@@ -53,14 +53,8 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
 
-import {
-  getDriveById,
-  getDriveAccess,
-  getDriveWithAccess,
-  updateDrive,
-  trashDrive,
-  loggers,
-} from '@pagespace/lib/server';
+import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

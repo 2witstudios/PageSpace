@@ -110,7 +110,7 @@ vi.mock('@pagespace/lib/monitoring', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../restore/route';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
