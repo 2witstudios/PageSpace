@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { z } from 'zod/v4';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 // State expires after 10 minutes — prevents replay attacks
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;

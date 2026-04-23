@@ -8,15 +8,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/lib/auth', () => ({
-  generateRegistrationOptionsForSignup: vi.fn(),
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+    generateRegistrationOptionsForSignup: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -25,14 +21,16 @@ vi.mock('@pagespace/lib/server', async () => {
         debug: vi.fn(),
       },
     },
-    auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
   },
 }));
@@ -43,9 +41,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const validPayload = {

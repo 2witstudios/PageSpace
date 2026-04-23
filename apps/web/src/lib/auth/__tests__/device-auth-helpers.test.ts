@@ -1,22 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     revokeDeviceSessions: vi.fn(),
     revokeAllUserSessions: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateOrCreateDeviceToken: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    validateOrCreateDeviceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { revokeSessionsForLogin, createWebDeviceToken } from '../device-auth-helpers';
-import { sessionService } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 
 describe('device-auth-helpers', () => {
   beforeEach(() => {

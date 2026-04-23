@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { listUserPasskeys } from '@pagespace/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import {
   authenticateSessionRequest,
   isAuthError,

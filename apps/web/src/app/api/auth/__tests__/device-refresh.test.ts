@@ -17,13 +17,16 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateDeviceToken: vi.fn(),
-  updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-  // Opaque token generator - now synchronous with no parameters
-  generateDeviceToken: vi.fn().mockReturnValue('ps_dev_mock_token'),
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  loggers: {
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    validateDeviceToken: vi.fn(),
+    updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+    generateDeviceToken: vi.fn().mockReturnValue('ps_dev_mock_token'),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -34,7 +37,11 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -44,16 +51,19 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-cuid'),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
+  isCuid: vi.fn((id: string) => typeof id === 'string' && id.length > 0),
 }));
 
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn().mockReturnValue('mock-token-hash'),
-  getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn().mockReturnValue('mock-token-hash'),
+    getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'session-123',
@@ -72,17 +82,24 @@ vi.mock('@/lib/auth', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, remaining: 9 }),
+  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+  DISTRIBUTED_RATE_LIMITS: {
+    REFRESH: { windowMs: 300000, maxAttempts: 10 },
+    LOGIN: { windowMs: 900000, maxAttempts: 5 },
+    API: { windowMs: 60000, maxAttempts: 100 },
+  },
+}));
+
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-  auditRequest,
-  loggers,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { appendSessionCookie } from '@/lib/auth';
 
 describe('/api/auth/device/refresh', () => {

@@ -32,8 +32,8 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -46,10 +46,18 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
-  verifyAppleIdToken: vi.fn().mockResolvedValue({
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+    createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/oauth-utils', () => ({
+    verifyAppleIdToken: vi.fn().mockResolvedValue({
     success: true,
     userInfo: {
       providerId: 'apple-sub-123',
@@ -64,11 +72,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -80,13 +84,17 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
     validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
     }),
-    maskEmail,
-  };
-});
+}));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
@@ -108,24 +116,27 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
     retryAfter: undefined,
   }),
-  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-  DISTRIBUTED_RATE_LIMITS: {
+    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
   },
 }));
 
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';

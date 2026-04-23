@@ -10,7 +10,7 @@
  * using the same pattern as production, with a structural sync assertion to catch drift.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions';
+import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions/file-access';
 
 const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted(() => ({
   mockWhereFn: vi.fn().mockResolvedValue([]),
@@ -37,14 +37,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
   return { loggers: { api: logger, realtime: logger, security: logger } };
 });
 
-vi.mock('@pagespace/lib', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    parseUserId: vi.fn((v: unknown) => ({ success: true, data: v })),
-    parsePageId: vi.fn((v: unknown) => ({ success: true, data: v })),
-  };
-});
+vi.mock('@pagespace/lib/validators/id-validators', () => ({
+  parseUserId: vi.fn((v: unknown) => ({ success: true, data: v })),
+  parsePageId: vi.fn((v: unknown) => ({ success: true, data: v })),
+}));
 
 describe('canUserAccessFile', () => {
   let canUserAccessFile: (userId: string, fileId: string, driveId: string) => Promise<boolean>;

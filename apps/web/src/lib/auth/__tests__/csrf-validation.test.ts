@@ -21,28 +21,33 @@ import { validateCSRF, requiresCSRFProtection } from '../csrf-validation';
  */
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/auth', () => ({
-  validateCSRFToken: vi.fn(),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    validateCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       warn: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '../cookie-config';
 
 describe('csrf-validation', () => {

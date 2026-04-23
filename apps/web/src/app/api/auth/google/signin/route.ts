@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { createSignedState } from '@pagespace/lib/integrations';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { generatePKCE } from '@pagespace/lib/auth';
+import { generatePKCE } from '@pagespace/lib/auth/pkce';
 
 // Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
 // the server can mint a signed state it will later reject at the callback,

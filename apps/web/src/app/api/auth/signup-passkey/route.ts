@@ -1,19 +1,19 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { oauthRepository } from '@/lib/repositories/oauth-repository';
-import {
-  verifySignupRegistration,
-  sessionService,
-  generateCSRFToken,
-  SESSION_DURATION_MS,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
+import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service'
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';

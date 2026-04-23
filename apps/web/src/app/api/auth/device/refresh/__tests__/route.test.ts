@@ -40,12 +40,16 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  validateDeviceToken: vi.fn(),
-  updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-  generateDeviceToken: vi.fn(),
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  loggers: {
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+    validateDeviceToken: vi.fn(),
+    updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+    generateDeviceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -56,13 +60,17 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-  DISTRIBUTED_RATE_LIMITS: {
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+    DISTRIBUTED_RATE_LIMITS: {
     REFRESH: {
       maxAttempts: 10,
       windowMs: 300000,
@@ -70,10 +78,12 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn(),
-  getTokenPrefix: vi.fn(),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn(),
+    getTokenPrefix: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -99,9 +109,11 @@ import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
