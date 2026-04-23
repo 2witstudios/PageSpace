@@ -7,6 +7,10 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join, extname } from 'path';
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const ROOT = new URL('..', import.meta.url).pathname;
 const APPS_DIR = join(ROOT, 'apps');
 
@@ -427,9 +431,10 @@ function parseImportBlock(source, barrel) {
   const results = [];
   // For root barrel (barrel=''), match '@pagespace/lib' followed immediately by quote (no subpath).
   // For subpath barrels, match '@pagespace/lib/<barrel>'.
+  const escapedBarrel = escapeRegExp(barrel);
   const pattern = barrel === ''
     ? `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib'`
-    : `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib/${barrel}'`;
+    : `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib/${escapedBarrel}'`;
   const regex = new RegExp(pattern, 'gs');
 
   let match;

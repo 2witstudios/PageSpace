@@ -7,6 +7,10 @@
 
 import { readFileSync, writeFileSync } from 'fs';
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Symbols that belong in activity-logger, not change-group
 const ACTIVITY_LOGGER_SYMBOLS = new Set([
   'logActivityWithTx',
@@ -129,7 +133,7 @@ function fixFile(filePath, fixes) {
   for (const { fromPath, targetSymbols, targetPath } of fixes) {
     // Match imports from fromPath (multi-line)
     const regex = new RegExp(
-      `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'${fromPath.replace(/\//g, '\\/')}'`,
+      `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'${escapeRegExp(fromPath)}'`,
       'gs'
     );
 
