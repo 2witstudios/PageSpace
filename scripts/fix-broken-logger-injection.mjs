@@ -86,10 +86,9 @@ for (const filePath of testFiles) {
 
   const mockBlock = fixed.slice(mockStart, mockEnd + 1);
 
-  // Check if logger: is already at a top-level position (not inside nested fn)
-  // We check by looking at the content between the first { and last }
-  // specifically if `logger:` appears at ~2 spaces of indent
-  if (/^  logger\s*:/m.test(mockBlock)) {
+  // Check if logger: is already at a top-level position (not inside nested fn).
+  // Use a loose indent pattern to handle 2-space, 4-space, or tab indentation.
+  if (/^\s+logger\s*:/m.test(mockBlock)) {
     // Already has it at correct level
     writeFileSync(filePath, fixed);
     fixedCount++;

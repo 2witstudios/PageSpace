@@ -710,19 +710,13 @@ function buildMockReplacement(barrelPath, factoryRaw, barrelMap) {
   }
 
   if (unknown.length > 0) {
-    // Keep the unknown keys in the original barrel path
-    const hasComplex = unknown.some(u => u.spread || u.computedKey);
-    if (hasComplex) {
-      const entries = unknown.map(u => {
-        if (u.spread) return `    ...${u.spread}`;
-        if (u.computedKey) return `    ${u.computedKey}: ${u.value}`;
-        return `    ${u.key}: ${u.value}`;
-      }).join(',\n');
-      lines.push(`vi.mock('${barrelPath}', () => ({\n${entries},\n}));`);
-    } else {
-      const entries = unknown.map(u => `    ${u.key}: ${u.value}`).join(',\n');
-      lines.push(`vi.mock('${barrelPath}', () => ({\n${entries},\n}));`);
-    }
+    // Unknown, spread, or computed entries cannot be safely mapped to a subpath.
+    // Emitting a fallback vi.mock(barrelPath, ...) would leave barrel aliases in
+    // "migrated" files and silently defeat the barrel-removal goal.
+    // Instead, skip the mock and report it for manual handling.
+    const names = unknown.map(u => u.spread ? `...${u.spread}` : (u.computedKey || u.key)).join(', ');
+    console.warn(`  SKIP (manual): ${barrelPath} — unmapped keys: ${names}`);
+    return { canSplit: false, replacement: null };
   }
 
   return { canSplit: true, replacement: lines.join('\n') };

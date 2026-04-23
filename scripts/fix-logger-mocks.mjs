@@ -57,19 +57,20 @@ for (const filePath of testFiles) {
   // If logger: is already in this block, skip
   if (/\blogger\s*:/.test(mockBlock)) continue;
 
-  // Find the closing })) and inject logger before it
-  // Pattern: replace })); or })) at end of the mock factory
-  const fixed = content.replace(
-    /(vi\.mock\('@pagespace\/lib\/logging\/logger-config',\s*\(\)\s*=>\s*\(\{)([\s\S]*?)(\}\)\))/,
-    (match, open, body, close) => {
-      const trimBody = body.trimEnd();
-      const comma = trimBody.endsWith(',') ? '' : ',';
-      return `${open}${body}${comma}\n  logger: { child: ${childFn} },\n${close}`;
-    }
-  );
+  // Use the paren-bounded mock block to inject precisely before the final }))
+  // so we never accidentally inject into a nested vi.fn(() => ({ ... })) call.
+  const before = content.slice(0, mockIdx);
+  const block = content.slice(mockIdx, mockEnd + 1);
+  const after = content.slice(mockEnd + 1);
 
-  if (fixed !== content) {
-    writeFileSync(filePath, fixed);
+  // block ends with })) — insert before the final newline+}))
+  const newBlock = block.replace(/(\n?[ \t]*\}\)\))$/, (_, closing) => {
+    const needsComma = !block.slice(0, block.length - closing.length).trimEnd().endsWith(',');
+    return `${needsComma ? ',' : ''}\n  logger: { child: ${childFn} },\n}))`;
+  });
+
+  if (newBlock !== block) {
+    writeFileSync(filePath, before + newBlock + after);
     fixedCount++;
     const rel = filePath.replace(ROOT, '');
     console.log('Fixed:', rel);
