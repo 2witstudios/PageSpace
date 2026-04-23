@@ -7,7 +7,7 @@ import {
   logMessageActivity,
 } from '@pagespace/lib/server';
 import { db, channelMessages, channelReadStatus, pages, driveMembers, eq, and } from '@pagespace/db';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';

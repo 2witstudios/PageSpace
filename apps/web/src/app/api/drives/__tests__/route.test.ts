@@ -28,11 +28,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data, options = {}) =>
     NextResponse.json(data, { status: options.status || 200 })
   ),
@@ -51,7 +51,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 

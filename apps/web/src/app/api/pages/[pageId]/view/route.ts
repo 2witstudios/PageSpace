@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, userPageViews, pages } from '@pagespace/db';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { jsonResponse } from '@pagespace/lib/api-utils';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { canUserViewPage } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

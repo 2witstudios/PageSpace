@@ -58,11 +58,11 @@ vi.mock('@pagespace/lib', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data) => NextResponse.json(data)),
 }));
 
@@ -70,8 +70,8 @@ import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/server';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { jsonResponse } from '@pagespace/lib/api-utils';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 
 // Test helpers
 const mockUserId = 'user_123';

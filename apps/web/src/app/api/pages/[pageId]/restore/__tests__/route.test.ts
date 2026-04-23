@@ -98,7 +98,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: (...args: unknown[]) => mockTrackPageOperation(...args),
 }));
 

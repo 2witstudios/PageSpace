@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the logger at system boundary
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/logger-config', () => ({
   },
 }));
 
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Re-implement the origin validation functions from index.ts for testing.

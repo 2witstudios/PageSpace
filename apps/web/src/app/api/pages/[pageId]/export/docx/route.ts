@@ -3,7 +3,7 @@ import { pages, db, eq } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { marked } from 'marked';
 

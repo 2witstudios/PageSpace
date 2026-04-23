@@ -12,7 +12,7 @@ import {
 } from '../kick-handler';
 
 // Mock the logger
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),

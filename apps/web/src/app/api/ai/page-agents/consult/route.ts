@@ -3,7 +3,7 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
-import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import {

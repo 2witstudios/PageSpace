@@ -35,7 +35,7 @@ vi.mock('../../cache/content-store', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     processor: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },

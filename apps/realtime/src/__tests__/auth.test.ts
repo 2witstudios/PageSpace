@@ -21,7 +21,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock the broadcast-auth module since it lives in @pagespace/lib
-vi.mock('@pagespace/lib/broadcast-auth', async () => {
+vi.mock('@pagespace/lib/auth/broadcast-auth', async () => {
   const crypto = await import('node:crypto');
 
   const SECRET = 'broadcast-secret-key-minimum-32-characters-long';
@@ -73,7 +73,7 @@ import {
   verifyBroadcastSignature,
   generateBroadcastSignature,
   formatSignatureHeader,
-} from '@pagespace/lib/broadcast-auth';
+} from '@pagespace/lib/auth/broadcast-auth';
 
 describe('Broadcast Authentication', () => {
   describe('signature generation', () => {

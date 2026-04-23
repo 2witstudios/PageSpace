@@ -8,7 +8,7 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';

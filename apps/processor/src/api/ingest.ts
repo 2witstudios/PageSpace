@@ -4,7 +4,7 @@ import { queueManager } from '../server';
 import { getPageForIngestion } from '../db';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
 import { assertFileAccess } from '../services/authorization';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const router = Router();
 

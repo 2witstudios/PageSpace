@@ -27,7 +27,7 @@ import {
   buildGlobalAssistantInstructions,
 } from '@/lib/ai/core';
 import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
-import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
+import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 
 interface PromptSection {
   name: string;

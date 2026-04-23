@@ -71,7 +71,7 @@ export function NotificationItem({
       className={cn(
         'group relative grid grid-cols-[0.5rem_auto_1fr_auto] items-start gap-x-3 gap-y-1 rounded-md border border-transparent bg-card text-card-foreground transition-colors',
         containerClasses[variant],
-        isInteractive && 'cursor-pointer hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        isInteractive && 'cursor-pointer hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         isUnread && 'bg-accent/40',
       )}
     >
@@ -89,6 +89,7 @@ export function NotificationItem({
           'flex items-center justify-center rounded-full bg-muted text-muted-foreground',
           iconWrapClasses[variant],
           isUnread && 'bg-primary/10 text-primary',
+          isInteractive && 'group-hover:text-accent-foreground',
         )}
       >
         <Icon className="size-4" aria-hidden />
@@ -103,10 +104,10 @@ export function NotificationItem({
         >
           {notification.title}
         </p>
-        <p className="mt-0.5 line-clamp-2 text-sm leading-5 text-muted-foreground">
+        <p className={cn('mt-0.5 line-clamp-2 text-sm leading-5 text-muted-foreground', isInteractive && 'group-hover:text-accent-foreground')}>
           {notification.message}
         </p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        <div className={cn('mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground', isInteractive && 'group-hover:text-accent-foreground')}>
           <time dateTime={new Date(notification.createdAt).toISOString()}>{timestamp}</time>
           {triggeredByName ? (
             <>

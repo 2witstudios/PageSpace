@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
 import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';

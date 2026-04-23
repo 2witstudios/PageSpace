@@ -60,7 +60,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -110,7 +110,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/mobile/oauth/google/exchange', () => {
   const mockUserInfo = {

@@ -39,32 +39,37 @@
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
     },
-    "./logger": {
+    "./logging/logger": {
       "types": "./dist/logging/logger.d.ts",
       "import": "./dist/logging/logger.js",
       "require": "./dist/logging/logger.js"
     },
-    "./logger-config": {
+    "./logging/logger-config": {
       "types": "./dist/logging/logger-config.d.ts",
       "import": "./dist/logging/logger-config.js",
       "require": "./dist/logging/logger-config.js"
     },
-    "./logger-database": {
+    "./logging/logger-database": {
       "types": "./dist/logging/logger-database.d.ts",
       "import": "./dist/logging/logger-database.js",
       "require": "./dist/logging/logger-database.js"
     },
-    "./activity-tracker": {
+    "./logging/logger-browser": {
+      "types": "./dist/logging/logger-browser.d.ts",
+      "import": "./dist/logging/logger-browser.js",
+      "default": "./dist/logging/logger-browser.js"
+    },
+    "./monitoring/activity-tracker": {
       "types": "./dist/monitoring/activity-tracker.d.ts",
       "import": "./dist/monitoring/activity-tracker.js",
       "require": "./dist/monitoring/activity-tracker.js"
     },
-    "./ai-monitoring": {
+    "./monitoring/ai-monitoring": {
       "types": "./dist/monitoring/ai-monitoring.d.ts",
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
     },
-    "./ai-context-calculator": {
+    "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
       "import": "./dist/monitoring/ai-context-calculator.js",
       "require": "./dist/monitoring/ai-context-calculator.js"
@@ -84,17 +89,17 @@
       "import": "./dist/auth/auth-utils.js",
       "require": "./dist/auth/auth-utils.js"
     },
-    "./device-auth-utils": {
+    "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
       "import": "./dist/auth/device-auth-utils.js",
       "require": "./dist/auth/device-auth-utils.js"
     },
-    "./device-fingerprint-utils": {
+    "./auth/device-fingerprint-utils": {
       "types": "./dist/auth/device-fingerprint-utils.d.ts",
       "import": "./dist/auth/device-fingerprint-utils.js",
       "require": "./dist/auth/device-fingerprint-utils.js"
     },
-    "./api-utils": {
+    "./utils/api-utils": {
       "types": "./dist/utils/api-utils.d.ts",
       "import": "./dist/utils/api-utils.js",
       "require": "./dist/utils/api-utils.js"
@@ -109,7 +114,7 @@
       "import": "./dist/audit/mask-email.js",
       "require": "./dist/audit/mask-email.js"
     },
-    "./broadcast-auth": {
+    "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
@@ -169,11 +174,6 @@
       "import": "./dist/monitoring/index.js",
       "require": "./dist/monitoring/index.js"
     },
-    "./logger-browser": {
-      "types": "./dist/logging/logger-browser.d.ts",
-      "import": "./dist/logging/logger-browser.js",
-      "default": "./dist/logging/logger-browser.js"
-    },
     "./utils/environment": {
       "types": "./dist/utils/environment.d.ts",
       "import": "./dist/utils/environment.js",
@@ -199,7 +199,7 @@
       "import": "./dist/pages/circular-reference-guard.js",
       "require": "./dist/pages/circular-reference-guard.js"
     },
-    "./verification-utils": {
+    "./auth/verification-utils": {
       "types": "./dist/auth/verification-utils.d.ts",
       "import": "./dist/auth/verification-utils.js",
       "require": "./dist/auth/verification-utils.js"
@@ -229,7 +229,7 @@
       "import": "./dist/test/auth-helpers.js",
       "require": "./dist/test/auth-helpers.js"
     },
-    "./secure-compare": {
+    "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
       "require": "./dist/auth/secure-compare.js"
@@ -304,22 +304,25 @@
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
-      "logger": [
+      "logging/logger": [
         "./dist/logging/logger.d.ts"
       ],
-      "logger-config": [
+      "logging/logger-config": [
         "./dist/logging/logger-config.d.ts"
       ],
-      "logger-database": [
+      "logging/logger-database": [
         "./dist/logging/logger-database.d.ts"
       ],
-      "activity-tracker": [
+      "logging/logger-browser": [
+        "./dist/logging/logger-browser.d.ts"
+      ],
+      "monitoring/activity-tracker": [
         "./dist/monitoring/activity-tracker.d.ts"
       ],
-      "ai-monitoring": [
+      "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
       ],
-      "ai-context-calculator": [
+      "monitoring/ai-context-calculator": [
         "./dist/monitoring/ai-context-calculator.d.ts"
       ],
       "monitoring/activity-logger": [
@@ -331,19 +334,19 @@
       "auth-utils": [
         "./dist/auth/auth-utils.d.ts"
       ],
-      "device-auth-utils": [
+      "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"
       ],
-      "device-fingerprint-utils": [
+      "auth/device-fingerprint-utils": [
         "./dist/auth/device-fingerprint-utils.d.ts"
       ],
-      "api-utils": [
+      "utils/api-utils": [
         "./dist/utils/api-utils.d.ts"
       ],
       "audit/security-audit": [
         "./dist/audit/security-audit.d.ts"
       ],
-      "broadcast-auth": [
+      "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
       ],
       "scribe-processor": [
@@ -379,9 +382,6 @@
       "monitoring": [
         "./dist/monitoring/index.d.ts"
       ],
-      "logger-browser": [
-        "./dist/logging/logger-browser.d.ts"
-      ],
       "utils/environment": [
         "./dist/utils/environment.d.ts"
       ],
@@ -397,7 +397,7 @@
       "pages/circular-reference-guard": [
         "./dist/pages/circular-reference-guard.d.ts"
       ],
-      "verification-utils": [
+      "auth/verification-utils": [
         "./dist/auth/verification-utils.d.ts"
       ],
       "services/email-service": [
@@ -415,7 +415,7 @@
       "test/auth-helpers": [
         "./dist/test/auth-helpers.d.ts"
       ],
-      "secure-compare": [
+      "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"
       ],
       "audit": [

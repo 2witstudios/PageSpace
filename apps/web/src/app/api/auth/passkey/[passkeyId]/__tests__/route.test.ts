@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -40,7 +40,7 @@ vi.mock('@/lib/auth', () => ({
 import { DELETE, PATCH } from '../route';
 import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 

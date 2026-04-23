@@ -7,6 +7,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
+svg.lucide {
+  stroke-width: 1.5;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

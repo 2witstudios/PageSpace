@@ -19,7 +19,7 @@ import {
   type ToolSchemaInfo,
   type JsonSchema,
 } from './schema-introspection';
-import { estimateSystemPromptTokens } from '@pagespace/lib/ai-context-calculator';
+import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { pageSpaceTools } from './ai-tools';
 
 export interface LocationContext {

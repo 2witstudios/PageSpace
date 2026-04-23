@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -55,7 +55,7 @@ import {
   consumePasskeyRegisterHandoff,
 } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
