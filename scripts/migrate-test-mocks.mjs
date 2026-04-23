@@ -856,7 +856,10 @@ const allIssues = [];
 for (const f of testFiles) {
   const src = readFileSync(f, 'utf8');
   // Quick check: does this file have any barrel mock?
-  const hasBarrel = Object.keys(BARREL_MAPS).some(b => src.includes(`vi.mock('${b}'`));
+  const hasBarrel = Object.keys(BARREL_MAPS).some((b) => {
+    const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`vi\\.mock\\s*\\(\\s*['"]${escaped}['"]`).test(src);
+  });
   if (!hasBarrel) continue;
 
   const { changed, issues } = migrateTestFile(f);
