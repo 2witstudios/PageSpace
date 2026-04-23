@@ -175,6 +175,7 @@ describe('/api/cron/verify-audit-chain', () => {
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: true, entriesVerified: 100 } })
     );
+    expect(mockAudit.mock.calls[0]?.[0]).not.toHaveProperty('userId');
   });
 
   it('logs audit event on failed chain verification', async () => {
@@ -185,6 +186,7 @@ describe('/api/cron/verify-audit-chain', () => {
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: false, entriesVerified: 100 } })
     );
+    expect(mockAudit.mock.calls[0]?.[0]).not.toHaveProperty('userId');
   });
 
   it('does not log audit event when verification throws', async () => {

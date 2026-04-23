@@ -202,6 +202,7 @@ describe('POST /api/cron/workflows', () => {
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
     );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
 
   it('should log audit event with zero executed when no workflows are due', async () => {
@@ -211,6 +212,7 @@ describe('POST /api/cron/workflows', () => {
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } })
     );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
 
   it('should handle thrown exceptions during execution', async () => {

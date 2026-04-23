@@ -34,9 +34,7 @@ vi.mock('@pagespace/db', () => {
   return {
     db: {
       query: {
-        securityAuditLog: {
-          findFirst: vi.fn(),
-        },
+        securityAuditLog: {},
       },
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
@@ -214,11 +212,10 @@ describe('Security Audit Service', () => {
   });
 
   describe('initialize', () => {
-    it('marks service as initialized without a DB query', async () => {
+    it('marks service as initialized', async () => {
       await service.initialize();
 
       expect(service.isInitialized()).toBe(true);
-      expect(db.query.securityAuditLog.findFirst).not.toHaveBeenCalled();
     });
 
     it('is idempotent when called multiple times', async () => {
@@ -227,13 +224,11 @@ describe('Security Audit Service', () => {
       await service.initialize();
 
       expect(service.isInitialized()).toBe(true);
-      expect(db.query.securityAuditLog.findFirst).not.toHaveBeenCalled();
     });
   });
 
   describe('logEvent', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 
@@ -316,7 +311,6 @@ describe('Security Audit Service', () => {
 
   describe('convenience methods', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 

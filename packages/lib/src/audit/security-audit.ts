@@ -102,25 +102,13 @@ export function computeSecurityEventHash(
  */
 export class SecurityAuditService {
   private initialized = false;
-  private initializePromise: Promise<void> | null = null;
 
   /**
-   * Mark the service as initialized. Call during app startup before logEvent().
-   * Idempotent — safe to call multiple times.
+   * Mark the service as initialized. Retained for callers that invoke it at
+   * app startup; logEvent() also self-initializes. Idempotent.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-
-    // Prevent concurrent initialization
-    if (this.initializePromise) {
-      return this.initializePromise;
-    }
-
-    this.initializePromise = this._doInitialize();
-    await this.initializePromise;
-  }
-
-  private async _doInitialize(): Promise<void> {
     this.initialized = true;
   }
 
