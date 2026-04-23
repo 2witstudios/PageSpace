@@ -497,7 +497,7 @@ export async function collectUserSessions(database: DB, userId: string): Promise
 }
 
 export async function collectUserNotifications(database: DB, userId: string): Promise<UserNotificationExport[]> {
-  return database
+  const result = await database
     .select({
       id: notifications.id,
       type: notifications.type,
@@ -510,6 +510,11 @@ export async function collectUserNotifications(database: DB, userId: string): Pr
     })
     .from(notifications)
     .where(eq(notifications.userId, userId));
+
+  return result.map(n => ({
+    ...n,
+    metadata: n.metadata as Record<string, unknown> | null,
+  }));
 }
 
 export async function collectUserDisplayPreferences(database: DB, userId: string): Promise<UserDisplayPreferenceExport[]> {
