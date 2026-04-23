@@ -8,14 +8,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  EnforcedAuthContext: {
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
+    EnforcedAuthContext: {
     fromSession: vi.fn((claims) => ({
       userId: claims.userId,
       userRole: claims.userRole,
@@ -35,7 +35,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   },
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 function createMockRequest(overrides: Partial<Request> = {}): Request {
   return {

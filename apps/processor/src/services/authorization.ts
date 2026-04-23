@@ -1,5 +1,5 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions';
+import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import type { EnforcedAuthContext, ResourceBinding } from '../middleware/auth';
 import { getLinksForFile, getFileDriveId, type FileLink } from './file-links';
 

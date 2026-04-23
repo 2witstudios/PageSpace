@@ -21,9 +21,9 @@
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 
 // Mock the permission functions
-vi.mock('@pagespace/lib/permissions', () => ({
-  getUserAccessLevel: vi.fn(),
-  getUserDriveAccess: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserAccessLevel: vi.fn(),
+    getUserDriveAccess: vi.fn(),
 }));
 
 // Mock the database
@@ -49,9 +49,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Create a mock socket that tracks room joins/leaves
