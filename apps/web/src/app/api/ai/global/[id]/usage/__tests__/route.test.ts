@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 // Mock AI monitoring (boundary)
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   getContextWindow: vi.fn(() => 200000),
 }));
 
@@ -49,7 +49,7 @@ import {
 } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 
 // Test fixtures
 const mockUserId = 'user_123';

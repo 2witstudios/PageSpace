@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import { authenticateService, requireScope, AUTH_REQUIRED } from '../src/middleware/auth';
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   },

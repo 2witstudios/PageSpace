@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken, markEmailVerified } from '@pagespace/lib/verification-utils';
+import { verifyToken, markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 export async function GET(request: NextRequest) {
   try {

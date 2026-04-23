@@ -60,7 +60,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logMemberActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 
@@ -73,7 +73,7 @@ import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // ---------- helpers ----------
 

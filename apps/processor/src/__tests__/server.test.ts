@@ -215,7 +215,7 @@ vi.mock('../db', () => ({
   getPoolForWorker: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     processor: {
       debug: vi.fn(),
@@ -360,7 +360,7 @@ describe('CORS origin callback', () => {
       delete process.env.CORS_ORIGIN;
       delete process.env.WEB_APP_URL;
 
-      const { loggers } = await import('@pagespace/lib/logger-config');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       await callCorsOrigin('https://example.com');
 
       expect(loggers.processor.error).toHaveBeenCalledWith(
@@ -387,7 +387,7 @@ describe('CORS origin callback', () => {
       delete process.env.CORS_ORIGIN;
       delete process.env.WEB_APP_URL;
 
-      const { loggers } = await import('@pagespace/lib/logger-config');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       await callCorsOrigin('https://example.com');
 
       expect(loggers.processor.warn).toHaveBeenCalledWith(
@@ -459,7 +459,7 @@ describe('CORS origin callback', () => {
     it('should log a security warning', async () => {
       process.env.WEB_APP_URL = 'https://app.example.com';
 
-      const { loggers } = await import('@pagespace/lib/logger-config');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       await callCorsOrigin('https://evil.example.com');
 
       expect(loggers.processor.warn).toHaveBeenCalledWith(

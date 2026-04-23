@@ -86,7 +86,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -102,7 +102,7 @@ import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-trans
 import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const mockUser = {

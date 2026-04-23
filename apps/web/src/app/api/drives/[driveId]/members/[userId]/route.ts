@@ -19,7 +19,7 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

@@ -1,9 +1,9 @@
 import { users, db, eq, deviceTokens, sql, and, isNull, gt } from '@pagespace/db';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { hashToken } from '@pagespace/lib/auth';
-import { secureCompare } from '@pagespace/lib/secure-compare';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
+import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

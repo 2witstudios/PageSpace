@@ -20,14 +20,14 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   clearSessionCache: () => mockClearSessionCache(),
 }));
 
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({
     'Content-Type': 'application/json',
     'X-Broadcast-Signature': 't=1234567890,v1=signature',
   })),
 }));
 
-vi.mock('@pagespace/lib/logger-browser', () => ({
+vi.mock('@pagespace/lib/logging/logger-browser', () => ({
   browserLoggers: {
     realtime: {
       child: vi.fn(() => ({

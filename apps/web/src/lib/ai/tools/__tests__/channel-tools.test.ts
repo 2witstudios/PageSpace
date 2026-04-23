@@ -53,7 +53,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({
     'Content-Type': 'application/json',
   })),

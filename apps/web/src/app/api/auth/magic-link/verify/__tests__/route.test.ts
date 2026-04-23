@@ -44,7 +44,7 @@ vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/verification-utils', () => ({
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -63,7 +63,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -82,9 +82,9 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { markEmailVerified } from '@pagespace/lib/verification-utils';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';

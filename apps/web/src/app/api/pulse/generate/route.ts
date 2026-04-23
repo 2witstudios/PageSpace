@@ -46,7 +46,7 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
-import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 

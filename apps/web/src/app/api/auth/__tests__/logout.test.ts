@@ -58,7 +58,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -66,7 +66,7 @@ import { sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/logout', () => {
   beforeEach(() => {

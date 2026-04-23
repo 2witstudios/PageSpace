@@ -18,7 +18,7 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { db } from '@pagespace/db';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

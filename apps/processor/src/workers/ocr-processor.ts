@@ -1,7 +1,7 @@
 import Tesseract from 'tesseract.js';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { OCRJobData, OCRResult } from '../types';
 

@@ -1,4 +1,4 @@
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Normalizes an origin URL by extracting protocol, host, and port.

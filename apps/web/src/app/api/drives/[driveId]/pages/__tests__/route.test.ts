@@ -86,7 +86,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data: unknown) => NextResponse.json(data, { status: 200 })),
 }));
 

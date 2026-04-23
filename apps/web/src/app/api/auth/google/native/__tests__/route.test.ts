@@ -101,7 +101,7 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
@@ -130,7 +130,7 @@ import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, auditRequest, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 

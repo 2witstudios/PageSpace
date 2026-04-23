@@ -21,7 +21,7 @@ import { POST, PUT } from '../route';
  *   - Schema validation: only known event types accepted
  */
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackActivity: vi.fn(),
   trackFeature: vi.fn(),
   trackError: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
 }));
 
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
-import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
+import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
 
 const createRequest = (body: object, headers?: Record<string, string>) => {
   const bodyStr = JSON.stringify(body);
