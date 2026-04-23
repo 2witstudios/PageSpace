@@ -24,6 +24,7 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { isElectron } from '@/lib/utils';
 import type { TreePage } from '@/hooks/usePageTree';
 import {
   PageType,
@@ -101,8 +102,10 @@ export default function QuickCreatePalette() {
     return breadcrumbs.map((b) => b.title).join(' › ');
   })();
 
-  // Global cmd+N listener
+  // Register hotkey only in Electron — Meta+N is reserved by web browsers for
+  // "new window" and cannot be overridden via preventDefault in Chrome/Firefox/Safari.
   useEffect(() => {
+    if (!isElectron()) return;
     const handler = (e: KeyboardEvent) => {
       const binding = getEffectiveBinding('pages.quick-create');
       if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId) {

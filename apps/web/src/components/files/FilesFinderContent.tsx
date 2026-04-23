@@ -126,7 +126,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
               <Grip className="h-4 w-4" />
             </Button>
             {canWrite && (
-              <Button size="sm" onClick={() => openQuickCreate(currentPageId)}>
+              <Button size="sm" onClick={() => openQuickCreate()}>
                 <Plus className="h-4 w-4 mr-1" />
                 New Page
               </Button>
