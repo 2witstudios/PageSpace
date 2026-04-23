@@ -38,11 +38,8 @@ vi.mock('@pagespace/lib', () => ({
 }));
 
 import { DELETE } from '../route';
-import {
-  loggers,
-  accountRepository,
-  activityLogRepository,
-} from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteMonitoringDataForUser } from '@pagespace/lib';
 

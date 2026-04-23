@@ -13,7 +13,8 @@ import {
 } from '@pagespace/db';
 import type { CalendarTriggerMetadata } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
-import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';

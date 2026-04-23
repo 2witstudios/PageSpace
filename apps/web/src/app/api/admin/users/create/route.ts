@@ -5,7 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),

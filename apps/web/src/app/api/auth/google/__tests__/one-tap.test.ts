@@ -117,9 +117,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 

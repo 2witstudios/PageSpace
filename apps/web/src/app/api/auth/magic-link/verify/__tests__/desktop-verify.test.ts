@@ -93,7 +93,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { createExchangeCode } from '@pagespace/lib/auth';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 

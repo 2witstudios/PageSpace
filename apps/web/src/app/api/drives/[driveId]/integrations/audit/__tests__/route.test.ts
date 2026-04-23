@@ -61,7 +61,7 @@ vi.mock('../audit-filters', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseAuditListParams, buildAuditLogWhereClause } from '../audit-filters';

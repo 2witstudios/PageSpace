@@ -90,7 +90,8 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage, pageRepository, driveRepository } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { pageRepository, driveRepository } from '@pagespace/lib/repositories';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 

@@ -38,7 +38,7 @@ vi.mock('@/lib/validation/parse-body', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

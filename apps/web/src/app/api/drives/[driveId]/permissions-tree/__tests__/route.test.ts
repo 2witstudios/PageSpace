@@ -88,7 +88,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // ---------- helpers ----------
 

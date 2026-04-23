@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };

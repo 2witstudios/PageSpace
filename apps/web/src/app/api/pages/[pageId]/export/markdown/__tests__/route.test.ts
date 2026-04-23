@@ -53,7 +53,7 @@ vi.mock('turndown', () => ({
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { sanitizeFilename } from '@pagespace/lib';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import TurndownService from 'turndown';

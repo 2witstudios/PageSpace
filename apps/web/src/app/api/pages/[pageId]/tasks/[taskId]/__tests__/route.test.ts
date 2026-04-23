@@ -132,11 +132,11 @@ vi.mock('@/lib/websocket', () => ({
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // ---------- Helpers ----------

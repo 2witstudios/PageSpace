@@ -17,7 +17,7 @@ vi.mock('@pagespace/lib/auth', async () => {
 });
 
 // Import the mocked module after vi.mock declaration
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 describe('Admin Role Versioning', () => {
   let adminUserId: string;

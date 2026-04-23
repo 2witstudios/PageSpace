@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 interface DriveAgentSummary {
   id: string;

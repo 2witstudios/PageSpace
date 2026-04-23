@@ -42,9 +42,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST, GET } from '../route';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const createPostRequest = (body: Record<string, unknown> = {}) =>
   new Request('http://localhost/api/auth/apple/signin', {

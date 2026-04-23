@@ -115,7 +115,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 

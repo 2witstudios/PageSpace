@@ -66,7 +66,7 @@ vi.mock('@/lib/logging/mask', () => ({
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);

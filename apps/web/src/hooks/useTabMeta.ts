@@ -6,7 +6,7 @@ import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useTabsStore, type Tab } from '@/stores/useTabsStore';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface PageMetaResponse {
   id: string;

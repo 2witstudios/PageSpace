@@ -1,4 +1,4 @@
-import { isValidEmail } from '@pagespace/lib/validators'
+import { isValidEmail } from '@pagespace/lib/validators/email'
 
 export type ValidationResult = {
   valid: boolean

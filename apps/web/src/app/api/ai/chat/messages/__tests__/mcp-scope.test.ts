@@ -44,7 +44,7 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // ============================================================================

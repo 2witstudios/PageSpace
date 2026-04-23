@@ -87,7 +87,8 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
 

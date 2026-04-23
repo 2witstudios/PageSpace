@@ -3,7 +3,7 @@ import type { CalendarTrigger, CalendarEvent } from '@pagespace/db';
 import { executeWorkflow, type WorkflowExecutionResult } from './workflow-executor';
 import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
 

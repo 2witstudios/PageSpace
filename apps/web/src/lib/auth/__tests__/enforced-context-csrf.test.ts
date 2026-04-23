@@ -56,8 +56,8 @@ vi.mock('../cookie-config', () => ({
 }));
 
 import { authenticateWithEnforcedContext, isEnforcedAuthError } from '../index';
-import { sessionService } from '@pagespace/lib/auth';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { validateCSRF } from '../csrf-validation';
 import { getSessionFromCookies } from '../cookie-config';
 

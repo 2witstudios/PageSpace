@@ -64,7 +64,8 @@ import { chatMessageRepository } from '@/lib/repositories/chat-message-repositor
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Type for page lookup mock (matches Drizzle schema)
 type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';

@@ -93,7 +93,7 @@ vi.mock('@pagespace/db', () => {
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export

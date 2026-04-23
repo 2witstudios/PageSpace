@@ -121,10 +121,13 @@ vi.mock('@pagespace/lib/security', () => ({
 
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth/session-service'
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
-import { loggers, auditRequest, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';

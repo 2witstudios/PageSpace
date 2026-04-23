@@ -93,16 +93,13 @@ vi.mock('@/lib/auth', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getClientIP } from '@/lib/auth';
 
 describe('/api/auth/mobile/refresh', () => {

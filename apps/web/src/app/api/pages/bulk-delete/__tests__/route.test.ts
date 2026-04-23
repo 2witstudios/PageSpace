@@ -80,7 +80,8 @@ vi.mock('@pagespace/db', () => {
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserDeletePage, auditRequest } from '@pagespace/lib/server';
+import { canUserDeletePage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';

@@ -39,7 +39,8 @@ import {
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';

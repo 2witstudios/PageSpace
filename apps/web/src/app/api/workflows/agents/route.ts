@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db, pages, eq, and } from '@pagespace/db';
 
 // GET /api/workflows/agents?driveId=xxx - List AI_CHAT pages in a drive

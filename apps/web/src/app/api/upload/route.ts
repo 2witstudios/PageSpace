@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { PageType } from '@pagespace/lib/server';
+import { PageType } from '@pagespace/lib/utils/enums';
 import {
   checkStorageQuota,
   updateStorageUsage,
@@ -18,7 +18,7 @@ import {
 } from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Define allowed file types and size limits
 

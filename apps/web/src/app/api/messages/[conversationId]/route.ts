@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';

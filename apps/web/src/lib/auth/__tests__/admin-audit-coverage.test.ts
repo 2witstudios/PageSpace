@@ -30,7 +30,7 @@ vi.mock('@pagespace/lib/server', () => ({
 import { withAdminAuth } from '../auth';
 import { authenticateSessionRequest } from '../index';
 import { validateAdminAccess } from '../admin-role';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockAuthenticateRequest = vi.mocked(authenticateSessionRequest);
 const mockValidateAdminAccess = vi.mocked(validateAdminAccess);

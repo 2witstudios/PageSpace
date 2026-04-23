@@ -74,7 +74,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Test helpers
 const mockUserId = 'user_123';

@@ -1,11 +1,12 @@
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP, createWebDeviceToken } from '@/lib/auth';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const registerDeviceSchema = z.object({

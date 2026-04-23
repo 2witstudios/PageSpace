@@ -43,7 +43,8 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Test fixtures
 const mockUserId = 'user_123';

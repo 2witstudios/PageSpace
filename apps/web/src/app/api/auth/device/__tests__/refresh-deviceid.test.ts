@@ -54,8 +54,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../refresh/route';
-import { validateDeviceToken } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
+import { validateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 function makeRequest(body: Record<string, unknown>): Request {
   return new Request('http://localhost/api/auth/device/refresh', {

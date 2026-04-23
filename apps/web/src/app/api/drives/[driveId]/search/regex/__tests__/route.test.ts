@@ -32,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
 }));
 
-import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/server';
+import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

@@ -43,7 +43,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
 
 const createRequest = (body: object, headers?: Record<string, string>) => {

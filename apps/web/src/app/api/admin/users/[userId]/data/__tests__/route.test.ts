@@ -56,7 +56,8 @@ import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 

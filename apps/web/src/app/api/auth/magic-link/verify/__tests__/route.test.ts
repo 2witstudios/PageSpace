@@ -80,10 +80,11 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 }));
 
 import { GET } from '../route';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';

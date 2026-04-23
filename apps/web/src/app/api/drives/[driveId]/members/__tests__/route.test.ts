@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/server';
+import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/members
@@ -34,13 +34,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import {
-  checkDriveAccess,
-  listDriveMembers,
-  isMemberOfDrive,
-  addDriveMember,
-  loggers,
-} from '@pagespace/lib/server';
+import { checkDriveAccess, listDriveMembers, isMemberOfDrive, addDriveMember } from '@pagespace/lib/services/drive-member-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

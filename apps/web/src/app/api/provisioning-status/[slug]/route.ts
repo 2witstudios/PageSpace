@@ -1,4 +1,4 @@
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Mirrors control-plane's tenant-validation.ts SLUG_PATTERN
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;

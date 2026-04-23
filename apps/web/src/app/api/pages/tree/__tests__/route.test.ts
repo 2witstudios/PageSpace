@@ -49,7 +49,7 @@ vi.mock('@pagespace/db', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db';
 
 // Test helpers

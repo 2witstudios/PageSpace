@@ -1,5 +1,7 @@
 import { withAdminAuth } from '@/lib/auth/auth';
-import { loggers, auditRequest, accountRepository, activityLogRepository } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
 import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';

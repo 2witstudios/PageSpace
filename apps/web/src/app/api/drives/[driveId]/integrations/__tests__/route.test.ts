@@ -38,17 +38,13 @@ vi.mock('@/lib/auth', () => ({
 
 
 import { GET, POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import {
-  listDriveConnections,
-  createConnection,
-  getProviderById,
-  findDriveConnection,
-  encryptCredentials,
-  buildOAuthAuthorizationUrl,
-  createSignedState,
-} from '@pagespace/lib/integrations';
+import { listDriveConnections, createConnection, findDriveConnection } from '@pagespace/lib/integrations/repositories/connection-repository'
+import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository'
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials'
+import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

@@ -99,14 +99,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import {
-  checkDriveAccess,
-  getDriveMemberDetails,
-  getMemberPermissions,
-  updateMemberRole,
-  updateMemberPermissions,
-  loggers,
-} from '@pagespace/lib/server';
+import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveNotification } from '@pagespace/lib';
 import {
   broadcastDriveMemberEvent,

@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
 import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
-import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 
 // Test helpers
 const mockUserId = 'user_123';

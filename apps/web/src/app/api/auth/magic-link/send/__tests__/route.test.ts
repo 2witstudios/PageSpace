@@ -73,10 +73,11 @@ vi.mock('react', () => ({
 }));
 
 import { POST } from '../route';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { parse } from 'cookie';
 

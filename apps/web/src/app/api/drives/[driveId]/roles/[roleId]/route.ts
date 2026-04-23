@@ -1,13 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  auditRequest,
-  checkDriveAccessForRoles,
-  getRoleById,
-  updateDriveRole,
-  deleteDriveRole,
-  validateRolePermissions,
-} from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

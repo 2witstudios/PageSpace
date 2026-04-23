@@ -1,19 +1,17 @@
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-  generateDeviceToken,
-  generateCSRFToken,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth/token-utils'
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { z } from 'zod/v4';
-import { loggers, securityAudit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const refreshSchema = z.object({

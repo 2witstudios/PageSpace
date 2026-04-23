@@ -1,5 +1,5 @@
 import { db, eq, users } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isBillingEnabled } from '@pagespace/lib';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';

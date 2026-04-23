@@ -43,7 +43,7 @@ vi.mock('@pagespace/db', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {

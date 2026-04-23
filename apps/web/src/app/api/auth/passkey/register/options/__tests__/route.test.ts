@@ -46,14 +46,12 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import {
-  generateRegistrationOptions,
-  validateCSRFToken,
-  peekPasskeyRegisterHandoff,
-  markPasskeyRegisterOptionsIssued,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { generateRegistrationOptions } from '@pagespace/lib/auth/passkey-service'
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { peekPasskeyRegisterHandoff, markPasskeyRegisterOptionsIssued } from '@pagespace/lib/auth/passkey-register-handoff';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 

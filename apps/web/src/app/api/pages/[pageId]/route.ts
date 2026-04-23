@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';

@@ -1,8 +1,8 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
-import { auditRequest } from '@pagespace/lib/server';
+import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };

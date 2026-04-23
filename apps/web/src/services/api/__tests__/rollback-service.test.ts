@@ -120,8 +120,8 @@ vi.mock('@/services/api/page-mention-service', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
-import { logRollbackActivity } from '@pagespace/lib/monitoring';
+import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
+import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db') above */
 type MockFn = ReturnType<typeof vi.fn>;

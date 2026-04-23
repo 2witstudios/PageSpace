@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult } from '@pagespace/lib/server';
+import type { DriveAccessResult } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for /api/workflows
@@ -59,7 +59,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { GET, POST } from '../route';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 

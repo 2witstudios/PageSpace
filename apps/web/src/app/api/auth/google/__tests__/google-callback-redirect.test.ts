@@ -146,9 +146,9 @@ vi.mock('crypto', async () => {
 });
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 // Test fixtures

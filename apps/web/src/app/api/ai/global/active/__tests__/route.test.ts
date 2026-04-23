@@ -37,7 +37,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Test fixtures
 const mockUserId = 'user_123';

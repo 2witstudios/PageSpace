@@ -85,8 +85,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { NextResponse } from 'next/server';
 
 const createResendRequest = () =>

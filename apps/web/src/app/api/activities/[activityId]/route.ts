@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope } from '@/lib/auth';
 import { getActivityById, previewRollback } from '@/services/api';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
-import type { RollbackContext } from '@pagespace/lib/permissions';
-import { auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

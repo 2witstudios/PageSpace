@@ -42,8 +42,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { listUserPasskeys } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateSessionRequest,
   isAuthError,

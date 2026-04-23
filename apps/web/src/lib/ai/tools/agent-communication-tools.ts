@@ -3,7 +3,7 @@ import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import {
   sanitizeMessagesForModel,
   saveMessageToDatabase,
@@ -23,7 +23,7 @@ import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without

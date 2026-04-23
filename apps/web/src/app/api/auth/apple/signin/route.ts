@@ -1,9 +1,9 @@
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import crypto from 'crypto';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 

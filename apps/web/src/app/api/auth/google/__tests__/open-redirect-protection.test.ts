@@ -178,7 +178,7 @@ const createSignedState = (data: Record<string, unknown>) => {
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 describe('Open Redirect Protection', () => {
   const originalEnv = { ...process.env };

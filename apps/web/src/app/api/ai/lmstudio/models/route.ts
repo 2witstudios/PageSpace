@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 /**
  * GET /api/ai/lmstudio/models

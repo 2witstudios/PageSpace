@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listAccessibleDrives, createDrive } from '@pagespace/lib/server';
+import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';

@@ -54,7 +54,7 @@ vi.mock('@/lib/websocket', () => ({
 
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

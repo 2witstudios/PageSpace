@@ -41,7 +41,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, createWebDeviceToken } from '@/lib/auth';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 function createRequest(body: Record<string, unknown>) {

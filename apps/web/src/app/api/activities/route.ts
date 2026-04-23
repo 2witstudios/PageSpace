@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, activityLogs, eq, and, desc, count, gte, lt, inArray } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
 

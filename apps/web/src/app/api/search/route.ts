@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray, SQL } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
-import { getBatchPagePermissions } from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 interface SearchResult {

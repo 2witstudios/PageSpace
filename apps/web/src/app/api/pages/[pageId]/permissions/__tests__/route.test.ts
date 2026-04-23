@@ -15,7 +15,7 @@ import type {
   GetPermissionsResult,
   PermissionEntry,
 } from '@/services/api';
-import type { GrantResult, RevokeResult } from '@pagespace/lib/server';
+import type { GrantResult, RevokeResult } from '@pagespace/lib/permissions/permission-mutations';
 
 // Mock service boundary for GET (still uses permissionManagementService)
 vi.mock('@/services/api', () => ({
@@ -74,7 +74,7 @@ vi.mock('@/lib/websocket', () => ({
 import { permissionManagementService } from '@/services/api';
 import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth';
 import { createPermissionNotification } from '@pagespace/lib';
-import { grantPagePermission, revokePagePermission } from '@pagespace/lib/server';
+import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 
 // Test helpers
 const mockUserId = 'cluser123456789012345';

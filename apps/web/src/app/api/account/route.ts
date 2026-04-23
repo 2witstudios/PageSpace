@@ -1,6 +1,8 @@
 import { users, db, eq } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers, accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';

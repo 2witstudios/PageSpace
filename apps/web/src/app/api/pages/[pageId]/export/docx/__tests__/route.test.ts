@@ -52,7 +52,7 @@ vi.mock('marked', () => ({
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 

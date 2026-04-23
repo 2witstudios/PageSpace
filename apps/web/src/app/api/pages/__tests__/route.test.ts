@@ -63,7 +63,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPCreateScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Test helpers

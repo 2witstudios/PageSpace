@@ -6,7 +6,7 @@
  */
 
 import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';

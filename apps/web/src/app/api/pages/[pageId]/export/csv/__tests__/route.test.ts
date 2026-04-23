@@ -52,9 +52,9 @@ vi.mock('@/lib/auth', () => ({
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib';
-import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
+import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Helper to create mock SessionAuthResult

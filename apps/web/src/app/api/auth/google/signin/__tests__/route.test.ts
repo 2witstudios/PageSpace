@@ -49,8 +49,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST, GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 
 const createPostRequest = (

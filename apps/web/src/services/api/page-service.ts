@@ -1,15 +1,9 @@
 import { db, pages, drives, users, chatMessages, eq, and, desc, isNull } from '@pagespace/db';
-import {
-  canUserViewPage,
-  canUserEditPage,
-  canUserDeletePage,
-  getActorInfo,
-  detectPageContentFormat,
-  hashWithPrefix,
-  computePageStateHash,
-  createPageVersion,
-  type PageVersionSource,
-} from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
+import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
+import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import {
   validatePageCreation,
@@ -19,7 +13,8 @@ import {
   isAIChatPage,
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
-import { createChangeGroupId, inferChangeGroupType, logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 

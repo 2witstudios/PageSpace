@@ -64,9 +64,10 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // Test fixtures
 const mockWebAuth = (userId: string): SessionAuthResult => ({

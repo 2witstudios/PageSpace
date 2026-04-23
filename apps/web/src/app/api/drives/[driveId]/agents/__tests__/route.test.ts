@@ -53,7 +53,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers, getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 

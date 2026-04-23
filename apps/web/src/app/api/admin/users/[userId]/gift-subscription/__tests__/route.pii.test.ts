@@ -109,7 +109,7 @@ vi.mock('@pagespace/lib/server', async () => {
 });
 
 import { POST, DELETE } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 describe('Gift subscription PII scrub', () => {
   beforeEach(() => {

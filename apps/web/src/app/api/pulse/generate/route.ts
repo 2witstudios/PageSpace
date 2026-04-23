@@ -37,15 +37,18 @@ import {
 import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
-  resolveStackedVersionContent,
-  generateDiffsWithinBudget,
-  calculateDiffBudget,
   type ActivityForDiff,
   type ActivityDiffGroup,
-  type DiffRequest,
   type StackedDiff,
-} from '@pagespace/lib/content';
-import { readPageContent, loggers } from '@pagespace/lib/server';
+} from '@pagespace/lib/content/activity-diff-utils';
+import { resolveStackedVersionContent } from '@pagespace/lib/content/version-resolver';
+import {
+  generateDiffsWithinBudget,
+  calculateDiffBudget,
+  type DiffRequest,
+} from '@pagespace/lib/content/diff-generator';
+import { readPageContent } from '@pagespace/lib/services/page-content-store'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';

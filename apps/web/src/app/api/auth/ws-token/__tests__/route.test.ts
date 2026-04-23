@@ -47,7 +47,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 import { verifyAuth, getClientIP } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { POST } from '../route';
 
 describe('/api/auth/ws-token', () => {

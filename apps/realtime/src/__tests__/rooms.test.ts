@@ -51,7 +51,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Create a mock socket that tracks room joins/leaves

@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
-import { loggers, getActorInfo, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createChangeGroupId, inferChangeGroupType, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
