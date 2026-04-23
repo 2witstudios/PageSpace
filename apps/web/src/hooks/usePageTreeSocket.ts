@@ -166,7 +166,11 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     socket.on('presence:page_viewers', handlePresenceUpdate);
 
     // Clear stale presence data on socket disconnect (server won't deliver updates)
-    const handleDisconnect = () => { clearAllPresence(); };
+    // Also reset joinedDriveIdRef so the reconnect path re-emits join_drive.
+    const handleDisconnect = () => {
+      clearAllPresence();
+      joinedDriveIdRef.current = null;
+    };
     socket.on('disconnect', handleDisconnect);
 
     // Cleanup function
