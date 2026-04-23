@@ -695,7 +695,6 @@ const GlobalAssistantView: React.FC = () => {
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
-      setShowVoiceSettings(false);
     } else {
       enableVoiceMode(VOICE_OWNER);
     }
