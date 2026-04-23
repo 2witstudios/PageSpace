@@ -205,6 +205,21 @@ describe('GET /api/account/export', () => {
       expect(appendCalls.some((n: string) => n.includes('display-preferences.json'))).toBe(true);
     });
 
+    it('appends personalization.json when personalization data exists', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue({
+        ...mockUserData,
+        personalization: { bio: 'test', writingStyle: null, rules: null, enabled: true, createdAt: new Date(), updatedAt: new Date() },
+      } as never);
+
+      await GET(createRequest());
+
+      expect(mockArchive.append).toHaveBeenCalledTimes(12);
+      const appendCalls = mockArchive.append.mock.calls.map(
+        (call: unknown[]) => (call[1] as { name: string }).name
+      );
+      expect(appendCalls.some((n: string) => n.includes('personalization.json'))).toBe(true);
+    });
+
     it('calls archive.finalize()', async () => {
       vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
 
