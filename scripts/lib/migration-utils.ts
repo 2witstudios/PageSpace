@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile, writeFile, stat } from 'fs/promises';
 import path from 'path';
-import { resolvePathWithin } from '@pagespace/lib/security';
+import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ExportManifest, FileChecksum } from './migration-types';
 
 /**
