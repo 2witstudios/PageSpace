@@ -24,7 +24,7 @@ export function CalendarSection() {
             {[
               { icon: CalendarDays, title: "Cross-Workspace View", desc: "See events from all your drives in one calendar. Filter by workspace, project, or person when you need focus." },
               { icon: Zap, title: "Google Calendar Sync", desc: "Connect your Google Calendar to see everything together. External meetings alongside PageSpace deadlines." },
-              { icon: Bot, title: "AI Scheduling Awareness", desc: "AI agents see your calendar. They know when you&apos;re busy and can suggest better times for focus work." },
+              { icon: Bot, title: "AI Scheduling Awareness", desc: "AI agents see your calendar. They know when you're busy and can suggest better times for focus work." },
               { icon: CheckSquare, title: "Task Deadlines", desc: "Task due dates appear on your calendar automatically. Never miss a deadline because it was hidden in a task list." },
             ].map((card) => (
               <div key={card.title} className="rounded-xl border border-border bg-card p-6">

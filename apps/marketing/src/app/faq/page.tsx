@@ -114,7 +114,7 @@ const faqs: FAQItem[] = [
     question: "Is there a desktop app?",
     answer: (
       <>
-        Yes — macOS (Apple Silicon and Intel), Windows, and Linux. There&apos;s
+        Yes — macOS (Apple Silicon and Intel), Windows, and Linux. There's
         also an iOS app via TestFlight, and PageSpace works in any web browser.
         Android is in progress. See the{" "}
         {docsLink("/downloads", "Downloads page")}.
@@ -273,8 +273,8 @@ export default function FAQPage() {
               Frequently Asked Questions
             </h1>
             <p className="text-lg text-muted-foreground">
-              Everything you need to know about PageSpace. Can&apos;t find what
-              you&apos;re looking for?{" "}
+              Everything you need to know about PageSpace. Can't find what
+              you're looking for?{" "}
               <Link href="/contact" className="text-primary hover:underline">
                 Contact us
               </Link>
@@ -327,7 +327,7 @@ export default function FAQPage() {
             </div>
             <h2 className="text-2xl font-bold mb-4">Still have questions?</h2>
             <p className="text-muted-foreground mb-6">
-              Can&apos;t find the answer you&apos;re looking for? Our support
+              Can't find the answer you're looking for? Our support
               team is here to help.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">

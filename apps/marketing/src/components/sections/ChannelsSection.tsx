@@ -154,11 +154,11 @@ function AIMessage({ name, time }: { name: string; time: string }) {
           <span className="text-xs text-muted-foreground">{time}</span>
         </div>
         <div className="prose prose-sm dark:prose-invert max-w-none">
-          <p className="text-sm mb-2">Based on your positioning doc, here&apos;s a draft:</p>
+          <p className="text-sm mb-2">Based on your positioning doc, here's a draft:</p>
           <div className="bg-muted/50 rounded-lg p-3 text-sm border border-border/50">
             <p className="font-medium mb-1">Subject: Meet your new AI-powered workspace</p>
             <p className="text-muted-foreground text-sm">
-              We&apos;re excited to introduce PageSpace—where your documents, tasks, and team conversations live alongside AI that actually understands your work...
+              We're excited to introduce PageSpace—where your documents, tasks, and team conversations live alongside AI that actually understands your work...
             </p>
           </div>
         </div>

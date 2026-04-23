@@ -18,7 +18,7 @@ export function CTASection() {
           </h2>
 
           <p className="mx-auto max-w-2xl text-lg text-muted-foreground mb-10">
-            Join teams who&apos;ve discovered that the best AI isn&apos;t a chatbot—it&apos;s a collaborator
+            Join teams who've discovered that the best AI isn't a chatbot—it's a collaborator
             that lives in your workspace and understands your work.
           </p>
 
