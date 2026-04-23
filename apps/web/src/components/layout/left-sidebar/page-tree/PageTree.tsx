@@ -9,8 +9,8 @@ import { findNodeAndParent } from "@/lib/tree/tree-utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PullToRefresh } from "@/components/ui/pull-to-refresh";
 import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
-import CreatePageDialog from "../CreatePageDialog";
 import { useTreeState } from "@/hooks/useUI";
+import { useUIStore } from "@/stores/useUIStore";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { cn } from "@/lib/utils";
 import { SortableTree } from "@/components/ui/sortable-tree";
@@ -41,11 +41,7 @@ export default function PageTree({
   const tree = initialTree ?? fetchedTree;
   const mutate = externalMutate ?? internalMutate;
   const { expanded: expandedNodes, toggleExpanded } = useTreeState();
-
-  const [createPageInfo, setCreatePageInfo] = useState<{
-    isOpen: boolean;
-    parentId: string | null;
-  }>({ isOpen: false, parentId: null });
+  const openQuickCreate = useUIStore((s) => s.openQuickCreate);
 
   // File drag state (native HTML5 drag, separate from dnd-kit)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -170,12 +166,8 @@ export default function PageTree({
   );
 
   const handleOpenCreateDialog = useCallback((parentId: string | null) => {
-    setCreatePageInfo({ isOpen: true, parentId });
-  }, []);
-
-  const handlePageCreated = useCallback(() => {
-    mutate();
-  }, [mutate]);
+    openQuickCreate(parentId);
+  }, [openQuickCreate]);
 
   // File drop handlers (native HTML5 drag events)
   const handleFileDragEnter = useCallback((e: React.DragEvent) => {
@@ -389,14 +381,6 @@ export default function PageTree({
               </div>
             </div>
           )}
-
-          <CreatePageDialog
-            isOpen={createPageInfo.isOpen}
-            setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
-            parentId={createPageInfo.parentId}
-            onPageCreated={handlePageCreated}
-            driveId={driveId}
-          />
 
           {/* Upload progress indicator */}
           {isUploading && (

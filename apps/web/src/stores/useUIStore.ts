@@ -6,9 +6,15 @@ export interface UIState {
   treeExpanded: Set<string>;
   treeScrollPosition: number;
 
+  // Quick-create palette state (NOT persisted)
+  quickCreateOpen: boolean;
+  quickCreateParentOverride: string | null | undefined;
+
   // Actions
   setTreeExpanded: (nodeId: string, expanded: boolean) => void;
   setTreeScrollPosition: (position: number) => void;
+  openQuickCreate: (parentOverride?: string | null) => void;
+  closeQuickCreate: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -17,6 +23,8 @@ export const useUIStore = create<UIState>()(
       // Initial state
       treeExpanded: new Set(),
       treeScrollPosition: 0,
+      quickCreateOpen: false,
+      quickCreateParentOverride: undefined,
 
       // Actions
       setTreeExpanded: (nodeId: string, expanded: boolean) => {
@@ -31,6 +39,14 @@ export const useUIStore = create<UIState>()(
 
       setTreeScrollPosition: (position: number) => {
         set({ treeScrollPosition: position });
+      },
+
+      openQuickCreate: (parentOverride?: string | null) => {
+        set({ quickCreateOpen: true, quickCreateParentOverride: parentOverride });
+      },
+
+      closeQuickCreate: () => {
+        set({ quickCreateOpen: false, quickCreateParentOverride: undefined });
       },
     }),
     {

@@ -4,9 +4,9 @@ import { useCallback, useRef, useState } from 'react';
 import { FolderOpen, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import CreatePageDialog from '@/components/layout/left-sidebar/CreatePageDialog';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useUIStore } from '@/stores/useUIStore';
 
 interface FilesEmptyStateProps {
   driveId: string;
@@ -30,9 +30,9 @@ const uploadOne = async (file: File, driveId: string, parentId: string | null) =
 };
 
 export function FilesEmptyState({ driveId, parentId, canWrite, onMutate }: FilesEmptyStateProps) {
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDropActive, setIsDropActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const openQuickCreate = useUIStore((s) => s.openQuickCreate);
 
   const headline = parentId ? 'No child pages' : 'No pages in this drive';
 
@@ -104,52 +104,40 @@ export function FilesEmptyState({ driveId, parentId, canWrite, onMutate }: Files
   };
 
   return (
-    <>
-      <div
-        data-testid="files-empty-state"
-        data-drop-active={isDropActive ? 'true' : 'false'}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        className={`flex flex-col items-center justify-center py-16 text-center rounded-lg border-2 border-dashed transition-colors ${
-          isDropActive ? 'border-primary bg-primary/5' : 'border-transparent'
-        }`}
-      >
-        <FolderOpen className="h-12 w-12 text-muted-foreground/50 mb-4" aria-hidden="true" />
-        <p className="text-muted-foreground mb-2">{headline}</p>
-        <p className="text-sm text-muted-foreground/70 mb-6">
-          Upload files or create a page to get started
-        </p>
-        <div className="flex gap-2">
-          <Button onClick={() => fileInputRef.current?.click()}>
-            <Upload className="mr-2 h-4 w-4" />
-            Upload files
-          </Button>
-          <Button variant="outline" onClick={() => setIsDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create page
-          </Button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          data-testid="files-upload-input"
-          className="hidden"
-          onChange={handleInputChange}
-        />
+    <div
+      data-testid="files-empty-state"
+      data-drop-active={isDropActive ? 'true' : 'false'}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex flex-col items-center justify-center py-16 text-center rounded-lg border-2 border-dashed transition-colors ${
+        isDropActive ? 'border-primary bg-primary/5' : 'border-transparent'
+      }`}
+    >
+      <FolderOpen className="h-12 w-12 text-muted-foreground/50 mb-4" aria-hidden="true" />
+      <p className="text-muted-foreground mb-2">{headline}</p>
+      <p className="text-sm text-muted-foreground/70 mb-6">
+        Upload files or create a page to get started
+      </p>
+      <div className="flex gap-2">
+        <Button onClick={() => fileInputRef.current?.click()}>
+          <Upload className="mr-2 h-4 w-4" />
+          Upload files
+        </Button>
+        <Button variant="outline" onClick={() => openQuickCreate(parentId)}>
+          <Plus className="mr-2 h-4 w-4" />
+          Create page
+        </Button>
       </div>
-      <CreatePageDialog
-        driveId={driveId}
-        parentId={parentId}
-        isOpen={isDialogOpen}
-        setIsOpen={setIsDialogOpen}
-        onPageCreated={() => {
-          onMutate();
-          setIsDialogOpen(false);
-        }}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        data-testid="files-upload-input"
+        className="hidden"
+        onChange={handleInputChange}
       />
-    </>
+    </div>
   );
 }

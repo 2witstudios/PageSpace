@@ -8,18 +8,12 @@ const hoisted = vi.hoisted(() => ({
   toastError: vi.fn(),
   startEditing: vi.fn(),
   endEditing: vi.fn(),
+  openQuickCreate: vi.fn(),
 }));
 
-vi.mock('@/components/layout/left-sidebar/CreatePageDialog', () => ({
-  default: vi.fn(({ isOpen, driveId, parentId }: { isOpen: boolean; driveId: string; parentId: string | null }) =>
-    isOpen ? (
-      <div
-        data-testid="create-page-dialog"
-        data-drive={driveId}
-        data-parent={parentId ?? ''}
-      />
-    ) : null
-  ),
+vi.mock('@/stores/useUIStore', () => ({
+  useUIStore: (selector: (s: { openQuickCreate: typeof hoisted.openQuickCreate }) => unknown) =>
+    selector({ openQuickCreate: hoisted.openQuickCreate }),
 }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -83,7 +77,7 @@ describe('FilesEmptyState', () => {
     expect(screen.getByText('No child pages')).toBeInTheDocument();
   });
 
-  it('opens CreatePageDialog seeded with driveId and parentId when Create page is clicked', async () => {
+  it('calls openQuickCreate with parentId when Create page is clicked', async () => {
     const user = userEvent.setup();
     render(
       <FilesEmptyState driveId="drive-1" parentId="page-42" canWrite={true} onMutate={vi.fn()} />
@@ -91,9 +85,7 @@ describe('FilesEmptyState', () => {
 
     await user.click(screen.getByRole('button', { name: /create page/i }));
 
-    const dialog = await screen.findByTestId('create-page-dialog');
-    expect(dialog.dataset.drive).toBe('drive-1');
-    expect(dialog.dataset.parent).toBe('page-42');
+    expect(hoisted.openQuickCreate).toHaveBeenCalledWith('page-42');
   });
 
   it('triggers the hidden file picker when Upload files is clicked', async () => {
