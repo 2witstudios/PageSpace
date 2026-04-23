@@ -30,7 +30,6 @@ import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
-import { InputCard } from '@/components/ui/floating-input';
 import { isEditingActive } from '@/stores/useEditingStore';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
