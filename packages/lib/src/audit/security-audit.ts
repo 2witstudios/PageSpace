@@ -96,11 +96,11 @@ export function computeSecurityEventHash(
 /**
  * Security Audit Service with hash chain integrity.
  *
- * Maintains an in-memory reference to the last hash for building the chain.
- * Must be initialized before use by calling initialize().
+ * Must be initialized before first use by calling initialize().
+ * Each logEvent() reads the previous hash from the DB inside an advisory lock,
+ * so multi-instance deployments are safe without any in-memory state.
  */
 export class SecurityAuditService {
-  private lastHash: string = 'genesis';
   private initialized = false;
   private initializePromise: Promise<void> | null = null;
 
@@ -129,7 +129,6 @@ export class SecurityAuditService {
         columns: { eventHash: true },
       });
 
-      this.lastHash = lastEvent?.eventHash ?? 'genesis';
       this.initialized = true;
     } catch (error) {
       // Reset promise so initialization can be retried

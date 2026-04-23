@@ -51,7 +51,6 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
 export async function POST(req: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(req);
   if (authError) {
     return authError;
