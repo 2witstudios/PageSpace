@@ -16,7 +16,7 @@
  */
 
 import { createHash } from 'crypto';
-import { db, securityAuditLog, desc, sql } from '@pagespace/db';
+import { db, securityAuditLog, sql } from '@pagespace/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
@@ -105,10 +105,8 @@ export class SecurityAuditService {
   private initializePromise: Promise<void> | null = null;
 
   /**
-   * Initialize the service by loading the last hash from the database.
-   * Call this during service startup, not lazily.
-   *
-   * This method is idempotent - calling it multiple times is safe.
+   * Mark the service as initialized. Call during app startup before logEvent().
+   * Idempotent — safe to call multiple times.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -123,18 +121,7 @@ export class SecurityAuditService {
   }
 
   private async _doInitialize(): Promise<void> {
-    try {
-      const lastEvent = await db.query.securityAuditLog.findFirst({
-        orderBy: [desc(securityAuditLog.chainSeq)],
-        columns: { eventHash: true },
-      });
-
-      this.initialized = true;
-    } catch (error) {
-      // Reset promise so initialization can be retried
-      this.initializePromise = null;
-      throw error;
-    }
+    this.initialized = true;
   }
 
   /**

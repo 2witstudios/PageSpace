@@ -28,7 +28,7 @@ if [ -z "$METHOD" ] || [ -z "$URL" ]; then
 fi
 
 # Extract path from URL — pathname only, no query string, matching how Next.js parses url.pathname
-PATH_PART=$(echo "$URL" | sed 's|^https\?://[^/]*||' | sed 's|?.*||')
+PATH_PART=$(echo "$URL" | sed -e 's|^https\?://[^/]*||' -e 's|?.*||')
 
 TIMESTAMP=$(date +%s)
 NONCE=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
