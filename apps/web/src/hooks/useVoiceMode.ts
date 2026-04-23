@@ -577,6 +577,10 @@ export function useVoiceMode({
 
         const audioBuffer = await audioContext.decodeAudioData(audioData);
 
+        // Guard: if barge-in cleared the audio ID during the fetch, discard this synthesis
+        const { currentAudioId: liveAudioId } = useVoiceModeStore.getState();
+        if (liveAudioId !== audioId) return;
+
         // Stop any existing playback without resetting state (we're already 'speaking')
         stopAudioPlayback();
 
