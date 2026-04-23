@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
     console.log(`[Cron] Cleaned up ${count} expired device tokens`);
 
-    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: count } });
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: count } });
 
     return NextResponse.json({
       success: true,

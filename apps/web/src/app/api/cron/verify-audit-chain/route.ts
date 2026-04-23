@@ -35,7 +35,7 @@ export async function GET(request: Request) {
       );
     }
 
-    audit({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: result.isValid, entriesVerified: result.entriesVerified } });
+    audit({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: result.isValid, entriesVerified: result.entriesVerified } });
 
     return NextResponse.json({
       success: true,

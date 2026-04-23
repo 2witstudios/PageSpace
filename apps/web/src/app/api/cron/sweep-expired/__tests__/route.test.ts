@@ -107,7 +107,6 @@ describe('/api/cron/sweep-expired', () => {
       expect(mockAudit).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'data.delete',
-          userId: 'system',
           resourceType: 'cron_job',
           resourceId: 'sweep_expired',
           details: {

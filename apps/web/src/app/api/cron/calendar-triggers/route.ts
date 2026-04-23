@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       .limit(MAX_DUE_TRIGGERS);
 
     if (dueTriggers.length === 0) {
-      audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } });
+      audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No calendar triggers due', executed: 0 });
     }
 
@@ -131,7 +131,7 @@ export async function POST(req: Request) {
 
     logger.info(`Calendar trigger cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Calendar trigger cron complete',

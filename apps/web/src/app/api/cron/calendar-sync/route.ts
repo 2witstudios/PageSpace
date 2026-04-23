@@ -79,7 +79,7 @@ export async function GET(request: Request) {
 
     loggers.api.info('Calendar sync cron completed', { synced, failed });
 
-    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced, failed } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced, failed } });
 
     return NextResponse.json({
       success: true,

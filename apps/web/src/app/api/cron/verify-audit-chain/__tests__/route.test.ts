@@ -173,7 +173,7 @@ describe('/api/cron/verify-audit-chain', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: true, entriesVerified: 100 } })
+      expect.objectContaining({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: true, entriesVerified: 100 } })
     );
   });
 
@@ -183,7 +183,7 @@ describe('/api/cron/verify-audit-chain', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.read', userId: 'system', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: false, entriesVerified: 100 } })
+      expect.objectContaining({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: false, entriesVerified: 100 } })
     );
   });
 
