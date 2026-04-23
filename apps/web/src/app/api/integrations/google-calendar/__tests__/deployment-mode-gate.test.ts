@@ -101,6 +101,7 @@ const assertModeGatePasses = async (response: Response) => {
 
 import { GET as getStatus } from '../status/route';
 import { POST as postConnect } from '../connect/route';
+import { GET as getCallback } from '../callback/route';
 import { POST as postWebhook } from '../webhook/route';
 import { GET as getCalendars } from '../calendars/route';
 import { POST as postDisconnect } from '../disconnect/route';
@@ -236,6 +237,22 @@ describe('Google Calendar routes — deployment mode gate', () => {
         headers: { 'X-Goog-Channel-ID': 'ch-1', 'X-Goog-Resource-ID': 'res-1' },
       });
       await assertModeGateBlocks(await postWebhook(req));
+    });
+  });
+
+  describe('GET /callback', () => {
+    it('given cloud mode, should pass deployment mode gate', async () => {
+      const req = new Request('http://localhost/api/integrations/google-calendar/callback?code=code&state=state');
+      await assertModeGatePasses(await getCallback(req));
+    });
+    it('given tenant mode, should pass deployment mode gate', async () => {
+      const req = new Request('http://localhost/api/integrations/google-calendar/callback?code=code&state=state');
+      await assertModeGatePasses(await getCallback(req));
+    });
+    it('given onprem mode, should return 404 from gate', async () => {
+      mockIsOnPrem.mockReturnValue(true);
+      const req = new Request('http://localhost/api/integrations/google-calendar/callback?code=code&state=state');
+      await assertModeGateBlocks(await getCallback(req));
     });
   });
 });
