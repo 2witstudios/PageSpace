@@ -20,5 +20,16 @@ export async function register() {
     setActivityBroadcastHook(broadcastActivityEvent);
 
     console.log('[Instrumentation] Activity broadcast hook initialized');
+
+    // Wire SIEM error delivery: ship application errors to the SIEM webhook when configured.
+    // SIEM URL is operator-controlled (env var only — never user input).
+    if (process.env.AUDIT_SIEM_ENABLED === 'true' && process.env.AUDIT_WEBHOOK_URL) {
+      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib');
+      setSiemErrorHook(buildWebhookSiemErrorHook(
+        process.env.AUDIT_WEBHOOK_URL,
+        process.env.AUDIT_WEBHOOK_SECRET ?? '',
+      ));
+      console.log('[Instrumentation] SIEM error hook initialized');
+    }
   }
 }

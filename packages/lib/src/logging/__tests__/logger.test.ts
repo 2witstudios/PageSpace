@@ -21,6 +21,11 @@ vi.mock('../logger-database', () => ({
   writeLogsToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
+const mockFireSiemErrorHook = vi.fn();
+vi.mock('../siem-error-hook', () => ({
+  fireSiemErrorHook: (...args: unknown[]) => mockFireSiemErrorHook(...args),
+}));
+
 // Import after mocks are set up
 import { LogLevel, logger, type LogContext } from '../logger';
 
@@ -973,5 +978,53 @@ describe('Logger writeToDatabase error handling', () => {
     consoleSpy.mockRestore();
     consoleLogSpy.mockRestore();
     vi.mocked(writeLogsToDatabase).mockResolvedValue(undefined);
+  });
+});
+
+describe('Logger SIEM error hook integration', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let anyLogger: any;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    anyLogger = logger as any;
+    anyLogger.config.destination = 'console';
+    anyLogger.config.level = LogLevel.TRACE;
+    mockFireSiemErrorHook.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    anyLogger.config.level = LogLevel.INFO;
+    anyLogger.config.destination = 'console';
+    anyLogger.clearContext();
+  });
+
+  it('given logger.error() fires, should call fireSiemErrorHook with ERROR payload', () => {
+    logger.error('something went wrong');
+    expect(mockFireSiemErrorHook).toHaveBeenCalledOnce();
+    const payload = mockFireSiemErrorHook.mock.calls[0][0];
+    expect(payload.level).toBe('ERROR');
+    expect(payload.message).toBe('something went wrong');
+  });
+
+  it('given logger.fatal() fires, should call fireSiemErrorHook with FATAL payload', () => {
+    logger.fatal('total failure');
+    expect(mockFireSiemErrorHook).toHaveBeenCalledOnce();
+    const payload = mockFireSiemErrorHook.mock.calls[0][0];
+    expect(payload.level).toBe('FATAL');
+  });
+
+  it('given logger.warn() fires, should NOT call fireSiemErrorHook', () => {
+    logger.warn('just a warning');
+    expect(mockFireSiemErrorHook).not.toHaveBeenCalled();
+  });
+
+  it('given logger level is below ERROR, should NOT trigger SIEM delivery', () => {
+    anyLogger.config.level = LogLevel.SILENT;
+    logger.error('muted error');
+    expect(mockFireSiemErrorHook).not.toHaveBeenCalled();
   });
 });
