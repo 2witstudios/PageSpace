@@ -15,12 +15,14 @@ type DB = NodePgDatabase<Record<string, unknown>>;
  * Find file records with zero references across filePages, channelMessages, and pages.
  *
  * A file is orphaned when:
- * 1. No filePages rows reference it
+ * 1. No filePages rows reference it by fileId
  * 2. No channelMessages reference it (via fileId)
  * 3. No pages reference it (via filePath = storagePath pattern)
+ * 4. No other live file record shares the same contentHash — protects content-addressed
+ *    blobs that are still needed by a sibling file record referenced via fileId.
  *
- * Content-addressed storage means one physical file may serve multiple pages/drives,
- * so we only consider a file orphaned when ALL references are gone.
+ * Content-addressed storage means one physical blob may back multiple file records.
+ * We only delete a blob when every record sharing that contentHash is gone.
  */
 export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFile[]> {
   const result = await database.execute(sql`
@@ -32,6 +34,18 @@ export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFil
     WHERE fp."fileId" IS NULL
       AND cm."fileId" IS NULL
       AND p.id IS NULL
+      AND (
+        f."contentHash" IS NULL
+        OR NOT EXISTS (
+          SELECT 1 FROM files other_f
+          WHERE other_f."contentHash" = f."contentHash"
+            AND other_f.id != f.id
+            AND (
+              EXISTS (SELECT 1 FROM file_pages WHERE "fileId" = other_f.id)
+              OR EXISTS (SELECT 1 FROM channel_messages WHERE "fileId" = other_f.id)
+            )
+        )
+      )
   `);
 
   return (result.rows as Array<{

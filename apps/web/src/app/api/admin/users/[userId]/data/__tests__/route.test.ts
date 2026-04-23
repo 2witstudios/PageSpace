@@ -95,6 +95,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
@@ -127,6 +128,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'admin-123',
       email: 'admin@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/admin-123/data', {
@@ -180,6 +182,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
@@ -212,6 +215,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
     vi.mocked(accountRepository.checkAndDeleteSoloDrives).mockResolvedValue({
       multiMemberDriveNames: ['Shared Drive'],

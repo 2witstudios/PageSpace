@@ -11,6 +11,7 @@ export interface UserAccount {
   id: string;
   email: string;
   image: string | null;
+  stripeCustomerId: string | null;
 }
 
 export interface OwnedDrive {
@@ -34,6 +35,7 @@ export const accountRepository = {
         id: true,
         email: true,
         image: true,
+        stripeCustomerId: true,
       },
     });
 

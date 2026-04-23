@@ -73,6 +73,19 @@ describe('findOrphanedFileRecords', () => {
 
     await expect(findOrphanedFileRecords(db as never)).rejects.toThrow('connection refused');
   });
+
+  it('given_contentHashDedupRequired_queryIncludesContentHashGuard', async () => {
+    // Ensures the SQL excludes blobs shared with a live sibling file record (#905 gap).
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await findOrphanedFileRecords(db as never);
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    expect(fullSql).toContain('contentHash');
+  });
 });
 
 describe('isFileOrphaned', () => {
