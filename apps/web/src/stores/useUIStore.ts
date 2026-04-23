@@ -8,11 +8,21 @@ export interface UIState {
 
   // Quick-create palette state (NOT persisted)
   quickCreateOpen: boolean;
+  /**
+   * Three-state parent placement:
+   *   undefined → auto-detect from the current route (folder → child, page → sibling, root → top-level)
+   *   null      → force creation at the drive root
+   *   string    → create as a child of this specific page id
+   *
+   * Callers with a `string | null` variable should be explicit: pass `undefined` to use auto-detect
+   * rather than accidentally mapping a null "no page" to "drive root".
+   */
   quickCreateParentOverride: string | null | undefined;
 
   // Actions
   setTreeExpanded: (nodeId: string, expanded: boolean) => void;
   setTreeScrollPosition: (position: number) => void;
+  /** @see quickCreateParentOverride for parentOverride semantics */
   openQuickCreate: (parentOverride?: string | null) => void;
   closeQuickCreate: () => void;
 }

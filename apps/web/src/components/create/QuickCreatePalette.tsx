@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, Upload } from 'lucide-react';
 import { toast } from 'sonner';
@@ -86,21 +86,21 @@ export default function QuickCreatePalette() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Derive which parent to create in
-  const effectiveParentId: string | null = (() => {
+  const effectiveParentId = useMemo<string | null>(() => {
     if (quickCreateParentOverride !== undefined) return quickCreateParentOverride;
     if (!pageId || !tree) return null;
     const found = findNodeAndParent(tree, pageId);
     if (!found) return null;
     return found.node.type === PageType.FOLDER ? found.node.id : found.node.parentId;
-  })();
+  }, [quickCreateParentOverride, pageId, tree]);
 
   const { breadcrumbs } = useBreadcrumbs(effectiveParentId);
 
-  const contextLabel = (() => {
+  const contextLabel = useMemo(() => {
     if (!effectiveParentId) return 'Drive root';
     if (!breadcrumbs?.length) return '…';
     return breadcrumbs.map((b) => b.title).join(' › ');
-  })();
+  }, [effectiveParentId, breadcrumbs]);
 
   // Register hotkey only in Electron — Meta+N is reserved by web browsers for
   // "new window" and cannot be overridden via preventDefault in Chrome/Firefox/Safari.
@@ -142,6 +142,8 @@ export default function QuickCreatePalette() {
     setName(`Untitled ${config.displayName}`);
     setPhase('name-entry');
     if (type === PageType.FILE) {
+      // Defer past the Radix Dialog open animation so the native file picker
+      // doesn't fight focus-trap or get swallowed by browsers mid-animation.
       setTimeout(() => fileInputRef.current?.click(), 100);
     }
   }, []);
