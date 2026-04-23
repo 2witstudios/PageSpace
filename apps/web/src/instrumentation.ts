@@ -23,11 +23,17 @@ export async function register() {
 
     // Wire SIEM error delivery: ship application errors to the SIEM webhook when configured.
     // SIEM URL is operator-controlled (env var only — never user input).
-    if (process.env.AUDIT_SIEM_ENABLED === 'true' && process.env.AUDIT_WEBHOOK_URL) {
+    // Require both URL and non-empty secret: an empty secret produces HMAC signatures
+    // that SIEM receivers configured for authentication will reject, causing silent drops.
+    if (
+      process.env.AUDIT_SIEM_ENABLED === 'true' &&
+      process.env.AUDIT_WEBHOOK_URL &&
+      process.env.AUDIT_WEBHOOK_SECRET
+    ) {
       const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib');
       setSiemErrorHook(buildWebhookSiemErrorHook(
         process.env.AUDIT_WEBHOOK_URL,
-        process.env.AUDIT_WEBHOOK_SECRET ?? '',
+        process.env.AUDIT_WEBHOOK_SECRET,
       ));
       console.log('[Instrumentation] SIEM error hook initialized');
     }

@@ -95,4 +95,19 @@ describe('buildWebhookSiemErrorHook', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockFetch).toHaveBeenCalledOnce();
   });
+
+  it('given the webhook returns a non-2xx status, should log to stderr and not throw', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    vi.stubGlobal('fetch', mockFetch);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const hook = buildWebhookSiemErrorHook('https://siem.example.com/ingest', 'secret');
+    expect(() =>
+      hook({ level: 'ERROR', message: 'x', timestamp: new Date().toISOString(), hostname: 'h', pid: 1 })
+    ).not.toThrow();
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('401'));
+  });
 });

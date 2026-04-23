@@ -49,8 +49,14 @@ export function buildWebhookSiemErrorHook(webhookUrl: string, secret: string): S
         'X-PageSpace-Timestamp': new Date().toISOString(),
       },
       body,
+    }).then(res => {
+      if (!res.ok) {
+        // Non-2xx (auth failure, throttling, server error): log so operators can detect
+        // delivery issues without breaking the main logging path.
+        console.error(`[SIEM] Webhook delivery failed: HTTP ${res.status}`);
+      }
     }).catch(() => {
-      // Delivery failure must never break the logging path.
+      // Network error: delivery failure must never break the logging path.
     });
   };
 }
