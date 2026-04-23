@@ -49,7 +49,7 @@ import {
   type TaskEventPayload,
   type UsageEventPayload,
 } from '../socket-utils';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {
   const originalEnv = process.env;

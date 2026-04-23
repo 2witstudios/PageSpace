@@ -63,13 +63,13 @@ import { GET, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { hashToken, isValidTokenFormat, getTokenType } from '@pagespace/lib/auth';
-import { secureCompare } from '@pagespace/lib/secure-compare';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import {
   getUserDeviceTokens,
   revokeAllUserDeviceTokens,
   createDeviceTokenRecord,
   revokeExpiredDeviceTokens,
-} from '@pagespace/lib/device-auth-utils';
+} from '@pagespace/lib/auth/device-auth-utils';
 
 // Test helpers
 const mockSessionAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({

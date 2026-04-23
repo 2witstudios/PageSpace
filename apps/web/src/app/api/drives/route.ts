@@ -3,9 +3,9 @@ import { z } from 'zod';
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
-import { jsonResponse } from '@pagespace/lib/api-utils';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
 

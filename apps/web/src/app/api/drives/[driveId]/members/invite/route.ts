@@ -4,7 +4,7 @@ import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

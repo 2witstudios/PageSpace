@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/logger-config', () => ({
   },
 }));
 
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   normalizeOrigin,
   getAllowedOrigins,

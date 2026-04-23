@@ -220,8 +220,8 @@ vi.mock('socket.io', () => ({
 // ---------------------------------------------------------------------------
 // 3. Import dependencies that will be tested
 // ---------------------------------------------------------------------------
-import { loggers } from '@pagespace/lib/logger-config';
-import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
 import { sessionService } from '@pagespace/lib/auth';
 import { emitValidationError } from '../validation';

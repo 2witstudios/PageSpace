@@ -9,7 +9,7 @@ import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
-import { secureCompare } from '@pagespace/lib/secure-compare';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({

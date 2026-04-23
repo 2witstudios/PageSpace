@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/logger-config', () => ({
   },
 }));
 
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Re-implement the origin validation functions from index.ts for testing.

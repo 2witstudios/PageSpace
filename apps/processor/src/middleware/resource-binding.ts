@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isValidContentHash } from '../cache/content-store';
 
 type ContentHashSource = 'params' | 'body';

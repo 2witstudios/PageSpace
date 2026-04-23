@@ -14,7 +14,7 @@
  */
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { Socket } from 'socket.io';
 
 /**

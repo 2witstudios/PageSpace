@@ -55,7 +55,7 @@ import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { sanitizeFilename } from '@pagespace/lib';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import TurndownService from 'turndown';
 
 // Helper to create mock SessionAuthResult

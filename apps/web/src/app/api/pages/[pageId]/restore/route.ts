@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pages, db, and, eq } from '@pagespace/db';
 import { loggers, getActorInfo, auditRequest } from '@pagespace/lib/server';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';

@@ -59,7 +59,7 @@ import {
 } from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
 import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';

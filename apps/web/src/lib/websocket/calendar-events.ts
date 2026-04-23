@@ -2,8 +2,8 @@
  * Socket.IO utilities for broadcasting calendar events
  */
 
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
-import { browserLoggers } from '@pagespace/lib/logger-browser';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import { maskIdentifier } from '@/lib/logging/mask';
 

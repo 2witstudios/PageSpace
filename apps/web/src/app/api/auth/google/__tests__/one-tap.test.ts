@@ -121,7 +121,7 @@ import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Test fixtures
 const mockNewUser = {

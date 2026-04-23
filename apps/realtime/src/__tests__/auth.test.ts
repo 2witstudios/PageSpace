@@ -73,7 +73,7 @@ import {
   verifyBroadcastSignature,
   generateBroadcastSignature,
   formatSignatureHeader,
-} from '@pagespace/lib/broadcast-auth';
+} from '@pagespace/lib/auth/broadcast-auth';
 
 describe('Broadcast Authentication', () => {
   describe('signature generation', () => {

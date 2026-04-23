@@ -28,9 +28,9 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-import { verifyToken, markEmailVerified } from '@pagespace/lib/verification-utils';
+import { verifyToken, markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/verify-email', () => {
   beforeEach(() => {

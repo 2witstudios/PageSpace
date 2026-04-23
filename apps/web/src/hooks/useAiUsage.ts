@@ -1,6 +1,6 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 
 /**
  * AI Usage data structure - separates billing from context metrics

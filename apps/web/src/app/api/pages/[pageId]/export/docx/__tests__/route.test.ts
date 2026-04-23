@@ -54,7 +54,7 @@ import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

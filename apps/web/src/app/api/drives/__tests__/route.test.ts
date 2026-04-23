@@ -51,7 +51,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 

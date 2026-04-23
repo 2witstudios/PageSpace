@@ -8,9 +8,9 @@ import {
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
-import { markEmailVerified } from '@pagespace/lib/verification-utils';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';

@@ -9,7 +9,7 @@
  */
 
 import { Server, Socket } from 'socket.io';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { socketRegistry } from './socket-registry';
 
 export interface KickPayload {

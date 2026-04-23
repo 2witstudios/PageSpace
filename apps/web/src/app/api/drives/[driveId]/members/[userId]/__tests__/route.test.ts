@@ -117,7 +117,7 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
 

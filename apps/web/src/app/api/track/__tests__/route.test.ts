@@ -44,7 +44,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
 }));
 
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
-import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
+import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
 
 const createRequest = (body: object, headers?: Record<string, string>) => {
   const bodyStr = JSON.stringify(body);

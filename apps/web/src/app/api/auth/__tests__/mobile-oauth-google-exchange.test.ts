@@ -110,7 +110,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/mobile/oauth/google/exchange', () => {
   const mockUserInfo = {

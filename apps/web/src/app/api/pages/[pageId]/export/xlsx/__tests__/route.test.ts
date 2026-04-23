@@ -55,7 +55,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { generateExcel, sanitizeFilename } from '@pagespace/lib';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
-import { trackPageOperation } from '@pagespace/lib/activity-tracker';
+import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
