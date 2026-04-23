@@ -105,18 +105,20 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   return (
     <div className="h-full overflow-y-auto">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-        <div className="flex items-center justify-between mb-6">
-          {currentPageId ? (
-            <FilesBreadcrumbs
-              driveId={driveId}
-              driveName={driveName}
-              currentPageId={currentPageId}
-              tree={tree}
-            />
-          ) : (
-            <h1 className="text-2xl font-bold">{driveName}</h1>
-          )}
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div className="min-w-0 flex-1">
+            {currentPageId ? (
+              <FilesBreadcrumbs
+                driveId={driveId}
+                driveName={driveName}
+                currentPageId={currentPageId}
+                tree={tree}
+              />
+            ) : (
+              <h1 className="text-2xl font-bold truncate">{driveName}</h1>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             <Button variant={viewMode === 'list' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('list')}>
               <List className="h-4 w-4" />
             </Button>
