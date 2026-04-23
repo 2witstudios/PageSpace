@@ -9,32 +9,38 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@pagespace/lib/server')>();
-  return {
-    ...actual,
-    canUserViewPage: vi.fn(),
-    canUserEditPage: vi.fn(),
-    auditRequest: vi.fn(),
-  };
-});
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserViewPage: vi.fn(),
+  canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
 
-vi.mock('@pagespace/lib', () => ({
-  PageType: {
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: {
     DOCUMENT: 'DOCUMENT',
     FOLDER: 'FOLDER',
     TASK_LIST: 'TASK_LIST',
   },
-  getDefaultContent: vi.fn(() => '{}'),
-  logger: {
-    child: vi.fn(() => ({
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    })),
-  },
 }));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getDefaultContent: vi.fn(() => '{}'),
+    getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const child = vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+  const mkLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child });
+  return {
+    loggers: {
+      api: mkLogger(),
+      ai: mkLogger(),
+      auth: mkLogger(),
+      security: mkLogger(),
+    },
+    logger: { child },
+  };
+});
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@test.com' }),
@@ -115,7 +121,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 

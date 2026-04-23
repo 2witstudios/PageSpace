@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
-import type { InboxItem, InboxResponse } from '@pagespace/lib';
+import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);

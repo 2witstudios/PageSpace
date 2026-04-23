@@ -30,17 +30,23 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createDriveNotification: vi.fn().mockResolvedValue(undefined),
-  isEmailVerified: vi.fn().mockResolvedValue(true),
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+    createDriveNotification: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+    isEmailVerified: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -69,8 +75,9 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';

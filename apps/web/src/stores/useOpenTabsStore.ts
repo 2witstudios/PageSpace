@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 export type TabPageType = `${PageType}`;
 

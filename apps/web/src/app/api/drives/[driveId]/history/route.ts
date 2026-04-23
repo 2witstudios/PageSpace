@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
-import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };

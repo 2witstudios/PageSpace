@@ -6,25 +6,37 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/integrations
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
-  listDriveConnections: vi.fn(),
-  createConnection: vi.fn(),
-  getProviderById: vi.fn(),
-  findDriveConnection: vi.fn(),
-  encryptCredentials: vi.fn(),
-  buildOAuthAuthorizationUrl: vi.fn(),
-  createSignedState: vi.fn(),
+vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
+    listDriveConnections: vi.fn(),
+    createConnection: vi.fn(),
+    findDriveConnection: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/repositories/provider-repository', () => ({
+    getProviderById: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/credentials/encrypt-credentials', () => ({
+    encryptCredentials: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/oauth/oauth-handler', () => ({
+    buildOAuthAuthorizationUrl: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
+    createSignedState: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -38,17 +50,13 @@ vi.mock('@/lib/auth', () => ({
 
 
 import { GET, POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import {
-  listDriveConnections,
-  createConnection,
-  getProviderById,
-  findDriveConnection,
-  encryptCredentials,
-  buildOAuthAuthorizationUrl,
-  createSignedState,
-} from '@pagespace/lib/integrations';
+import { listDriveConnections, createConnection, findDriveConnection } from '@pagespace/lib/integrations/repositories/connection-repository'
+import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository'
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials'
+import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

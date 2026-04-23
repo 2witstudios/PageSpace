@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { useSocketStore } from './useSocketStore';
-import type { LegacyNotification } from '@pagespace/lib/client-safe';
+import type { LegacyNotification } from '@pagespace/lib/notifications/types';
 import { patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Use LegacyNotification type for backward compatibility

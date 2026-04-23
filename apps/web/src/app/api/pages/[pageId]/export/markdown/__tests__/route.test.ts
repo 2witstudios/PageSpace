@@ -18,9 +18,11 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -28,11 +30,15 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
+vi.mock('@pagespace/lib/content/export-utils', () => ({
+    sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -53,8 +59,8 @@ vi.mock('turndown', () => ({
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { sanitizeFilename } from '@pagespace/lib';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import TurndownService from 'turndown';
 

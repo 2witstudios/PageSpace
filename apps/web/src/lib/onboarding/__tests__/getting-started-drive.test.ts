@@ -15,8 +15,8 @@ vi.mock('@pagespace/db', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn(),
+vi.mock('@pagespace/lib/utils/utils', () => ({
+    slugify: vi.fn(),
 }));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({
@@ -24,7 +24,7 @@ vi.mock('@/lib/onboarding/drive-setup', () => ({
 }));
 
 import { db, drives, sql } from '@pagespace/db';
-import { slugify } from '@pagespace/lib/server';
+import { slugify } from '@pagespace/lib/utils/utils';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 import {
   GETTING_STARTED_DRIVE_NAME,

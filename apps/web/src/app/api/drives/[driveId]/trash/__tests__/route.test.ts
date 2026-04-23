@@ -28,10 +28,14 @@ vi.mock('@pagespace/db', () => ({
   asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  buildTree: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -39,6 +43,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -49,7 +55,8 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { db } from '@pagespace/db';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================

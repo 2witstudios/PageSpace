@@ -20,9 +20,11 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -36,7 +38,7 @@ vi.mock('@pagespace/db', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test helpers

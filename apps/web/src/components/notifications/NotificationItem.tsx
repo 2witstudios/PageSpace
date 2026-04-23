@@ -3,8 +3,8 @@
 import { formatDistanceToNow } from 'date-fns';
 import { X } from 'lucide-react';
 import type { MouseEvent } from 'react';
-import type { LegacyNotification } from '@pagespace/lib/client-safe';
-import { isConnectionRequest } from '@pagespace/lib/client-safe';
+import type { LegacyNotification } from '@pagespace/lib/notifications/types';
+import { isConnectionRequest } from '@pagespace/lib/notifications/guards';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getNotificationIcon } from './notificationIcons';

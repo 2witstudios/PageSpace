@@ -6,11 +6,15 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/integrations/audit
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
@@ -61,7 +65,7 @@ vi.mock('../audit-filters', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseAuditListParams, buildAuditLogWhereClause } from '../audit-filters';

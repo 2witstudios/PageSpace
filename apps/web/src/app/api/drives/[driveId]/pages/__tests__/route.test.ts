@@ -78,12 +78,18 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-vi.mock('@pagespace/lib/server', () => ({
-  buildTree: vi.fn((items: unknown[]) => items),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn((items: unknown[]) => items),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/utils/api-utils', () => ({
@@ -100,7 +106,8 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // ---------- helpers ----------
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/server';
+import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/members
@@ -12,14 +12,18 @@ import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/server
 // ============================================================================
 
 // Mock at the service seam - this is the ONLY place we mock DB-related logic
-vi.mock('@pagespace/lib/server', () => ({
-  checkDriveAccess: vi.fn(),
-  listDriveMembers: vi.fn(),
-  isMemberOfDrive: vi.fn(),
-  addDriveMember: vi.fn(),
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    checkDriveAccess: vi.fn(),
+    listDriveMembers: vi.fn(),
+    isMemberOfDrive: vi.fn(),
+    addDriveMember: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -27,6 +31,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -34,13 +40,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import {
-  checkDriveAccess,
-  listDriveMembers,
-  isMemberOfDrive,
-  addDriveMember,
-  loggers,
-} from '@pagespace/lib/server';
+import { checkDriveAccess, listDriveMembers, isMemberOfDrive, addDriveMember } from '@pagespace/lib/services/drive-member-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

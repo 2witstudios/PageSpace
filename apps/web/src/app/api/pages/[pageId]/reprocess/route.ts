@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createPageServiceToken } from '@pagespace/lib';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { canUserEditPage } from '@pagespace/lib/permissions';
-import { auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

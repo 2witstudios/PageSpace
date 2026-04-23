@@ -41,8 +41,8 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -50,11 +50,17 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
@@ -69,7 +75,7 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildTree } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 

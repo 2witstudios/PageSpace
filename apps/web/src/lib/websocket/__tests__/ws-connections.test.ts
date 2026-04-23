@@ -22,7 +22,7 @@ import {
 } from '../ws-connections';
 
 // Mock logger and sessionService to prevent side effects during tests
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
@@ -31,6 +31,8 @@ vi.mock('@pagespace/lib', () => ({
       debug: vi.fn(),
     })),
   },
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     // Mock validateSession to return null by default (session invalid)
     // Tests that don't pass wsToken to registerConnection will skip revalidation anyway

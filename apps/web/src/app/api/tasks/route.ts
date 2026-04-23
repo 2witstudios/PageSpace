@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

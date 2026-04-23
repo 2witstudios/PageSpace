@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 type ActivityAction = 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'commented' | 'renamed';
 

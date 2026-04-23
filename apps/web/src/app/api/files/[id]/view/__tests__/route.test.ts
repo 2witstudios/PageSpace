@@ -20,16 +20,22 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  PageType: { FILE: 'FILE' },
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  isFilePage: vi.fn().mockReturnValue(true),
-  createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
-  createDriveServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { FILE: 'FILE' },
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    isFilePage: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
+    createDriveServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
 }));
 
 vi.mock('@pagespace/lib/permissions', () => ({
-  canUserAccessFile: vi.fn().mockResolvedValue(true),
+    canUserAccessFile: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/utils/file-security', () => ({
@@ -38,18 +44,22 @@ vi.mock('@pagespace/lib/utils/file-security', () => ({
   getCSPHeaderForFile: vi.fn().mockReturnValue("default-src 'none'"),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db';
 
 const mockUserId = 'user_123';

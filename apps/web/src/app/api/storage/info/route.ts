@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   getUserStorageQuota,
   getUserFileCount,

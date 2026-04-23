@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 

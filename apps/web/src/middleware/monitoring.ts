@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/server';
+import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/logging/logger-config';
 import {
   getOrCreateRequestId,
   REQUEST_ID_HEADER,

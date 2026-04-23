@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import type { SheetData } from '@pagespace/lib/client-safe';
+import type { SheetData } from '@pagespace/lib/sheets';
 
 const MAX_HISTORY_SIZE = 50;
 

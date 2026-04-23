@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActivityById } from '@/services/api';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { readPageContent } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import {
   diffContent,
   summarizeDiff,
   type DiffResult,
   type DiffOptions,
-} from '@pagespace/lib/content';
+} from '@pagespace/lib/content/diff-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };

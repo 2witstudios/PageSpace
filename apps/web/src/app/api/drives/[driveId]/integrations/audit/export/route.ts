@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, desc, integrationAuditLog } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { format } from 'date-fns';
 import { buildAuditLogWhereClause, parseAuditFilterParams } from '../audit-filters';

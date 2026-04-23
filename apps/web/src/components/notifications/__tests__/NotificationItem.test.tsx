@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import type { LegacyNotification, NotificationType } from '@pagespace/lib/client-safe';
+import type { LegacyNotification, NotificationType } from '@pagespace/lib/notifications/types';
 import { NotificationItem } from '../NotificationItem';
 import { NOTIFICATION_ICONS } from '../notificationIcons';
 
