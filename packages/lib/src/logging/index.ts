@@ -17,6 +17,16 @@ export {
 // Export logger-database
 export * from './logger-database';
 
+// Export SIEM error hook (fire-and-forget delivery of application errors to SIEM webhook)
+export {
+  setSiemErrorHook,
+  getSiemErrorHook,
+  fireSiemErrorHook,
+  buildWebhookSiemErrorHook,
+  type SiemErrorPayload,
+  type SiemErrorHookFn,
+} from './siem-error-hook';
+
 // Export logger-config functions (but not re-exports from logger)
 export {
   loggers,
