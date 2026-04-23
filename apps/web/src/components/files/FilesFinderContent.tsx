@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useDriveStore } from '@/hooks/useDrive';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
-import CreatePageDialog from '@/components/layout/left-sidebar/CreatePageDialog';
+import { useUIStore } from '@/stores/useUIStore';
 import { FilesBreadcrumbs } from './FilesBreadcrumbs';
 import { FilesGridView } from './FilesGridView';
 import { FilesListView } from './FilesListView';
@@ -26,9 +26,9 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   const drive = drives.find((d) => d.id === driveId);
   const driveName = drive?.name ?? 'Files';
   const canWrite = drive?.role === 'OWNER' || drive?.role === 'ADMIN';
+  const openQuickCreate = useUIStore((s) => s.openQuickCreate);
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('title');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
@@ -126,7 +126,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
               <Grip className="h-4 w-4" />
             </Button>
             {canWrite && (
-              <Button size="sm" onClick={() => setIsDialogOpen(true)}>
+              <Button size="sm" onClick={() => openQuickCreate(currentPageId)}>
                 <Plus className="h-4 w-4 mr-1" />
                 New Page
               </Button>
@@ -154,18 +154,6 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
           />
         )}
       </div>
-      {canWrite && (
-        <CreatePageDialog
-          driveId={driveId}
-          parentId={currentPageId}
-          isOpen={isDialogOpen}
-          setIsOpen={setIsDialogOpen}
-          onPageCreated={() => {
-            handleMutate();
-            setIsDialogOpen(false);
-          }}
-        />
-      )}
     </div>
   );
 }
