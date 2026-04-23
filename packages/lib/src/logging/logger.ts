@@ -230,8 +230,8 @@ class Logger {
     if (error) {
       entry.error = {
         name: error.name,
-        message: scrubPII(error.message) ?? error.message,
-        stack: scrubPII(error.stack) ?? error.stack,
+        message: scrubPII(error.message) ?? '[scrub_failed]',
+        stack: scrubPII(error.stack),
       };
     }
 

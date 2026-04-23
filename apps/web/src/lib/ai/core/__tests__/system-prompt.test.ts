@@ -3,7 +3,6 @@
  *
  * Covers:
  * - buildSystemPrompt: dashboard, drive, page context types
- * - GDPR Art. 5 data minimization: workspace display name must NOT appear in provider payload (#942)
  * - buildPersonalizationPrompt: enabled/disabled, section presence
  * - getWelcomeMessage / getErrorMessage
  * - estimateSystemPromptTokens
@@ -18,18 +17,18 @@ import {
   estimateSystemPromptTokens,
 } from '../system-prompt';
 
-describe('buildSystemPrompt — data minimization (#942)', () => {
-  it('given drive context with workspace display name, should NOT include driveName in provider payload', () => {
+describe('buildSystemPrompt — drive context', () => {
+  it('given drive context, should include driveName to give AI semantic workspace context', () => {
     const result = buildSystemPrompt('drive', {
-      driveName: 'John Smith Personal Projects',
-      driveSlug: 'john-smith-personal',
+      driveName: 'Marketing Team',
+      driveSlug: 'marketing-team',
       driveId: 'cuid_abc123',
     });
 
-    expect(result).not.toContain('John Smith Personal Projects');
+    expect(result).toContain('Marketing Team');
   });
 
-  it('given drive context, should still include driveSlug for tool routing', () => {
+  it('given drive context, should include driveSlug for tool routing', () => {
     const result = buildSystemPrompt('drive', {
       driveName: 'Confidential Workspace',
       driveSlug: 'confidential-ws',
@@ -39,7 +38,7 @@ describe('buildSystemPrompt — data minimization (#942)', () => {
     expect(result).toContain('confidential-ws');
   });
 
-  it('given drive context, should still include driveId for tool routing', () => {
+  it('given drive context, should include driveId for tool routing', () => {
     const result = buildSystemPrompt('drive', {
       driveName: 'My Private Drive',
       driveSlug: 'my-private-drive',
@@ -47,19 +46,6 @@ describe('buildSystemPrompt — data minimization (#942)', () => {
     });
 
     expect(result).toContain('cuid_drive_007');
-  });
-
-  it('given page context, should not include page breadcrumb text that may contain PII', () => {
-    const result = buildSystemPrompt('page', {
-      driveName: 'Alice Johnson HR Drive',
-      driveSlug: 'hr-drive',
-      driveId: 'cuid_hr',
-      pagePath: '/pages/employees',
-      pageType: 'document',
-      breadcrumbs: ['HR Drive', 'Employees'],
-    });
-
-    expect(result).not.toContain('Alice Johnson HR Drive');
   });
 });
 

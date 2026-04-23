@@ -89,7 +89,7 @@ function buildContextPrompt(
 
     case 'drive':
       return `DRIVE CONTEXT:
-• Current Workspace Slug: ${contextInfo.driveSlug}, ID: ${contextInfo.driveId}
+• Current Workspace: "${contextInfo.driveName}" (Slug: ${contextInfo.driveSlug}, ID: ${contextInfo.driveId})
 • When users say "here" or "this workspace", they mean: ${contextInfo.driveSlug}`;
 
     case 'page':

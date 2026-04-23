@@ -7,7 +7,6 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * Cron endpoint to purge old AI usage logs.
  *
  * Deletes entire rows older than 90 days to enforce data retention limits.
- * (Prompt/completion columns were removed in #957 — no anonymization phase needed.)
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
