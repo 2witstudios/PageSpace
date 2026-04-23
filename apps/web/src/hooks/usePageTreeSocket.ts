@@ -24,6 +24,8 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
 
   // Track the current drive to avoid unnecessary revalidations
   const currentDriveRef = useRef<string | undefined>(driveId);
+  // Track which drive room the socket has joined so we can leave it on drive switch
+  const joinedDriveIdRef = useRef<string | null>(null);
   // Track page IDs present in the current tree snapshot for safe granular updates.
   // If an incoming event targets a missing page, we must fall back to full revalidation.
   const treePageIdsRef = useRef<Set<string>>(new Set());
@@ -138,8 +140,20 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
 
     console.log('🌳 usePageTreeSocket: Setting up listeners for drive:', driveId);
 
-    // Join the drive room to receive page events (using drive ID)
-    socket.emit('join_drive', driveId);
+    const joinDrive = () => {
+      if (!socket.connected) return;
+      if (joinedDriveIdRef.current && joinedDriveIdRef.current !== driveId) {
+        socket.emit('leave_drive', joinedDriveIdRef.current);
+        joinedDriveIdRef.current = null;
+      }
+      if (joinedDriveIdRef.current !== driveId) {
+        socket.emit('join_drive', driveId);
+        joinedDriveIdRef.current = driveId;
+      }
+    };
+
+    joinDrive();
+    socket.on('connect', joinDrive);
 
     // Listen for page events
     const events = ['page:created', 'page:updated', 'page:moved', 'page:trashed', 'page:restored', 'page:content-updated'];
@@ -159,10 +173,13 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     return () => {
       console.log('🌳 usePageTreeSocket: Cleaning up listeners for drive:', driveId);
 
+      socket.off('connect', joinDrive);
+
       // Note: We don't leave the drive on unmount because:
       // 1. Other hooks (useCalendarSocket, usePageContentSocket) may share the drive room
       // 2. Server cleans up room membership on disconnect
       // 3. Leaving prematurely could cause missed events for other components
+      // Drive switches are handled above via joinedDriveIdRef.
 
       // Remove all event listeners
       events.forEach(event => {

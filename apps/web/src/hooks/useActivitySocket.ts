@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useSocket } from './useSocket';
+import type { ActivityEventPayload } from '@/lib/websocket/socket-utils';
 
 export type ActivityContext = 'drive' | 'page';
 
@@ -60,8 +61,10 @@ export function useActivitySocket({
       currentContextRef.current = contextKey;
     }
 
-    // Listen for activity events
-    const handleActivityLogged = () => {
+    // Listen for activity events — validate payload context before refetching
+    const handleActivityLogged = (payload: ActivityEventPayload) => {
+      if (context === 'drive' && payload.driveId !== contextId) return;
+      if (context === 'page' && payload.pageId !== contextId) return;
       debouncedRefetch();
     };
 
