@@ -12,7 +12,7 @@ import {
   inArray,
 } from '@pagespace/db';
 import type { CalendarTriggerMetadata } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';

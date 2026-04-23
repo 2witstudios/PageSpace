@@ -13,27 +13,35 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/db', () => ({ db: {} }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserEditPage: vi.fn().mockResolvedValue(true),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
+    listGrantsByAgent: mockListGrantsByAgent,
+}));
+vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
+    getConnectionById: vi.fn(),
+}));
 vi.mock('@pagespace/lib/integrations', () => ({
-  listGrantsByAgent: mockListGrantsByAgent,
-  createGrant: vi.fn(),
-  getConnectionById: vi.fn(),
-  findGrant: vi.fn(),
+    createGrant: vi.fn(),
+    findGrant: vi.fn(),
 }));
 
 import { GET } from '../route';

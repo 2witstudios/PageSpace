@@ -1,5 +1,5 @@
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
-import { logger } from '@pagespace/lib';
+import { logger } from '@pagespace/lib/logging/logger-config';
 import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 import type {
   FetchResponseStartMessage,

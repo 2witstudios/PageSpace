@@ -13,15 +13,19 @@ import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/services/d
 // ============================================================================
 
 // Mock the service seam - this is the ONLY place we mock DB-related logic
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveById: vi.fn(),
-  getDriveAccess: vi.fn(),
-  getDriveWithAccess: vi.fn(),
-  updateDrive: vi.fn(),
-  trashDrive: vi.fn(),
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+    getDriveById: vi.fn(),
+    getDriveAccess: vi.fn(),
+    getDriveWithAccess: vi.fn(),
+    updateDrive: vi.fn(),
+    trashDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -29,6 +33,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket', () => ({

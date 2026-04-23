@@ -8,14 +8,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/lib/auth', () => ({
-  deletePasskey: vi.fn(),
-  updatePasskeyName: vi.fn(),
-  validateCSRFToken: vi.fn(),
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+    deletePasskey: vi.fn(),
+    updatePasskeyName: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    validateCSRFToken: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -23,7 +25,11 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({

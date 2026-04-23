@@ -21,8 +21,8 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: mockAudit,
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

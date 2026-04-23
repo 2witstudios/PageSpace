@@ -50,21 +50,27 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  canUserViewPage: (...args: unknown[]) => mockCanUserViewPage(...args),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: (...args: unknown[]) => mockCanUserViewPage(...args),
 }));
 
 vi.mock('@/services/api', () => ({
   getActivityById: (...args: unknown[]) => mockGetActivityById(...args),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  readPageContent: (...args: unknown[]) => mockReadPageContent(...args),
-  loggers: mockLoggers,
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/services/page-content-store', () => ({
+    readPageContent: (...args: unknown[]) => mockReadPageContent(...args),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: mockLoggers,
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/content', () => ({
+vi.mock('@pagespace/lib/content/diff-utils', () => ({
   diffContent: (...args: unknown[]) => mockDiffContent(...args),
   summarizeDiff: (...args: unknown[]) => mockSummarizeDiff(...args),
 }));

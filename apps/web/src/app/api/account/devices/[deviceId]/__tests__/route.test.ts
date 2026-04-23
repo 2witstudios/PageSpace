@@ -21,24 +21,28 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/secure-compare', () => ({
   secureCompare: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn((token: string) => `hashed_${token}`),
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
+    hashToken: vi.fn((token: string) => `hashed_${token}`),
 }));
 
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({

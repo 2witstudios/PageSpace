@@ -5,9 +5,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({

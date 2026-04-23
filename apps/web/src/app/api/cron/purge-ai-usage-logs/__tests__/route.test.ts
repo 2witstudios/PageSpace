@@ -14,13 +14,13 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  anonymizeAiUsageContent: mockAnonymize,
-  purgeAiUsageLogs: mockPurge,
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+    anonymizeAiUsageContent: mockAnonymize,
+    purgeAiUsageLogs: mockPurge,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: mockAudit,
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

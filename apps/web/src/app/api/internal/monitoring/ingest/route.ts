@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logging/logger-database';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { sanitizeIngestPayload, type IngestPayload } from '@/lib/monitoring/ingest-sanitizer';
 
 function unauthorized(message: string, status: number = 401) {

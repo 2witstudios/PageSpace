@@ -15,7 +15,7 @@ import {
   isNull,
   inArray,
 } from '@pagespace/db';
-import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib';
+import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,

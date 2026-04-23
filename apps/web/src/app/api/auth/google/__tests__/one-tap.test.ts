@@ -39,8 +39,8 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 // Mock session service from @pagespace/lib/auth
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -53,8 +53,12 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
 // Mock cookie utilities
@@ -64,11 +68,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -80,15 +80,17 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  resetDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    resetDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: {
       maxAttempts: 5,
       windowMs: 900000,

@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@pagespace/lib', () => ({
-  createUserServiceToken: vi.fn().mockResolvedValue({ token: 'service-token' }),
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createUserServiceToken: vi.fn().mockResolvedValue({ token: 'service-token' }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       debug: vi.fn(),
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { createUserServiceToken } from '@pagespace/lib';
+import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isExternalHttpUrl, resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 

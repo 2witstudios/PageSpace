@@ -6,10 +6,12 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/assignees
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
-  canUserViewPage: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserDriveAccess: vi.fn(),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => {

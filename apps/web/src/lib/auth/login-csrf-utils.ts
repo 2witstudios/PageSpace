@@ -1,5 +1,5 @@
 import { randomBytes, createHmac } from 'crypto';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 // Constants
 export const LOGIN_CSRF_COOKIE_NAME = 'login_csrf';

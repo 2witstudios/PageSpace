@@ -17,8 +17,8 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  logger: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       error: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn()
     }))
   },
-  loggers: {
+    loggers: {
     performance: {
       info: vi.fn(),
       error: vi.fn(),
@@ -56,7 +56,7 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     }
   },
-  extractRequestContext: vi.fn(() => ({
+    extractRequestContext: vi.fn(() => ({
     method: 'GET',
     endpoint: '/api/test',
     ip: '127.0.0.1',
@@ -64,7 +64,7 @@ vi.mock('@pagespace/lib/server', () => ({
     sessionId: 'test-session',
     query: {}
   })),
-  logResponse: vi.fn()
+    logResponse: vi.fn(),
 }));
 
 // Mock request-id (has transitive dep on @paralleldrive/cuid2)

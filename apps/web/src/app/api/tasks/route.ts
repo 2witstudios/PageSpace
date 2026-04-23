@@ -5,7 +5,7 @@ import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

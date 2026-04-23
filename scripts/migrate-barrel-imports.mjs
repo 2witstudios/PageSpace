@@ -275,6 +275,118 @@ const NOTIFICATIONS_MAP = {
   sendPushNotification: '@pagespace/lib/notifications/push-notifications',
 };
 
+// Root @pagespace/lib barrel (the main index.ts)
+const LIB_ROOT_MAP = {
+  // Deployment mode
+  isOnPrem: '@pagespace/lib/deployment-mode',
+  isCloud: '@pagespace/lib/deployment-mode',
+  isTenantMode: '@pagespace/lib/deployment-mode',
+  isBillingEnabled: '@pagespace/lib/deployment-mode',
+  getOnPremUserDefaults: '@pagespace/lib/onprem-defaults',
+  getOnPremOllamaSettings: '@pagespace/lib/onprem-defaults',
+  // Permissions
+  canUserViewPage: '@pagespace/lib/permissions/permissions',
+  canUserEditPage: '@pagespace/lib/permissions/permissions',
+  canUserDeletePage: '@pagespace/lib/permissions/permissions',
+  getUserDriveAccess: '@pagespace/lib/permissions/permissions',
+  getBatchPagePermissions: '@pagespace/lib/permissions/permissions',
+  getUserAccessLevel: '@pagespace/lib/permissions/permissions',
+  isDriveOwnerOrAdmin: '@pagespace/lib/permissions/permissions',
+  getDriveIdsForUser: '@pagespace/lib/permissions/permissions',
+  isUserDriveMember: '@pagespace/lib/permissions/permissions',
+  getUserAccessiblePagesInDriveWithDetails: '@pagespace/lib/permissions/permissions',
+  grantPagePermission: '@pagespace/lib/permissions/permission-mutations',
+  revokePagePermission: '@pagespace/lib/permissions/permission-mutations',
+  EnforcedAuthContext: '@pagespace/lib/permissions/enforced-context',
+  // Auth
+  sessionService: '@pagespace/lib/auth/session-service',
+  SessionClaims: '@pagespace/lib/auth/session-service',
+  CreateSessionOptions: '@pagespace/lib/auth/session-service',
+  generateCSRFToken: '@pagespace/lib/auth/csrf-utils',
+  validateCSRFToken: '@pagespace/lib/auth/csrf-utils',
+  secureCompare: '@pagespace/lib/auth/secure-compare',
+  isEmailVerified: '@pagespace/lib/auth/verification-utils',
+  createVerificationToken: '@pagespace/lib/auth/verification-utils',
+  cleanupExpiredDeviceTokens: '@pagespace/lib/auth/device-auth-utils',
+  validateOrCreateDeviceToken: '@pagespace/lib/auth/device-auth-utils',
+  // Service tokens
+  createValidatedServiceToken: '@pagespace/lib/services/validated-service-token',
+  createPageServiceToken: '@pagespace/lib/services/validated-service-token',
+  createDriveServiceToken: '@pagespace/lib/services/validated-service-token',
+  createUserServiceToken: '@pagespace/lib/services/validated-service-token',
+  ServiceScope: '@pagespace/lib/services/validated-service-token',
+  ValidatedTokenOptions: '@pagespace/lib/services/validated-service-token',
+  ValidatedTokenResult: '@pagespace/lib/services/validated-service-token',
+  PermissionSet: '@pagespace/lib/services/validated-service-token',
+  ResourceType: '@pagespace/lib/services/validated-service-token',
+  // Notifications
+  createNotification: '@pagespace/lib/notifications/notifications',
+  createDriveNotification: '@pagespace/lib/notifications/notifications',
+  createOrUpdateMessageNotification: '@pagespace/lib/notifications/notifications',
+  createPermissionNotification: '@pagespace/lib/notifications/notifications',
+  markNotificationAsRead: '@pagespace/lib/notifications/notifications',
+  deleteNotification: '@pagespace/lib/notifications/notifications',
+  markAllNotificationsAsRead: '@pagespace/lib/notifications/notifications',
+  getUserNotifications: '@pagespace/lib/notifications/notifications',
+  getUnreadNotificationCount: '@pagespace/lib/notifications/notifications',
+  // Content
+  isDocumentPage: '@pagespace/lib/content/page-types.config',
+  isAIChatPage: '@pagespace/lib/content/page-types.config',
+  isFolderPage: '@pagespace/lib/content/page-types.config',
+  isFilePage: '@pagespace/lib/content/page-types.config',
+  isSheetPage: '@pagespace/lib/content/page-types.config',
+  isCodePage: '@pagespace/lib/content/page-types.config',
+  getPageTypeEmoji: '@pagespace/lib/content/page-types.config',
+  getDefaultContent: '@pagespace/lib/content/page-types.config',
+  getCreatablePageTypes: '@pagespace/lib/content/page-types.config',
+  buildTree: '@pagespace/lib/content/tree-utils',
+  formatTreeAsMarkdown: '@pagespace/lib/content/tree-utils',
+  filterToSubtree: '@pagespace/lib/content/tree-utils',
+  detectPageContentFormat: '@pagespace/lib/content/page-content-format',
+  validatePageCreation: '@pagespace/lib/content/page-type-validators',
+  canConvertToType: '@pagespace/lib/content/page-type-validators',
+  validatePageUpdate: '@pagespace/lib/content/page-type-validators',
+  validateAIChatTools: '@pagespace/lib/content/page-type-validators',
+  generateCSV: '@pagespace/lib/content/export-utils',
+  generateDOCX: '@pagespace/lib/content/export-utils',
+  generateExcel: '@pagespace/lib/content/export-utils',
+  sanitizeFilename: '@pagespace/lib/content/export-utils',
+  // Utils/types
+  PageType: '@pagespace/lib/utils/enums',
+  slugify: '@pagespace/lib/utils/utils',
+  isValidEmail: '@pagespace/lib/validators/email',
+  isValidId: '@pagespace/lib/validators/id-validators',
+  parseUserId: '@pagespace/lib/validators/id-validators',
+  parsePageId: '@pagespace/lib/validators/id-validators',
+  InboxItem: '@pagespace/lib/types',
+  InboxResponse: '@pagespace/lib/types',
+  // Encryption
+  encrypt: '@pagespace/lib/encryption',
+  decrypt: '@pagespace/lib/encryption',
+  // Logging
+  loggers: '@pagespace/lib/logging/logger-config',
+  logger: '@pagespace/lib/logging/logger-config',
+  deleteAiUsageLogsForUser: '@pagespace/lib/logging/ai-usage-purge',
+  deleteMonitoringDataForUser: '@pagespace/lib/logging/monitoring-purge',
+  anonymizeAiUsageContent: '@pagespace/lib/logging/ai-usage-purge',
+  purgeAiUsageLogs: '@pagespace/lib/logging/ai-usage-purge',
+  // Audit
+  verifyAndAlert: '@pagespace/lib/audit/security-audit-alerting',
+  // Services
+  getTomorrowMidnightUTC: '@pagespace/lib/services/date-utils',
+  getTodayUTC: '@pagespace/lib/services/date-utils',
+  getSecondsUntilMidnightUTC: '@pagespace/lib/services/date-utils',
+  rateLimitCache: '@pagespace/lib/services/rate-limit-cache',
+  ProviderType: '@pagespace/lib/services/rate-limit-cache',
+  UsageTrackingResult: '@pagespace/lib/services/rate-limit-cache',
+  // Sheets
+  parseSheetContent: '@pagespace/lib/sheets',
+  serializeSheetContent: '@pagespace/lib/sheets',
+  isSheetType: '@pagespace/lib/sheets',
+  updateSheetCells: '@pagespace/lib/sheets',
+  createEmptySheet: '@pagespace/lib/sheets/io',
+};
+
 // ─── Barrel → map lookup ─────────────────────────────────────────────────────
 
 const BARREL_MAPS = {
@@ -282,6 +394,8 @@ const BARREL_MAPS = {
   auth: AUTH_MAP,
   integrations: INTEGRATIONS_MAP,
   notifications: NOTIFICATIONS_MAP,
+  // Root barrel: key 'ROOT' is special — matched as '@pagespace/lib' (no subpath)
+  ROOT: LIB_ROOT_MAP,
 };
 
 // ─── File walker ─────────────────────────────────────────────────────────────
@@ -311,11 +425,12 @@ function getAllFiles(dir, exts = ['.ts', '.tsx']) {
  */
 function parseImportBlock(source, barrel) {
   const results = [];
-  // Match both `import {` and `import type {` forms, multi-line
-  const regex = new RegExp(
-    `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib/${barrel}'`,
-    'gs'
-  );
+  // For root barrel (barrel=''), match '@pagespace/lib' followed immediately by quote (no subpath).
+  // For subpath barrels, match '@pagespace/lib/<barrel>'.
+  const pattern = barrel === ''
+    ? `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib'`
+    : `import(\\s+type)?\\s+\\{([^}]+)\\}\\s+from\\s+'@pagespace/lib/${barrel}'`;
+  const regex = new RegExp(pattern, 'gs');
 
   let match;
   while ((match = regex.exec(source)) !== null) {
@@ -455,14 +570,20 @@ for (const barrel of targetBarrels) {
     continue;
   }
 
+  // Root barrel is matched as '@pagespace/lib' exactly (no subpath suffix)
+  const importPath = barrel === 'ROOT' ? '' : barrel;
+  const importMatch = barrel === 'ROOT'
+    ? `from '@pagespace/lib'`
+    : `from '@pagespace/lib/${barrel}'`;
+
   let count = 0;
-  console.log(`\nMigrating @pagespace/lib/${barrel} barrel...`);
+  console.log(`\nMigrating @pagespace/lib${importPath ? '/' + importPath : ''} barrel...`);
 
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
-    if (!source.includes(`from '@pagespace/lib/${barrel}'`)) continue;
+    if (!source.includes(importMatch)) continue;
 
-    const migrated = migrateFile(file, barrel, barrelMap);
+    const migrated = migrateFile(file, importPath, barrelMap);
     if (migrated) {
       count++;
       console.log(`  ✓ ${file.replace(ROOT, '')}`);

@@ -33,18 +33,24 @@ vi.mock('@pagespace/db', () => ({
   inArray: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  isUserDriveMember: vi.fn().mockResolvedValue(true),
-  generateCSV: vi.fn().mockReturnValue('col1,col2\nval1,val2'),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+    isUserDriveMember: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/content/export-utils', () => ({
+    generateCSV: vi.fn().mockReturnValue('col1,col2\nval1,val2'),
 }));
 
 vi.mock('date-fns', () => ({

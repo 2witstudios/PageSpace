@@ -14,21 +14,25 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/oauth/google/exchange/route';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
     generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
     validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
     }),
+}));
+vi.mock('@pagespace/lib/auth/oauth-utils', () => ({
     verifyOAuthIdToken: vi.fn(),
     createOrLinkOAuthUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/oauth-types', () => ({
     OAuthProvider: {
       GOOGLE: 'google',
       APPLE: 'apple',
     },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -40,13 +44,15 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
 
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_oauth-token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'sfh0haxfpzowht3oi213oas1',
@@ -64,14 +70,14 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
     retryAfter: undefined,
   }),
-  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-  DISTRIBUTED_RATE_LIMITS: {
+    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
     REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },

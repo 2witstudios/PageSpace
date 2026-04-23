@@ -17,13 +17,13 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createUserServiceToken: vi.fn().mockResolvedValue({ token: 'mock-service-token' }),
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createUserServiceToken: vi.fn().mockResolvedValue({ token: 'mock-service-token' }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 // Mock global fetch

@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, files, eq } from '@pagespace/db';
-import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
+import { PageType } from '@pagespace/lib/utils/enums'
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { isFilePage } from '@pagespace/lib/content/page-types.config'
+import { createPageServiceToken, createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { sanitizeFilenameForHeader, isDangerousMimeType, getCSPHeaderForFile } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

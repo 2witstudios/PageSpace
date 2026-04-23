@@ -10,11 +10,7 @@ import { POST } from '../signin/route';
 import { GET } from '../callback/route';
 
 // Mock dependencies for signin
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -26,19 +22,23 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
     validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
     }),
-    maskEmail,
-  };
-});
+}));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
-  resetDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
+    resetDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, blockDurationMs: 900000, progressiveDelay: true },
     REFRESH: { maxAttempts: 10, windowMs: 60000 },
   },
@@ -97,8 +97,8 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 // Mock session service from @pagespace/lib/auth
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -111,10 +111,16 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  generatePKCE: vi.fn().mockResolvedValue(null),
-  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/pkce', () => ({
+    generatePKCE: vi.fn().mockResolvedValue(null),
+    consumePKCEVerifier: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
 // Mock cookie utilities

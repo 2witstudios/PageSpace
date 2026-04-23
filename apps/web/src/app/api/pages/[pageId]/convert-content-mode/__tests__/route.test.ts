@@ -74,11 +74,19 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
-  createPageVersion: (...args: unknown[]) => mockCreatePageVersion(...args),
-  loggers: mockLoggers,
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+    createPageVersion: (...args: unknown[]) => mockCreatePageVersion(...args),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: mockLoggers,
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('turndown', () => ({

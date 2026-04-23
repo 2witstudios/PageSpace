@@ -19,9 +19,11 @@ vi.mock('@pagespace/db', () => ({
   sql: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -29,6 +31,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('ai', () => ({

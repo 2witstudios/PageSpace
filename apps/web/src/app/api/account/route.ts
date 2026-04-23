@@ -4,7 +4,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token'
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge'
+import { isValidEmail } from '@pagespace/lib/validators/email';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 

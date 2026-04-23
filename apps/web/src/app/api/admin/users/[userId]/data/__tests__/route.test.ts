@@ -18,14 +18,20 @@ vi.mock('@/lib/auth/csrf-validation', () => ({
   validateCSRF: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
     auth: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
   },
-  logSecurityEvent: vi.fn(),
-  auditRequest: vi.fn(),
-  accountRepository: {
+    logSecurityEvent: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/repositories', () => ({
+    accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
     getDriveMemberCount: vi.fn().mockResolvedValue(0),
@@ -33,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
     deleteUser: vi.fn(),
     checkAndDeleteSoloDrives: vi.fn().mockResolvedValue({ multiMemberDriveNames: [] }),
   },
-  activityLogRepository: {
+    activityLogRepository: {
     anonymizeForUser: vi.fn().mockResolvedValue({ success: true, count: 0 }),
   },
 }));
@@ -43,14 +49,12 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...(actual as object),
-    deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
-    deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
-  };
-});
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+  deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
+}));
 
 import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
@@ -59,7 +63,8 @@ import { validateCSRF } from '@/lib/auth/csrf-validation';
 import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 
 const mockAuth = vi.mocked(authenticateSessionRequest);
 const mockAdminValidation = vi.mocked(validateAdminAccess);

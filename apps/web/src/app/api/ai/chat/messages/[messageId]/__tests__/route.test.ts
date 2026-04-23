@@ -28,12 +28,18 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock logging mask (boundary)

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createVerificationToken } from '@pagespace/lib';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config'

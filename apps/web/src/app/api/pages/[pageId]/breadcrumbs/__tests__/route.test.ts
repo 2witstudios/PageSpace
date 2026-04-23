@@ -20,9 +20,11 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({

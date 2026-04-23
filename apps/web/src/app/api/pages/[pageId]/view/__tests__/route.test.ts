@@ -20,15 +20,19 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => {

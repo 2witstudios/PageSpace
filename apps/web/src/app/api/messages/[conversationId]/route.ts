@@ -3,7 +3,8 @@ import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pag
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
+import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';

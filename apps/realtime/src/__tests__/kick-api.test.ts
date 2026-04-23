@@ -21,6 +21,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 describe('Kick API', () => {

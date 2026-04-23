@@ -29,21 +29,22 @@ vi.mock('@pagespace/db', () => ({
   asc: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@pagespace/lib/server')>();
-  return {
-    ...actual,
-    canUserEditPage: vi.fn(),
-    canUserViewPage: vi.fn(),
-    getUserDriveAccess: vi.fn(),
-    logPageActivity: vi.fn(),
-    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com' }),
-  };
-});
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserEditPage: vi.fn(),
+  canUserViewPage: vi.fn(),
+  getUserDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  logPageActivity: vi.fn(),
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com' }),
+}));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
   getDefaultContent: vi.fn(() => ''),
-  PageType: { DOCUMENT: 'DOCUMENT' },
+  getCreatablePageTypes: vi.fn(() => ['DOCUMENT', 'FOLDER', 'TASK_LIST']),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { DOCUMENT: 'DOCUMENT' },
 }));
 
 vi.mock('@/lib/websocket', () => ({

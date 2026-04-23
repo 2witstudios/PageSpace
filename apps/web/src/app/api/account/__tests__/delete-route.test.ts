@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock repository seams - the proper architectural boundary
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       info: vi.fn(),
       error: vi.fn(),
@@ -12,18 +12,24 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  accountRepository: {
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/repositories', () => ({
+    accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
     getDriveMemberCount: vi.fn(),
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
   },
-  activityLogRepository: {
+    activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -31,17 +37,22 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createUserServiceToken: vi.fn(),
-  deleteAiUsageLogsForUser: vi.fn(),
-  deleteMonitoringDataForUser: vi.fn(),
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createUserServiceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+    deleteAiUsageLogsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+    deleteMonitoringDataForUser: vi.fn(),
 }));
 
 import { DELETE } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteMonitoringDataForUser } from '@pagespace/lib';
+import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 
 // Type the mocked repositories
 const mockAccountRepo = vi.mocked(accountRepository);

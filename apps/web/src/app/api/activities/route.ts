@@ -4,7 +4,7 @@ import { db, activityLogs, eq, and, desc, count, gte, lt, inArray } from '@pages
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

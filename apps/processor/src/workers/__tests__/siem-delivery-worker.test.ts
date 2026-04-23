@@ -60,7 +60,7 @@ vi.mock('../siem-delivery-preflight', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit', () => ({
-  notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
+    notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
 }));
 
 import { processSiemDelivery } from '../siem-delivery-worker';

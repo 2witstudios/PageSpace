@@ -16,7 +16,7 @@ import {
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isOnPrem } from '@pagespace/lib';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { withAdminAuth } from '@/lib/auth';
 
 export const GET = withAdminAuth(async (_adminUser, _request) => {

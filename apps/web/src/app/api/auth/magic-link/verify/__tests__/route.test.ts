@@ -19,8 +19,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // Mock dependencies BEFORE imports
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -33,8 +33,12 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
 vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
@@ -48,8 +52,8 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -60,7 +64,11 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({

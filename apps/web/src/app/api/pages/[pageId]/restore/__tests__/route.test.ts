@@ -92,19 +92,25 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: mockLoggers,
-  getActorInfo: (...args: unknown[]) => mockGetActorInfo(...args),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: mockLoggers,
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: (...args: unknown[]) => mockGetActorInfo(...args),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: (...args: unknown[]) => mockTrackPageOperation(...args),
 }));
 
-vi.mock('@pagespace/lib/monitoring', () => ({
-  createChangeGroupId: () => mockCreateChangeGroupId(),
-  inferChangeGroupType: (...args: unknown[]) => mockInferChangeGroupType(...args),
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: () => mockCreateChangeGroupId(),
+    inferChangeGroupType: (...args: unknown[]) => mockInferChangeGroupType(...args),
 }));
 
 // ── Imports (after mocks) ──────────────────────────────────────────────────

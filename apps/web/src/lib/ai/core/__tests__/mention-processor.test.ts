@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import {

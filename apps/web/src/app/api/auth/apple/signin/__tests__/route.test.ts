@@ -14,8 +14,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies BEFORE imports
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -23,15 +23,17 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
     retryAfter: undefined,
   }),
-  DISTRIBUTED_RATE_LIMITS: {
+    DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
   },
 }));

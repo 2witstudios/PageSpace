@@ -59,6 +59,16 @@
       "import": "./dist/logging/logger-browser.js",
       "default": "./dist/logging/logger-browser.js"
     },
+    "./logging/ai-usage-purge": {
+      "types": "./dist/logging/ai-usage-purge.d.ts",
+      "import": "./dist/logging/ai-usage-purge.js",
+      "require": "./dist/logging/ai-usage-purge.js"
+    },
+    "./logging/monitoring-purge": {
+      "types": "./dist/logging/monitoring-purge.d.ts",
+      "import": "./dist/logging/monitoring-purge.js",
+      "require": "./dist/logging/monitoring-purge.js"
+    },
     "./monitoring/activity-tracker": {
       "types": "./dist/monitoring/activity-tracker.d.ts",
       "import": "./dist/monitoring/activity-tracker.js",
@@ -158,6 +168,31 @@
       "types": "./dist/services/validated-service-token.d.ts",
       "import": "./dist/services/validated-service-token.js",
       "require": "./dist/services/validated-service-token.js"
+    },
+    "./services/date-utils": {
+      "types": "./dist/services/date-utils.d.ts",
+      "import": "./dist/services/date-utils.js",
+      "require": "./dist/services/date-utils.js"
+    },
+    "./services/rate-limit-cache": {
+      "types": "./dist/services/rate-limit-cache.d.ts",
+      "import": "./dist/services/rate-limit-cache.js",
+      "require": "./dist/services/rate-limit-cache.js"
+    },
+    "./deployment-mode": {
+      "types": "./dist/deployment-mode.d.ts",
+      "import": "./dist/deployment-mode.js",
+      "require": "./dist/deployment-mode.js"
+    },
+    "./onprem-defaults": {
+      "types": "./dist/onprem-defaults.d.ts",
+      "import": "./dist/onprem-defaults.js",
+      "require": "./dist/onprem-defaults.js"
+    },
+    "./sheets/io": {
+      "types": "./dist/sheets/io.d.ts",
+      "import": "./dist/sheets/io.js",
+      "require": "./dist/sheets/io.js"
     },
     "./permissions": {
       "types": "./dist/permissions/index.d.ts",
@@ -686,6 +721,12 @@
       "logging/logger-browser": [
         "./dist/logging/logger-browser.d.ts"
       ],
+      "logging/ai-usage-purge": [
+        "./dist/logging/ai-usage-purge.d.ts"
+      ],
+      "logging/monitoring-purge": [
+        "./dist/logging/monitoring-purge.d.ts"
+      ],
       "monitoring/activity-tracker": [
         "./dist/monitoring/activity-tracker.d.ts"
       ],
@@ -742,6 +783,21 @@
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"
+      ],
+      "services/date-utils": [
+        "./dist/services/date-utils.d.ts"
+      ],
+      "services/rate-limit-cache": [
+        "./dist/services/rate-limit-cache.d.ts"
+      ],
+      "deployment-mode": [
+        "./dist/deployment-mode.d.ts"
+      ],
+      "onprem-defaults": [
+        "./dist/onprem-defaults.d.ts"
+      ],
+      "sheets/io": [
+        "./dist/sheets/io.d.ts"
       ],
       "permissions": [
         "./dist/permissions/index.d.ts"

@@ -38,6 +38,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 // broadcast-auth mock
@@ -46,14 +48,14 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 // permissions mock
-vi.mock('@pagespace/lib/permissions', () => ({
-  getUserAccessLevel: vi.fn(),
-  getUserDriveAccess: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserAccessLevel: vi.fn(),
+    getUserDriveAccess: vi.fn(),
 }));
 
 // auth/session mock
-vi.mock('@pagespace/lib/auth', () => ({
-  sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     validateSession: vi.fn(),
   },
 }));

@@ -71,10 +71,7 @@ vi.mock('@/lib/stripe-config', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', async () => {
-  const actual = await vi.importActual('@pagespace/lib/server');
-  return {
-    ...actual,
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       api: {
         info: vi.fn(),
@@ -92,8 +89,9 @@ vi.mock('@pagespace/lib/server', async () => {
       },
     },
     logSecurityEvent: vi.fn(),
-  };
-});
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
 
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 

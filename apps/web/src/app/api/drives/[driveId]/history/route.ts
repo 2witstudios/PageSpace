@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'

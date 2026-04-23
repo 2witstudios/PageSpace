@@ -18,7 +18,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, contactSubmissions } from '@pagespace/db';
-import { isValidEmail, secureCompare } from '@pagespace/lib';
+import { isValidEmail } from '@pagespace/lib/validators/email'
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 export async function POST(request: Request) {
   const secret = process.env.INTERNAL_API_SECRET;

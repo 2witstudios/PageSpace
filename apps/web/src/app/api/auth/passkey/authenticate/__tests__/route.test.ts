@@ -17,9 +17,11 @@ vi.mock('next/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  verifyAuthentication: vi.fn(),
-  sessionService: {
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+    verifyAuthentication: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+    sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -32,13 +34,19 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
+    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+    createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
+    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -46,17 +54,21 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-  checkDistributedRateLimit: vi.fn(),
-  resetDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: {
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+    checkDistributedRateLimit: vi.fn(),
+    resetDistributedRateLimit: vi.fn(),
+    DISTRIBUTED_RATE_LIMITS: {
     PASSKEY_AUTH: { maxAttempts: 5, windowMs: 300000, progressiveDelay: true },
   },
 }));
