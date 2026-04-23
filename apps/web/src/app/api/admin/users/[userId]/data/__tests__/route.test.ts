@@ -18,6 +18,14 @@ vi.mock('@/lib/auth/csrf-validation', () => ({
   validateCSRF: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('@/lib/stripe/client', () => ({
+  stripe: {
+    customers: {
+      del: vi.fn(),
+    },
+  },
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -25,6 +33,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   logSecurityEvent: vi.fn(),
   auditRequest: vi.fn(),
+  revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
@@ -49,6 +58,7 @@ vi.mock('@pagespace/lib', async (importOriginal) => {
     ...(actual as object),
     deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
     deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
+    isCloud: vi.fn().mockReturnValue(false),
   };
 });
 
@@ -56,9 +66,10 @@ import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository, auditRequest } from '@pagespace/lib/server';
+import { accountRepository, activityLogRepository, auditRequest, revokeUserIntegrationTokens } from '@pagespace/lib/server';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
+import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isCloud } from '@pagespace/lib';
+import { stripe } from '@/lib/stripe/client';
 
 const mockAuth = vi.mocked(authenticateSessionRequest);
 const mockAdminValidation = vi.mocked(validateAdminAccess);
@@ -87,6 +98,11 @@ function mockAuthDenied() {
 describe('/api/admin/users/[userId]/data', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isCloud).mockReturnValue(false);
+    vi.mocked(revokeUserIntegrationTokens).mockResolvedValue({ revoked: 0, failed: 0 });
+    vi.mocked(stripe.customers.del).mockResolvedValue({} as never);
+    // Reset mocks that individual tests override (clearAllMocks preserves implementations)
+    vi.mocked(accountRepository.checkAndDeleteSoloDrives).mockResolvedValue({ multiMemberDriveNames: [] });
   });
 
   it('DELETE_withValidAdmin_anonymizesAndDeletesUserData', async () => {
@@ -95,6 +111,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
@@ -127,6 +144,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'admin-123',
       email: 'admin@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/admin-123/data', {
@@ -180,6 +198,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
@@ -212,6 +231,7 @@ describe('/api/admin/users/[userId]/data', () => {
       id: 'user-1',
       email: 'target@example.com',
       image: null,
+      stripeCustomerId: null,
     });
     vi.mocked(accountRepository.checkAndDeleteSoloDrives).mockResolvedValue({
       multiMemberDriveNames: ['Shared Drive'],
@@ -230,5 +250,135 @@ describe('/api/admin/users/[userId]/data', () => {
     expect(response.status).toBe(400);
     expect(body.error).toContain('Transfer ownership first');
     expect(body.multiMemberDrives).toContain('Shared Drive');
+  });
+
+  describe('oauth token revocation (#911)', () => {
+    it('given_activeOAuthConnections_shouldRevokeTokensBeforeUserDeletion', async () => {
+      mockAdminAuth();
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'target@example.com',
+        image: null,
+        stripeCustomerId: null,
+      });
+
+      const callOrder: string[] = [];
+      vi.mocked(revokeUserIntegrationTokens).mockImplementation(async () => {
+        callOrder.push('revoke');
+        return { revoked: 2, failed: 0 };
+      });
+      vi.mocked(accountRepository.deleteUser).mockImplementation(async () => {
+        callOrder.push('deleteUser');
+      });
+
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'DSAR' }),
+      });
+
+      await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(callOrder.indexOf('revoke')).toBeLessThan(callOrder.indexOf('deleteUser'));
+    });
+
+    it('given_oauthRevocationFailure_shouldLogErrorButNotBlockDeletion', async () => {
+      mockAdminAuth();
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'target@example.com',
+        image: null,
+        stripeCustomerId: null,
+      });
+      vi.mocked(revokeUserIntegrationTokens).mockRejectedValue(new Error('DB connection lost'));
+
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'DSAR' }),
+      });
+
+      const response = await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(response.status).toBe(200);
+      expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
+    });
+  });
+
+  describe('stripe customer deletion (#910)', () => {
+    it('given_cloudDeploymentWithStripeCustomer_shouldDeleteStripeCustomerAfterUserDeletion', async () => {
+      mockAdminAuth();
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'target@example.com',
+        image: null,
+        stripeCustomerId: 'cus_abc123',
+      });
+      vi.mocked(isCloud).mockReturnValue(true);
+
+      const callOrder: string[] = [];
+      vi.mocked(accountRepository.deleteUser).mockImplementation(async () => {
+        callOrder.push('deleteUser');
+      });
+      vi.mocked(stripe.customers.del).mockImplementation(async () => {
+        callOrder.push('stripeDelete');
+        return {} as never;
+      });
+
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'DSAR' }),
+      });
+
+      await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(stripe.customers.del).toHaveBeenCalledWith('cus_abc123');
+      expect(callOrder.indexOf('deleteUser')).toBeLessThan(callOrder.indexOf('stripeDelete'));
+    });
+
+    it('given_nonCloudDeployment_shouldNotCallStripeEvenWithStripeCustomerId', async () => {
+      mockAdminAuth();
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'target@example.com',
+        image: null,
+        stripeCustomerId: 'cus_abc123',
+      });
+      vi.mocked(isCloud).mockReturnValue(false);
+
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'DSAR' }),
+      });
+
+      await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(stripe.customers.del).not.toHaveBeenCalled();
+    });
+
+    it('given_stripeApiFailure_shouldLogErrorButNotBlockDeletion', async () => {
+      mockAdminAuth();
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'target@example.com',
+        image: null,
+        stripeCustomerId: 'cus_abc123',
+      });
+      vi.mocked(isCloud).mockReturnValue(true);
+      vi.mocked(stripe.customers.del).mockRejectedValue(new Error('Stripe API unavailable'));
+
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'DSAR' }),
+      });
+
+      const response = await DELETE(request, { params: Promise.resolve({ userId: 'user-1' }) });
+
+      expect(response.status).toBe(200);
+      expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
+    });
   });
 });

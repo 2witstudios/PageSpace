@@ -52,6 +52,9 @@ export * from './monitoring';
 // Repository seams for testable database access
 export * from './repositories';
 
+// Compliance — erasure (Art. 17 GDPR)
+export { revokeUserIntegrationTokens, type OAuthRevokeResult } from './compliance/erasure/revoke-integration-tokens';
+
 // Notifications
 export * from './notifications';
 
