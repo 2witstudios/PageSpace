@@ -67,10 +67,6 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock('@pagespace/lib/content/export-utils', () => ({
-  generateCSV: vi.fn().mockReturnValue('csv-data'),
-}));
-
 vi.mock('date-fns', () => ({
   format: vi.fn().mockReturnValue('2024-01-01'),
 }));
