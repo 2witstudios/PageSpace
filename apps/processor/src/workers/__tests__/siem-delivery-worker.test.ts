@@ -59,7 +59,7 @@ vi.mock('../siem-delivery-preflight', () => ({
   runChainPreflight: mockRunChainPreflight,
 }));
 
-vi.mock('@pagespace/lib/audit', () => ({
+vi.mock('@pagespace/lib/audit/security-audit-alerting', () => ({
     notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
 }));
 
