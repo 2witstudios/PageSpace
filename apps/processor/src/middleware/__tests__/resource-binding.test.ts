@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 const VALID_HASH = 'a'.repeat(64);
 const OTHER_HASH = 'b'.repeat(64);
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: {
       warn: vi.fn(),

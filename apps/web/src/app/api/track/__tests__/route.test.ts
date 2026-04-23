@@ -21,7 +21,7 @@ import { POST, PUT } from '../route';
  *   - Schema validation: only known event types accepted
  */
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackActivity: vi.fn(),
   trackFeature: vi.fn(),
   trackError: vi.fn(),

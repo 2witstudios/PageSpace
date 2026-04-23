@@ -44,7 +44,7 @@ vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/verification-utils', () => ({
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -63,7 +63,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 

@@ -30,7 +30,7 @@ vi.mock('@pagespace/lib/security', () => ({
   DISTRIBUTED_RATE_LIMITS: { REFRESH: { maxAttempts: 10, windowMs: 60000 } },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 

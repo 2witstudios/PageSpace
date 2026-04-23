@@ -6,14 +6,14 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // Mock the dependencies
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn((body: string) => ({
     'Content-Type': 'application/json',
     'X-Broadcast-Signature': `t=1234567890,v1=mocksignature_${body.length}`,
   })),
 }));
 
-vi.mock('@pagespace/lib/logger-browser', () => ({
+vi.mock('@pagespace/lib/logging/logger-browser', () => ({
   browserLoggers: {
     realtime: {
       child: vi.fn(() => ({

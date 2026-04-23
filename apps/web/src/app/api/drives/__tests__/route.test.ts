@@ -28,11 +28,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data, options = {}) =>
     NextResponse.json(data, { status: options.status || 200 })
   ),

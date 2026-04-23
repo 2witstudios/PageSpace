@@ -58,11 +58,11 @@ vi.mock('@pagespace/lib', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data) => NextResponse.json(data)),
 }));
 

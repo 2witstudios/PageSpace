@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/secure-compare', () => ({
+vi.mock('@pagespace/lib/auth/secure-compare', () => ({
   secureCompare: vi.fn(),
 }));
 
@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn((token: string) => `hashed_${token}`),
 }));
 
-vi.mock('@pagespace/lib/device-auth-utils', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   revokeDeviceToken: vi.fn(),
 }));
 

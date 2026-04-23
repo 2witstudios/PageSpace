@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { shouldReauthorize, isSensitiveEvent, reauthorizePageAccess, withPerEventAuth, type AuthSocket, SensitiveEventType } from '../per-event-auth';
 
-vi.mock('@pagespace/lib/logger-config', () => {
+vi.mock('@pagespace/lib/logging/logger-config', () => {
   const noop = vi.fn();
   const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop };
   return { loggers: { realtime: logger, api: logger, security: logger } };

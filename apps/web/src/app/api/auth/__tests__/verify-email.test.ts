@@ -3,7 +3,7 @@ import { GET } from '../verify-email/route';
 import { NextRequest } from 'next/server';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/verification-utils', () => ({
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   verifyToken: vi.fn(),
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
@@ -24,7 +24,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 

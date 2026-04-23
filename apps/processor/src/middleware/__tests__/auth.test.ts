@@ -24,7 +24,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   },
@@ -180,7 +180,7 @@ describe('authenticateService - catch block', () => {
     vi.doMock('@pagespace/lib/permissions', () => ({
       EnforcedAuthContext: { fromSession: vi.fn() },
     }));
-    vi.doMock('@pagespace/lib/logger-config', () => ({
+    vi.doMock('@pagespace/lib/logging/logger-config', () => ({
       loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
     }));
 
@@ -216,7 +216,7 @@ describe('authenticateService - catch block', () => {
     vi.doMock('@pagespace/lib/permissions', () => ({
       EnforcedAuthContext: { fromSession: vi.fn() },
     }));
-    vi.doMock('@pagespace/lib/logger-config', () => ({
+    vi.doMock('@pagespace/lib/logging/logger-config', () => ({
       loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
     }));
 

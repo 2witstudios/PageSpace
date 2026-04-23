@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 // Mock AI monitoring (boundary)
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   getContextWindow: vi.fn(() => 200000),
 }));
 

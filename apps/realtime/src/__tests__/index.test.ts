@@ -29,7 +29,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('dotenv', () => ({ config: vi.fn() }));
 
 // Logger mock
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     realtime: {
       debug: vi.fn(),
@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/logger-config', () => ({
 }));
 
 // broadcast-auth mock
-vi.mock('@pagespace/lib/broadcast-auth', () => ({
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   verifyBroadcastSignature: vi.fn(),
 }));
 

@@ -60,7 +60,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPermissionActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 

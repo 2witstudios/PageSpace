@@ -31,7 +31,7 @@ vi.mock('@pagespace/db', () => ({
   pages: {}, drives: {}, driveMembers: {}, pagePermissions: {},
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => {
+vi.mock('@pagespace/lib/logging/logger-config', () => {
   const noop = vi.fn();
   const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop };
   return { loggers: { api: logger, realtime: logger, security: logger } };

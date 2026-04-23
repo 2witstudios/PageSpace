@@ -56,7 +56,7 @@ vi.mock('@pagespace/lib', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 

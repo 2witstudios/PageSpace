@@ -99,7 +99,7 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 

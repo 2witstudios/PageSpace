@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib', () => ({
   sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 

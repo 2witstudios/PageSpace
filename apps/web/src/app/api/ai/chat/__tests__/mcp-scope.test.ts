@@ -143,11 +143,11 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
 }));
 
-vi.mock('@pagespace/lib/activity-tracker', () => ({
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackFeature: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn(),
     trackToolUsage: vi.fn(),
