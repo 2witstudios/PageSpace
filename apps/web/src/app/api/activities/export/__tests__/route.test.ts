@@ -34,6 +34,7 @@ vi.mock('@pagespace/db', () => ({
     },
   },
   activityLogs: {
+    id: 'activityLogs.id',
     timestamp: 'activityLogs.timestamp',
     userId: 'activityLogs.userId',
     isArchived: 'activityLogs.isArchived',
@@ -61,7 +62,6 @@ vi.mock('@pagespace/lib/server', () => ({
 vi.mock('@pagespace/lib', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
   isUserDriveMember: vi.fn().mockResolvedValue(true),
-  generateCSV: vi.fn((rows: string[][]) => rows.map(r => r.join(',')).join('\n')),
 }));
 
 vi.mock('date-fns', () => ({
