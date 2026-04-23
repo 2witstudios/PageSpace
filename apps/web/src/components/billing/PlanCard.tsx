@@ -154,7 +154,7 @@ export function PlanCard({
   return (
     <Card
       className={cn(
-        'relative transition-all duration-300 hover:shadow-lg flex flex-col min-w-[280px] shrink-0 snap-center',
+        'relative transition-all duration-300 hover:shadow-lg flex flex-col w-full',
         plan.highlighted && 'ring-2 ring-zinc-400 dark:ring-zinc-500 shadow-lg',
         isCurrentPlan && 'ring-2 ring-zinc-900 dark:ring-zinc-100',
         isScheduledPlan && !isCurrentPlan && 'ring-2 ring-blue-400 dark:ring-blue-500',
