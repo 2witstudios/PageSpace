@@ -21,7 +21,7 @@ export default function IntegrationsIndexPage() {
     <div>
       <h1 className="text-3xl font-bold tracking-tight mb-4">Integrations</h1>
       <p className="text-lg text-muted-foreground mb-8">
-        PageSpace connects outward and inward. Outward — your agents reach into <strong>Google Calendar</strong> and <strong>GitHub</strong> on your behalf. Inward — external AI clients connect in through <strong>MCP</strong>. That's the full list.
+        PageSpace connects outward and inward. Outward — your agents reach into <strong>Google Calendar</strong> and <strong>GitHub</strong> on your behalf. Inward — external AI clients connect in through <strong>MCP</strong>. That&#39;s the full list.
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">

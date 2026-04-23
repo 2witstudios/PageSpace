@@ -166,7 +166,7 @@ export default function DownloadsPage() {
                 <div>
                   <h3 className="font-semibold mb-1">Automatic Updates</h3>
                   <p className="text-sm text-muted-foreground">
-                    PageSpace automatically updates in the background. You'll always have the latest features
+                    PageSpace automatically updates in the background. You&#39;ll always have the latest features
                     and security fixes without any manual intervention.
                   </p>
                 </div>
@@ -254,7 +254,7 @@ export default function DownloadsPage() {
                   <h3 className="font-semibold mb-1">Mobile Apps in Beta</h3>
                   <p className="text-sm text-muted-foreground">
                     Our mobile apps are currently in beta testing. While core features work well, you may encounter
-                    occasional bugs. We'd love your feedback to help us improve!
+                    occasional bugs. We&#39;d love your feedback to help us improve!
                   </p>
                 </div>
               </div>

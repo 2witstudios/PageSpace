@@ -68,7 +68,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">4. Third-Party AI Services</h2>
             <p className="mb-4">
-              When you use AI features, we work with external AI providers, each subject to that provider's own privacy policy. Supported providers include:
+              When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Supported providers include:
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li><strong>PageSpace-hosted (default):</strong> included free tier, backed by a GLM inference provider</li>
@@ -164,7 +164,7 @@ export default function PrivacyPolicy() {
           </section>
 
           <section className="mb-8">
-            <h2 className="text-2xl font-semibold mb-4">9. Children's Privacy</h2>
+            <h2 className="text-2xl font-semibold mb-4">9. Children&#39;s Privacy</h2>
             <p className="mb-4">
               PageSpace is not intended for children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided personal information, please contact us.
             </p>
@@ -205,7 +205,7 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">13. Payment and Billing Information</h2>
             <p className="mb-4">
-              When you purchase a subscription, payment processing is handled by Stripe, Inc. We do not store your credit card information on our servers. Stripe's privacy policy governs the collection and use of payment information.
+              When you purchase a subscription, payment processing is handled by Stripe, Inc. We do not store your credit card information on our servers. Stripe&#39;s privacy policy governs the collection and use of payment information.
             </p>
             <p className="mb-4">
               We receive and store information about your subscription status, billing history, and usage metrics necessary for providing our services and managing your account.

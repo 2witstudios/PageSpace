@@ -389,7 +389,7 @@ function AIPanelPreview() {
           ))}
 
           <div className="group relative">
-            <p className="text-[10px] text-foreground">Done — I've added a Key Objectives section with the three priorities as bullet points.</p>
+            <p className="text-[10px] text-foreground">Done — I&#39;ve added a Key Objectives section with the three priorities as bullet points.</p>
             <span className="text-[10px] text-muted-foreground/60">10:32 AM</span>
           </div>
         </div>

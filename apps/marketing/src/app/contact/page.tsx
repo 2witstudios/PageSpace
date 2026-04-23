@@ -25,7 +25,7 @@ export default function ContactPage() {
               </h1>
               <p className="text-lg text-muted-foreground">
                 Have a question, feedback, or want to learn more about PageSpace?
-                We'd love to hear from you.
+                We&#39;d love to hear from you.
               </p>
             </div>
 

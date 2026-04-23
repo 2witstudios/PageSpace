@@ -282,7 +282,7 @@ export default function PricingPage() {
                   </div>
                   <p className="text-muted-foreground mb-4">
                     Need custom limits, SSO, advanced security, or dedicated support?
-                    We'll work with you to create a plan that fits your organization.
+                    We&#39;ll work with you to create a plan that fits your organization.
                   </p>
                   <ul className="space-y-2 text-sm text-muted-foreground">
                     <li className="flex items-center gap-2">
