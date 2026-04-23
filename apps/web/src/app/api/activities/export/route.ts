@@ -186,19 +186,9 @@ export async function GET(request: Request) {
       ? and(...filterConditions)
       : undefined;
 
-    // Fetch all activities (no pagination for export)
-    const activities = await db.query.activityLogs.findMany({
-      where: finalWhereCondition,
-      with: {
-        user: {
-          columns: { id: true, name: true, email: true },
-        },
-      },
-      orderBy: [desc(activityLogs.timestamp)],
-      limit: 10000, // Safety limit
-    });
-
-    // Build CSV data
+    // Fetch all activities in batches to avoid loading millions of rows into
+    // memory at once. Build CSV rows as we go rather than accumulating objects.
+    const BATCH_SIZE = 1000;
     const headers = [
       'Timestamp',
       'Actor Name',
@@ -210,18 +200,39 @@ export async function GET(request: Request) {
       'AI Model',
       'Changed Fields',
     ];
+    const rows: string[][] = [];
+    let batchOffset = 0;
 
-    const rows = activities.map(activity => [
-      format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
-      activity.actorDisplayName || activity.user?.name || '',
-      activity.actorEmail || activity.user?.email || '',
-      activity.operation,
-      activity.resourceType,
-      activity.resourceTitle || '',
-      activity.isAiGenerated ? 'Yes' : 'No',
-      activity.isAiGenerated ? [activity.aiProvider, activity.aiModel].filter(Boolean).join('/') : '',
-      activity.updatedFields ? activity.updatedFields.join(', ') : '',
-    ]);
+    for (;;) {
+      const batch = await db.query.activityLogs.findMany({
+        where: finalWhereCondition,
+        with: {
+          user: {
+            columns: { id: true, name: true, email: true },
+          },
+        },
+        orderBy: [desc(activityLogs.timestamp)],
+        limit: BATCH_SIZE,
+        offset: batchOffset,
+      });
+
+      for (const activity of batch) {
+        rows.push([
+          format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
+          activity.actorDisplayName || activity.user?.name || '',
+          activity.actorEmail || activity.user?.email || '',
+          activity.operation,
+          activity.resourceType,
+          activity.resourceTitle || '',
+          activity.isAiGenerated ? 'Yes' : 'No',
+          activity.isAiGenerated ? [activity.aiProvider, activity.aiModel].filter(Boolean).join('/') : '',
+          activity.updatedFields ? activity.updatedFields.join(', ') : '',
+        ]);
+      }
+
+      if (batch.length < BATCH_SIZE) break;
+      batchOffset += BATCH_SIZE;
+    }
 
     const csvData = [headers, ...rows];
     const csvContent = generateCSV(csvData);
@@ -239,20 +250,15 @@ export async function GET(request: Request) {
     }
     filename += '.csv';
 
-    // Check if results were truncated
-    const isTruncated = activities.length === 10000;
-
     auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activity', resourceId: params.driveId ?? params.pageId ?? '*', details: {
       context: params.context,
-      exportedCount: activities.length,
-      isTruncated,
+      exportedCount: rows.length,
     } });
 
     return new Response(csvContent, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        ...(isTruncated && { 'X-Truncated': 'true', 'X-Truncated-At': '10000' }),
       },
     });
   } catch (error) {

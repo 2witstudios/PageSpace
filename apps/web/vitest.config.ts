@@ -1,10 +1,47 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import fs from 'fs'
 // Note: vite-tsconfig-paths removed due to ESM compatibility issue
 // Using manual path alias instead
 
 const packagesDir = path.resolve(__dirname, '../../packages')
+
+// In pnpm git worktrees the local node_modules may be empty (no pnpm install
+// was run in the worktree). Walk up the directory tree to find the workspace
+// root's .pnpm/node_modules so that Next.js and other packages can be resolved
+// by Vite during test collection.
+function findPnpmNodeModules(startDir: string): string | null {
+  let dir = startDir;
+  for (let i = 0; i < 10; i++) {
+    const candidate = path.join(dir, 'node_modules', '.pnpm', 'node_modules');
+    if (fs.existsSync(path.join(candidate, 'next'))) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+const workspaceNodeModules = findPnpmNodeModules(__dirname)
+
+// Build a Vite alias entry for a package from the shared pnpm store.
+// Only used when local node_modules are absent (git worktree scenario).
+function pnpmAlias(pkg: string, subpath: string, pnpmModules: string): Record<string, string> {
+  const fullPath = path.join(pnpmModules, subpath);
+  return fs.existsSync(fullPath) ? { [pkg]: fullPath } : {};
+}
+
+const worktreeAliases = workspaceNodeModules ? {
+  'next/server': path.join(workspaceNodeModules, 'next', 'server.js'),
+  'next/headers': path.join(workspaceNodeModules, 'next', 'headers.js'),
+  'next/navigation': path.join(workspaceNodeModules, 'next', 'navigation.js'),
+  'next/cache': path.join(workspaceNodeModules, 'next', 'cache.js'),
+  'next': path.join(workspaceNodeModules, 'next', 'dist', 'index.js'),
+  ...pnpmAlias('date-fns', 'date-fns/index.js', workspaceNodeModules),
+  ...pnpmAlias('zod/v4', 'zod/v4/index.js', workspaceNodeModules),
+  ...pnpmAlias('zod', 'zod/index.js', workspaceNodeModules),
+} : {}
 
 export default defineConfig({
   plugins: [react()],
@@ -38,6 +75,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // Worktree fallback: resolves packages from the shared pnpm store when
+      // local node_modules are empty. Has no effect in CI or full installs.
+      ...worktreeAliases,
       '@': path.resolve(__dirname, './src'),
       // Workspace package aliases for testing
       '@pagespace/db/test/factories': path.resolve(packagesDir, 'db/src/test/factories'),
