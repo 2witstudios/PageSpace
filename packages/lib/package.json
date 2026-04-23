@@ -693,6 +693,11 @@
       "types": "./dist/compliance/anonymize.d.ts",
       "import": "./dist/compliance/anonymize.js",
       "require": "./dist/compliance/anonymize.js"
+    },
+    "./compliance/erasure/revoke-integration-tokens": {
+      "types": "./dist/compliance/erasure/revoke-integration-tokens.d.ts",
+      "import": "./dist/compliance/erasure/revoke-integration-tokens.js",
+      "require": "./dist/compliance/erasure/revoke-integration-tokens.js"
     }
   },
   "typesVersions": {
@@ -1098,6 +1103,9 @@
       ],
       "compliance/anonymize": [
         "./dist/compliance/anonymize.d.ts"
+      ],
+      "compliance/erasure/revoke-integration-tokens": [
+        "./dist/compliance/erasure/revoke-integration-tokens.d.ts"
       ]
     }
   },
