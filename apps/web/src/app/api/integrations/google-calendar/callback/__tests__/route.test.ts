@@ -32,6 +32,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib', () => ({
+  isOnPrem: () => false,
   encrypt: vi.fn().mockResolvedValue('encrypted'),
   secureCompare: (a: string, b: string) => a === b,
 }));
