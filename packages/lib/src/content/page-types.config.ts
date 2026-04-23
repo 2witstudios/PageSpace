@@ -19,7 +19,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareTerminal';
+  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareTerminal' | 'SquareCheckBig';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
@@ -156,7 +156,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.TASK_LIST,
     displayName: 'Task List',
     description: 'Table-based task management',
-    iconName: 'FileCheck2',
+    iconName: 'SquareCheckBig',
     emoji: '✅',
     capabilities: {
       canAcceptUploads: false,
