@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, Upload } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import {
   CommandDialog,
@@ -51,10 +51,20 @@ function useCachedPageTree(driveId: string | undefined) {
 
 export default function QuickCreatePalette() {
   const params = useParams();
+  const { mutate: swrMutate } = useSWRConfig();
   const rawDriveId = params?.driveId;
   const rawPageId = params?.pageId;
+  const rawPath = params?.path;
   const driveId = Array.isArray(rawDriveId) ? rawDriveId[0] : (rawDriveId ?? undefined);
-  const pageId = Array.isArray(rawPageId) ? rawPageId[0] : (rawPageId ?? undefined);
+  // Support both the page route (/dashboard/[driveId]/[pageId]) and the
+  // files route (/dashboard/[driveId]/files/[[...path]]) which stores the
+  // active folder/page in params.path[0] instead of params.pageId.
+  const pageId =
+    Array.isArray(rawPageId) ? rawPageId[0]
+    : rawPageId
+    ? rawPageId
+    : Array.isArray(rawPath) ? rawPath[0]
+    : undefined;
 
   const quickCreateOpen = useUIStore((s) => s.quickCreateOpen);
   const quickCreateParentOverride = useUIStore((s) => s.quickCreateParentOverride);
@@ -156,6 +166,7 @@ export default function QuickCreatePalette() {
         }
         const result = (await response.json()) as { page: Page };
         closeQuickCreate();
+        await swrMutate(`/api/drives/${driveId}/pages`);
         await navigateToPage(result.page.id, driveId);
       } catch (error) {
         toast.error((error as Error).message);
@@ -180,6 +191,7 @@ export default function QuickCreatePalette() {
       });
 
       closeQuickCreate();
+      await swrMutate(`/api/drives/${driveId}/pages`);
       await navigateToPage(newPage.id, driveId);
     } catch (error) {
       toast.error((error as Error).message ?? 'Failed to create page');
