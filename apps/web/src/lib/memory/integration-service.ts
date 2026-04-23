@@ -9,7 +9,7 @@
 import { generateText } from 'ai';
 import { db, userPersonalization, eq } from '@pagespace/db';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { DiscoveryResult } from './discovery-service';
 
 export interface UserPersonalizationData {

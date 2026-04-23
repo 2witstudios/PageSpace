@@ -6,7 +6,7 @@
  * mention format: @[Label](id:type) and returns the IDs for processing.
  */
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface ProcessedMention {
   id: string;

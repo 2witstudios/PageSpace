@@ -2,13 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ToolExecutionContext } from '../../core';
 
 // Mock repository seams - the proper boundary for tests
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  loggers: {
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -18,7 +22,10 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
-  agentRepository: {
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/repositories', () => ({
+    agentRepository: {
     findById: vi.fn(),
   },
 }));
@@ -45,7 +52,8 @@ vi.mock('../../core', () => ({
 }));
 
 import { agentTools } from '../agent-tools';
-import { canUserEditPage, agentRepository } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { agentRepository } from '@pagespace/lib/repositories';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 

@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { decrypt, isOnPrem } from '@pagespace/lib';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { decrypt } from '@pagespace/lib/encryption';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { unregisterWebhookChannels } from '@/lib/integrations/google-calendar/sync-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

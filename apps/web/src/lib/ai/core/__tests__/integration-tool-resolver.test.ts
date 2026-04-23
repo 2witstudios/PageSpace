@@ -12,26 +12,40 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
+vi.mock('@pagespace/lib/integrations/resolution/resolve-agent-integrations', () => ({
   resolveAgentIntegrations: vi.fn(),
   resolveGlobalAssistantIntegrations: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/converter/ai-sdk', () => ({
   convertIntegrationToolsToAISDK: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/saga/execute-tool', () => ({
   createToolExecutor: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
   getConnectionWithProvider: vi.fn(),
-  logAuditEntry: vi.fn(),
-  listGrantsByAgent: vi.fn(),
   listUserConnections: vi.fn(),
   listDriveConnections: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/repositories/audit-repository', () => ({
+  logAuditEntry: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
+  listGrantsByAgent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getConfig: vi.fn(),
 }));
 
 import {
   resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,
+} from '@pagespace/lib/integrations/resolution/resolve-agent-integrations';
+import {
   convertIntegrationToolsToAISDK,
-  createToolExecutor,
   type GrantWithConnectionAndProvider,
-} from '@pagespace/lib/integrations';
+} from '@pagespace/lib/integrations/converter/ai-sdk';
+import { createToolExecutor } from '@pagespace/lib/integrations/saga/execute-tool';
 import { resolvePageAgentIntegrationTools, resolveGlobalAssistantIntegrationTools } from '../integration-tool-resolver';
 
 const mockResolveAgentIntegrations = vi.mocked(resolveAgentIntegrations);

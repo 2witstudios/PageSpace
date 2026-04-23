@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { importOpenAPISpec } from '@pagespace/lib/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { importOpenAPISpec } from '@pagespace/lib/integrations/converter/openapi';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
-import { canUserEditPage, loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';

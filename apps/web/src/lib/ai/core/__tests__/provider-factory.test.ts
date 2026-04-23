@@ -64,7 +64,7 @@ vi.mock('ollama-ai-provider-v2', () => ({
 }));
 
 // Mock security validation
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 
@@ -128,7 +128,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 const mockDb = vi.mocked(db);
 const mockDbMock = mockDb as unknown as MockDb;

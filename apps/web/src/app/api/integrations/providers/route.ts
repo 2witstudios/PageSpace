@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders, builtinProviderList } from '@pagespace/lib/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders } from '@pagespace/lib/integrations/repositories/provider-repository'
+import { builtinProviderList } from '@pagespace/lib/integrations/providers';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

@@ -8,7 +8,7 @@
  */
 
 import crypto from 'crypto';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 /**
  * Generate an HMAC token for webhook authentication.

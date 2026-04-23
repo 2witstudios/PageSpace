@@ -8,8 +8,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 // Mock the logger
-vi.mock('@pagespace/lib', () => ({
-  logger: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       warn: vi.fn(),

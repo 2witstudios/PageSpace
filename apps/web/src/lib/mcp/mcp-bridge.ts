@@ -1,5 +1,5 @@
 import { getConnection, checkConnectionHealth } from '@/lib/websocket';
-import { logger } from '@pagespace/lib';
+import { logger } from '@pagespace/lib/logging/logger-config';
 
 /**
  * MCP Bridge - Server-side WebSocket manager for tool execution
