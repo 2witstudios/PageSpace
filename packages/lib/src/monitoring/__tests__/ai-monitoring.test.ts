@@ -285,6 +285,25 @@ describe('trackAIUsage', () => {
       expect.objectContaining({ error: 'db error' })
     );
   });
+
+  it('given AI request completes, should NOT write prompt or completion content to ai_usage_logs (#957 — GDPR data minimization)', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockWriteAiUsage).toHaveBeenCalledOnce();
+    const callArg = mockWriteAiUsage.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArg).not.toHaveProperty('prompt');
+    expect(callArg).not.toHaveProperty('completion');
+    // Token counts must still be present
+    expect(callArg.inputTokens).toBe(1000);
+    expect(callArg.outputTokens).toBe(500);
+  });
 });
 
 // ---------------------------------------------------------------------------

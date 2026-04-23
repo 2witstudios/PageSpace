@@ -276,6 +276,13 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(monitoring.activityLogsRelations).toBeDefined();
     });
+
+    it('aiUsageLogs must NOT have prompt or completion columns (#957 — GDPR data minimization)', () => {
+      // Prompt/response content must not be stored in usage logs — only token counts, model, cost, timestamp.
+      // These columns were present but violated GDPR Art. 5 data minimization.
+      expect((monitoring.aiUsageLogs as Record<string, unknown>).prompt).toBeUndefined();
+      expect((monitoring.aiUsageLogs as Record<string, unknown>).completion).toBeUndefined();
+    });
   });
 
   describe('versioning schema', () => {
