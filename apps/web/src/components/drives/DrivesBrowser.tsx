@@ -44,9 +44,9 @@ export function DrivesSkeleton() {
               <Skeleton className="h-9 w-28" />
             </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1">
             {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="aspect-square rounded-lg" />
+              <Skeleton key={i} className="h-20 rounded-lg" />
             ))}
           </div>
         </div>
@@ -179,24 +179,24 @@ export default function DrivesBrowser() {
   );
 
   const renderDriveGrid = (driveList: Drive[]) => (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-1">
       {driveList.map((drive) => (
         <DriveContextMenu key={drive.id} drive={drive}>
           <button
             onClick={() => handleDriveClick(drive)}
-            className="flex flex-col items-center justify-center p-4 border rounded-lg hover:bg-accent transition-colors aspect-square w-full text-left"
+            className="flex flex-col items-center gap-1.5 pt-2 pb-1.5 px-1 rounded-lg hover:bg-accent transition-colors w-full text-left cursor-pointer"
           >
-            <Folder className="h-10 w-10 mb-2 text-primary" />
-            <span className="text-sm font-medium text-center truncate w-full">
+            <Folder className="h-12 w-12 shrink-0 text-primary" />
+            <span className="text-xs text-center line-clamp-2 w-full leading-tight break-words">
               {drive.name}
             </span>
             {drive.role && drive.role !== "OWNER" && (
-              <span className="text-xs text-muted-foreground mt-1">
+              <span className="text-xs text-muted-foreground">
                 {formatRole(drive.role)}
               </span>
             )}
             {isFavorite(drive.id, "drive") && (
-              <Star className="h-3 w-3 fill-yellow-500 text-yellow-500 mt-1" />
+              <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
             )}
           </button>
         </DriveContextMenu>
