@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { checkRateLimit, RATE_LIMIT_CONFIGS } from '../auth/rate-limit-utils';
+import { isOnPrem } from '../deployment-mode';
 import type * as React from 'react';
 
 function getResendConfig() {
@@ -30,6 +31,11 @@ export interface SendEmailOptions {
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
+  if (isOnPrem()) {
+    console.warn('[email-service] Email sending is disabled in on-premise deployment mode');
+    return;
+  }
+
   const config = getResendConfig();
   const resend = getResend();
 

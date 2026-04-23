@@ -497,12 +497,12 @@ export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', '
  */
 export function getVisibleProviders(): Partial<typeof AI_PROVIDERS> {
   // Client-side check uses NEXT_PUBLIC_ prefix; server-side uses DEPLOYMENT_MODE
-  const isOnPremMode =
+  const mode =
     typeof window !== 'undefined'
-      ? process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'onprem'
-      : process.env.DEPLOYMENT_MODE === 'onprem';
+      ? process.env.NEXT_PUBLIC_DEPLOYMENT_MODE
+      : process.env.DEPLOYMENT_MODE;
 
-  if (!isOnPremMode) return AI_PROVIDERS;
+  if (mode !== 'onprem') return AI_PROVIDERS;
 
   return Object.fromEntries(
     Object.entries(AI_PROVIDERS).filter(([key]) => ONPREM_ALLOWED_PROVIDERS.has(key))

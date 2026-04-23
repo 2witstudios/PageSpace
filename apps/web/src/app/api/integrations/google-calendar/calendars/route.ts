@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { isOnPrem } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { getValidAccessToken } from '@/lib/integrations/google-calendar/token-refresh';
@@ -12,6 +13,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
  * Used by the settings UI for calendar selection.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;

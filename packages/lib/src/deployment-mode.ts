@@ -1,15 +1,20 @@
 /**
  * Deployment mode detection utilities (server-side).
  *
- * When DEPLOYMENT_MODE=onprem, the application disables cloud-only features
- * (Stripe billing, OAuth, self-registration) and surfaces password auth,
- * local AI providers, and admin-managed user accounts.
+ * Three modes via DEPLOYMENT_MODE env var:
  *
- * When DEPLOYMENT_MODE=tenant, the application runs as a managed instance
- * where billing is handled by the control plane. All users get business-tier
- * features. Cloud-only routes (Stripe, OAuth) are blocked like on-prem.
+ *   cloud  (default) — SaaS at pagespace.ai. Full feature set.
+ *   tenant           — Dedicated-image cloud deployment (own postgres/realtime/processor
+ *                      per tenant). Identical feature set to cloud; differs only in
+ *                      infrastructure topology and billing path (control plane, not Stripe).
+ *   onprem           — Self-hosted. Restricts cloud integrations: no Google Calendar,
+ *                      no external AI providers (only ollama/lmstudio/azure_openai),
+ *                      no OAuth login, no Stripe, no self-registration. Password auth only.
  *
- * All changes are inert unless the env var is explicitly set.
+ * Guard selection:
+ *   isOnPrem()        — gate cloud integrations (Calendar, AI providers). Tenant keeps them.
+ *   isBillingEnabled() — gate subscription/billing UI. False for both onprem and tenant.
+ *   Never use !isCloud() to gate integrations — it incorrectly restricts tenant.
  */
 
 export function isOnPrem(): boolean {

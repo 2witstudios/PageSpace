@@ -5,7 +5,7 @@
  * Database operations are mocked at the repository seam.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -485,6 +485,53 @@ describe('POST /api/ai/settings', () => {
       expect(response.status).toBe(500);
       expect(body.error).toContain('Failed to save');
       expect(loggers.ai.error).toHaveBeenCalledWith('Failed to save openrouter API key', expect.objectContaining({ message: 'Save failed' }), { provider: 'openrouter' });
+    });
+  });
+
+  describe('deployment mode blocking', () => {
+    const origDeploymentMode = process.env.DEPLOYMENT_MODE;
+
+    beforeEach(() => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValue(false);
+    });
+
+    afterEach(() => {
+      if (origDeploymentMode === undefined) {
+        delete process.env.DEPLOYMENT_MODE;
+      } else {
+        process.env.DEPLOYMENT_MODE = origDeploymentMode;
+      }
+    });
+
+    it('given cloud mode + external provider, should not return 403 due to mode gate', async () => {
+      delete process.env.DEPLOYMENT_MODE;
+      const request = createPostRequest({ provider: 'openai', apiKey: 'test-key' });
+      const response = await POST(request);
+      expect(response.status).not.toBe(403);
+    });
+
+    it('given onprem mode + external provider, should return 403', async () => {
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const request = createPostRequest({ provider: 'openai', apiKey: 'test-key' });
+      const response = await POST(request);
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/not available/i);
+    });
+
+    it('given onprem mode + ollama (allowed), should not return 403', async () => {
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const request = createPostRequest({ provider: 'ollama', baseUrl: 'http://localhost:11434' });
+      const response = await POST(request);
+      expect(response.status).not.toBe(403);
+    });
+
+    it('given tenant mode + external provider, should not return 403 due to mode gate', async () => {
+      process.env.DEPLOYMENT_MODE = 'tenant';
+      const request = createPostRequest({ provider: 'openai', apiKey: 'test-key' });
+      const response = await POST(request);
+      expect(response.status).not.toBe(403);
     });
   });
 });
