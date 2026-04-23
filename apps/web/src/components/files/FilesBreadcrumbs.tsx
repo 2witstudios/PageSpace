@@ -34,7 +34,7 @@ export function FilesBreadcrumbs({ driveId, driveName, currentPageId, tree }: Fi
   const rootHref = `/dashboard/${driveId}/files`;
 
   return (
-    <nav className="flex items-center gap-1 text-sm text-muted-foreground mb-4" aria-label="Breadcrumb">
+    <nav className="flex items-center gap-1 text-sm text-muted-foreground" aria-label="Breadcrumb">
       {currentPageId ? (
         <Link href={rootHref} className="hover:text-foreground transition-colors">
           {driveName}
