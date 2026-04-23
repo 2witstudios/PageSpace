@@ -367,22 +367,24 @@ export default function PlanPage() {
 
       {/* Plan Cards - Only show when not in checkout */}
       {!checkoutPlan && (
-        <div className="flex overflow-x-auto gap-4 pt-6 pb-4 snap-x snap-mandatory -mx-6 px-6 justify-center">
-          {plans.map((plan) => (
-            <PlanCard
-              key={plan.id}
-              plan={plan}
-              currentTier={subscriptionData?.subscriptionTier || 'free'}
-              isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
-              isScheduledPlan={plan.id === scheduledTier}
-              hasPendingSchedule={!!scheduledTier}
-              onUpgrade={handlePlanSelect}
-              onManageBilling={() => router.push('/settings/billing')}
-              onCancelSchedule={handleCancelSchedule}
-              cancellingSchedule={cancellingSchedule}
-              className={plan.highlighted ? 'relative z-10' : ''}
-            />
-          ))}
+        <div className="overflow-x-auto snap-x snap-mandatory -mx-6 pt-6 pb-4">
+          <div className="flex gap-4 px-6 w-max mx-auto">
+            {plans.map((plan) => (
+              <PlanCard
+                key={plan.id}
+                plan={plan}
+                currentTier={subscriptionData?.subscriptionTier || 'free'}
+                isCurrentPlan={plan.id === subscriptionData?.subscriptionTier}
+                isScheduledPlan={plan.id === scheduledTier}
+                hasPendingSchedule={!!scheduledTier}
+                onUpgrade={handlePlanSelect}
+                onManageBilling={() => router.push('/settings/billing')}
+                onCancelSchedule={handleCancelSchedule}
+                cancellingSchedule={cancellingSchedule}
+                className={plan.highlighted ? 'relative z-10' : ''}
+              />
+            ))}
+          </div>
         </div>
       )}
 
