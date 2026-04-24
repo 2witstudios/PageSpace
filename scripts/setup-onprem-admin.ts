@@ -17,7 +17,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { userAiSettings } from '@pagespace/db/schema/ai';
 import { eq, and } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
-import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
+import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';
 import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { parseArgs } from 'node:util';
 

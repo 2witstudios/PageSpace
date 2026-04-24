@@ -497,7 +497,8 @@ export async function checkMCPPageScope(
   }
 
   // Need to look up the page's drive
-  const { pages, eq } = await import('@pagespace/db');
+  const { pages } = await import('@pagespace/db/schema/core');
+  const { eq } = await import('@pagespace/db/operators');
   const page = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
     columns: { driveId: true },

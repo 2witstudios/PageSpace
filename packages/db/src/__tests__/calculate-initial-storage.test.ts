@@ -38,7 +38,7 @@ function dequeue<T>(queue: Array<() => Promise<T>>, fallback: T): Promise<T> {
   return fn ? fn() : Promise.resolve(fallback);
 }
 
-vi.mock('../../src/index', () => {
+vi.mock('../db', () => {
   const updateWhere = vi.fn(() => dequeue(updateWhereQueue, undefined));
   const updateSet = vi.fn(() => ({ where: updateWhere }));
   const mockUpdate = vi.fn(() => ({ set: updateSet }));
@@ -46,28 +46,10 @@ vi.mock('../../src/index', () => {
   const insertValues = vi.fn(() => dequeue(insertValuesQueue, undefined));
   const mockInsert = vi.fn(() => ({ values: insertValues }));
 
-  let selectCallCount = 0;
-  const mockFrom = vi.fn(() => {
-    // First call from select is either direct resolve (no .where) or returns {where}
-    // The users call resolves directly: db.select().from(users) resolves to array
-    // The file size call uses .where(): db.select({...}).from(pages).where(...)
-    // We alternate: users (no where), [fileSizes with where], summary (no where)
-    return {
-      where: vi.fn(() => dequeue(selectFromQueue, [] as unknown[])),
-      then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
-        // When resolved without .where (i.e., direct await on from())
-        dequeue(selectFromQueue, []).then(resolve, reject);
-      },
-    };
-  });
-
-  // The 'from' function acts as both a thenable and a {where} provider
-  // This handles: await db.select().from(x) and db.select().from(x).where(y)
   const smartFrom = vi.fn(() => {
     const result = dequeue(selectFromQueue, []);
     const fromResult = {
       where: vi.fn(() => dequeue(selectFromQueue, [])),
-      // Make it thenable so `await db.select().from(x)` works
       then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
         result.then(resolve, reject);
       },
@@ -79,7 +61,6 @@ vi.mock('../../src/index', () => {
   });
 
   const mockSelect = vi.fn(() => ({ from: smartFrom }));
-
   const mockFindMany = vi.fn(() => dequeue(findManyQueue, []));
 
   return {
@@ -93,23 +74,25 @@ vi.mock('../../src/index', () => {
         },
       },
     },
-    users: {},
-    pages: {},
-    drives: {},
-    eq: vi.fn(),
-    and: vi.fn(),
-    isNull: vi.fn(),
-    sql: vi.fn(),
-    inArray: vi.fn(),
   };
 });
 
-vi.mock('dotenv', () => ({ config: vi.fn() }));
+vi.mock('../schema/auth', () => ({ users: {} }));
 
-vi.mock('../../src/schema/core', async () => {
-  const actual = await vi.importActual('../../src/schema/core') as Record<string, unknown>;
+vi.mock('../schema/core', async () => {
+  const actual = await vi.importActual('../schema/core') as Record<string, unknown>;
   return { ...actual, storageEvents: {} };
 });
+
+vi.mock('../operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  isNull: vi.fn(),
+  sql: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+vi.mock('dotenv', () => ({ config: vi.fn() }));
 
 /** @scaffold */
 describe('scripts/calculate-initial-storage.ts', () => {

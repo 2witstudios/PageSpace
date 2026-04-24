@@ -31,7 +31,7 @@ const mockTransaction = vi.fn(async (fn: (tx: { execute: typeof mockTxExecute })
   await fn({ execute: mockTxExecute });
 });
 
-vi.mock('../index', () => ({
+vi.mock('../db', () => ({
   db: {
     execute: mockExecute,
     transaction: mockTransaction,
