@@ -24,7 +24,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
-vi.mock('@pagespace/lib/repositories', () => ({
+vi.mock('@pagespace/lib/repositories/agent-repository', () => ({
     agentRepository: {
     findById: vi.fn(),
   },

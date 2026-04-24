@@ -70,7 +70,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
-vi.mock('@pagespace/lib/repositories', () => ({
+vi.mock('@pagespace/lib/repositories/page-repository', () => ({
     pageRepository: {
     findById: vi.fn(),
     findTrashedById: vi.fn(),
@@ -83,6 +83,8 @@ vi.mock('@pagespace/lib/repositories', () => ({
     restore: vi.fn(),
     getChildIds: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
     driveRepository: {
     findById: vi.fn(),
     findByIdBasic: vi.fn(),

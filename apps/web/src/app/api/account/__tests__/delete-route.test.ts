@@ -13,7 +13,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/repositories', () => ({
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
@@ -21,6 +21,8 @@ vi.mock('@pagespace/lib/repositories', () => ({
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/repositories/activity-log-repository', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },

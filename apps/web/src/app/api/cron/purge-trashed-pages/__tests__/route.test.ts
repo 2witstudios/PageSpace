@@ -9,8 +9,11 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
+}));
+
+vi.mock('@pagespace/lib/repositories/page-repository', () => ({
   pageRepository: mockPageRepo,
 }));
 
