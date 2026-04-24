@@ -139,6 +139,7 @@ export const syncGoogleCalendar = async (
     const syncCursors = parseSyncCursors(connection.syncCursor);
 
     // Sync each selected calendar
+    const staleCalendarIds = new Set<string>();
     for (const calendarId of calendarsToSync) {
       // Use per-calendar sync token for incremental sync if available and not forcing full sync
       const calendarSyncToken = !options.fullSync ? syncCursors[calendarId] : undefined;
@@ -158,6 +159,10 @@ export const syncGoogleCalendar = async (
         timeMax
       );
 
+      if (calendarResult.calendarNotFound) {
+        staleCalendarIds.add(calendarId);
+      }
+
       result.eventsCreated += calendarResult.eventsCreated;
       result.eventsUpdated += calendarResult.eventsUpdated;
       result.eventsDeleted += calendarResult.eventsDeleted;
@@ -168,6 +173,14 @@ export const syncGoogleCalendar = async (
       }
     }
 
+    // Remove stale (404) calendars from selectedCalendars so they are not re-synced
+    const updatedSelectedCalendars = staleCalendarIds.size > 0
+      ? rawCalendars.filter(rawId => {
+          const resolvedId = rawId === 'primary' ? (connection.googleEmail || 'primary') : rawId;
+          return !staleCalendarIds.has(resolvedId);
+        })
+      : rawCalendars;
+
     // Persist all updated sync cursors and update last sync time
     await db
       .update(googleCalendarConnections)
@@ -176,6 +189,7 @@ export const syncGoogleCalendar = async (
         lastSyncAt: new Date(),
         lastSyncError: null,
         updatedAt: new Date(),
+        ...(staleCalendarIds.size > 0 ? { selectedCalendars: updatedSelectedCalendars } : {}),
       })
       .where(eq(googleCalendarConnections.userId, userId));
 
@@ -334,6 +348,7 @@ const syncCalendar = async (
   eventsUpdated: number;
   eventsDeleted: number;
   syncCursor?: string;
+  calendarNotFound?: boolean;
 }> => {
   const result = {
     eventsCreated: 0,
@@ -365,13 +380,13 @@ const syncCalendar = async (
       );
     }
 
-    // Calendar not found — skip gracefully instead of failing the entire sync
+    // Calendar not found — signal the caller to remove this stale entry
     if (listResult.statusCode === 404) {
       loggers.api.warn('Calendar not found, skipping', {
         userId,
         calendarId: maskIdentifier(storageCalendarId),
       });
-      return result;
+      return { ...result, calendarNotFound: true };
     }
 
     // Propagate permission/auth errors so the caller can update connection status
