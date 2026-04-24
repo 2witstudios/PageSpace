@@ -6,7 +6,7 @@
  */
 
 import { db, pages, drives, eq, and, asc } from '@pagespace/db';
-import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions'
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree } from '@pagespace/lib/content/tree-utils';
 

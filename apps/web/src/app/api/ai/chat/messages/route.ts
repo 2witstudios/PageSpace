@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 

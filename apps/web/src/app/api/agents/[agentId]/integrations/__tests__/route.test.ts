@@ -34,14 +34,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
-    listGrantsByAgent: mockListGrantsByAgent,
+  listGrantsByAgent: mockListGrantsByAgent,
+  createGrant: vi.fn(),
+  findGrant: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
-    getConnectionById: vi.fn(),
-}));
-vi.mock('@pagespace/lib/integrations', () => ({
-    createGrant: vi.fn(),
-    findGrant: vi.fn(),
+  getConnectionById: vi.fn(),
 }));
 
 import { GET } from '../route';

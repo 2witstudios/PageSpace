@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { isOnPrem } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

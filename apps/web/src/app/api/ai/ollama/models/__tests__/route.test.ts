@@ -26,8 +26,8 @@ vi.mock('@/lib/ai/core', () => ({
   getUserOllamaSettings: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
-    validateLocalProviderURL: vi.fn().mockResolvedValue({ valid: true, resolvedIPs: ['127.0.0.1'] }),
+vi.mock('@pagespace/lib/security/url-validator', () => ({
+  validateLocalProviderURL: vi.fn().mockResolvedValue({ valid: true, resolvedIPs: ['127.0.0.1'] }),
 }));
 
 import { loggers } from '@pagespace/lib/logging/logger-config';

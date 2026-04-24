@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';

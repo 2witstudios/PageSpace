@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository'
+import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };

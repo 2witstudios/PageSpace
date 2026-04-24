@@ -6,7 +6,7 @@
  */
 
 import { db, pages, drives, eq, and } from '@pagespace/db';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 interface DriveAgent {

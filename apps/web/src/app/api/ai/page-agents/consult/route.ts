@@ -16,7 +16,7 @@ import {
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 /**

@@ -12,7 +12,7 @@ import {
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db, pages, drives, eq, and, inArray, workflows as workflowsTable, taskItems, taskAssignees, taskStatusConfigs, users } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions'
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface WorkflowExecutionResult {

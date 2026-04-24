@@ -1,14 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
-import { PageType } from '@pagespace/lib/utils/enums'
-import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
-import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets'
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger'
-import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
-import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
-import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
+import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
+import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
+import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
+import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { pageRepository, driveRepository } from '@pagespace/lib/repositories';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';

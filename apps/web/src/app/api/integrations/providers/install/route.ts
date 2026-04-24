@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getBuiltinProvider } from '@pagespace/lib/integrations/providers'
+import { getBuiltinProvider } from '@pagespace/lib/integrations/providers';
 import { getProviderBySlug, createProvider } from '@pagespace/lib/integrations/repositories/provider-repository';
 
 const installSchema = z.object({

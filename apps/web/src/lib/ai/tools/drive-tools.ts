@@ -1,8 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify } from '@pagespace/lib/utils/utils'
-import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
+import { slugify } from '@pagespace/lib/utils/utils';
+import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';

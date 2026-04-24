@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import { db, users, eq } from '@pagespace/db';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';

@@ -140,7 +140,7 @@ vi.mock('chrono-node', () => ({
 
 import { calendarWriteTools } from '../calendar-write-tools';
 import { db, inArray } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../../core';

@@ -1,8 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
-import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isOnPrem } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';

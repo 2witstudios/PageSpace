@@ -21,7 +21,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import {
   createAIProvider,
@@ -61,7 +61,7 @@ import {
 } from '@/lib/ai/core';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';

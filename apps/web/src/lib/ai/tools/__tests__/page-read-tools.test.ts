@@ -81,14 +81,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
-vi.mock('@pagespace/lib/server', () => ({
-    isChannelPage: vi.fn((type) => type === 'CHANNEL'),
-    formatContentForAI: vi.fn((content) => content),
-    formatSheetForAI: vi.fn(),
-    formatTaskListForAI: vi.fn(),
-    getPagePath: vi.fn().mockResolvedValue('/drive/page'),
-}));
-
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
