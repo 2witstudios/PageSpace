@@ -39,10 +39,10 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
     const newDocuments = new Map(state.documents);
 
     if (existing?.isDirty) {
-      // Preserve unsaved edits — only update non-content metadata
+      // Preserve unsaved edits — only update revision; contentMode stays
+      // aligned with the preserved local content to avoid parse mismatch
       newDocuments.set(pageId, {
         ...existing,
-        contentMode,
         ...(revision !== undefined ? { revision } : {}),
       });
     } else {

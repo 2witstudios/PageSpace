@@ -169,12 +169,18 @@ export const useDocument = (pageId: string) => {
         setActiveDocument(pageId);
       } else {
         console.error('Failed to fetch page content:', response.status);
-        useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+        // Only fall back to empty when there is no existing cached content —
+        // a transient failure should not blank a valid in-memory document
+        if (!useDocumentManagerStore.getState().documents.get(pageId)) {
+          useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+        }
         setActiveDocument(pageId);
       }
     } catch (error) {
       console.error('Failed to fetch page content:', error);
-      useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+      if (!useDocumentManagerStore.getState().documents.get(pageId)) {
+        useDocumentManagerStore.getState().upsertDocument(pageId, '', 'html');
+      }
       setActiveDocument(pageId);
     } finally {
       setIsLoading(false);
