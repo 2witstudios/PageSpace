@@ -1,7 +1,7 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { hashToken } from '@pagespace/lib/auth';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { randomBytes } from 'crypto';
 
 /**

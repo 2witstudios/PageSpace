@@ -9,7 +9,8 @@ import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service';
-import { pageRepository, driveRepository } from '@pagespace/lib/repositories';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';

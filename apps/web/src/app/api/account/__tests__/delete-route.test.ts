@@ -13,7 +13,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/repositories', () => ({
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
@@ -21,6 +21,8 @@ vi.mock('@pagespace/lib/repositories', () => ({
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/repositories/activity-log-repository', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
@@ -71,7 +73,8 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { DELETE } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token'

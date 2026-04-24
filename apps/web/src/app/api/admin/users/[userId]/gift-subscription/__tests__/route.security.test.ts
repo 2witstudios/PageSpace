@@ -85,7 +85,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
         error: vi.fn(),
       },
       security: {
+        info: vi.fn(),
         warn: vi.fn(),
+        error: vi.fn(),
       },
     },
   logSecurityEvent: vi.fn(),

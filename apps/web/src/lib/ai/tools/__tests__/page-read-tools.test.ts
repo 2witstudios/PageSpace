@@ -56,8 +56,9 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
-    getPageTypeEmoji: vi.fn((type: string) => '📄'),
+    getPageTypeEmoji: vi.fn((_type: string) => '📄'),
     isFolderPage: vi.fn((type: string) => type === 'FOLDER'),
+    getCreatablePageTypes: vi.fn(() => []),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {

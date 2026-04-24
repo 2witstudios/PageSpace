@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { audit, pageRepository } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
