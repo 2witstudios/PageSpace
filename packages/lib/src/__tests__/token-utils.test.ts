@@ -116,14 +116,14 @@ describe('Token Utils', () => {
       expect(result.tokenPrefix).toBe(result.token.substring(0, 12));
     });
 
-    it('should generate token with 256 bits of CSPRNG entropy', () => {
+    it('should generate token with sufficient length', () => {
       const result = generateToken('ps_test');
 
-      // Token format: {prefix}_{randomBytes(32).base64url}
+      // Token format: {prefix}_{cuid2}
       // prefix = 'ps_test' (7 chars) + '_' (1 char) = 8 chars
-      // randomBytes(32) base64url = 43 chars
-      // Total minimum: 8 + 43 = 51 chars
-      expect(result.token.length).toBeGreaterThanOrEqual(51);
+      // CUID2 at max length = 32 chars
+      // Total minimum: 8 + 32 = 40 chars
+      expect(result.token.length).toBeGreaterThanOrEqual(40);
     });
   });
 
