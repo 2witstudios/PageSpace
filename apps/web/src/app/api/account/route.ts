@@ -1,4 +1,6 @@
-import { users, db, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';

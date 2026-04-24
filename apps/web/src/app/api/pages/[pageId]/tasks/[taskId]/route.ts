@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, taskItems, taskLists, taskStatusConfigs, taskAssignees, pages, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems, taskLists, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

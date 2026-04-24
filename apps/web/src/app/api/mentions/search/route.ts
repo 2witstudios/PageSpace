@@ -3,7 +3,10 @@ import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pag
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { pages, users, db, and, eq, ilike, drives, inArray, desc, SQL } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
 

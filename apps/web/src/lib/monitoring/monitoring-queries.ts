@@ -2,24 +2,11 @@
  * Database queries for monitoring dashboard
  */
 
-import {
-  db,
-  apiMetrics,
-  userActivities,
-  aiUsageLogs,
-  systemLogs,
-  errorLogs,
-  users,
-  sql,
-  eq,
-  and,
-  or,
-  gte,
-  lte,
-  desc,
-  count
-} from '@pagespace/db';
-import type { SQL } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { sql, eq, and, or, gte, lte, desc, count } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
+import type { SQL } from '@pagespace/db/operators';
 
 /**
  * Get system health overview

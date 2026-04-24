@@ -54,7 +54,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -70,8 +70,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 vi.mock('@/lib/websocket', () => ({

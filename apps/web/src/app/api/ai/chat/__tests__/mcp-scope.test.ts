@@ -49,7 +49,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -73,12 +73,18 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
-  eq: vi.fn(),
-  and: vi.fn(),
 }));
 
 vi.mock('@/lib/subscription/usage-service', () => ({

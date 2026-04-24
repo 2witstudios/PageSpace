@@ -8,7 +8,9 @@ import {
   STORAGE_TIERS,
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
-import { db, pages, drives, eq, and, desc, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, inArray } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 
 export async function GET(request: NextRequest) {
   try {

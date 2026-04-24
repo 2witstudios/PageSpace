@@ -53,11 +53,25 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  lte: vi.fn(),
+  inArray: vi.fn(),
+  asc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  calendarEvents: {
+    id: 'id',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   calendarTriggers: {
     id: 'id',
     status: 'status',
@@ -65,14 +79,6 @@ vi.mock('@pagespace/db', () => ({
     startedAt: 'startedAt',
     calendarEventId: 'calendarEventId',
   },
-  calendarEvents: {
-    id: 'id',
-  },
-  eq: vi.fn(),
-  and: vi.fn(),
-  lte: vi.fn(),
-  inArray: vi.fn(),
-  asc: vi.fn(),
 }));
 
 import { POST } from '../route';

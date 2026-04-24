@@ -56,7 +56,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // Mock database for capturing current page state
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -66,15 +66,19 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id', parentId: 'parentId', position: 'position' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', parentId: 'parentId', position: 'position' },
 }));
 
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

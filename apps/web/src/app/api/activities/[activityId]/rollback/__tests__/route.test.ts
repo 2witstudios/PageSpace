@@ -28,7 +28,7 @@ vi.mock('../../../../../../lib/auth', () => ({
 }));
 
 // Mock database for idempotency check
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -39,9 +39,13 @@ vi.mock('@pagespace/db', () => ({
     }),
     transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})),
   },
-  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
 }));
 
 // Mock loggers

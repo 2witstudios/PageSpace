@@ -68,7 +68,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 // REVIEW: Deep ORM chain mocks (db.update().set().where().returning(), db.transaction(tx => ...))
 // are used here because the route directly calls Drizzle ORM with no service layer.
 // The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       taskLists: { findFirst: vi.fn() },
@@ -116,13 +116,19 @@ vi.mock('@pagespace/db', () => ({
       return callback(tx);
     }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a: unknown, _b: unknown) => ({ _a, _b })),
+  and: vi.fn((...c: unknown[]) => c),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: {},
   taskLists: {},
   taskStatusConfigs: {},
   taskAssignees: {},
-  pages: {},
-  eq: vi.fn((_a: unknown, _b: unknown) => ({ _a, _b })),
-  and: vi.fn((...c: unknown[]) => c),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -136,7 +142,7 @@ vi.mock('@/lib/websocket', () => ({
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';

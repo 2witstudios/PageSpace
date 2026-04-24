@@ -62,7 +62,7 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: (...args: unknown[]) => mockCreatePageEventPayload(...args),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -70,8 +70,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

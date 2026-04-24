@@ -28,7 +28,7 @@ vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => 
     deleteConnection: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: 'mock-db',
 }));
 

@@ -12,7 +12,7 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 // ============================================================================
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
@@ -26,10 +26,8 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
-  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
-  taskLists: { id: 'id', pageId: 'pageId' },
-  taskStatusConfigs: { taskListId: 'taskListId' },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args: any[]) => args),
   desc: vi.fn(),
@@ -42,6 +40,14 @@ vi.mock('@pagespace/db', () => ({
   isNull: vi.fn(),
   not: vi.fn(),
   sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
+  taskLists: { id: 'id', pageId: 'pageId' },
+  taskStatusConfigs: { taskListId: 'taskListId' },
 }));
 
 vi.mock('@/lib/task-status-config', () => ({

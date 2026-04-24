@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db, pages, driveMembers, userProfiles, users, drives, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 
 /**
  * Unified assignee type for task assignment

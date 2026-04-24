@@ -4,18 +4,10 @@
  * enabling proper unit testing without ORM chain mocking.
  */
 
-import {
-  db,
-  socketTokens,
-  deviceTokens,
-  mcpTokens,
-  mcpTokenDrives,
-  drives,
-  eq,
-  and,
-  inArray,
-  type InferSelectModel,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
+import { socketTokens, deviceTokens, mcpTokens, mcpTokenDrives } from '@pagespace/db/schema/auth'
+import { drives } from '@pagespace/db/schema/core';
 
 export type DeviceToken = InferSelectModel<typeof deviceTokens>;
 export type McpToken = InferSelectModel<typeof mcpTokens>;

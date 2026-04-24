@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db, channelMessages, channelReadStatus, pages, driveMembers, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members'
+import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { type ToolExecutionContext } from '../core';

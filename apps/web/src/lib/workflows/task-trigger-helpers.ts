@@ -1,4 +1,8 @@
-import { db, workflows, taskItems, pages, eq, and, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow } from './workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 

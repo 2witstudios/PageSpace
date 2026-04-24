@@ -15,7 +15,9 @@ import {
   getUserTimezone,
   type ToolExecutionContext,
 } from '@/lib/ai/core';
-import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 

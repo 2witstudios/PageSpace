@@ -6,7 +6,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 const mockTurndown = vi.fn();
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -14,8 +14,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -57,7 +61,7 @@ vi.mock('turndown', () => ({
   })),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { sanitizeFilename } from '@pagespace/lib/content/export-utils';

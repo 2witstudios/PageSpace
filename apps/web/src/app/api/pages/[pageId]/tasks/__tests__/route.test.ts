@@ -54,13 +54,12 @@ let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
 // REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.transaction(tx => ...))
 // are used here because the route directly calls Drizzle ORM with no service layer.
 // The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({
       returning: vi.fn(),
     })),
   }));
-
   return {
     db: {
       query: {
@@ -96,23 +95,29 @@ vi.mock('@pagespace/db', () => {
         return callback(tx);
       }),
     },
-    taskLists: {},
-    taskItems: {},
-    taskStatusConfigs: {},
-    taskAssignees: {},
-    pages: {},
-    DEFAULT_TASK_STATUSES: [
+  };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ field, value })),
+  and: vi.fn((...conditions) => conditions),
+  asc: vi.fn((col) => ({ type: 'asc', col })),
+  desc: vi.fn((col) => ({ type: 'desc', col })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: {},
+  taskItems: {},
+  taskStatusConfigs: {},
+  taskAssignees: {},
+  DEFAULT_TASK_STATUSES: [
       { slug: 'pending', name: 'To Do', color: 'bg-slate-100 text-slate-700', group: 'todo', position: 0 },
       { slug: 'in_progress', name: 'In Progress', color: 'bg-amber-100 text-amber-700', group: 'in_progress', position: 1 },
       { slug: 'blocked', name: 'Blocked', color: 'bg-red-100 text-red-700', group: 'in_progress', position: 2 },
       { slug: 'completed', name: 'Done', color: 'bg-green-100 text-green-700', group: 'done', position: 3 },
     ],
-    eq: vi.fn((field, value) => ({ field, value })),
-    and: vi.fn((...conditions) => conditions),
-    asc: vi.fn((col) => ({ type: 'asc', col })),
-    desc: vi.fn((col) => ({ type: 'desc', col })),
-  };
-});
+}));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),
@@ -123,7 +128,7 @@ vi.mock('@/lib/websocket', () => ({
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 describe('Task API Routes', () => {

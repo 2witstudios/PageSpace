@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   formatBytes: vi.fn((n: number) => `${n}B`),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: { findMany: vi.fn().mockResolvedValue([]) },
@@ -33,12 +33,16 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
-  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
+  drives: { id: 'id', ownerId: 'ownerId' },
 }));
 
 import { GET } from '../route';

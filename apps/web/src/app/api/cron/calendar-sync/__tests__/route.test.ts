@@ -15,23 +15,27 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       googleCalendarConnections: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
-  googleCalendarConnections: {
-    status: 'status',
-    lastSyncAt: 'lastSyncAt',
-    syncFrequencyMinutes: 'syncFrequencyMinutes',
-  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
   lt: vi.fn(),
   isNull: vi.fn(),
   sql: Object.assign(vi.fn(), { raw: vi.fn() }),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  googleCalendarConnections: {
+    status: 'status',
+    lastSyncAt: 'lastSyncAt',
+    syncFrequencyMinutes: 'syncFrequencyMinutes',
+  },
 }));
 
 vi.mock('@/lib/integrations/google-calendar/sync-service', () => ({
@@ -59,7 +63,7 @@ vi.mock('next/server', () => ({
 
 import { GET } from '../route';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
 function makeRequest(): Request {

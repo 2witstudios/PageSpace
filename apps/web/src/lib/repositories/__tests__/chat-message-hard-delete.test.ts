@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -25,6 +25,13 @@ vi.mock('@pagespace/db', () => ({
     }),
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
+  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: {
     id: 'id',
     pageId: 'pageId',
@@ -34,13 +41,10 @@ vi.mock('@pagespace/db', () => ({
     content: 'content',
     editedAt: 'editedAt',
   },
-  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
-  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
-  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
 }));
 
 import { chatMessageRepository } from '../chat-message-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('chatMessageRepository hard-delete', () => {
   beforeEach(() => {

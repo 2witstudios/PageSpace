@@ -5,17 +5,21 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
   },
-  users: { emailVerified: 'emailVerified', id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { emailVerified: 'emailVerified', id: 'id' },
 }));
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const createRequest = () =>

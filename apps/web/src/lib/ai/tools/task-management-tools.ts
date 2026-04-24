@@ -1,6 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, isNull, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';

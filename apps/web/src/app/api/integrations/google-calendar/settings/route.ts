@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, count } from '@pagespace/db/operators'
+import { googleCalendarConnections, calendarEvents } from '@pagespace/db/schema/calendar';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';

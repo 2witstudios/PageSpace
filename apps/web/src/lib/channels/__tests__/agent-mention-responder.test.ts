@@ -1,18 +1,24 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
       channelMessages: { findMany: vi.fn() },
     },
   },
-  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed' },
-  channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
   desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -48,7 +54,7 @@ vi.mock('@/lib/ai/tools/channel-tools', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';

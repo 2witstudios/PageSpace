@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     selectDistinct: vi.fn().mockReturnThis(),
@@ -18,24 +18,8 @@ vi.mock('@pagespace/db', () => ({
       channelMessages: { findMany: vi.fn() },
     },
   },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
-  drives: { id: 'id' },
-  taskItems: { pageId: 'pageId' },
-  channelMessages: {
-    pageId: 'pageId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-  },
-  chatMessages: {
-    id: 'id',
-    pageId: 'pageId',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    role: 'role',
-    userId: 'userId',
-  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   asc: vi.fn(),
@@ -47,6 +31,30 @@ vi.mock('@pagespace/db', () => ({
   count: vi.fn(),
   max: vi.fn(),
   min: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+  chatMessages: {
+    id: 'id',
+    pageId: 'pageId',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+    content: 'content',
+    role: 'role',
+    userId: 'userId',
+  },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { pageId: 'pageId' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: {
+    pageId: 'pageId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+  },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -86,7 +94,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageReadTools } from '../page-read-tools';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 

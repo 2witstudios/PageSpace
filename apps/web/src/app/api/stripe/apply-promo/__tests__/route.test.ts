@@ -9,7 +9,7 @@ const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
 
 // Mock database
 const mockDbSelect = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: () => ({
@@ -17,7 +17,11 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ a, b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
 }));
 

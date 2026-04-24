@@ -9,31 +9,16 @@ import {
   normalizeTimezone,
   formatDateInTimezone,
 } from '@/lib/ai/core';
-import {
-  db,
-  sessions,
-  users,
-  taskItems,
-  directMessages,
-  dmConversations,
-  pages,
-  drives,
-  driveMembers,
-  activityLogs,
-  pulseSummaries,
-  userMentions,
-  pagePermissions,
-  chatMessages,
-  eq,
-  and,
-  or,
-  lt,
-  gte,
-  ne,
-  desc,
-  inArray,
-  isNull,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social'
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,

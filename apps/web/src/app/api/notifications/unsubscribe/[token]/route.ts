@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, emailNotificationPreferences, emailUnsubscribeTokens, eq, and, gt, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, gt, isNull } from '@pagespace/db/operators'
+import { emailUnsubscribeTokens } from '@pagespace/db/schema/auth'
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';

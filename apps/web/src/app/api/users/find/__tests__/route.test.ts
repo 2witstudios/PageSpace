@@ -32,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
 
 const mockFindFirst = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -40,8 +40,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  users: { email: 'email-column' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { email: 'email-column' },
 }));
 
 import { GET } from '../route';

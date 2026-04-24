@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, chatMessages, eq, and, desc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc } from '@pagespace/db/operators'
+import { chatMessages } from '@pagespace/db/schema/core';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';

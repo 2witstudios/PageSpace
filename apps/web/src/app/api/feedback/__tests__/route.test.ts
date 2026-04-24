@@ -25,12 +25,14 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
  */
 
 // Mock dependencies at system boundaries
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/feedback', () => ({
   feedbackSubmissions: {},
 }));
 
@@ -68,7 +70,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

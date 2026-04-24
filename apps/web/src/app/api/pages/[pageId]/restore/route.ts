@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { pages, db, and, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

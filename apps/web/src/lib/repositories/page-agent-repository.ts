@@ -4,7 +4,9 @@
  * enabling proper unit testing of routes without ORM chain mocking.
  */
 
-import { db, pages, drives, eq, and, desc, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, isNull } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 
 /**

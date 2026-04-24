@@ -12,7 +12,7 @@ vi.mock('@/lib/auth', () => ({
   getAllowedDriveIds: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -26,7 +26,8 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  activityLogs: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
@@ -34,6 +35,9 @@ vi.mock('@pagespace/db', () => ({
   gte: vi.fn(),
   lt: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: {},
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

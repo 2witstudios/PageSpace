@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, isNull } from '@pagespace/db/operators'
+import { mcpTokens } from '@pagespace/db/schema/auth';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';

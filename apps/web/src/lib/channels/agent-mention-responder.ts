@@ -1,12 +1,7 @@
-import {
-  and,
-  channelMessages,
-  db,
-  desc,
-  eq,
-  inArray,
-  pages,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, desc, eq, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { channelMessages } from '@pagespace/db/schema/chat';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';

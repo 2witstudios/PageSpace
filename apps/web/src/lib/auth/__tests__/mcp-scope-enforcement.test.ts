@@ -30,7 +30,7 @@ vi.mock('next/server', () => ({
 
 // Mock DB for checkMCPPageScope
 const mockPageFindFirst = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -40,11 +40,17 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
   },
-  mcpTokens: { tokenHash: 'mcpTokens.tokenHash', revokedAt: 'mcpTokens.revokedAt', id: 'mcpTokens.id' },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: { tokenHash: 'mcpTokens.tokenHash', revokedAt: 'mcpTokens.revokedAt', id: 'mcpTokens.id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 vi.mock('@pagespace/lib/auth/token-utils', () => ({

@@ -3,17 +3,20 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { db, apiMetrics } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { apiMetrics } from '@pagespace/db/schema/monitoring';
 import { getMonitoringIngestStatus } from '../monitoring';
 
 // Mock the database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined)
     })
   },
-  apiMetrics: {}
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  apiMetrics: {},
 }));
 
 // Mock loggers

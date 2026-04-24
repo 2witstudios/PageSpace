@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { db, systemLogs } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { systemLogs } from '@pagespace/db/schema/monitoring';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logging/logger-database';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';

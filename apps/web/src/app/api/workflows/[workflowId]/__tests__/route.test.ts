@@ -56,16 +56,22 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
     delete: mockDelete,
   },
-  workflows: { id: 'id', driveId: 'driveId' },
-  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { id: 'id', driveId: 'driveId' },
 }));
 
 import { GET, PATCH, DELETE } from '../route';

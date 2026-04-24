@@ -61,7 +61,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   isCuid: vi.fn(() => true),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const txInsertValues = vi.fn().mockResolvedValue(undefined);
   const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
@@ -72,7 +72,6 @@ vi.mock('@pagespace/db', () => {
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
   });
-
   return {
     db: {
       query: {
@@ -83,16 +82,22 @@ vi.mock('@pagespace/db', () => {
       transaction,
     },
     __test__: { txInsert, txInsertValues, txQueryPagesFindMany, transaction },
-    pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
-    drives: { id: 'id' },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    and: vi.fn((...args: unknown[]) => args),
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-    inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
-    desc: vi.fn((a: unknown) => a),
-    isNull: vi.fn((a: unknown) => a),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
+  desc: vi.fn((a: unknown) => a),
+  isNull: vi.fn((a: unknown) => a),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
@@ -102,7 +107,7 @@ import { broadcastPageEvent } from '@/lib/websocket';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
-import { db, __test__ as dbTest } from '@pagespace/db';
+import { db, __test__ as dbTest } from '@pagespace/db/db';
 import { createId } from '@paralleldrive/cuid2';
 
 const { txInsert, txInsertValues, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {

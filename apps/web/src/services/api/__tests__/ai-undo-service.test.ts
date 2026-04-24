@@ -14,7 +14,7 @@ import type { RollbackResult } from '../rollback-service';
 import type { ActivityActionPreview } from '../../../types/activity-actions';
 
 // Mock the database
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     query: {
       chatMessages: {
@@ -31,19 +31,26 @@ vi.mock('@pagespace/db', () => {
     update: vi.fn(),
     transaction: vi.fn(),
   };
-
   return {
     db: mockDb,
-    chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
-    messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
-    activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
-    and: vi.fn((...args) => args),
-    gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
-    lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
-    desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...args) => args),
+  gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
+  lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
+  desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+}));
 
 // Mock the rollback service
 vi.mock('../rollback-service', () => ({
@@ -74,7 +81,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';

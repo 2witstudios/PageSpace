@@ -61,7 +61,7 @@ const mockLoggers = vi.hoisted(() => ({
 }));
 const mockAuditRequest = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 

@@ -4,7 +4,9 @@ import {
   type FileUIPart,
   type DynamicToolUIPart,
 } from 'ai';
-import { db, chatMessages, messages } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { chatMessages } from '@pagespace/db/schema/core'
+import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** Narrow a UIMessage part to TextUIPart */

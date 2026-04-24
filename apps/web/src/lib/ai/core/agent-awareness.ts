@@ -5,7 +5,9 @@
  * for the global assistant to be aware of and consult via ask_agent.
  */
 
-import { db, pages, drives, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 

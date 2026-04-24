@@ -8,10 +8,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Tests mock at the SERVICE SEAM level, not ORM level.
 // ============================================================================
 
-vi.mock('@pagespace/db', () => ({
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
-  pages: { driveId: 'pages.driveId', isTrashed: 'pages.isTrashed' },
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -23,9 +20,18 @@ vi.mock('@pagespace/db', () => ({
     },
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args: unknown[]) => args),
   asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  pages: { driveId: 'pages.driveId', isTrashed: 'pages.isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
 }));
 
 vi.mock('@pagespace/lib/content/tree-utils', () => ({
@@ -54,7 +60,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';

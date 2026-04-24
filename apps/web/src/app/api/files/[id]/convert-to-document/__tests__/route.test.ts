@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { pages: { findFirst: vi.fn() } },
     insert: vi.fn().mockReturnValue({
@@ -18,8 +18,12 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
 }));
 
 vi.mock('@pagespace/lib/utils/enums', () => ({
@@ -72,7 +76,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';

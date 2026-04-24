@@ -4,12 +4,10 @@
  * enabling proper unit testing without ORM chain mocking.
  */
 
-import {
-  db,
-  userAiSettings,
-  drives,
-  type InferSelectModel,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import type { InferSelectModel } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
+import { userAiSettings } from '@pagespace/db/schema/ai';
 
 export const oauthRepository = {
   /**

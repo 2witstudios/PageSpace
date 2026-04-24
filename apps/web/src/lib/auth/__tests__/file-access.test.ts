@@ -28,7 +28,33 @@ vi.mock('@pagespace/db', () => ({
   },
   eq: vi.fn((...args: unknown[]) => args),
   filePages: { fileId: 'fileId', pageId: 'pageId' },
-  pages: {}, drives: {}, driveMembers: {}, pagePermissions: {},
+  pages: {},
+  drives: {},
+  driveMembers: {},
+  pagePermissions: {},
+}));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: mockWhereFn,
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+  drives: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {},
+  pagePermissions: {},
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  filePages: { fileId: 'fileId', pageId: 'pageId' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {
