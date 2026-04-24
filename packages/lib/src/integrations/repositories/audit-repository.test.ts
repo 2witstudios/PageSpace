@@ -15,8 +15,11 @@ const mockSelectFrom = vi.fn();
 const mockSelectWhere = vi.fn();
 const mockSelectGroupBy = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  const integrationAuditLog = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
+vi.mock('@pagespace/db/schema/integrations', () => ({
+  integrationAuditLog: {
     driveId: 'driveId',
     connectionId: 'connectionId',
     createdAt: 'createdAt',
@@ -24,20 +27,17 @@ vi.mock('@pagespace/db', () => {
     agentId: 'agentId',
     toolName: 'toolName',
     errorType: 'errorType',
-  };
-
-  return {
-    db: {},
-    eq: (field: string, value: unknown) => ({ eq: [field, value] }),
-    and: (...conditions: unknown[]) => ({ and: conditions }),
-    desc: (field: string) => ({ desc: field }),
-    gte: (field: string, value: unknown) => ({ gte: [field, value] }),
-    lte: (field: string, value: unknown) => ({ lte: [field, value] }),
-    count: () => 'count()',
-    isNotNull: (field: string) => ({ isNotNull: field }),
-    integrationAuditLog,
-  };
-});
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: (field: string, value: unknown) => ({ eq: [field, value] }),
+  and: (...conditions: unknown[]) => ({ and: conditions }),
+  desc: (field: string) => ({ desc: field }),
+  gte: (field: string, value: unknown) => ({ gte: [field, value] }),
+  lte: (field: string, value: unknown) => ({ lte: [field, value] }),
+  count: () => 'count()',
+  isNotNull: (field: string) => ({ isNotNull: field }),
+}));
 
 import {
   logAuditEntry,

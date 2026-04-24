@@ -4,11 +4,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { userId: 'userId', actorEmail: 'actorEmail', actorDisplayName: 'actorDisplayName' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
 }));
 

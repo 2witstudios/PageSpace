@@ -15,7 +15,7 @@ vi.mock('drizzle-orm', () => ({
   inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id' },
 }));
 

@@ -18,7 +18,7 @@ const mockFindFirst = vi.hoisted(() => vi.fn());
 const mockFindMany = vi.hoisted(() => vi.fn());
 
 // ── Mock @pagespace/db ─────────────────────────────────────────────────────────
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockDbSelect,
     query: {
@@ -28,6 +28,8 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -35,6 +37,8 @@ vi.mock('@pagespace/db', () => ({
     chainSeed: 'chainSeed',
     previousLogHash: 'previousLogHash',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   asc: vi.fn((col) => ({ dir: 'asc', col })),
   isNotNull: vi.fn((col) => ({ type: 'isNotNull', col })),
   count: vi.fn(() => 'count(*)'),

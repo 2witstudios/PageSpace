@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks (must be hoisted before imports)
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     insert: vi.fn(),
     select: vi.fn(),
@@ -17,19 +17,26 @@ vi.mock('@pagespace/db', () => {
       notifications: { findFirst: vi.fn() },
     },
   };
-  return {
-    db: mockDb,
-    notifications: { id: 'id', userId: 'userId', type: 'type', isRead: 'isRead', metadata: 'metadata', createdAt: 'createdAt' },
-    users: { id: 'id', name: 'name', email: 'email', image: 'image' },
-    pages: { id: 'id', title: 'title', driveId: 'driveId', type: 'type' },
-    drives: { id: 'id', slug: 'slug', name: 'name' },
-    eq: vi.fn((_a, _b) => 'eq'),
-    and: vi.fn((...args) => ({ and: args })),
-    desc: vi.fn((a) => ({ desc: a })),
-    count: vi.fn(() => 'count()'),
-    sql: Object.assign(vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join(''), values })), { placeholder: vi.fn() }),
-  };
+  return { db: mockDb };
 });
+
+vi.mock('@pagespace/db/schema/notifications', () => ({
+  notifications: { id: 'id', userId: 'userId', type: 'type', isRead: 'isRead', metadata: 'metadata', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', name: 'name', email: 'email', image: 'image' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', title: 'title', driveId: 'driveId', type: 'type' },
+  drives: { id: 'id', slug: 'slug', name: 'name' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a, _b) => 'eq'),
+  and: vi.fn((...args) => ({ and: args })),
+  desc: vi.fn((a) => ({ desc: a })),
+  count: vi.fn(() => 'count()'),
+  sql: Object.assign(vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join(''), values })), { placeholder: vi.fn() }),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id-123'),

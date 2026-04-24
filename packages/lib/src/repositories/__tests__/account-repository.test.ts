@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => {
-  const mockDb = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
     query: {
       users: { findFirst: vi.fn() },
       drives: { findMany: vi.fn() },
@@ -13,19 +13,24 @@ vi.mock('@pagespace/db', () => {
     select: vi.fn(),
     delete: vi.fn(),
     transaction: vi.fn(),
-  };
-  return {
-    db: mockDb,
-    users: { id: 'id', email: 'email', image: 'image' },
-    drives: { id: 'id', name: 'name', ownerId: 'ownerId' },
-    driveMembers: { driveId: 'driveId' },
-    eq: vi.fn((_a, _b) => 'eq'),
-    sql: Object.assign(
-      vi.fn((parts: TemplateStringsArray) => ({ sql: parts.join('') })),
-      { placeholder: vi.fn() }
-    ),
-  };
-});
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email', image: 'image' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', name: 'name', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a, _b) => 'eq'),
+  sql: Object.assign(
+    vi.fn((parts: TemplateStringsArray) => ({ sql: parts.join('') })),
+    { placeholder: vi.fn() }
+  ),
+}));
 
 // ---------------------------------------------------------------------------
 // Imports after mocks

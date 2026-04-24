@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     update: vi.fn(() => ({
       set: vi.fn(() => ({
@@ -11,8 +11,14 @@ vi.mock('@pagespace/db', () => ({
     insert: vi.fn(),
     delete: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
   sessions: { tokenHash: 'tokenHash' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),

@@ -12,8 +12,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const mockTable = (name: string) => ({
+const { mockTable } = vi.hoisted(() => {
+  const fn = (name: string) => ({
     id: `${name}.id`,
     name: `${name}.name`,
     email: `${name}.email`,
@@ -49,21 +49,16 @@ vi.mock('@pagespace/db', () => {
     priority: `${name}.priority`,
     taskListId: `${name}.taskListId`,
     senderId: `${name}.senderId`,
-    // DM conversation participant fields
     participant1Id: `${name}.participant1Id`,
     participant2Id: `${name}.participant2Id`,
-    // Notification fields
     isRead: `${name}.isRead`,
     readAt: `${name}.readAt`,
     message: `${name}.message`,
-    // Display preference fields
     preferenceType: `${name}.preferenceType`,
     enabled: `${name}.enabled`,
-    // Personalization fields
     bio: `${name}.bio`,
     writingStyle: `${name}.writingStyle`,
     rules: `${name}.rules`,
-    // Session fields
     scopes: `${name}.scopes`,
     deviceId: `${name}.deviceId`,
     createdByIp: `${name}.createdByIp`,
@@ -73,30 +68,41 @@ vi.mock('@pagespace/db', () => {
     revokedAt: `${name}.revokedAt`,
     revokedReason: `${name}.revokedReason`,
   });
-
-  return {
-    users: mockTable('users'),
-    drives: mockTable('drives'),
-    driveMembers: mockTable('driveMembers'),
-    pages: mockTable('pages'),
-    chatMessages: mockTable('chatMessages'),
-    channelMessages: mockTable('channelMessages'),
-    conversations: mockTable('conversations'),
-    messages: mockTable('messages'),
-    directMessages: mockTable('directMessages'),
-    dmConversations: mockTable('dmConversations'),
-    files: mockTable('files'),
-    filePages: mockTable('filePages'),
-    activityLogs: mockTable('activityLogs'),
-    aiUsageLogs: mockTable('aiUsageLogs'),
-    taskLists: mockTable('taskLists'),
-    taskItems: mockTable('taskItems'),
-    sessions: mockTable('sessions'),
-    notifications: mockTable('notifications'),
-    displayPreferences: mockTable('displayPreferences'),
-    userPersonalization: mockTable('userPersonalization'),
-  };
+  return { mockTable: fn };
 });
+
+vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: mockTable('drives'),
+  pages: mockTable('pages'),
+  chatMessages: mockTable('chatMessages'),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: mockTable('activityLogs'),
+  aiUsageLogs: mockTable('aiUsageLogs'),
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: mockTable('files'),
+  filePages: mockTable('filePages'),
+}));
+vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
+vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: mockTable('channelMessages') }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: mockTable('conversations'),
+  messages: mockTable('messages'),
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  directMessages: mockTable('directMessages'),
+  dmConversations: mockTable('dmConversations'),
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: mockTable('taskLists'),
+  taskItems: mockTable('taskItems'),
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
+vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
+vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: mockTable('userPersonalization') }));
 
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),

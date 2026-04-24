@@ -33,7 +33,7 @@ const mockPagePermFindFirst = vi.fn();
 const mockFileFindFirst = vi.fn();
 const mockDriveFindFirst = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findFirst: (...args: unknown[]) => mockPageFindFirst(...args) },
@@ -50,11 +50,19 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
+  drives: { id: 'drives.id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { userId: 'driveMembers.userId', driveId: 'driveMembers.driveId' },
   pagePermissions: { userId: 'pagePermissions.userId', pageId: 'pagePermissions.pageId' },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id', driveId: 'files.driveId' },
-  drives: { id: 'drives.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
   and: vi.fn((...conditions: unknown[]) => ({ conditions })),
 }));

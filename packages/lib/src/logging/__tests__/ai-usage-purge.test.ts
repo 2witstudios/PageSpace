@@ -11,15 +11,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     id: 'id',
     timestamp: 'timestamp',
     userId: 'userId',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
 }));

@@ -18,21 +18,6 @@ const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted((
   mockIsUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: mockWhereFn,
-      }),
-    }),
-  },
-  eq: vi.fn((...args: unknown[]) => args),
-  filePages: { fileId: 'fileId', pageId: 'pageId' },
-  pages: {},
-  drives: {},
-  driveMembers: {},
-  pagePermissions: {},
-}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
@@ -77,7 +62,9 @@ describe('canUserAccessFile', () => {
     mockCanUserViewPage.mockReset();
     mockIsUserDriveMember.mockReset();
 
-    const { db, eq, filePages } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
+    const { eq } = await import('@pagespace/db/operators');
+    const { filePages } = await import('@pagespace/db/schema/storage');
 
     canUserAccessFile = async (userId: string, fileId: string, driveId: string): Promise<boolean> => {
       const linkedPages = await db

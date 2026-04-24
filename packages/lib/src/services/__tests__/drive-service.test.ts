@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock the db module
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -23,10 +23,16 @@ vi.mock('@pagespace/db', () => ({
     insert: vi.fn(),
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId', isTrashed: 'drives.isTrashed' },
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
   pages: { driveId: 'pages.driveId', id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
   pagePermissions: { pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),

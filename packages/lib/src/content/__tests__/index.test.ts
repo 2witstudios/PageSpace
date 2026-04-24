@@ -5,9 +5,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock @pagespace/db since version-resolver imports it
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
   pageVersions: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),

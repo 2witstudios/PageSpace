@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: { findFirst: vi.fn() },
@@ -12,7 +12,11 @@ vi.mock('@pagespace/db', () => ({
     select: vi.fn(),
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId', isTrashed: 'isTrashed', trashedAt: 'trashedAt', updatedAt: 'updatedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
 }));
