@@ -49,8 +49,6 @@ export async function GET(request: Request) {
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
 
-  auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activities', resourceId: 'self' });
-
   try {
     const parseResult = querySchema.safeParse({
       context: searchParams.get('context') || 'user',
@@ -204,8 +202,8 @@ export async function GET(request: Request) {
     auditRequest(request, {
       eventType: 'data.export',
       userId,
-      resourceType: 'activity',
-      resourceId: params.driveId ?? params.pageId ?? '*',
+      resourceType: 'activities',
+      resourceId: params.driveId ?? params.pageId ?? 'self',
       details: { context: params.context },
     });
 
@@ -236,7 +234,7 @@ export async function GET(request: Request) {
                   columns: { id: true, name: true, email: true },
                 },
               },
-              orderBy: [desc(activityLogs.timestamp)],
+              orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
               limit: BATCH_SIZE,
               offset,
             });
