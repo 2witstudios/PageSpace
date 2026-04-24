@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
-import { db } from '../index'
+import { db } from '../db'
 import { activityLogs } from '../schema/monitoring'
 import { users } from '../schema/auth'
 import { drives } from '../schema/core'
