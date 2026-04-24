@@ -2,19 +2,31 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockIsOnPrem = vi.hoisted(() => vi.fn(() => false));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/deployment-mode', () => ({
   isOnPrem: mockIsOnPrem,
+}));
+
+vi.mock('@pagespace/lib/encryption', () => ({
   encrypt: vi.fn(),
-  secureCompare: vi.fn(),
   decrypt: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/secure-compare', () => ({
+  secureCompare: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
     api: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
   },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/audit/mask-email', () => ({
   maskEmail: (e: string) => e,
 }));
 

@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 const { mockValidateURL } = vi.hoisted(() => ({
   mockValidateURL: vi.fn(),
 }));
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
     validateLocalProviderURL: mockValidateURL,
 }));
 

@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/repositories', () => ({
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
@@ -42,6 +42,8 @@ vi.mock('@pagespace/lib/repositories', () => ({
     deleteUser: vi.fn(),
     checkAndDeleteSoloDrives: vi.fn().mockResolvedValue({ multiMemberDriveNames: [] }),
   },
+}));
+vi.mock('@pagespace/lib/repositories/activity-log-repository', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn().mockResolvedValue({ success: true, count: 0 }),
   },
@@ -65,6 +67,7 @@ vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
 
 vi.mock('@pagespace/lib/deployment-mode', () => ({
   isCloud: vi.fn().mockReturnValue(false),
+  isOnPrem: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -76,7 +79,8 @@ import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
