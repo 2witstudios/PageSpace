@@ -7,10 +7,14 @@
  * @module @pagespace/lib/auth/token-utils
  */
 
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { init } from '@paralleldrive/cuid2';
 
-const createId = init({ length: 32 });
+// Explicitly supply Node's CSPRNG as the random source — CUID2's default is
+// Math.random, which is a PRNG. randomBytes gives full OS-level entropy while
+// still benefiting from CUID2's additional entropy sources (time, counter,
+// fingerprint) all mixed via SHA3-512.
+const createId = init({ length: 32, random: () => randomBytes(4).readUInt32BE() / 0x100000000 });
 
 /**
  * Token generation result containing the raw token (shown once),
@@ -59,7 +63,8 @@ export function getTokenPrefix(token: string): string {
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - 32-char CUID2 random part backed by crypto.getRandomValues() (CSPRNG)
+ * - 32-char CUID2 random part — explicitly seeded with randomBytes() (CSPRNG),
+ *   combined with time, counter, and fingerprint entropy via SHA3-512
  *
  * @param prefix - Token type prefix (e.g., 'ps_refresh', 'mcp', 'ps_device')
  * @returns Object with token, hash, and tokenPrefix
