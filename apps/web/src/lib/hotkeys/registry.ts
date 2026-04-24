@@ -22,6 +22,13 @@ export const HOTKEY_CATEGORIES: Record<HotkeyCategory, { label: string; descript
 export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
   // Navigation
   {
+    id: 'pages.quick-create',
+    label: 'Quick Create Page',
+    description: 'Open the quick-create palette to create a new page',
+    category: 'navigation',
+    defaultBinding: 'Alt+N',
+  },
+  {
     id: 'navigation.search',
     label: 'Open Search',
     description: 'Open the global search dialog',

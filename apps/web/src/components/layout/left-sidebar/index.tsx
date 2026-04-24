@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { useSWRConfig } from "swr";
 import { Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -18,8 +17,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
+import { useUIStore } from "@/stores/useUIStore";
 
-import CreatePageDialog from "./CreatePageDialog";
 import DashboardFooter from "./DashboardFooter";
 import DashboardSidebar from "./DashboardSidebar";
 import DriveFooter from "./DriveFooter";
@@ -33,7 +32,6 @@ export interface SidebarProps {
 }
 
 export default function Sidebar({ className }: SidebarProps) {
-  const [isCreatePageOpen, setCreatePageOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isElectronMac, setIsElectronMac] = useState(false);
   const params = useParams();
@@ -41,11 +39,10 @@ export default function Sidebar({ className }: SidebarProps) {
   const { user } = useAuth();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
-  // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const openQuickCreate = useUIStore((state) => state.openQuickCreate);
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
-  const { mutate } = useSWRConfig();
 
   const drive = drives.find((d) => d.id === driveId);
   const canManage = canManageDrive(drive);
@@ -56,16 +53,9 @@ export default function Sidebar({ className }: SidebarProps) {
     }
   }, [user?.id, fetchDrives]);
 
-  // Detect macOS Electron for stoplight button accommodation
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
   }, []);
-
-  const handlePageCreated = () => {
-    if (driveId) {
-      void mutate(`/api/drives/${driveId}/pages`);
-    }
-  };
 
   return (
     <aside
@@ -104,7 +94,7 @@ export default function Sidebar({ className }: SidebarProps) {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0"
-                    onClick={() => setCreatePageOpen(true)}
+                    onClick={() => openQuickCreate()}
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
@@ -145,14 +135,6 @@ export default function Sidebar({ className }: SidebarProps) {
         {/* Dashboard footer - only shown when NOT in a drive */}
         {!driveId && <DashboardFooter />}
 
-        {/* Create page dialog */}
-        <CreatePageDialog
-          parentId={null}
-          isOpen={isCreatePageOpen}
-          setIsOpen={setCreatePageOpen}
-          onPageCreated={handlePageCreated}
-          driveId={driveId as string}
-        />
       </div>
     </aside>
   );

@@ -92,8 +92,36 @@ describe('matchesKeyEvent', () => {
       shiftKey: false,
       altKey: false,
       key: 'k',
+      code: 'KeyK',
     } as KeyboardEvent;
 
     expect(matchesKeyEvent('', event)).toBe(false);
+  });
+
+  it('given Alt+N on macOS where e.key is "~", should match via e.code', () => {
+    // On macOS US layout, Option+N produces "~" as e.key but e.code stays "KeyN"
+    const event = {
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: true,
+      key: '~',
+      code: 'KeyN',
+    } as KeyboardEvent;
+
+    expect(matchesKeyEvent('Alt+N', event)).toBe(true);
+  });
+
+  it('given Alt+N on Windows where e.key is "n", should match directly', () => {
+    const event = {
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: true,
+      key: 'n',
+      code: 'KeyN',
+    } as KeyboardEvent;
+
+    expect(matchesKeyEvent('Alt+N', event)).toBe(true);
   });
 });
