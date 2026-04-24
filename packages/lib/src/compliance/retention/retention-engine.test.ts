@@ -15,16 +15,26 @@ vi.mock('drizzle-orm', () => ({
   isNotNull: (col: unknown) => ({ _op: 'isNotNull', col }),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
+vi.mock('@pagespace/db/schema/auth', () => ({
   verificationTokens: { id: 'vt.id', expiresAt: 'vt.expiresAt' },
   socketTokens: { id: 'st.id', expiresAt: 'st.expiresAt' },
   emailUnsubscribeTokens: { id: 'eut.id', expiresAt: 'eut.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/dashboard', () => ({
   pulseSummaries: { id: 'ps.id', expiresAt: 'ps.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  pagePermissions: { id: 'pp.id', expiresAt: 'pp.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: { id: 'aul.id', expiresAt: 'aul.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
+  sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
   pageVersions: { id: 'pv.id', expiresAt: 'pv.expiresAt', isPinned: 'pv.isPinned' },
   driveBackups: { id: 'db.id', expiresAt: 'db.expiresAt', isPinned: 'db.isPinned' },
-  pagePermissions: { id: 'pp.id', expiresAt: 'pp.expiresAt' },
-  aiUsageLogs: { id: 'aul.id', expiresAt: 'aul.expiresAt' },
 }));
 
 vi.mock('./monitoring-retention', () => ({
