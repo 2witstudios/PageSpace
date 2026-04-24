@@ -124,6 +124,31 @@
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
     },
+    "./repositories/account-repository": {
+      "types": "./dist/repositories/account-repository.d.ts",
+      "import": "./dist/repositories/account-repository.js",
+      "require": "./dist/repositories/account-repository.js"
+    },
+    "./repositories/activity-log-repository": {
+      "types": "./dist/repositories/activity-log-repository.d.ts",
+      "import": "./dist/repositories/activity-log-repository.js",
+      "require": "./dist/repositories/activity-log-repository.js"
+    },
+    "./repositories/agent-repository": {
+      "types": "./dist/repositories/agent-repository.d.ts",
+      "import": "./dist/repositories/agent-repository.js",
+      "require": "./dist/repositories/agent-repository.js"
+    },
+    "./repositories/page-repository": {
+      "types": "./dist/repositories/page-repository.d.ts",
+      "import": "./dist/repositories/page-repository.js",
+      "require": "./dist/repositories/page-repository.js"
+    },
+    "./repositories/drive-repository": {
+      "types": "./dist/repositories/drive-repository.d.ts",
+      "import": "./dist/repositories/drive-repository.js",
+      "require": "./dist/repositories/drive-repository.js"
+    },
     "./services/storage-limits": {
       "types": "./dist/services/storage-limits.d.ts",
       "import": "./dist/services/storage-limits.js",

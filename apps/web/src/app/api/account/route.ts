@@ -1,7 +1,8 @@
 import { users, db, eq } from '@pagespace/db';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

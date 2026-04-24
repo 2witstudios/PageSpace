@@ -53,7 +53,7 @@ vi.mock('../../core', () => ({
 
 import { agentTools } from '../agent-tools';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import { agentRepository } from '@pagespace/lib/repositories';
+import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
