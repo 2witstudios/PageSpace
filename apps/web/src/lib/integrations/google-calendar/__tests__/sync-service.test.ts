@@ -467,13 +467,41 @@ describe('syncGoogleCalendar error handling', () => {
       expected: true,
     });
 
+    const setArgs = mockUpdate.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<string, unknown> | undefined;
+
     assert({
       given: 'all calendars return 404',
-      should: 'call updateConnectionStatus with error',
-      actual: mockUpdateConnectionStatus.mock.calls.some(
-        (call: unknown[]) => call[0] === 'user-1' && call[1] === 'error'
-      ),
-      expected: true,
+      should: 'persist selectedCalendars as empty array in the DB write',
+      actual: setArgs?.selectedCalendars,
+      expected: [],
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set connection status to error in the same DB write',
+      actual: setArgs?.status,
+      expected: 'error',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set statusMessage to the inaccessible message in the same DB write',
+      actual: setArgs?.statusMessage,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set lastSyncError to the inaccessible message in the same DB write',
+      actual: setArgs?.lastSyncError,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'not call updateConnectionStatus separately (single atomic write)',
+      actual: mockUpdateConnectionStatus.mock.calls.length,
+      expected: 0,
     });
   });
 

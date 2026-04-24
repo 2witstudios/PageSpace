@@ -181,25 +181,23 @@ export const syncGoogleCalendar = async (
         })
       : rawCalendars;
 
-    // Persist all updated sync cursors and update last sync time
+    const allCalendarsGone = staleCalendarIds.size > 0 && updatedSelectedCalendars.length === 0;
+    const INACCESSIBLE_MSG = 'All connected calendars are inaccessible. Please reconnect your Google Calendar.';
+
+    // Single atomic write: persist cursors, prune stale calendars, and (if all are gone) mark connection error
     await db
       .update(googleCalendarConnections)
       .set({
         syncCursor: serializeSyncCursors(syncCursors),
         lastSyncAt: new Date(),
-        lastSyncError: null,
+        lastSyncError: allCalendarsGone ? INACCESSIBLE_MSG : null,
         updatedAt: new Date(),
         ...(staleCalendarIds.size > 0 ? { selectedCalendars: updatedSelectedCalendars } : {}),
+        ...(allCalendarsGone ? { status: 'error' as const, statusMessage: INACCESSIBLE_MSG } : {}),
       })
       .where(eq(googleCalendarConnections.userId, userId));
 
-    // All calendars gone after 404 cleanup — disable the connection so the cron stops picking it up
-    if (staleCalendarIds.size > 0 && updatedSelectedCalendars.length === 0) {
-      await updateConnectionStatus(
-        userId,
-        'error',
-        'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
-      );
+    if (allCalendarsGone) {
       loggers.api.info('Google Calendar connection disabled: all calendars returned 404', { userId });
     }
 
