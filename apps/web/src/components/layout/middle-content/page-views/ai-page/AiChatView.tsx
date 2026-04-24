@@ -186,6 +186,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isStreaming = status === 'submitted' || status === 'streaming';
   const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
+
+  const streamingAssistantText = useMemo(() => {
+    if (!isStreaming) return null;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return null;
+    return (last.parts ?? [])
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { type: 'text'; text: string }).text)
+      .join('');
+  }, [messages, isStreaming]);
   const isLoading = !isInitialized;
 
   // ============================================
@@ -649,6 +659,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     onSend={handleVoiceSend}
                     latestAssistantMessage={lastAIResponse}
                     isAIStreaming={isStreaming}
+                    streamingText={streamingAssistantText}
+                    onStopStream={stop}
                     onClose={disableVoiceMode}
                   />
                 )}

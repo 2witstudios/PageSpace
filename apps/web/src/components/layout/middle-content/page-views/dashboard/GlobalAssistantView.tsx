@@ -308,6 +308,16 @@ const GlobalAssistantView: React.FC = () => {
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
   const { wrapSend } = useSendHandoff(currentConversationId, status);
+
+  const streamingAssistantText = useMemo(() => {
+    if (!isStreaming) return null;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return null;
+    return (last.parts ?? [])
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { type: 'text'; text: string }).text)
+      .join('');
+  }, [messages, isStreaming]);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
 
@@ -857,6 +867,8 @@ const GlobalAssistantView: React.FC = () => {
                 onSend={handleVoiceSend}
                 latestAssistantMessage={lastAIResponse}
                 isAIStreaming={isStreaming}
+                streamingText={streamingAssistantText}
+                onStopStream={stop}
                 onClose={disableVoiceMode}
               />
             )}
