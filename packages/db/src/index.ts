@@ -1,11 +1,9 @@
-// Re-export commonly used drizzle-orm functions
 export {
-  eq, and, or, not, inArray, sql, asc, desc, count, sum, avg, max, min,
-  like, ilike, exists, between, gt, gte, lt, lte, ne, isNull, isNotNull
-} from 'drizzle-orm';
-
-// Re-export types
-export type { SQL, InferSelectModel, InferInsertModel } from 'drizzle-orm';
+  eq, ne, gt, gte, lt, lte, and, or, not, like, ilike, between,
+  exists, isNull, isNotNull, inArray, count, sum, avg, max, min, asc,
+  desc, sql,
+} from './operators';
+export type { SQL, InferSelectModel, InferInsertModel } from './operators';
 
 export { db } from './db';
 
