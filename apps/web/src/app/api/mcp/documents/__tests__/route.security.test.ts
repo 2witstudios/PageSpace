@@ -273,7 +273,7 @@ describe('MCP Documents API - Security Tests', () => {
     });
 
     it('should log security events when access is denied', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       mockGetUserAccessLevel.mockResolvedValue({
         canView: false,
@@ -307,7 +307,7 @@ describe('MCP Documents API - Security Tests', () => {
     it('should deny access when permission check returns null access level', async () => {
       mockGetUserAccessLevel.mockResolvedValue(null);
 
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const { POST } = await import('../route');
       const request = new NextRequest('http://localhost/api/mcp/documents', {

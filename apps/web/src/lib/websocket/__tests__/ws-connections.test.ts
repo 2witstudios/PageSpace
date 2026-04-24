@@ -466,7 +466,7 @@ describe('WebSocket Connection Manager', () => {
 
     it('should close connections with revoked sessions', async () => {
       // Import the mocked sessionService to configure the mock
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return null (session revoked)
       vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
@@ -483,7 +483,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should keep connections with valid sessions', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return valid claims
       vi.mocked(sessionService.validateSession).mockResolvedValueOnce({
@@ -508,7 +508,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should handle validation errors gracefully', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to throw an error
       vi.mocked(sessionService.validateSession).mockRejectedValueOnce(new Error('Network error'));
@@ -524,7 +524,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should skip recently revalidated connections', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return valid claims
       vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -555,7 +555,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should validate multiple connections in parallel', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession with a delay to test parallelism
       vi.mocked(sessionService.validateSession).mockImplementation(async () => {

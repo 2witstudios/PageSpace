@@ -421,7 +421,7 @@ describe('syncGoogleCalendar error handling', () => {
     });
 
     // 404 warning log must be retained
-    const { loggers } = await import('@pagespace/lib/server');
+    const { loggers } = await import('@pagespace/lib/logging/logger-config');
     assert({
       given: 'a 404 from Google Calendar API',
       should: 'log a warning for the not-found calendar',
