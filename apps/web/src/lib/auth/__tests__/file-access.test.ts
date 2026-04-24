@@ -18,21 +18,6 @@ const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted((
   mockIsUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: mockWhereFn,
-      }),
-    }),
-  },
-  eq: vi.fn((...args: unknown[]) => args),
-  filePages: { fileId: 'fileId', pageId: 'pageId' },
-  pages: {},
-  drives: {},
-  driveMembers: {},
-  pagePermissions: {},
-}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
