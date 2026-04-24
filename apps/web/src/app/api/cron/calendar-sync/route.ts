@@ -31,6 +31,7 @@ export async function GET(request: Request) {
     const dueConnections = await db.query.googleCalendarConnections.findMany({
       where: and(
         eq(googleCalendarConnections.status, 'active'),
+        sql`jsonb_array_length(coalesce(${googleCalendarConnections.selectedCalendars}, '[]'::jsonb)) > 0`,
         or(
           isNull(googleCalendarConnections.lastSyncAt),
           lt(
