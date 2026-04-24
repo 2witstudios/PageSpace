@@ -435,6 +435,48 @@ describe('syncGoogleCalendar error handling', () => {
     });
   });
 
+  it('should disable connection when all calendars return 404', async () => {
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['stale-1@group.calendar.google.com', 'stale-2@group.calendar.google.com'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+
+    mockListEvents.mockResolvedValue({
+      success: false,
+      error: 'Not Found',
+      statusCode: 404,
+    });
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'succeed overall',
+      actual: result.success,
+      expected: true,
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'call updateConnectionStatus with error',
+      actual: mockUpdateConnectionStatus.mock.calls.some(
+        (call: unknown[]) => call[0] === 'user-1' && call[1] === 'error'
+      ),
+      expected: true,
+    });
+  });
+
   it('should handle token expiration (410) with sync token fallback', async () => {
     mockGetValidAccessToken.mockResolvedValue({
       success: true,

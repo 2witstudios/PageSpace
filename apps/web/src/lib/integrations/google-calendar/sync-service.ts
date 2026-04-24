@@ -193,6 +193,16 @@ export const syncGoogleCalendar = async (
       })
       .where(eq(googleCalendarConnections.userId, userId));
 
+    // All calendars gone after 404 cleanup — disable the connection so the cron stops picking it up
+    if (staleCalendarIds.size > 0 && updatedSelectedCalendars.length === 0) {
+      await updateConnectionStatus(
+        userId,
+        'error',
+        'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+      );
+      loggers.api.info('Google Calendar connection disabled: all calendars returned 404', { userId });
+    }
+
     result.success = true;
 
     loggers.api.info('Google Calendar sync completed', {
