@@ -1,5 +1,5 @@
 {
-  "id": "c712e2a3-3e75-45a8-a9d4-d8c0840ac777",
+  "id": "4c647bb1-ebfd-495f-97b4-78fd842c1b91",
   "prevId": "df763a41-6c2f-42ac-916c-84759c2fb19a",
   "version": "7",
   "dialect": "postgresql",
@@ -5472,18 +5472,6 @@
         },
         "drive_id": {
           "name": "drive_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "prompt": {
-          "name": "prompt",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completion": {
-          "name": "completion",
           "type": "text",
           "primaryKey": false,
           "notNull": false

@@ -460,6 +460,61 @@ describe('Logger error hoisting (Error passed as 2nd arg bypasses sanitize)', ()
   });
 });
 
+describe('Logger PII scrubbing in error messages (#970)', () => {
+  let anyLogger: AnyLogger;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    anyLogger = logger as AnyLogger;
+    anyLogger.config.destination = 'console';
+    anyLogger.config.level = LogLevel.TRACE;
+    anyLogger.config.format = 'json';
+    anyLogger.config.sanitize = true;
+    anyLogger.clearContext();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    anyLogger.config.level = LogLevel.INFO;
+    anyLogger.config.format = 'pretty';
+    anyLogger.clearContext();
+  });
+
+  it('given error with email in message, should scrub email from error.message', () => {
+    const err = new Error('Failed to process user alice@example.com');
+    logger.error('processing failed', err);
+
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(raw);
+    expect(parsed.error.message).not.toContain('alice@example.com');
+    expect(parsed.error.message).toContain('[EMAIL_REDACTED]');
+  });
+
+  it('given error with email in stack trace, should scrub email from error.stack', () => {
+    const err = new Error('Auth error for bob@test.org');
+    logger.error('auth failed', err);
+
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(raw);
+    if (parsed.error.stack) {
+      expect(parsed.error.stack).not.toContain('bob@test.org');
+    }
+    expect(parsed.error.message).toContain('[EMAIL_REDACTED]');
+  });
+
+  it('given error with no PII in message, should leave message unchanged', () => {
+    const err = new Error('Database connection timeout');
+    logger.error('db error', err);
+
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    const parsed = JSON.parse(raw);
+    expect(parsed.error.message).toBe('Database connection timeout');
+  });
+});
+
 describe('Logger formatOutput', () => {
   let anyLogger: AnyLogger;
 
