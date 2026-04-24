@@ -28,9 +28,8 @@ import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
+import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
-import { InputCard } from '@/components/ui/floating-input';
 import { isEditingActive } from '@/stores/useEditingStore';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
@@ -255,9 +254,7 @@ const SidebarChatTab: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -417,27 +414,6 @@ const SidebarChatTab: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
 
   // Track last AI response for voice mode TTS
   useEffect(() => {
@@ -612,7 +588,6 @@ const SidebarChatTab: React.FC = () => {
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
-      setShowVoiceSettings(false);
     } else {
       enableVoiceMode(VOICE_OWNER);
     }
@@ -816,44 +791,38 @@ const SidebarChatTab: React.FC = () => {
           />
         </div>
 
-        {isVoiceModeActive ? (
-          <InputCard>
-            <VoiceModeDock
-              owner={VOICE_OWNER}
-              onSend={handleVoiceSend}
-              aiResponse={lastAIResponse}
-              isAIStreaming={displayIsStreaming}
-              showSettings={showVoiceSettings}
-              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-              onClose={() => setShowVoiceSettings(false)}
-            />
-          </InputCard>
-        ) : (
-          <ChatInput
-            ref={chatInputRef}
-            value={input}
-            onChange={setInput}
-            onSend={handleSendMessage}
-            onStop={handleStop}
-            isStreaming={displayIsStreaming}
-            placeholder={locationContext
-              ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-              : 'Ask about your workspace...'}
-            driveId={locationContext?.currentDrive?.id}
-            crossDrive={true}
-            hideModelSelector={true}
-            variant="sidebar"
-            onVoiceModeClick={handleVoiceModeToggle}
-            isVoiceModeActive={isVoiceModeActive}
-            isVoiceModeAvailable={isOpenAIConfigured}
-            attachments={attachments}
-            onAddFiles={addFiles}
-            onRemoveFile={removeFile}
-            hasVision={hasVisionCapability(
-              (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
-            )}
+        {isVoiceModeActive && (
+          <VoiceCallPanel
+            owner={VOICE_OWNER}
+            onSend={handleVoiceSend}
+            latestAssistantMessage={lastAIResponse}
+            isAIStreaming={displayIsStreaming}
+            onClose={disableVoiceMode}
           />
         )}
+        <ChatInput
+          ref={chatInputRef}
+          value={input}
+          onChange={setInput}
+          onSend={handleSendMessage}
+          onStop={handleStop}
+          isStreaming={displayIsStreaming}
+          placeholder={locationContext
+            ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
+            : 'Ask about your workspace...'}
+          driveId={locationContext?.currentDrive?.id}
+          crossDrive={true}
+          hideModelSelector={true}
+          variant="sidebar"
+          onVoiceModeClick={handleVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeActive}
+          attachments={attachments}
+          onAddFiles={addFiles}
+          onRemoveFile={removeFile}
+          hasVision={hasVisionCapability(
+            (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
+          )}
+        />
       </div>
 
       <UndoAiChangesDialog

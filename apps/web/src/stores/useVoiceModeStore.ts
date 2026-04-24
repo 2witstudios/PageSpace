@@ -88,7 +88,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   owner: null,
   voiceState: 'idle',
   hasLoadedSettings: false,
-  interactionMode: 'tap-to-speak',
+  interactionMode: 'barge-in',
   ttsVoice: 'nova',
   ttsSpeed: 1.0,
   autoSend: true,
@@ -209,7 +209,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     const autoSend = localStorage.getItem(VOICE_AUTO_SEND_KEY);
 
     set({
-      interactionMode: interactionMode || 'tap-to-speak',
+      interactionMode: interactionMode || 'barge-in',
       ttsVoice: ttsVoice || 'nova',
       autoSend: autoSend !== 'false', // Default true
       hasLoadedSettings: true,
