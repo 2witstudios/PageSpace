@@ -180,7 +180,7 @@ Each item in a drive is a typed page with a specific role:
 ### Security Architecture
 PageSpace is built around a zero-trust model for cloud deployment. One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
 
-- **Opaque session tokens**: Server-validated tokens with SHA-256 hash-only storage — raw tokens never persisted
+- **Opaque session tokens**: Server-validated tokens with SHA3-256 hash-only storage — raw tokens never persisted
 - **Per-event authorization**: Every sensitive operation re-validates permissions against the database
 - **Instant token revocation**: Token versioning enables immediate session invalidation across all devices
 - **Device fingerprinting**: Trust scoring detects token theft via IP/User-Agent anomalies

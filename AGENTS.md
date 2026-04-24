@@ -7,7 +7,7 @@
 - **Full-Stack**: Next.js 15 App Router + TypeScript + Tailwind + shadcn/ui
 - **Database**: PostgreSQL + Drizzle ORM (local deployment via Docker)
 - **AI**: Ollama (local models) + Vercel AI SDK + OpenRouter + Google AI SDK
-- **Auth**: Passwordless — passkeys (WebAuthn) + magic links; opaque session tokens, SHA-256 hashed at rest
+- **Auth**: Passwordless — passkeys (WebAuthn) + magic links; opaque session tokens, SHA3-256 hashed at rest
 - **File Storage**: Local filesystem with metadata in PostgreSQL
 - **Real-time**: Socket.IO for live collaboration
 - **Deployment**: Docker containers on Mac Studio (local deployment)
@@ -38,7 +38,7 @@ This project uses a pnpm workspace with the following structure:
 
 **Backend & Database:**
 - Drizzle ORM ^0.32.2 with PostgreSQL
-- Passwordless auth: `@simplewebauthn/server` for passkeys, magic-link tokens, opaque session tokens (SHA-256 hashed at rest)
+- Passwordless auth: `@simplewebauthn/server` for passkeys, magic-link tokens, opaque session tokens (SHA3-256 hashed at rest)
 
 **AI & Real-time:**
 - Vercel AI SDK ^4.3.17

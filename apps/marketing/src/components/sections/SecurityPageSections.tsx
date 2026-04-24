@@ -97,8 +97,8 @@ export function SessionSecuritySection() {
             <FeatureCard
               icon={Key}
               title="Hash-Only Storage"
-              description="We never store the session token itself — only its SHA-256 hash. A compromised database snapshot does not yield usable tokens."
-              items={["High-entropy random tokens", "SHA-256 one-way hashing", "Server-side validation on every request"]}
+              description="We never store the session token itself — only its SHA3-256 hash. A compromised database snapshot does not yield usable tokens."
+              items={["High-entropy random tokens", "SHA3-256 one-way hashing", "Server-side validation on every request"]}
             />
             <FeatureCard
               icon={Timer}
