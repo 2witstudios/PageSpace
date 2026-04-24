@@ -4,16 +4,20 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       mcpTokens: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   mcpTokens: {
     tokenHash: 'tokenHash',
     revokedAt: 'revokedAt',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),

@@ -10,53 +10,53 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((a, b) => ({ op: 'eq', a, b }));
-  const and = vi.fn((...args: unknown[]) => ({ op: 'and', args }));
-  const isNull = vi.fn((a) => ({ op: 'isNull', a }));
-  const lt = vi.fn((a, b) => ({ op: 'lt', a, b }));
-  const sql = vi.fn();
-
-  return {
-    db: {
-      query: {
-        users: { findFirst: vi.fn() },
-        passkeys: { findFirst: vi.fn(), findMany: vi.fn() },
-        verificationTokens: { findFirst: vi.fn() },
-      },
-      insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
-      update: vi.fn(() => ({
-        set: vi.fn(() => ({
-          where: vi.fn(() => ({
-            returning: vi.fn().mockResolvedValue([{ id: 'updated' }]),
-          })),
-        })),
-      })),
-      delete: vi.fn(() => ({
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      users: { findFirst: vi.fn() },
+      passkeys: { findFirst: vi.fn(), findMany: vi.fn() },
+      verificationTokens: { findFirst: vi.fn() },
+    },
+    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
         where: vi.fn(() => ({
-          returning: vi.fn().mockResolvedValue([{ id: 'del' }]),
+          returning: vi.fn().mockResolvedValue([{ id: 'updated' }]),
         })),
       })),
-      transaction: vi.fn(),
-    },
-    passkeys: {
-      id: 'passkeys.id', userId: 'passkeys.userId', credentialId: 'passkeys.credentialId',
-      publicKey: 'passkeys.publicKey', counter: 'passkeys.counter', deviceType: 'passkeys.deviceType',
-      backedUp: 'passkeys.backedUp', transports: 'passkeys.transports', name: 'passkeys.name',
-      lastUsedAt: 'passkeys.lastUsedAt', createdAt: 'passkeys.createdAt',
-    },
-    users: {
-      id: 'users.id', email: 'users.email', name: 'users.name', suspendedAt: 'users.suspendedAt',
-      provider: 'users.provider', role: 'users.role', tokenVersion: 'users.tokenVersion',
-      emailVerified: 'users.emailVerified', tosAcceptedAt: 'users.tosAcceptedAt',
-    },
-    verificationTokens: {
-      id: 'vt.id', userId: 'vt.userId', tokenHash: 'vt.tokenHash', tokenPrefix: 'vt.tokenPrefix',
-      type: 'vt.type', expiresAt: 'vt.expiresAt', usedAt: 'vt.usedAt', metadata: 'vt.metadata',
-    },
-    eq, and, isNull, lt, sql,
-  };
-});
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'del' }]),
+      })),
+    })),
+    transaction: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  passkeys: {
+    id: 'passkeys.id', userId: 'passkeys.userId', credentialId: 'passkeys.credentialId',
+    publicKey: 'passkeys.publicKey', counter: 'passkeys.counter', deviceType: 'passkeys.deviceType',
+    backedUp: 'passkeys.backedUp', transports: 'passkeys.transports', name: 'passkeys.name',
+    lastUsedAt: 'passkeys.lastUsedAt', createdAt: 'passkeys.createdAt',
+  },
+  users: {
+    id: 'users.id', email: 'users.email', name: 'users.name', suspendedAt: 'users.suspendedAt',
+    provider: 'users.provider', role: 'users.role', tokenVersion: 'users.tokenVersion',
+    emailVerified: 'users.emailVerified', tosAcceptedAt: 'users.tosAcceptedAt',
+  },
+  verificationTokens: {
+    id: 'vt.id', userId: 'vt.userId', tokenHash: 'vt.tokenHash', tokenPrefix: 'vt.tokenPrefix',
+    type: 'vt.type', expiresAt: 'vt.expiresAt', usedAt: 'vt.usedAt', metadata: 'vt.metadata',
+  },
+}));
 
 const mockGenRegOptions = vi.fn();
 const mockGenAuthOptions = vi.fn();

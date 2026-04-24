@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       verificationTokens: { findFirst: vi.fn() },
@@ -21,8 +21,12 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email' },
   verificationTokens: { userId: 'userId', tokenHash: 'tokenHash', type: 'type', usedAt: 'usedAt', id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),

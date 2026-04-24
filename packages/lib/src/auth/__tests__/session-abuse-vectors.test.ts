@@ -42,7 +42,7 @@ vi.mock('drizzle-orm', () => ({
   sql: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
@@ -61,6 +61,8 @@ vi.mock('@pagespace/db', () => ({
       where: mockDeleteWhere.mockResolvedValue({ rowCount: 0 }),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
   sessions: {
     tokenHash: 'sessions.tokenHash',
     revokedAt: 'sessions.revokedAt',
@@ -68,7 +70,11 @@ vi.mock('@pagespace/db', () => ({
     userId: 'sessions.userId',
     lastUsedAt: 'sessions.lastUsedAt',
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'users.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),

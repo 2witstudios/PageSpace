@@ -5,15 +5,42 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((a, b) => ({ op: 'eq', a, b }));
-  const and = vi.fn((...args: unknown[]) => ({ op: 'and', args }));
-  const isNull = vi.fn((a) => ({ op: 'isNull', a }));
-  const lt = vi.fn((a, b) => ({ op: 'lt', a, b }));
-  const gt = vi.fn((a, b) => ({ op: 'gt', a, b }));
-  const or = vi.fn((...args: unknown[]) => ({ op: 'or', args }));
-  const sql = vi.fn();
-  const deviceTokens = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn(),
+      })),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: vi.fn(),
+        })),
+      })),
+    })),
+    query: {
+      deviceTokens: {
+        findFirst: vi.fn(),
+        findMany: vi.fn(),
+      },
+      users: {
+        findFirst: vi.fn(),
+      },
+    },
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
+  gt: vi.fn((a, b) => ({ op: 'gt', a, b })),
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  deviceTokens: {
     id: 'deviceTokens.id',
     userId: 'deviceTokens.userId',
     deviceId: 'deviceTokens.deviceId',
@@ -27,47 +54,12 @@ vi.mock('@pagespace/db', () => {
     lastUsedAt: 'deviceTokens.lastUsedAt',
     lastIpAddress: 'deviceTokens.lastIpAddress',
     $inferSelect: {},
-  };
-  const users = {
+  },
+  users: {
     id: 'users.id',
     tokenVersion: 'users.tokenVersion',
-  };
-
-  return {
-    db: {
-      insert: vi.fn(() => ({
-        values: vi.fn(() => ({
-          returning: vi.fn(),
-        })),
-      })),
-      update: vi.fn(() => ({
-        set: vi.fn(() => ({
-          where: vi.fn(() => ({
-            returning: vi.fn(),
-          })),
-        })),
-      })),
-      query: {
-        deviceTokens: {
-          findFirst: vi.fn(),
-          findMany: vi.fn(),
-        },
-        users: {
-          findFirst: vi.fn(),
-        },
-      },
-    },
-    deviceTokens,
-    users,
-    eq,
-    and,
-    isNull,
-    lt,
-    gt,
-    or,
-    sql,
-  };
-});
+  },
+}));
 
 vi.mock('../token-utils', () => ({
   hashToken: vi.fn((t: string) => `hashed_${t}`),

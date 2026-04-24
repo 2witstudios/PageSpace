@@ -20,7 +20,7 @@ vi.mock('apple-signin-auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: vi.fn() },
@@ -29,8 +29,14 @@ vi.mock('@pagespace/db', () => ({
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn() })) })),
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email', googleId: 'googleId', appleId: 'appleId' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   drives: { ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   or: vi.fn(),
   count: vi.fn(),
