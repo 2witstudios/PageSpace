@@ -56,6 +56,11 @@ vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
+  hashToken: (token: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createHash } = require('crypto');
+    return createHash('sha3-256').update(token).digest('hex');
+  },
 }));
 
 // DB mock – need query.socketTokens.findFirst and chained select().from().where().limit()

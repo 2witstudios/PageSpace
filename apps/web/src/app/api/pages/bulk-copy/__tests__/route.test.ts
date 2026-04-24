@@ -51,6 +51,7 @@ vi.mock('@pagespace/lib/monitoring', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-page-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
   isCuid: vi.fn(() => true),
 }));
 

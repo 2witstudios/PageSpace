@@ -23,6 +23,7 @@ vi.mock('../../index', () => {
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => 'mock-cuid-id',
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import {

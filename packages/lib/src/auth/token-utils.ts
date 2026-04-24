@@ -2,12 +2,19 @@
  * Token Utilities (P1-T3)
  *
  * Secure token generation and hashing for refresh tokens and MCP tokens.
- * All sensitive tokens MUST be stored as SHA-256 hashes, never plaintext.
+ * All sensitive tokens MUST be stored as SHA3-256 hashes, never plaintext.
  *
  * @module @pagespace/lib/auth/token-utils
  */
 
 import { createHash, randomBytes } from 'crypto';
+import { init } from '@paralleldrive/cuid2';
+
+// Explicitly supply Node's CSPRNG as the random source — CUID2's default is
+// Math.random, which is a PRNG. randomBytes gives full OS-level entropy while
+// still benefiting from CUID2's additional entropy sources (time, counter,
+// fingerprint) all mixed via SHA3-512.
+const createId = init({ length: 32, random: () => randomBytes(4).readUInt32BE() / 0x100000000 });
 
 /**
  * Token generation result containing the raw token (shown once),
@@ -16,24 +23,24 @@ import { createHash, randomBytes } from 'crypto';
 export interface GeneratedToken {
   /** Raw token value - show to user ONCE, never store */
   token: string;
-  /** SHA-256 hash of token - store in database */
+  /** SHA3-256 hash of token - store in database */
   hash: string;
   /** First 12 characters - store for debugging/identification */
   tokenPrefix: string;
 }
 
 /**
- * Hash a token using SHA-256.
+ * Hash a token using SHA3-256.
  *
  * Used for:
  * - Storing tokens securely in the database
  * - Looking up tokens by computing hash of provided value
  *
  * @param token - The raw token string to hash
- * @returns SHA-256 hex hash (64 characters)
+ * @returns SHA3-256 hex hash (64 characters)
  */
 export function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
+  return createHash('sha3-256').update(token).digest('hex');
 }
 
 /**
@@ -52,12 +59,12 @@ export function getTokenPrefix(token: string): string {
 }
 
 /**
- * Generate a new cryptographically secure token.
+ * Generate a cryptographically secure token using CUID2 at max length (32 chars).
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - 32 bytes (256 bits) of cryptographic randomness
- * - Base64URL encoding for URL-safe transmission
+ * - 32-char CUID2 random part — explicitly seeded with randomBytes() (CSPRNG),
+ *   combined with time, counter, and fingerprint entropy via SHA3-512
  *
  * @param prefix - Token type prefix (e.g., 'ps_refresh', 'mcp', 'ps_device')
  * @returns Object with token, hash, and tokenPrefix
@@ -71,8 +78,7 @@ export function getTokenPrefix(token: string): string {
  * ```
  */
 export function generateToken(prefix: string): GeneratedToken {
-  // 32 bytes = 256 bits of entropy
-  const randomPart = randomBytes(32).toString('base64url');
+  const randomPart = createId();
   const token = `${prefix}_${randomPart}`;
 
   return {

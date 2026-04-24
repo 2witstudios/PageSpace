@@ -36,7 +36,10 @@ vi.mock('@pagespace/db', () => ({
   count: vi.fn(),
 }));
 
-vi.mock('@paralleldrive/cuid2', () => ({ createId: vi.fn(() => 'test-cuid') }));
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn(() => 'test-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
+}));
 vi.mock('../../utils/utils', () => ({ slugify: vi.fn((s: string) => s.toLowerCase().replace(/\s+/g, '-')) }));
 vi.mock('../../logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },

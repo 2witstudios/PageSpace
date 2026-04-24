@@ -33,6 +33,7 @@ vi.mock('@pagespace/db', () => {
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id-123'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('../../services/notification-email-service', () => ({

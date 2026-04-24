@@ -35,6 +35,7 @@ vi.mock('@pagespace/db', () => {
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-token-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('crypto', async (importOriginal) => {

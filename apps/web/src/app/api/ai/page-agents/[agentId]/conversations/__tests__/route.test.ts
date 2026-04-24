@@ -57,6 +57,7 @@ vi.mock('@pagespace/lib/server', () => ({
 // Mock ID generation
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'generated_conv_id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';

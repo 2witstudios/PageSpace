@@ -131,6 +131,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({

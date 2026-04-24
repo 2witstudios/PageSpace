@@ -32,6 +32,7 @@ vi.mock('@pagespace/lib/server', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-attendee-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 // We need to test mapAttendeesToUsers which is not exported,

@@ -109,6 +109,7 @@ vi.mock('../event-transform', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('../webhook-token', () => ({

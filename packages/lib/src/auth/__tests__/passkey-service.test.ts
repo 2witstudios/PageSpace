@@ -77,6 +77,7 @@ vi.mock('../token-utils', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'test-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { db } from '@pagespace/db';
