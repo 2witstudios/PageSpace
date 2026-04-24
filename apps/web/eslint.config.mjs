@@ -20,6 +20,23 @@ const eslintConfig = [
           varsIgnorePattern: "^_",
         },
       ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@pagespace/db",
+              message:
+                "Use subpath imports: @pagespace/db/db, @pagespace/db/operators, or @pagespace/db/schema/<name>",
+            },
+            {
+              name: "@pagespace/lib",
+              message:
+                "Use direct subpath imports: @pagespace/lib/<module>/<file>",
+            },
+          ],
+        },
+      ],
     },
   },
 ];

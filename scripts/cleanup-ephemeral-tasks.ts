@@ -1,5 +1,7 @@
 import 'dotenv/config';
-import { db, taskLists, taskItems, eq, and, isNull, isNotNull, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
+import { eq, and, isNull, isNotNull, sql } from '@pagespace/db/operators';
 
 /**
  * Cleanup script to remove ephemeral (conversation-scoped) task lists.

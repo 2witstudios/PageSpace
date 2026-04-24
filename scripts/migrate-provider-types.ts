@@ -9,7 +9,9 @@
  * Run with: npx tsx scripts/migrate-provider-types.ts
  */
 
-import { db, aiUsageDaily, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { aiUsageDaily } from '@pagespace/db/schema/ai';
+import { eq } from '@pagespace/db/operators';
 
 async function migrateProviderTypes() {
   console.log('🚀 Starting provider type migration...');
