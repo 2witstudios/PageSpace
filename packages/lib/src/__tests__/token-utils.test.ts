@@ -13,8 +13,13 @@ describe('Token Utils', () => {
       const token = 'test_abc123xyz';
       const hash = hashToken(token);
 
-      // SHA3-256 produces 64 hex characters
       expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('given a known input, should return the correct SHA3-256 digest', () => {
+      expect(hashToken('test_abc123xyz')).toBe(
+        'b880f9685ff6b335e981ebd15d00ad0eaf066b39020702c4806ee3898ee6c4b2'
+      );
     });
 
     it('given the same token twice, should produce identical hashes', () => {
@@ -36,11 +41,10 @@ describe('Token Utils', () => {
       expect(hash1).not.toBe(hash2);
     });
 
-    it('given an empty string, should still produce a valid hash', () => {
-      const hash = hashToken('');
-
-      // SHA3-256 of empty string is a known value
-      expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    it('given an empty string, should return the SHA3-256 digest of empty input', () => {
+      expect(hashToken('')).toBe(
+        'a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a'
+      );
     });
 
     it('given a very long token (1000+ chars), should produce a valid hash', () => {

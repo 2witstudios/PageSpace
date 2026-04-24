@@ -53,11 +53,14 @@ export function getTokenPrefix(token: string): string {
 }
 
 /**
- * Generate a new cryptographically secure token.
+ * Generate a collision-resistant token.
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - CUID2 for collision-resistant unique ID generation
+ * - CUID2 random part (timestamp + fingerprint + counter + randomness)
+ *
+ * Security comes from storing only the SHA3-256 hash — the raw token
+ * is never persisted, so collision-resistance is sufficient for lookup.
  *
  * @param prefix - Token type prefix (e.g., 'ps_refresh', 'mcp', 'ps_device')
  * @returns Object with token, hash, and tokenPrefix
