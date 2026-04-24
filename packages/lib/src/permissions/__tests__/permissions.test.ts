@@ -58,7 +58,7 @@ import {
   getUserAccessiblePagesInDriveWithDetails,
   getUserDriveAccess,
 } from '../permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { parseUserId, parsePageId } from '../../validators';
 import { loggers } from '../../logging/logger-config';
 

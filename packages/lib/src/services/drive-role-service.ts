@@ -5,8 +5,10 @@
  * providing a clean seam for testing at the service level rather than the ORM level.
  */
 
-import { db, eq, and, asc } from '@pagespace/db';
-import { driveRoles, drives, driveMembers } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, asc } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
+import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 
 // ============================================================================
 // Types

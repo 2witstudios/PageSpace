@@ -5,17 +5,10 @@
  * providing a clean seam for testing route handlers.
  */
 
-import {
-  db,
-  drives,
-  driveMembers,
-  pages,
-  pagePermissions,
-  eq,
-  and,
-  not,
-  inArray,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, not, inArray } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 
 // ============================================================================

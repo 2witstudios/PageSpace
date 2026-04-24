@@ -8,7 +8,9 @@
  */
 
 import { z } from 'zod';
-import { db, users, verificationTokens, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull } from '@pagespace/db/operators';
+import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { generateToken, hashToken, getTokenPrefix } from './token-utils';
 import { secureCompare } from './secure-compare';

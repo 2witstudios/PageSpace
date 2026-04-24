@@ -1,50 +1,12 @@
 /**
- * Vitest setup file - runs before all tests
- * Sets required environment variables for testing
+ * Vitest setup file for apps/processor
+ *
+ * Forwards @pagespace/db subpath imports to the barrel mock so that test
+ * files using vi.mock('@pagespace/db', factory) automatically intercept
+ * subpath imports made by the code under test (e.g. security-audit.ts
+ * which imports from @pagespace/db/db, /operators, /schema/*).
  */
 import { vi } from 'vitest';
-
-// Encryption environment variables
-process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-32-chars-minimum-required-length'
-
-// CSRF protection environment variables
-process.env.CSRF_SECRET = process.env.CSRF_SECRET || 'test-csrf-secret-minimum-32-characters-long-for-testing-purposes'
-
-// Real-time broadcast authentication
-process.env.REALTIME_BROADCAST_SECRET = process.env.REALTIME_BROADCAST_SECRET || 'test-realtime-broadcast-secret-32-chars-minimum-length'
-
-// Database connection (for integration tests)
-// Note: Integration tests require a running PostgreSQL instance
-// See .env.test.example for setup instructions
-if (!process.env.DATABASE_URL) {
-  // Default to test database if not specified
-  process.env.DATABASE_URL = 'postgresql://localhost:5432/pagespace_test'
-}
-
-// File storage paths for file processor tests
-process.env.FILE_STORAGE_PATH = process.env.FILE_STORAGE_PATH || '/tmp/pagespace-test-files'
-process.env.PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://localhost:3003'
-
-// Realtime service URL
-process.env.INTERNAL_REALTIME_URL = process.env.INTERNAL_REALTIME_URL || 'http://localhost:3001'
-
-// ---------------------------------------------------------------------------
-// @pagespace/db subpath forwarding mocks
-//
-// Source files import from precise subpaths (@pagespace/db/db, /operators,
-// /schema/*) but unit tests mock the barrel (@pagespace/db). These lazy
-// factory functions forward each subpath mock to the barrel, so a test's
-// vi.mock('@pagespace/db', factory) automatically intercepts all subpath
-// imports made by the code under test.
-//
-// Each factory is lazy — it runs when the subpath is first imported, at
-// which point the test file's barrel mock is already registered.
-// ---------------------------------------------------------------------------
-
-// For each subpath: spread the real module first (all drizzle exports), then
-// overlay the barrel mock on top (test spies replace real functions where defined).
-// Using importOriginal ensures real drizzle functions serve as fallback for
-// anything not defined in the barrel mock.
 
 vi.mock('@pagespace/db/db', async (importOriginal) => {
   const real = await importOriginal<typeof import('@pagespace/db/db')>();

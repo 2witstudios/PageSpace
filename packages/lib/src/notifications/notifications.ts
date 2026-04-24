@@ -1,4 +1,8 @@
-import { db, notifications, users, pages, drives, eq, and, desc, count, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, desc, count, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { notifications } from '@pagespace/db/schema/notifications';
 import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';

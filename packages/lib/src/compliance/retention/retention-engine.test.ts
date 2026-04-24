@@ -47,17 +47,12 @@ import {
   runRetentionCleanup,
 } from './retention-engine';
 
-import {
-  sessions,
-  verificationTokens,
-  socketTokens,
-  emailUnsubscribeTokens,
-  pulseSummaries,
-  pageVersions,
-  driveBackups,
-  pagePermissions,
-  aiUsageLogs,
-} from '@pagespace/db';
+import { verificationTokens, socketTokens, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
 
 /**
  * Creates a mock DB that captures which table and condition were passed,

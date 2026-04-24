@@ -3,7 +3,10 @@
  * Provides a clean seam for testing storage-limits without ORM chain mocks.
  */
 
-import { db, users, pages, drives, storageEvents, eq, sql, and, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, sql, and, inArray } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 
 export type DrizzleTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

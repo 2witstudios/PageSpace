@@ -27,7 +27,7 @@ vi.mock('@pagespace/db', () => {
 });
 
 // Import after mocking
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   findMCPTokenByValue,
 } from '../auth/token-lookup';

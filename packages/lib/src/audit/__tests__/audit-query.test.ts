@@ -34,7 +34,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { queryAuditEvents } from '../audit-query';
-import { eq, gte, lte } from '@pagespace/db';
+import { eq, gte, lte } from '@pagespace/db/operators';
 
 describe('queryAuditEvents()', () => {
   const mockEvents = [

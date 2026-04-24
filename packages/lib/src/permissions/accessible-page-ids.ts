@@ -1,4 +1,5 @@
-import { db, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
 
 /**
  * Returns the set of page IDs the given user can view, computed via the

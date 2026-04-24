@@ -1,4 +1,7 @@
-import { db, users, emailNotificationPreferences, emailNotificationLog, emailUnsubscribeTokens, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
+import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { sendEmail } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';

@@ -435,6 +435,76 @@ describe('syncGoogleCalendar error handling', () => {
     });
   });
 
+  it('should disable connection when all calendars return 404', async () => {
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['stale-1@group.calendar.google.com', 'stale-2@group.calendar.google.com'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+
+    mockListEvents.mockResolvedValue({
+      success: false,
+      error: 'Not Found',
+      statusCode: 404,
+    });
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'succeed overall',
+      actual: result.success,
+      expected: true,
+    });
+
+    const setArgs = mockUpdate.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<string, unknown> | undefined;
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'persist selectedCalendars as empty array in the DB write',
+      actual: setArgs?.selectedCalendars,
+      expected: [],
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set connection status to error in the same DB write',
+      actual: setArgs?.status,
+      expected: 'error',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set statusMessage to the inaccessible message in the same DB write',
+      actual: setArgs?.statusMessage,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set lastSyncError to the inaccessible message in the same DB write',
+      actual: setArgs?.lastSyncError,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'not call updateConnectionStatus separately (single atomic write)',
+      actual: mockUpdateConnectionStatus.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   it('should handle token expiration (410) with sync token fallback', async () => {
     mockGetValidAccessToken.mockResolvedValue({
       success: true,

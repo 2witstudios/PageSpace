@@ -8,7 +8,9 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { db, revokedServiceTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { revokedServiceTokens } from '@pagespace/db/schema/revoked-service-tokens';
 import {
   recordJTI,
   isJTIRevoked,

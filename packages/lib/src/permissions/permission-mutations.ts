@@ -7,7 +7,11 @@
  */
 
 import { z } from 'zod';
-import { db, and, eq, pages, drives, driveMembers, pagePermissions, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { EnforcedAuthContext } from './enforced-context';
 import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './schemas';

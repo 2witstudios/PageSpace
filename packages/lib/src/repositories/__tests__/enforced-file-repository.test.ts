@@ -64,7 +64,7 @@ import {
   ForbiddenError,
   type FileRecord,
 } from '../enforced-file-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { getUserDrivePermissions } from '../../permissions/permissions';
 
 // Helper to create mock SessionClaims

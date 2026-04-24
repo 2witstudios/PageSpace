@@ -29,20 +29,12 @@
  *   - Per-page-type context loading delegates to `loadPagePayload` for shape
  *     reuse; the payload services compose, they don't duplicate.
  */
-import {
-  db,
-  drives,
-  driveMembers,
-  pages,
-  users,
-  connections,
-  and,
-  eq,
-  or,
-  inArray,
-  isNotNull,
-  asc,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, or, inArray, isNotNull, asc } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
+import { connections } from '@pagespace/db/schema/social';
 import type {
   AppShell,
   AppShellContext,

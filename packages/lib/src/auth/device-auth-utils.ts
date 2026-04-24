@@ -1,5 +1,7 @@
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, users, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull, lt, gt, sql, or } from '@pagespace/db/operators';
+import { deviceTokens, users } from '@pagespace/db/schema/auth';
 import { hashToken, getTokenPrefix } from './token-utils';
 import { generateOpaqueToken, isValidTokenFormat, getTokenType } from './opaque-tokens';
 

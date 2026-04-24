@@ -48,7 +48,7 @@ vi.mock('../secure-compare', () => ({
 }));
 
 import { createMagicLinkToken, verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES } from '../magic-link-service';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { secureCompare } from '../secure-compare';
 
 describe('magic-link-service', () => {

@@ -3,7 +3,8 @@
  * Handles writing log entries to the database
  */
 
-import { db, systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 import type { LogEntry, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
 import { createId } from '@paralleldrive/cuid2';

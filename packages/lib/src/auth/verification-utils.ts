@@ -1,4 +1,6 @@
-import { db, verificationTokens, users, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull } from '@pagespace/db/operators';
+import { verificationTokens, users } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { randomBytes } from 'crypto';
 import { hashToken, getTokenPrefix } from './token-utils';

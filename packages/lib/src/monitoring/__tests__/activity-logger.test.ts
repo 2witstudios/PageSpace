@@ -76,7 +76,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 // ── Import after mocking ──────────────────────────────────────────────────────
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   getActorInfo,
   generateChainSeed,

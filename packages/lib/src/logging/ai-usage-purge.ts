@@ -4,7 +4,9 @@
  * Provides TTL-based row purge and user-scoped deletion for account removal.
  */
 
-import { db, aiUsageLogs, lt, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { lt, eq } from '@pagespace/db/operators';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 
 /**
  * Delete AI usage log rows older than the cutoff date.

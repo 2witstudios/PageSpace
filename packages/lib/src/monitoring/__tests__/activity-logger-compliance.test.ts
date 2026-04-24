@@ -81,7 +81,7 @@ vi.mock('drizzle-orm', () => ({
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   logActivity,
   logPageActivity,

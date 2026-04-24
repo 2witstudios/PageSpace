@@ -8,7 +8,8 @@
  * making it detectable if any entry is modified, deleted, or inserted out of order.
  */
 
-import { db, activityLogs } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { asc, desc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
 import { computeLogHash } from './activity-logger';
 

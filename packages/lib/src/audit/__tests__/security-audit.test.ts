@@ -75,7 +75,8 @@ import {
   computeSecurityEventHash,
   type AuditEvent,
 } from '../security-audit';
-import { db, securityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 
 describe('Security Audit Service', () => {
   let service: SecurityAuditService;

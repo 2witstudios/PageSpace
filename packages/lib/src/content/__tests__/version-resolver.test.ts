@@ -33,7 +33,7 @@ import {
   resolveStackedVersionContent,
   type VersionResolveRequest,
 } from '../version-resolver';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('version-resolver', () => {
   beforeEach(() => {

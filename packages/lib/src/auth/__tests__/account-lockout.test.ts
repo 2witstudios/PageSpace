@@ -37,7 +37,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '../../logging/logger-config';
 import {
   getAccountLockoutStatus,

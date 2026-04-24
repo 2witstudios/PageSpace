@@ -144,7 +144,7 @@ import {
   verifyEntry,
   type HashChainVerificationResult,
 } from '../hash-chain-verifier';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 /**
  * Helper to create a valid hash chain of log entries
