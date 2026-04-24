@@ -4,10 +4,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockPurge, mockAudit, mockAnonymize } = vi.hoisted(() => ({
+const { mockPurge, mockAudit } = vi.hoisted(() => ({
   mockPurge: vi.fn(),
   mockAudit: vi.fn(),
-  mockAnonymize: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -15,7 +14,6 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
-  anonymizeAiUsageContent: mockAnonymize,
   purgeAiUsageLogs: mockPurge,
 }));
 
