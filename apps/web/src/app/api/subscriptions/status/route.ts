@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { db, eq, and, inArray, desc, subscriptions, users } from '@pagespace/db';
 import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 export async function GET(request: NextRequest) {
   try {

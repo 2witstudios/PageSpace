@@ -1,5 +1,6 @@
-import { verifyAndAlert } from '@pagespace/lib';
-import { loggers, audit } from '@pagespace/lib/server';
+import { verifyAndAlert } from '@pagespace/lib/audit/security-audit-alerting';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 

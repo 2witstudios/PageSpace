@@ -23,7 +23,7 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -32,6 +32,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -48,7 +52,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 

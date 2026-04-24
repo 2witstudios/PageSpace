@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, subscriptions, stripeEvents, users } from '@pagespace/db';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
-import { loggers, maskEmail } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 
 export async function POST(request: NextRequest) {
   try {

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;

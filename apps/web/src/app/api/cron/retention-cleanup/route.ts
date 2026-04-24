@@ -1,6 +1,6 @@
 import { runRetentionCleanup } from '@pagespace/lib/compliance/retention/retention-engine';
 import { db } from '@pagespace/db';
-import { audit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 

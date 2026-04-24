@@ -16,7 +16,7 @@ vi.mock('@pagespace/db', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -25,6 +25,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/repositories', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
@@ -35,6 +39,8 @@ vi.mock('@pagespace/lib/server', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -44,7 +50,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => {
+vi.mock('@pagespace/lib/validators/email', () => {
   const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return {
     isValidEmail: (email: string) => {
@@ -52,11 +58,17 @@ vi.mock('@pagespace/lib', () => {
       if (!EMAIL_PATTERN.test(email)) return false;
       return email.slice(email.lastIndexOf('@') + 1).includes('.');
     },
-    createUserServiceToken: vi.fn(),
-    deleteAiUsageLogsForUser: vi.fn(),
-    deleteMonitoringDataForUser: vi.fn(),
   };
 });
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+  createUserServiceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  deleteAiUsageLogsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+  deleteMonitoringDataForUser: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/compliance/anonymize', () => ({
   createAnonymizedActorEmail: vi.fn(() => 'deleted_user_abc123'),
@@ -72,7 +84,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { GET, PATCH } from '../route';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Helper to create mock SessionAuthResult

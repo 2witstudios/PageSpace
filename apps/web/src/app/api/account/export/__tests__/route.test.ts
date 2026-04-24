@@ -12,7 +12,7 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -28,7 +32,7 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
@@ -54,7 +58,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
 // Test helpers

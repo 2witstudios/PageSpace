@@ -2,11 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, integrationConnections, eq } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import {
-  getConnectionById,
-  deleteConnection,
-} from '@pagespace/lib/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getConnectionById, deleteConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

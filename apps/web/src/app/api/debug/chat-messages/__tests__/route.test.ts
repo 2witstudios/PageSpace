@@ -31,7 +31,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),
 }));
@@ -63,19 +63,21 @@ vi.mock('@pagespace/db', () => {
 });
 
 // Mock loggers (boundary)
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       debug: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test fixtures

@@ -26,14 +26,14 @@ vi.mock('@/lib/stripe/client', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
     auth: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
   },
-  logSecurityEvent: vi.fn(),
-  auditRequest: vi.fn(),
-  revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
+}));
+
+vi.mock('@pagespace/lib/repositories', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn().mockResolvedValue([]),
@@ -47,28 +47,42 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/revoke-integration-tokens', () => ({
+  revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
+}));
+
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+  deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
+}));
+
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isCloud: vi.fn().mockReturnValue(false),
+}));
+
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ email: 'admin@example.com', displayName: 'Admin' }),
   logUserActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...(actual as object),
-    deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(undefined),
-    deleteMonitoringDataForUser: vi.fn().mockResolvedValue({ systemLogs: 0, apiMetrics: 0, errorLogs: 0, userActivities: 0 }),
-    isCloud: vi.fn().mockReturnValue(false),
-  };
-});
-
 import { DELETE } from '../route';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { validateCSRF } from '@/lib/auth/csrf-validation';
-import { accountRepository, activityLogRepository, auditRequest, revokeUserIntegrationTokens } from '@pagespace/lib/server';
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isCloud } from '@pagespace/lib';
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge'
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge'
+import { isCloud } from '@pagespace/lib/deployment-mode';
 import { stripe } from '@/lib/stripe/client';
 
 const mockAuth = vi.mocked(authenticateSessionRequest);

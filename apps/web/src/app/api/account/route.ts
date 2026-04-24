@@ -1,8 +1,15 @@
 import { users, db, eq } from '@pagespace/db';
 import { z } from 'zod';
-import { loggers, accountRepository, activityLogRepository, auditRequest, revokeUserIntegrationTokens } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteAiUsageLogsForUser, deleteMonitoringDataForUser, isValidEmail, isCloud, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
+import { isValidEmail } from '@pagespace/lib/validators/email';
+import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { stripe } from '@/lib/stripe/client';

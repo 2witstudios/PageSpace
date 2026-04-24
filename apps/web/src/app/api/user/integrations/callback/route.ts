@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import {
-  verifySignedState,
-  exchangeOAuthCode,
-  encryptCredentials,
-  getProviderById,
-  createConnection,
-  findUserConnection,
-  findDriveConnection,
-  updateConnectionCredentials,
-  updateConnectionStatus,
-} from '@pagespace/lib/integrations';
-import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifySignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
+import { exchangeOAuthCode } from '@pagespace/lib/integrations/oauth/oauth-handler';
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
+import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { createConnection, findUserConnection, findDriveConnection, updateConnectionCredentials, updateConnectionStatus } from '@pagespace/lib/integrations/repositories/connection-repository';
+import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations/types';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { isSafeReturnUrl } from '@/lib/auth';
 

@@ -28,18 +28,28 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
   PageType: {},
+}));
+vi.mock('@pagespace/lib/sheets', () => ({
   isSheetType: vi.fn(() => false),
   parseSheetContent: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
