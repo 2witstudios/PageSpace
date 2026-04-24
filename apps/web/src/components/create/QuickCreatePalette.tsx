@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, Upload } from 'lucide-react';
+import {
+  ArrowLeft, Upload,
+  FileText, FileCode, FileSpreadsheet, FileImage, File,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+  type LucideIcon,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
@@ -34,6 +39,59 @@ import {
 } from '@pagespace/lib/client-safe';
 
 type Phase = 'type-select' | 'name-entry';
+
+const PAGE_TYPE_COLORS: Partial<Record<PageType, string>> = {
+  [PageType.DOCUMENT]:  '#60a5fa',
+  [PageType.AI_CHAT]:   '#e879f9',
+  [PageType.TASK_LIST]: '#fb923c',
+  [PageType.CHANNEL]:   '#38bdf8',
+  [PageType.FOLDER]:    '#fbbf24',
+  [PageType.SHEET]:     '#34d399',
+  [PageType.CANVAS]:    '#f472b6',
+  [PageType.CODE]:      '#a78bfa',
+  [PageType.FILE]:      '#94a3b8',
+  [PageType.TERMINAL]:  '#6ee7b7',
+};
+
+const PAGE_TYPE_ICON_COMPONENTS: Record<string, LucideIcon> = {
+  FileText, FileCode, FileSpreadsheet, FileImage, File,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+};
+
+function getPageTypeIconData(type: PageType): { Icon: LucideIcon; color: string } {
+  const config = getPageTypeConfig(type);
+  return {
+    Icon: PAGE_TYPE_ICON_COMPONENTS[config.iconName] ?? File,
+    color: PAGE_TYPE_COLORS[type] ?? '#94a3b8',
+  };
+}
+
+function KbdHint({ keys }: { keys: string[] }) {
+  return (
+    <span className="flex items-center gap-[3px]">
+      {keys.map((k) => (
+        <kbd key={k} className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border bg-muted px-1 font-sans text-[11px] font-medium leading-none text-muted-foreground">
+          {k}
+        </kbd>
+      ))}
+    </span>
+  );
+}
+
+function PageIconBadge({ type, size = 'md' }: { type: PageType; size?: 'sm' | 'md' }) {
+  const { Icon, color } = getPageTypeIconData(type);
+  const dim = size === 'sm' ? 20 : 24;
+  const iconSize = size === 'sm' ? 12 : 14;
+  const radius = size === 'sm' ? 5 : 6;
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center"
+      style={{ width: dim, height: dim, borderRadius: radius, background: `color-mix(in oklch, ${color} 15%, transparent)` }}
+    >
+      <Icon size={iconSize} color={color} strokeWidth={1.5} />
+    </span>
+  );
+}
 
 const treeFetcher = async (url: string) => {
   const res = await fetchWithAuth(url);
@@ -249,7 +307,12 @@ export default function QuickCreatePalette() {
               In: <span className="font-medium">{contextLabel}</span>
             </p>
           </div>
-          <CommandInput placeholder="Search page types…" autoFocus />
+          <div className="relative">
+            <CommandInput placeholder="Search page types…" autoFocus />
+            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+              <KbdHint keys={['⌥', 'N']} />
+            </div>
+          </div>
           <CommandList className="max-h-[360px]">
             <CommandEmpty>No matching types.</CommandEmpty>
             <CommandGroup>
@@ -258,13 +321,11 @@ export default function QuickCreatePalette() {
                 return (
                   <CommandItem
                     key={type}
-                    value={`${config.emoji} ${config.displayName} ${config.description}`}
+                    value={`${config.displayName} ${config.description}`}
                     onSelect={() => handleSelectType(type)}
                     className="flex items-center gap-3 py-2.5"
                   >
-                    <span className="text-lg leading-none w-6 text-center shrink-0">
-                      {config.emoji}
-                    </span>
+                    <PageIconBadge type={type} />
                     <span className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium">{config.displayName}</span>
                       <span className="text-xs text-muted-foreground">{config.description}</span>
@@ -294,7 +355,7 @@ export default function QuickCreatePalette() {
             >
               <ArrowLeft className="h-3.5 w-3.5" />
             </button>
-            <span className="text-base leading-none">{getPageTypeConfig(selectedType).emoji}</span>
+            <PageIconBadge type={selectedType} size="sm" />
             <span className="text-sm font-medium">{getPageTypeConfig(selectedType).displayName}</span>
           </div>
 
