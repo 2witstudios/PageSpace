@@ -181,7 +181,7 @@ export function logAuthEvent(
   const metadata = {
     event,
     userId,
-    email: email ? email.replace(/(.{2}).*(@.*)/, '$1***$2') : undefined, // Partially mask email
+    email: email ? '[REDACTED]' : undefined,
     ip,
     reason
   };

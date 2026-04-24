@@ -19,7 +19,7 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code' | 'Terminal';
+  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareTerminal' | 'SquareCheckBig';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
@@ -68,7 +68,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.CHANNEL,
     displayName: 'Channel',
     description: 'Team discussion channel',
-    iconName: 'MessageSquare',
+    iconName: 'MessagesSquare',
     emoji: '💬',
     capabilities: {
       canAcceptUploads: false,
@@ -85,7 +85,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.AI_CHAT,
     displayName: 'AI Chat',
     description: 'AI-powered conversation space',
-    iconName: 'Sparkles',
+    iconName: 'BotMessageSquare',
     emoji: '🤖',
     capabilities: {
       canAcceptUploads: false,
@@ -105,7 +105,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.CANVAS,
     displayName: 'Canvas',
     description: 'Custom HTML/CSS page',
-    iconName: 'Palette',
+    iconName: 'FileImage',
     emoji: '🎨',
     capabilities: {
       canAcceptUploads: false,
@@ -122,7 +122,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.FILE,
     displayName: 'File',
     description: 'Uploaded file with metadata',
-    iconName: 'FileIcon',
+    iconName: 'File',
     emoji: '📎',
     capabilities: {
       canAcceptUploads: false,
@@ -139,7 +139,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.SHEET,
     displayName: 'Sheet',
     description: 'Interactive spreadsheet with formulas',
-    iconName: 'Table',
+    iconName: 'FileSpreadsheet',
     emoji: '📊',
     capabilities: {
       canAcceptUploads: false,
@@ -156,7 +156,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.TASK_LIST,
     displayName: 'Task List',
     description: 'Table-based task management',
-    iconName: 'CheckSquare',
+    iconName: 'SquareCheckBig',
     emoji: '✅',
     capabilities: {
       canAcceptUploads: false,
@@ -173,7 +173,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.CODE,
     displayName: 'Code',
     description: 'Code editor with syntax highlighting',
-    iconName: 'Code',
+    iconName: 'FileCode',
     emoji: '💻',
     capabilities: {
       canAcceptUploads: false,
@@ -190,7 +190,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     type: PageType.TERMINAL,
     displayName: 'Terminal',
     description: 'Interactive terminal with shell access',
-    iconName: 'Terminal',
+    iconName: 'SquareTerminal',
     emoji: '🖥️',
     capabilities: {
       canAcceptUploads: false,

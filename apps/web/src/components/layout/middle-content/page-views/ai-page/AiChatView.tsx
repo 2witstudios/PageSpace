@@ -23,7 +23,7 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
+import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
@@ -80,9 +80,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceOwner = useVoiceModeStore((s) => s.owner);
@@ -279,28 +277,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (error) setShowError(true);
   }, [error]);
 
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
-
   // Track last AI response for voice mode TTS
   useEffect(() => {
     if (!isVoiceModeActive || isStreaming) return;
@@ -454,7 +430,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
-      setShowVoiceSettings(false);
     } else {
       enableVoiceMode(VOICE_OWNER);
     }
@@ -640,17 +615,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
             renderInput={(props) => (
-              isVoiceModeActive ? (
-                <VoiceModeDock
-                  owner={VOICE_OWNER}
-                  onSend={handleVoiceSend}
-                  aiResponse={lastAIResponse}
-                  isAIStreaming={isStreaming}
-                  showSettings={showVoiceSettings}
-                  onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-                  onClose={() => setShowVoiceSettings(false)}
-                />
-              ) : (
+              <>
+                {isVoiceModeActive && (
+                  <VoiceCallPanel
+                    owner={VOICE_OWNER}
+                    onSend={handleVoiceSend}
+                    latestAssistantMessage={lastAIResponse}
+                    isAIStreaming={isStreaming}
+                    onClose={disableVoiceMode}
+                  />
+                )}
                 <ChatInput
                   ref={inputRef}
                   value={props.value}
@@ -679,13 +653,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   }}
                   onVoiceModeClick={handleVoiceModeToggle}
                   isVoiceModeActive={isVoiceModeActive}
-                  isVoiceModeAvailable={isOpenAIConfigured}
                   attachments={attachments}
                   onAddFiles={addFiles}
                   onRemoveFile={removeFile}
                   hasVision={hasVision}
                 />
-              )
+              </>
             )}
           />
         </TabsContent>

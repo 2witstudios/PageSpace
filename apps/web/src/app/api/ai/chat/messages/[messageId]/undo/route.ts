@@ -6,7 +6,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({

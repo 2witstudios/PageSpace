@@ -3,7 +3,7 @@ import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { jsonResponse } from '@pagespace/lib/api-utils';
+import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

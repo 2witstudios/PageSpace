@@ -63,7 +63,6 @@ export async function GET(request: Request) {
 
   audit({
     eventType: 'data.delete',
-    userId: 'system',
     resourceType: 'cron_job',
     resourceId: 'sweep_expired',
     details: results,

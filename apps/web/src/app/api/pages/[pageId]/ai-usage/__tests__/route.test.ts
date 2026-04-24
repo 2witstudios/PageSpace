@@ -74,7 +74,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/ai-monitoring', () => ({
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   getContextWindow: (...args: unknown[]) => mockGetContextWindow(...args),
 }));
 

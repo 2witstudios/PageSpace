@@ -174,10 +174,6 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   pageId: text('page_id'),
   driveId: text('drive_id'),
   
-  // Request/Response
-  prompt: text('prompt'), // Store first 1000 chars
-  completion: text('completion'), // Store first 1000 chars
-  
   // Status
   success: boolean('success').default(true),
   error: text('error'),

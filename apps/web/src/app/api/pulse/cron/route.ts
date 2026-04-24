@@ -46,12 +46,11 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
-import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
 export async function POST(req: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(req);
   if (authError) {
     return authError;

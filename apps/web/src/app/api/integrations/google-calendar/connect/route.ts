@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { db, users, eq } from '@pagespace/db';
+import { isOnPrem } from '@pagespace/lib';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
@@ -18,6 +19,7 @@ const connectSchema = z.object({
  * User must be authenticated before connecting calendar.
  */
 export async function POST(req: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     // Validate required OAuth environment variables
     if (

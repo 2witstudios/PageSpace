@@ -2,11 +2,13 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { Grip, List, Plus } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useDriveStore } from '@/hooks/useDrive';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
-import { FolderViewHeader } from '@/components/layout/middle-content/page-views/folder/FolderViewHeader';
+import CreatePageDialog from '@/components/layout/left-sidebar/CreatePageDialog';
 import { FilesBreadcrumbs } from './FilesBreadcrumbs';
 import { FilesGridView } from './FilesGridView';
 import { FilesListView } from './FilesListView';
@@ -26,6 +28,7 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   const canWrite = drive?.role === 'OWNER' || drive?.role === 'ADMIN';
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('title');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
@@ -102,13 +105,34 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
   return (
     <div className="h-full overflow-y-auto">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-        <FilesBreadcrumbs
-          driveId={driveId}
-          driveName={driveName}
-          currentPageId={currentPageId}
-          tree={tree}
-        />
-        <FolderViewHeader viewMode={viewMode} onViewChange={setViewMode} />
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div className="min-w-0 flex-1">
+            {currentPageId ? (
+              <FilesBreadcrumbs
+                driveId={driveId}
+                driveName={driveName}
+                currentPageId={currentPageId}
+                tree={tree}
+              />
+            ) : (
+              <h1 className="text-2xl font-bold truncate">{driveName}</h1>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant={viewMode === 'list' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('list')}>
+              <List className="h-4 w-4" />
+            </Button>
+            <Button variant={viewMode === 'grid' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('grid')}>
+              <Grip className="h-4 w-4" />
+            </Button>
+            {canWrite && (
+              <Button size="sm" onClick={() => setIsDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />
+                New Page
+              </Button>
+            )}
+          </div>
+        </div>
 
         {sortedItems.length === 0 ? (
           <FilesEmptyState
@@ -130,6 +154,18 @@ export function FilesFinderContent({ driveId, currentPageId }: FilesFinderConten
           />
         )}
       </div>
+      {canWrite && (
+        <CreatePageDialog
+          driveId={driveId}
+          parentId={currentPageId}
+          isOpen={isDialogOpen}
+          setIsOpen={setIsDialogOpen}
+          onPageCreated={() => {
+            handleMutate();
+            setIsDialogOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

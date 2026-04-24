@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { getContextWindow } from '@pagespace/lib/ai-monitoring';
+import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 import {
   globalConversationRepository,
   calculateUsageSummary,

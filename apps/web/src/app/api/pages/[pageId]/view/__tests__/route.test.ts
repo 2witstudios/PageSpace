@@ -49,7 +49,7 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-vi.mock('@pagespace/lib/api-utils', () => ({
+vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data: unknown) => NextResponse.json(data)),
 }));
 

@@ -254,6 +254,8 @@ export default function SidebarActivityTab() {
     context: activityContext || 'drive', // Fallback for type, but won't be used when contextId is null
     contextId: activityContextId,
     onActivityLogged: loadActivities,
+    driveId: driveId ?? null,
+    pageId: pageId ?? null,
   });
 
   // Handle undo click - fetch preview and show confirm dialog

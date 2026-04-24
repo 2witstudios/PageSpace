@@ -5,7 +5,7 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, pages, eq, and, desc, isNull, inArray, type PageTypeEnum } from '@pagespace/db';
+import { db, pages, eq, and, desc, isNull, inArray, isNotNull, lt, type PageTypeEnum } from '@pagespace/db';
 
 export type PageTypeValue = PageTypeEnum;
 
@@ -262,6 +262,25 @@ export const pageRepository = {
       });
 
     return restoredPage;
+  },
+
+  /**
+   * Hard-delete pages that have been in the trash for longer than the cutoff date.
+   * Returns the count of deleted pages.
+   */
+  purgeExpiredTrashedPages: async (olderThan: Date): Promise<number> => {
+    const result = await db
+      .delete(pages)
+      .where(
+        and(
+          eq(pages.isTrashed, true),
+          isNotNull(pages.trashedAt),
+          lt(pages.trashedAt, olderThan)
+        )
+      )
+      .returning({ id: pages.id });
+
+    return result.length;
   },
 
   /**

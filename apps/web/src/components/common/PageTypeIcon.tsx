@@ -1,16 +1,16 @@
 import React from 'react';
 import {
+  File,
+  FileCheck2,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
   FileText,
-  FileCheck,
   Folder,
-  MessageSquare,
-  Sparkles,
-  Palette,
-  FileIcon,
-  Table,
-  CheckSquare,
-  Code,
-  Terminal,
+  BotMessageSquare,
+  MessagesSquare,
+  SquareCheckBig,
+  SquareTerminal,
 } from 'lucide-react';
 import { PageType, getPageTypeIconName } from '@pagespace/lib/client-safe';
 
@@ -20,27 +20,25 @@ interface PageTypeIconProps {
   isTaskLinked?: boolean;
 }
 
-// Map icon names to actual icon components
 const iconMap = {
   Folder,
   FileText,
-  FileCheck,
-  MessageSquare,
-  Sparkles,
-  Palette,
-  FileIcon,
-  Table,
-  CheckSquare,
-  Code,
-  Terminal,
+  FileCheck2,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
+  File,
+  MessagesSquare,
+  BotMessageSquare,
+  SquareCheckBig,
+  SquareTerminal,
 } as const;
 
 export function PageTypeIcon({ type, className, isTaskLinked }: PageTypeIconProps) {
   const iconName = getPageTypeIconName(type);
 
-  // Use FileCheck icon for task-linked documents
   if (type === 'DOCUMENT' && isTaskLinked) {
-    return <FileCheck className={className} />;
+    return <FileCheck2 className={className} />;
   }
 
   const Icon = iconMap[iconName as keyof typeof iconMap] || FileText;

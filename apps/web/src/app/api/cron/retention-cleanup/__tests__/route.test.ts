@@ -58,7 +58,7 @@ describe('/api/cron/retention-cleanup', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted: 15, tables: MOCK_RESULTS } })
+      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted: 15, tables: MOCK_RESULTS } })
     );
   });
 

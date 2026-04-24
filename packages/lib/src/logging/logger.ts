@@ -6,6 +6,8 @@
 import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
+import { scrubPII } from '../compliance/pii-scrubber';
+import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
 
 export enum LogLevel {
   TRACE = 0,
@@ -228,8 +230,8 @@ class Logger {
     if (error) {
       entry.error = {
         name: error.name,
-        message: error.message,
-        stack: error.stack
+        message: scrubPII(error.message) ?? '[scrub_failed]',
+        stack: scrubPII(error.stack),
       };
     }
 
@@ -372,6 +374,19 @@ class Logger {
     if (!this.shouldLog(level)) return;
 
     const entry = this.createLogEntry(level, message, metadata, error);
+
+    if (level >= LogLevel.ERROR) {
+      const siemPayload: SiemErrorPayload = {
+        timestamp: entry.timestamp,
+        level: entry.level,
+        message: entry.message,
+        hostname: entry.hostname,
+        pid: entry.pid,
+        category: this.context.category as string | undefined,
+        error: entry.error,
+      };
+      fireSiemErrorHook(siemPayload);
+    }
 
     if (this.config.destination === 'console') {
       // Write immediately to console

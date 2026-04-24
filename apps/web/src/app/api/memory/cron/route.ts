@@ -14,7 +14,7 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
@@ -45,7 +45,6 @@ const PAYING_TIERS = ['pro', 'founder', 'business'];
 const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;

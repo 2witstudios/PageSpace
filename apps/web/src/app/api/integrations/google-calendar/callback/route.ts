@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections } from '@pagespace/db';
 import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
-import { encrypt } from '@pagespace/lib';
+import { encrypt, isOnPrem } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
 import { secureCompare } from '@pagespace/lib';
@@ -18,6 +18,7 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
  * Exchanges authorization code for tokens and stores encrypted credentials.
  */
 export async function GET(req: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
   try {

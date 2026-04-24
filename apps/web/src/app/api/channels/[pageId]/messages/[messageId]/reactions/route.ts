@@ -3,7 +3,7 @@ import { channelMessages, channelMessageReactions, db, eq, and } from '@pagespac
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, auditRequest } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

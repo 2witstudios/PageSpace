@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
+import { isOnPrem } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 
@@ -18,6 +19,7 @@ const settingsSchema = z.object({
  * Returns the current settings and event statistics.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
@@ -76,6 +78,7 @@ export async function GET(request: Request) {
  * Updates Google Calendar sync settings.
  */
 export async function PATCH(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;

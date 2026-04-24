@@ -34,9 +34,7 @@ vi.mock('@pagespace/db', () => {
   return {
     db: {
       query: {
-        securityAuditLog: {
-          findFirst: vi.fn(),
-        },
+        securityAuditLog: {},
       },
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
@@ -214,41 +212,23 @@ describe('Security Audit Service', () => {
   });
 
   describe('initialize', () => {
-    it('initializes with genesis hash when no previous events exist', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('marks service as initialized', async () => {
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
+      expect(service.isInitialized()).toBe(true);
     });
 
-    it('initializes with last event hash when events exist', async () => {
-      const lastEvent = {
-        id: 'evt123',
-        eventHash: 'abc123def456',
-        timestamp: new Date(),
-      };
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(lastEvent as never);
-
-      await service.initialize();
-
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
-    });
-
-    it('only initializes once (idempotent)', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('is idempotent when called multiple times', async () => {
       await service.initialize();
       await service.initialize();
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalledTimes(1);
+      expect(service.isInitialized()).toBe(true);
     });
   });
 
   describe('logEvent', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 
@@ -331,7 +311,6 @@ describe('Security Audit Service', () => {
 
   describe('convenience methods', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 

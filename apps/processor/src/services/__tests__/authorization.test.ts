@@ -17,7 +17,7 @@ vi.mock('@pagespace/lib/permissions', () => ({
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 
-vi.mock('@pagespace/lib/logger-config', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     security: {
       warn: vi.fn(),

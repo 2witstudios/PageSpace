@@ -42,8 +42,8 @@ import { getMCPBridge } from '@/lib/mcp';
 import { loggers, auditRequest } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
-import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {

@@ -15,7 +15,7 @@ import {
 } from '@pagespace/lib/security';
 import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
 import { loggers, auditRequest } from '@pagespace/lib/server';
-import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({

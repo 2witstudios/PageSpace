@@ -3,7 +3,7 @@ import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, 
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage, auditRequest } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
-import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 
 // Type for attachment metadata stored in the database

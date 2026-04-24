@@ -24,6 +24,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   audit: vi.fn(),
   auditRequest: vi.fn(),
+  revokeUserIntegrationTokens: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -35,6 +36,15 @@ vi.mock('@pagespace/lib', () => ({
   createUserServiceToken: vi.fn(),
   deleteAiUsageLogsForUser: vi.fn(),
   deleteMonitoringDataForUser: vi.fn(),
+  isCloud: vi.fn(),
+}));
+
+vi.mock('@/lib/stripe/client', () => ({
+  stripe: {
+    customers: {
+      del: vi.fn(),
+    },
+  },
 }));
 
 import { DELETE } from '../route';
@@ -42,9 +52,11 @@ import {
   loggers,
   accountRepository,
   activityLogRepository,
+  revokeUserIntegrationTokens,
 } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, deleteMonitoringDataForUser } from '@pagespace/lib';
+import { createUserServiceToken, deleteMonitoringDataForUser, isCloud } from '@pagespace/lib';
+import { stripe } from '@/lib/stripe/client';
 
 // Type the mocked repositories
 const mockAccountRepo = vi.mocked(accountRepository);
@@ -78,11 +90,12 @@ describe('DELETE /api/account', () => {
     );
     vi.mocked(isAuthError).mockReturnValue(false);
 
-    // Arrange: default user exists
+    // Arrange: default user exists (includes stripeCustomerId for #910)
     mockAccountRepo.findById.mockResolvedValue({
       id: mockUserId,
       email: mockUserEmail,
       image: null,
+      stripeCustomerId: null,
     });
 
     // Arrange: default no owned drives
@@ -92,6 +105,12 @@ describe('DELETE /api/account', () => {
     mockAccountRepo.deleteDrive.mockResolvedValue(undefined);
     mockAccountRepo.deleteUser.mockResolvedValue(undefined);
     mockActivityLogRepo.anonymizeForUser.mockResolvedValue({ success: true });
+
+    // Arrange: default non-cloud (no Stripe calls)
+    vi.mocked(isCloud).mockReturnValue(false);
+
+    // Arrange: default successful OAuth revocation (#911)
+    vi.mocked(revokeUserIntegrationTokens).mockResolvedValue({ revoked: 0, failed: 0 });
   });
 
   describe('email confirmation validation', () => {
@@ -284,6 +303,7 @@ describe('DELETE /api/account', () => {
         id: mockUserId,
         email: mockUserEmail,
         image: '/avatars/user_123.jpg',
+        stripeCustomerId: null,
       });
 
       global.fetch = vi.fn().mockResolvedValue({
@@ -317,6 +337,7 @@ describe('DELETE /api/account', () => {
         id: mockUserId,
         email: mockUserEmail,
         image: 'https://example.com/avatar.jpg',
+        stripeCustomerId: null,
       });
 
       global.fetch = vi.fn();
@@ -339,6 +360,7 @@ describe('DELETE /api/account', () => {
         id: mockUserId,
         email: mockUserEmail,
         image: '/avatars/user_123.jpg',
+        stripeCustomerId: null,
       });
 
       vi.mocked(createUserServiceToken).mockRejectedValueOnce(new Error('Token creation failed'));
@@ -492,6 +514,200 @@ describe('DELETE /api/account', () => {
       expect(loggers.auth.error).toHaveBeenCalledWith(
         'Account deletion error:',
         expect.objectContaining({ message: 'Database connection lost' })
+      );
+    });
+  });
+
+  describe('stripe customer deletion (#910)', () => {
+    it('given stripeCustomerId and cloud mode, should delete Stripe customer after account deletion', async () => {
+      // Arrange
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: 'cus_test123',
+      });
+      vi.mocked(isCloud).mockReturnValue(true);
+      vi.mocked(stripe.customers.del).mockResolvedValue({} as never);
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(stripe.customers.del).toHaveBeenCalledWith('cus_test123');
+    });
+
+    it('given null stripeCustomerId, should not call Stripe delete', async () => {
+      // Arrange — default beforeEach already has stripeCustomerId: null
+      vi.mocked(isCloud).mockReturnValue(true);
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(stripe.customers.del).not.toHaveBeenCalled();
+    });
+
+    it('given non-cloud deployment, should not call Stripe delete even with stripeCustomerId', async () => {
+      // Arrange
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: 'cus_onprem123',
+      });
+      vi.mocked(isCloud).mockReturnValue(false);
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(stripe.customers.del).not.toHaveBeenCalled();
+    });
+
+    it('given Stripe API failure, should log error but not block deletion', async () => {
+      // Arrange
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: 'cus_test123',
+      });
+      vi.mocked(isCloud).mockReturnValue(true);
+      vi.mocked(stripe.customers.del).mockRejectedValue(new Error('Stripe API unavailable'));
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert — user deleted, Stripe failure only logged
+      expect(response.status).toBe(200);
+      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Could not delete Stripe customer during account deletion:',
+        expect.objectContaining({ message: 'Stripe API unavailable' })
+      );
+    });
+
+    it('given Stripe deletion, should call deleteUser BEFORE stripe.customers.del', async () => {
+      // Arrange — right to erasure cannot be gated on Stripe API availability
+      mockAccountRepo.findById.mockResolvedValue({
+        id: mockUserId,
+        email: mockUserEmail,
+        image: null,
+        stripeCustomerId: 'cus_test123',
+      });
+      vi.mocked(isCloud).mockReturnValue(true);
+
+      const callOrder: string[] = [];
+      mockAccountRepo.deleteUser.mockImplementation(async () => {
+        callOrder.push('deleteUser');
+      });
+      vi.mocked(stripe.customers.del).mockImplementation(async () => {
+        callOrder.push('stripeDel');
+        return {} as never;
+      });
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      await DELETE(request);
+
+      // Assert — DB deletion before Stripe
+      expect(callOrder.indexOf('deleteUser')).toBeLessThan(callOrder.indexOf('stripeDel'));
+    });
+  });
+
+  describe('oauth token revocation (#911)', () => {
+    it('given active oauth connections, should revoke tokens before user deletion', async () => {
+      // Arrange
+      const callOrder: string[] = [];
+      vi.mocked(revokeUserIntegrationTokens).mockImplementation(async () => {
+        callOrder.push('revokeTokens');
+        return { revoked: 2, failed: 0 };
+      });
+      mockAccountRepo.deleteUser.mockImplementation(async () => {
+        callOrder.push('deleteUser');
+      });
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert — revoke before delete
+      expect(response.status).toBe(200);
+      expect(revokeUserIntegrationTokens).toHaveBeenCalledWith(mockUserId);
+      expect(callOrder.indexOf('revokeTokens')).toBeLessThan(callOrder.indexOf('deleteUser'));
+    });
+
+    it('given oauth revocation failure, should log error but not block deletion', async () => {
+      // Arrange
+      vi.mocked(revokeUserIntegrationTokens).mockRejectedValue(
+        new Error('Revocation service down')
+      );
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(mockAccountRepo.deleteUser).toHaveBeenCalledWith(mockUserId);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Could not revoke OAuth tokens during account deletion:',
+        expect.objectContaining({ message: 'Revocation service down' })
+      );
+    });
+
+    it('given partial revocation failures, should log the counts and continue', async () => {
+      // Arrange
+      vi.mocked(revokeUserIntegrationTokens).mockResolvedValue({ revoked: 1, failed: 2 });
+
+      const request = new Request('https://example.com/api/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ emailConfirmation: mockUserEmail }),
+      });
+
+      // Act
+      const response = await DELETE(request);
+
+      // Assert
+      expect(response.status).toBe(200);
+      expect(loggers.auth.info).toHaveBeenCalledWith(
+        expect.stringMatching(/revoked=1.*failed=2|OAuth.*1.*2/i)
       );
     });
   });

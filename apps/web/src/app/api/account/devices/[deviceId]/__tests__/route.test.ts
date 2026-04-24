@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/server', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/secure-compare', () => ({
+vi.mock('@pagespace/lib/auth/secure-compare', () => ({
   secureCompare: vi.fn(),
 }));
 
@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn((token: string) => `hashed_${token}`),
 }));
 
-vi.mock('@pagespace/lib/device-auth-utils', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   revokeDeviceToken: vi.fn(),
 }));
 
@@ -53,9 +53,9 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { secureCompare } from '@pagespace/lib/secure-compare';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { hashToken } from '@pagespace/lib/auth';
-import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { revokeDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Test helpers

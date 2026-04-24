@@ -30,7 +30,7 @@ export function TasksSection() {
               { icon: Bot, title: "AI as Assignee", desc: "Assign tasks directly to AI agents. They work autonomously—research, draft, analyze—and notify you when done." },
               { icon: ListTodo, title: "Task Lists as Pages", desc: "Task lists are just another page type. Nest them in your file tree, attach context, and AI agents automatically understand the scope." },
               { icon: BarChart3, title: "Smart Rollups", desc: "See all tasks across drives, projects, or assigned to you. Track what AI is working on vs. what needs human attention." },
-              { icon: Users, title: "Human + AI Teams", desc: "AI handles the research and first drafts. Humans review and refine. A natural workflow where everyone does what they&apos;re best at." },
+              { icon: Users, title: "Human + AI Teams", desc: "AI handles the research and first drafts. Humans review and refine. A natural workflow where everyone does what they're best at." },
             ].map((card) => (
               <div key={card.title} className="rounded-xl border border-border bg-card p-6">
                 <div className="flex items-start gap-4">

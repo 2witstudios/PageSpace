@@ -6,7 +6,7 @@
 # so we bake the CRON_SECRET into a signing helper at startup.
 
 if [ -z "$CRON_SECRET" ]; then
-  echo "[cron] WARNING: CRON_SECRET is not set. Cron requests will rely on network-only auth."
+  echo "[cron] WARNING: CRON_SECRET is not set. Cron requests will be sent without HMAC signatures and will be rejected by the server in all non-dev environments."
 fi
 
 # Create the HMAC-signed curl helper used by crontab entries
@@ -27,8 +27,8 @@ if [ -z "$METHOD" ] || [ -z "$URL" ]; then
   exit 1
 fi
 
-# Extract path from URL (everything after host:port)
-PATH_PART=$(echo "$URL" | sed 's|^https\?://[^/]*||')
+# Extract path from URL — pathname only, no query string, matching how Next.js parses url.pathname
+PATH_PART=$(echo "$URL" | sed -e 's|^https\?://[^/]*||' -e 's|?.*||')
 
 TIMESTAMP=$(date +%s)
 NONCE=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
