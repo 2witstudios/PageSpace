@@ -426,15 +426,27 @@ const SidebarChatTab: React.FC = () => {
       setLastAIResponse(null);
       return;
     }
-    if (displayIsStreaming) return;
 
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-
+    // Initialize baseline BEFORE the streaming guard. If we waited until after,
+    // activating voice mid-stream would leave the baseline unset and then silence
+    // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      voiceBaselineRef.current = lastAssistantMsg?.id ?? null;
+      const assistantMsgs = messages.filter((m) => m.role === 'assistant');
+      const lastOverallMsg = messages[messages.length - 1];
+      // During streaming the last overall message is the in-progress assistant reply;
+      // the baseline should be the previously-finalized message before it.
+      const streamingAssistantIdx =
+        displayIsStreaming && lastOverallMsg?.role === 'assistant'
+          ? assistantMsgs.length - 1
+          : assistantMsgs.length;
+      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
+      voiceBaselineRef.current = baselineMsg?.id ?? null;
       return;
     }
 
+    if (displayIsStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
     const text = textParts.map((p) => (p as { text: string }).text).join(' ');
