@@ -17,6 +17,10 @@
       "types": "./dist/operators.d.ts",
       "default": "./dist/operators.js"
     },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
     "./schema/ai": {
       "types": "./dist/schema/ai.d.ts",
       "default": "./dist/schema/ai.js"
