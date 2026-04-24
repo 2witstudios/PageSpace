@@ -37,7 +37,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -48,11 +48,13 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   generateToken: vi.fn().mockReturnValue({
     token: 'mcp_randomBase64UrlString',
     hash: 'mockTokenHash123',
@@ -72,10 +74,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { generateToken } from '@pagespace/lib/auth';
+import { generateToken } from '@pagespace/lib/auth/token-utils';
 
 describe('/api/auth/mcp-tokens (additional coverage)', () => {
   beforeEach(() => {

@@ -1,5 +1,8 @@
 import 'dotenv/config';
-import { db, pages, files, filePages, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
+import { files, filePages } from '@pagespace/db/schema/storage';
+import { sql } from '@pagespace/db/operators';
 
 async function backfill(): Promise<void> {
   const rows = await db

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
@@ -19,6 +19,23 @@ vi.mock('@pagespace/db', () => ({
       eventAttendees: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
+  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
+    id: 'id',
+    type: 'type',
+    title: 'title',
+    isTrashed: 'isTrashed',
+    driveId: 'driveId',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -28,19 +45,6 @@ vi.mock('@pagespace/db', () => ({
     startAt: 'startAt',
     endAt: 'endAt',
   },
-  calendarTriggers: {
-    id: 'id',
-    calendarEventId: 'calendarEventId',
-    status: 'status',
-    triggerAt: 'triggerAt',
-  },
-  pages: {
-    id: 'id',
-    type: 'type',
-    title: 'title',
-    isTrashed: 'isTrashed',
-    driveId: 'driveId',
-  },
   eventAttendees: {
     id: 'id',
     eventId: 'eventId',
@@ -48,19 +52,25 @@ vi.mock('@pagespace/db', () => ({
     status: 'status',
     isOrganizer: 'isOrganizer',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  ne: vi.fn(),
-  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
+    id: 'id',
+    calendarEventId: 'calendarEventId',
+    status: 'status',
+    triggerAt: 'triggerAt',
+  },
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveMemberUserIds: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    getDriveMemberUserIds: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -70,6 +80,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({
@@ -136,9 +147,10 @@ vi.mock('chrono-node', () => ({
 }));
 
 import { calendarWriteTools } from '../calendar-write-tools';
-import { db, inArray } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
-import { getDriveMemberUserIds } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { inArray } from '@pagespace/db/operators';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../../core';
 

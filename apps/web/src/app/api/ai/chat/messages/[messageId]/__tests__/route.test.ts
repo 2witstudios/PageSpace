@@ -28,12 +28,18 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock logging mask (boundary)
@@ -48,7 +54,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 // Mock database for page lookup (boundary)
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -56,15 +62,20 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
 }));
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, loggers } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Type for page lookup mock (matches Drizzle schema)
 type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';

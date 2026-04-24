@@ -10,7 +10,10 @@
 
 import 'dotenv/config';
 import Stripe from 'stripe';
-import { db, users, subscriptions, eq, and, inArray, ne } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { eq, and, inArray, ne } from '@pagespace/db/operators';
 import { stripeConfig, stripeMode } from '../apps/web/src/lib/stripe-config';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {

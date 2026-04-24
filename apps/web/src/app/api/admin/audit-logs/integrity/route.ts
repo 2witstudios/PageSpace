@@ -1,11 +1,11 @@
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   verifyHashChain,
   quickIntegrityCheck,
   getHashChainStats,
   verifyEntry,
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
-import { isValidId } from '@pagespace/lib/validators';
+import { isValidId } from '@pagespace/lib/validators/id-validators';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 

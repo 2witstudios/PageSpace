@@ -9,7 +9,9 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { db, authHandoffTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import {
   createExchangeCode,
   consumeExchangeCode,

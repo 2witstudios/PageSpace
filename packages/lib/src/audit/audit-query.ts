@@ -5,8 +5,10 @@
  * so callers don't need a class instance or initialization ceremony.
  */
 
-import { db, securityAuditLog, desc, and, gte, lte, eq } from '@pagespace/db';
-import type { SelectSecurityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { desc, and, gte, lte, eq } from '@pagespace/db/operators';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
+import type { SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { QueryEventsOptions } from './security-audit';
 
 /**

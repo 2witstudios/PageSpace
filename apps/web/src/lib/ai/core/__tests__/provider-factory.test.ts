@@ -20,7 +20,7 @@ vi.mock('next/server', () => {
 import { NextResponse } from 'next/server';
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -28,8 +28,12 @@ vi.mock('@pagespace/db', () => ({
     update: vi.fn().mockReturnThis(),
     set: vi.fn().mockReturnThis(),
   },
-  users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ a, b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
 }));
 
 // Mock AI providers
@@ -64,7 +68,7 @@ vi.mock('ollama-ai-provider-v2', () => ({
 }));
 
 // Mock security validation
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 
@@ -107,7 +111,7 @@ import {
   createAIProvider,
   updateUserProviderSettings,
 } from '../provider-factory';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   getUserOpenRouterSettings,
   createOpenRouterSettings,
@@ -128,7 +132,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 const mockDb = vi.mocked(db);
 const mockDbMock = mockDb as unknown as MockDb;

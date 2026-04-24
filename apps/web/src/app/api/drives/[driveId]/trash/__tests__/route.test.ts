@@ -8,10 +8,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Tests mock at the SERVICE SEAM level, not ORM level.
 // ============================================================================
 
-vi.mock('@pagespace/db', () => ({
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
-  pages: { driveId: 'pages.driveId', isTrashed: 'pages.isTrashed' },
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -23,15 +20,28 @@ vi.mock('@pagespace/db', () => ({
     },
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args: unknown[]) => args),
   asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  pages: { driveId: 'pages.driveId', isTrashed: 'pages.isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  buildTree: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -39,6 +49,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -48,8 +60,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { db } from '@pagespace/db';
-import { buildTree, loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================

@@ -5,47 +5,49 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((a, b) => ({ op: 'eq', a, b }));
-  const and = vi.fn((...args: unknown[]) => ({ op: 'and', args }));
-  const asc = vi.fn((a) => ({ op: 'asc', a }));
-
-  return {
-    db: {
-      query: {
-        driveRoles: { findMany: vi.fn(), findFirst: vi.fn() },
-        driveMembers: { findFirst: vi.fn() },
-      },
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
-        })),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      driveRoles: { findMany: vi.fn(), findFirst: vi.fn() },
+      driveMembers: { findFirst: vi.fn() },
+    },
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
       })),
-      insert: vi.fn(() => ({
-        values: vi.fn(() => ({
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{}]),
+      })),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
           returning: vi.fn().mockResolvedValue([{}]),
         })),
       })),
-      update: vi.fn(() => ({
-        set: vi.fn(() => ({
-          where: vi.fn(() => ({
-            returning: vi.fn().mockResolvedValue([{}]),
-          })),
-        })),
-      })),
-      delete: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue(undefined),
-      })),
-      transaction: vi.fn(),
-    },
-    driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
-    drives: { id: 'drives.id', name: 'drives.name', slug: 'drives.slug', ownerId: 'drives.ownerId' },
-    driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
-    eq, and, asc,
-  };
-});
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn().mockResolvedValue(undefined),
+    })),
+    transaction: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', name: 'drives.name', slug: 'drives.slug', ownerId: 'drives.ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  asc: vi.fn((a) => ({ op: 'asc', a })),
+}));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   checkDriveAccessForRoles,
   listDriveRoles,

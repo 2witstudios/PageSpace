@@ -8,7 +8,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: vi.fn() },
@@ -16,6 +16,15 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  isNull: vi.fn((a) => ({ isNull: a })),
+  gt: vi.fn((a, b) => ({ gt: [a, b] })),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', tokenVersion: 'tokenVersion' },
   deviceTokens: {
     userId: 'userId',
@@ -23,14 +32,9 @@ vi.mock('@pagespace/db', () => ({
     revokedAt: 'revokedAt',
     expiresAt: 'expiresAt',
   },
-  eq: vi.fn((a, b) => ({ eq: [a, b] })),
-  and: vi.fn((...args: unknown[]) => ({ and: args })),
-  isNull: vi.fn((a) => ({ isNull: a })),
-  gt: vi.fn((a, b) => ({ gt: [a, b] })),
-  sql: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -38,12 +42,18 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn((token: string) => `hashed_${token}`),
+}));
+vi.mock('@pagespace/lib/auth/opaque-tokens', () => ({
   isValidTokenFormat: vi.fn(),
   getTokenType: vi.fn(),
 }));
@@ -61,8 +71,9 @@ vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
 
 import { GET, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
-import { hashToken, isValidTokenFormat, getTokenType } from '@pagespace/lib/auth';
+import { db } from '@pagespace/db/db';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import {
   getUserDeviceTokens,

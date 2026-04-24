@@ -33,12 +33,18 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
@@ -50,11 +56,11 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/monitoring', () => ({
-  createChangeGroupId: vi.fn(() => 'change-group-123'),
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
@@ -66,7 +72,6 @@ vi.mock('@pagespace/db', () => {
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
   });
-
   return {
     db: {
       query: {
@@ -77,27 +82,33 @@ vi.mock('@pagespace/db', () => {
       transaction,
     },
     __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
-    pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
-    drives: { id: 'id' },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    and: vi.fn((...args: unknown[]) => args),
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-    inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
-    desc: vi.fn((a: unknown) => a),
-    isNull: vi.fn((a: unknown) => a),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
+  desc: vi.fn((a: unknown) => a),
+  isNull: vi.fn((a: unknown) => a),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
-import { db, __test__ as dbTest } from '@pagespace/db';
+import { db, __test__ as dbTest } from '@pagespace/db/db';
 
 const { txUpdate, txUpdateSet, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;

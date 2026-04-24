@@ -22,7 +22,7 @@
  * one-options-per-mint replay guard.
  *
  * Security posture:
- * - 32-byte base64url token, SHA-256 hashed at rest
+ * - 32-byte base64url token, SHA3-256 hashed at rest
  * - 300s TTL
  * - Atomic DELETE … RETURNING for consume (no select-then-delete race)
  * - Fail-closed on create when DB is unavailable; log-and-return-null on
@@ -33,7 +33,9 @@
 
 import { randomBytes } from 'crypto';
 import { hashToken } from './token-utils';
-import { db, authHandoffTokens, and, eq, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, sql } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import { loggers } from '../logging/logger-config';
 
 const PASSKEY_REGISTER_HANDOFF_KIND = 'passkey-register-handoff';

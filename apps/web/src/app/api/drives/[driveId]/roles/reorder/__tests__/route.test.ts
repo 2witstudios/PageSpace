@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveRoleAccessInfo } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles/reorder
@@ -10,11 +10,13 @@ import type { DriveRoleAccessInfo } from '@pagespace/lib/server';
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  checkDriveAccessForRoles: vi.fn(),
-  reorderDriveRoles: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-role-service', () => ({
+    checkDriveAccessForRoles: vi.fn(),
+    reorderDriveRoles: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -37,19 +39,20 @@ const { mockOrderBy, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
   return { mockOrderBy, mockWhere, mockFrom, mockSelect };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
   },
-  driveRoles: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   asc: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveRoles: {},
+}));
 
-import {
-  checkDriveAccessForRoles,
-  reorderDriveRoles,
-} from '@pagespace/lib/server';
+import { checkDriveAccessForRoles, reorderDriveRoles } from '@pagespace/lib/services/drive-role-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 

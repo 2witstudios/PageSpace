@@ -60,7 +60,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -73,22 +73,28 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
   createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/pkce', () => ({
   consumePKCEVerifier: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
-    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
     }),
-    loggers: {
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
       auth: {
         error: vi.fn(),
         info: vi.fn(),
@@ -99,12 +105,12 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
@@ -123,6 +129,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
@@ -147,9 +154,13 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 
 import { GET } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, auditRequest, loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { createId } from '@paralleldrive/cuid2';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';

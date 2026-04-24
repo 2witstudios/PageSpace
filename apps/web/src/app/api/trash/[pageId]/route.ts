@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
-import { pages, favorites, pageTags, pagePermissions, chatMessages, channelMessages, db, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages, favorites, pageTags, chatMessages } from '@pagespace/db/schema/core'
+import { pagePermissions } from '@pagespace/db/schema/members'
+import { channelMessages } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserDeletePage } from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

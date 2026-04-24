@@ -1,8 +1,15 @@
 import { withAdminAuth } from '@/lib/auth/auth';
-import { loggers, auditRequest, accountRepository, activityLogRepository } from '@pagespace/lib/server';
-import { deleteAiUsageLogsForUser, deleteMonitoringDataForUser } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
+import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
+import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { stripe } from '@/lib/stripe/client';
 
 type DataRouteContext = { params: Promise<{ userId: string }> };
 
@@ -71,8 +78,26 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
       await deleteMonitoringDataForUser(userId);
 
+      // Revoke OAuth integration tokens BEFORE user deletion (Art. 17 GDPR — #911)
+      try {
+        const { revoked, failed } = await revokeUserIntegrationTokens(userId);
+        loggers.api.info(`Admin DSAR: OAuth token revocation for ${userId}: revoked=${revoked}, failed=${failed}`);
+      } catch (error) {
+        loggers.api.error('Admin DSAR: Could not revoke OAuth tokens:', error as Error);
+      }
+
       // Delete user record
       await accountRepository.deleteUser(userId);
+
+      // Delete Stripe customer AFTER user deletion (Art. 17 GDPR — #910)
+      if (user.stripeCustomerId && isCloud()) {
+        try {
+          await stripe.customers.del(user.stripeCustomerId);
+          loggers.api.info(`Admin DSAR: Stripe customer deleted: ${user.stripeCustomerId}`);
+        } catch (error) {
+          loggers.api.error('Admin DSAR: Could not delete Stripe customer:', error as Error);
+        }
+      }
 
       loggers.api.info(`Admin DSAR deletion: admin=${adminUser.id} target=${userId} reason="${reason}"`);
 

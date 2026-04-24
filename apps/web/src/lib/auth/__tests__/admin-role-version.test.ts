@@ -1,23 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { db, users, sessions, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole, validateAdminAccess } from '../admin-role';
 
 // Mock sessionService to avoid race conditions with parallel test execution
 // The real sessionService has a TOCTOU gap between user lookup and session insert
-vi.mock('@pagespace/lib/auth', async () => {
-  const actual = await vi.importActual('@pagespace/lib/auth');
-  return {
-    ...actual,
-    sessionService: {
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
       createSession: vi.fn(),
       validateSession: vi.fn(),
     },
-  };
-});
+}));
 
 // Import the mocked module after vi.mock declaration
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 describe('Admin Role Versioning', () => {
   let adminUserId: string;

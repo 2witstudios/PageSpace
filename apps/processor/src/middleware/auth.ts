@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
-import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
-import { EnforcedAuthContext } from '@pagespace/lib/permissions';
+import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
@@ -153,4 +153,4 @@ export function getUserId(req: Request): string | null {
   return auth.userId;
 }
 
-export { EnforcedAuthContext, type ResourceBinding } from '@pagespace/lib/permissions';
+export { EnforcedAuthContext, type ResourceBinding } from '@pagespace/lib/permissions/enforced-context';

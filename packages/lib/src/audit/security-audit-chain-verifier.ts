@@ -11,7 +11,8 @@
  * - 'genesis' as the chain start (no chainSeed concept)
  */
 
-import { db, securityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { asc, count, and, gte, lte, type SQL } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
 import { computeSecurityEventHash, type AuditEvent } from './security-audit';

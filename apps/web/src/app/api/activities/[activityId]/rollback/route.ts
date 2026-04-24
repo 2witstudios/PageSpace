@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { executeRollback, previewRollback, getActivityById } from '@/services/api';
-import type { RollbackContext } from '@pagespace/lib/permissions';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   broadcastPageEvent,
@@ -17,7 +18,7 @@ import {
   kickUserFromPage,
   kickUserFromPageActivity,
 } from '@/lib/websocket';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 

@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  db,
-  calendarEvents,
-  eventAttendees,
-  eq,
-  and,
-} from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, auditRequest } from '@pagespace/lib/server';
-import { isUserDriveMember } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 

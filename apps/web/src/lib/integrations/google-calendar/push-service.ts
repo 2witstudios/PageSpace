@@ -5,9 +5,11 @@
  * Handles create, update, and delete operations.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
-import type { CalendarEvent } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { googleCalendarConnections, calendarEvents } from '@pagespace/db/schema/calendar';
+import type { CalendarEvent } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getValidAccessToken } from './token-refresh';
 import {
   createGoogleEvent,

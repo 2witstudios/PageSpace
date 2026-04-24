@@ -29,7 +29,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
 }));
 
@@ -41,12 +41,8 @@ vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
   VerificationEmail: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
-    loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
       auth: {
         error: vi.fn(),
         info: vi.fn(),
@@ -57,13 +53,13 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 2,
@@ -83,10 +79,10 @@ vi.mock('react', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { createVerificationToken } from '@pagespace/lib';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
-import { loggers } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { NextResponse } from 'next/server';
 
 const createResendRequest = () =>

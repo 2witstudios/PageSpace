@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { audit } from '@pagespace/lib/server';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       `[Cron] Purged deleted messages: chat=${chatMessagesPurged}, global=${globalMessagesPurged}, conversations=${conversationsPurged}`
     );
 
-    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged, globalMessagesPurged, conversationsPurged } });
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged, globalMessagesPurged, conversationsPurged } });
 
     return NextResponse.json({
       success: true,

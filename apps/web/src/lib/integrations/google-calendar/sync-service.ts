@@ -5,8 +5,11 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, isNull, inArray, sql, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { googleCalendarConnections, calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
@@ -139,6 +142,7 @@ export const syncGoogleCalendar = async (
     const syncCursors = parseSyncCursors(connection.syncCursor);
 
     // Sync each selected calendar
+    const staleCalendarIds = new Set<string>();
     for (const calendarId of calendarsToSync) {
       // Use per-calendar sync token for incremental sync if available and not forcing full sync
       const calendarSyncToken = !options.fullSync ? syncCursors[calendarId] : undefined;
@@ -158,6 +162,10 @@ export const syncGoogleCalendar = async (
         timeMax
       );
 
+      if (calendarResult.calendarNotFound) {
+        staleCalendarIds.add(calendarId);
+      }
+
       result.eventsCreated += calendarResult.eventsCreated;
       result.eventsUpdated += calendarResult.eventsUpdated;
       result.eventsDeleted += calendarResult.eventsDeleted;
@@ -168,16 +176,33 @@ export const syncGoogleCalendar = async (
       }
     }
 
-    // Persist all updated sync cursors and update last sync time
+    // Remove stale (404) calendars from selectedCalendars so they are not re-synced
+    const updatedSelectedCalendars = staleCalendarIds.size > 0
+      ? rawCalendars.filter(rawId => {
+          const resolvedId = rawId === 'primary' ? (connection.googleEmail || 'primary') : rawId;
+          return !staleCalendarIds.has(resolvedId);
+        })
+      : rawCalendars;
+
+    const allCalendarsGone = staleCalendarIds.size > 0 && updatedSelectedCalendars.length === 0;
+    const INACCESSIBLE_MSG = 'All connected calendars are inaccessible. Please reconnect your Google Calendar.';
+
+    // Single atomic write: persist cursors, prune stale calendars, and (if all are gone) mark connection error
     await db
       .update(googleCalendarConnections)
       .set({
         syncCursor: serializeSyncCursors(syncCursors),
         lastSyncAt: new Date(),
-        lastSyncError: null,
+        lastSyncError: allCalendarsGone ? INACCESSIBLE_MSG : null,
         updatedAt: new Date(),
+        ...(staleCalendarIds.size > 0 ? { selectedCalendars: updatedSelectedCalendars } : {}),
+        ...(allCalendarsGone ? { status: 'error' as const, statusMessage: INACCESSIBLE_MSG } : {}),
       })
       .where(eq(googleCalendarConnections.userId, userId));
+
+    if (allCalendarsGone) {
+      loggers.api.info('Google Calendar connection disabled: all calendars returned 404', { userId });
+    }
 
     result.success = true;
 
@@ -334,6 +359,7 @@ const syncCalendar = async (
   eventsUpdated: number;
   eventsDeleted: number;
   syncCursor?: string;
+  calendarNotFound?: boolean;
 }> => {
   const result = {
     eventsCreated: 0,
@@ -365,13 +391,13 @@ const syncCalendar = async (
       );
     }
 
-    // Calendar not found — skip gracefully instead of failing the entire sync
+    // Calendar not found — signal the caller to remove this stale entry
     if (listResult.statusCode === 404) {
       loggers.api.warn('Calendar not found, skipping', {
         userId,
         calendarId: maskIdentifier(storageCalendarId),
       });
-      return result;
+      return { ...result, calendarNotFound: true };
     }
 
     // Propagate permission/auth errors so the caller can update connection status

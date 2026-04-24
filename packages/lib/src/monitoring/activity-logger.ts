@@ -6,7 +6,10 @@
  * Includes hash chain computation for tamper-evidence (SOC 2, HIPAA, GDPR compliance).
  */
 
-import { db, activityLogs, users, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';

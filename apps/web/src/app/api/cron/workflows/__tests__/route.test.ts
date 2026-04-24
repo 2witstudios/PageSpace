@@ -37,18 +37,31 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
 
 const mockAudit = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  lte: vi.fn(),
+  ne: vi.fn(),
+  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     isEnabled: 'isEnabled',
@@ -57,11 +70,6 @@ vi.mock('@pagespace/db', () => ({
     lastRunAt: 'lastRunAt',
     triggerType: 'triggerType',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  lte: vi.fn(),
-  ne: vi.fn(),
-  inArray: vi.fn(),
 }));
 
 import { POST } from '../route';
@@ -200,8 +208,9 @@ describe('POST /api/cron/workflows', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 1, failed: 0 } })
     );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
 
   it('should log audit event with zero executed when no workflows are due', async () => {
@@ -209,8 +218,9 @@ describe('POST /api/cron/workflows', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } })
     );
+    expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
 
   it('should handle thrown exceptions during execution', async () => {

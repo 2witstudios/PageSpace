@@ -15,7 +15,9 @@
  */
 
 import crypto from 'crypto';
-import { db, authHandoffTokens, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import { loggers } from '../logging/logger-config';
 
 const PKCE_TTL_SECONDS = 600; // 10 minutes — enough for OAuth round-trip

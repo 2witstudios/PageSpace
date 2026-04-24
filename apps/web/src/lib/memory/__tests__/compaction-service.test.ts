@@ -19,7 +19,7 @@ import { assert } from './riteway';
 // Mock database
 const mockDbQuery = vi.fn();
 const mockDbInsert = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       userPersonalization: {
@@ -28,8 +28,12 @@ vi.mock('@pagespace/db', () => ({
     },
     insert: () => mockDbInsert(),
   },
-  userPersonalization: { userId: 'userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: { userId: 'userId' },
 }));
 
 // Mock AI provider
@@ -40,8 +44,8 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -49,6 +53,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 // Mock generateText

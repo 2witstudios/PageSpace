@@ -7,15 +7,19 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
-  getDriveIdsForUser: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
+    getDriveIdsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -25,12 +29,16 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
-  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
+  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
 }));
 
 vi.mock('@/lib/utils/query-params', () => ({
@@ -38,7 +46,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
-import { getDriveIdsForUser } from '@pagespace/lib/server';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 
 const mockSessionAuth = {
   userId: 'user_123',

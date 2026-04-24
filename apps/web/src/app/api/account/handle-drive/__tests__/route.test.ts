@@ -4,7 +4,7 @@ import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -17,13 +17,19 @@ vi.mock('@pagespace/db', () => ({
     update: vi.fn(),
     delete: vi.fn(),
   },
-  drives: {},
-  driveMembers: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
   and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {},
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -32,6 +38,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -47,8 +57,8 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 

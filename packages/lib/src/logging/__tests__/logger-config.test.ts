@@ -487,11 +487,13 @@ describe('logAuthEvent', () => {
     expect(authInfoSpy).toHaveBeenCalled();
   });
 
-  it('partially masks email (preserves first 2 chars and domain)', () => {
+  it('fully redacts email — no partial info leaks to logs (#970)', () => {
     logAuthEvent('login', 'u-1', 'alice@example.com');
     const call = authInfoSpy.mock.calls[0];
     const metadata = call[1] as { email?: string };
-    expect(metadata.email).toMatch(/^al\*\*\*@example\.com$/);
+    expect(metadata.email).toBe('[REDACTED]');
+    expect(metadata.email).not.toContain('alice');
+    expect(metadata.email).not.toContain('example.com');
   });
 
   it('handles missing email gracefully', () => {

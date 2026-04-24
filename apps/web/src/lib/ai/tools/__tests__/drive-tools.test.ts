@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database - only mock what's actually used in tests
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: { findFirst: vi.fn() },
     },
   },
-  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', ownerId: 'ownerId' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -23,6 +27,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -35,7 +40,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { driveTools } from '../drive-tools';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

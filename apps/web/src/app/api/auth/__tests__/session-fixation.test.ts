@@ -21,13 +21,13 @@ describe('Session Fixation Prevention - Service Layer', () => {
   describe('sessionService contract', () => {
     it('createSession returns opaque token with ps_sess_ prefix', async () => {
       // Mock the session service
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           createSession: vi.fn().mockResolvedValue('ps_sess_abc123'),
         },
       }));
 
-      const { sessionService } = await import('@pagespace/lib/auth');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
       const token = await sessionService.createSession({
         userId: 'user-123',
         type: 'user',
@@ -47,13 +47,13 @@ describe('Session Fixation Prevention - Service Layer', () => {
         expiresAt: new Date(Date.now() + 1000000),
       };
 
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: vi.fn().mockResolvedValue(mockClaims),
         },
       }));
 
-      const { sessionService } = await import('@pagespace/lib/auth');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
       const claims = await sessionService.validateSession('ps_sess_valid');
 
       expect(claims).toEqual(mockClaims);
@@ -61,26 +61,26 @@ describe('Session Fixation Prevention - Service Layer', () => {
     });
 
     it('validateSession returns null for invalid token', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: vi.fn().mockResolvedValue(null),
         },
       }));
 
-      const { sessionService } = await import('@pagespace/lib/auth');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
       const claims = await sessionService.validateSession('ps_sess_invalid');
 
       expect(claims).toBeNull();
     });
 
     it('revokeAllUserSessions returns count of revoked sessions', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           revokeAllUserSessions: vi.fn().mockResolvedValue(3),
         },
       }));
 
-      const { sessionService } = await import('@pagespace/lib/auth');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
       const count = await sessionService.revokeAllUserSessions('user-123', 'new_login');
 
       expect(count).toBe(3);
@@ -91,33 +91,33 @@ describe('Session Fixation Prevention - Service Layer', () => {
     it('generateCSRFToken accepts session ID parameter', async () => {
       const mockCSRFToken = 'csrf.token.signature';
 
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/csrf-utils', () => ({
         generateCSRFToken: vi.fn().mockReturnValue(mockCSRFToken),
       }));
 
-      const { generateCSRFToken } = await import('@pagespace/lib/auth');
+      const { generateCSRFToken } = await import('@pagespace/lib/auth/csrf-utils');
       const token = generateCSRFToken('session-123');
 
       expect(token).toBe(mockCSRFToken);
     });
 
     it('validateCSRFToken validates against session ID', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/csrf-utils', () => ({
         validateCSRFToken: vi.fn().mockReturnValue(true),
       }));
 
-      const { validateCSRFToken } = await import('@pagespace/lib/auth');
+      const { validateCSRFToken } = await import('@pagespace/lib/auth/csrf-utils');
       const isValid = validateCSRFToken('csrf.token.signature', 'session-123');
 
       expect(isValid).toBe(true);
     });
 
     it('validateCSRFToken rejects invalid tokens', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/csrf-utils', () => ({
         validateCSRFToken: vi.fn().mockReturnValue(false),
       }));
 
-      const { validateCSRFToken } = await import('@pagespace/lib/auth');
+      const { validateCSRFToken } = await import('@pagespace/lib/auth/csrf-utils');
       const isValid = validateCSRFToken('invalid.token', 'session-123');
 
       expect(isValid).toBe(false);
@@ -187,10 +187,12 @@ describe('Session Fixation Prevention - Auth Middleware', () => {
 
   describe('validateSessionToken', () => {
     it('exports validateSessionToken function', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: vi.fn().mockResolvedValue(null),
         },
+      }));
+      vi.doMock('@pagespace/lib/auth/token-utils', () => ({
         hashToken: vi.fn(),
       }));
 
@@ -206,10 +208,12 @@ describe('Session Fixation Prevention - Auth Middleware', () => {
 
   describe('authenticateSessionRequest', () => {
     it('exports authenticateSessionRequest function', async () => {
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: vi.fn(),
         },
+      }));
+      vi.doMock('@pagespace/lib/auth/token-utils', () => ({
         hashToken: vi.fn(),
       }));
 
@@ -270,14 +274,15 @@ describe('Session Fixation Prevention - CSRF Validation', () => {
         getSessionFromCookies: mockGetSession,
       }));
 
-      vi.doMock('@pagespace/lib/auth', () => ({
+      vi.doMock('@pagespace/lib/auth/session-service', () => ({
         sessionService: {
           validateSession: mockValidateSession,
         },
+      }));
+      vi.doMock('@pagespace/lib/auth/csrf-utils', () => ({
         validateCSRFToken: vi.fn().mockReturnValue(true),
       }));
-
-      vi.doMock('@pagespace/lib/server', () => ({
+      vi.doMock('@pagespace/lib/logging/logger-config', () => ({
         loggers: {
           auth: {
             warn: vi.fn(),

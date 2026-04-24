@@ -17,11 +17,11 @@ vi.mock('@pagespace/lib/compliance/retention/retention-engine', () => ({
   runRetentionCleanup: mockRunRetentionCleanup,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
@@ -58,7 +58,7 @@ describe('/api/cron/retention-cleanup', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted: 15, tables: MOCK_RESULTS } })
+      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted: 15, tables: MOCK_RESULTS } })
     );
   });
 

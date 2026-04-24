@@ -11,6 +11,7 @@ import { rateLimitUpload } from '../middleware/rate-limit';
 import { hasAuthScope } from '../middleware/auth';
 import { resolvePathWithin, sanitizeExtension } from '../utils/security';
 import { detectContentType, type DetectedContentType } from '../services/content-detector';
+import { getMaxFileSizeBytes } from './upload-multer-config';
 
 const DENIED_LABELS: ReadonlySet<string> = new Set([
   'pebin',
@@ -86,8 +87,8 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE_MB || '50') * 1024 * 1024, // Increased to 50MB with disk storage
-    files: 5 // Can handle more files with disk storage
+    fileSize: getMaxFileSizeBytes(),
+    files: 5
   },
   fileFilter: (_req, file, cb) => {
     if (!file.originalname || file.originalname.length === 0) {

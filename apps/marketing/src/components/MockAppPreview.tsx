@@ -453,7 +453,7 @@ function ChatContent() {
         {/* AI response */}
         <div className="group relative">
           <div className="text-[10px] text-foreground space-y-1.5">
-            <p>I&apos;d be happy to help you create a Q1 product roadmap. Let me suggest a structure:</p>
+            <p>I&#39;d be happy to help you create a Q1 product roadmap. Let me suggest a structure:</p>
             <ul className="list-disc list-inside space-y-0.5 text-[10px] ml-1">
               <li>Executive Summary</li>
               <li>Key Objectives &amp; KPIs</li>

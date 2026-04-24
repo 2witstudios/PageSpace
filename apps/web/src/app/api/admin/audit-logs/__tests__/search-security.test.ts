@@ -44,7 +44,7 @@ vi.mock('@/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       error: vi.fn(),
@@ -54,13 +54,16 @@ vi.mock('@pagespace/lib/server', () => ({
     },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: () => ({
         from: () => ({
           where: () => Promise.resolve([{ count: 0 }]),
@@ -76,7 +79,27 @@ vi.mock('@pagespace/db', () => {
         }),
       }),
     },
-    activityLogs: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })),
+  and: vi.fn((...conditions: unknown[]) => ({ type: 'and', conditions })),
+  or: vi.fn((...conditions: unknown[]) => ({ type: 'or', conditions })),
+  desc: vi.fn((col: unknown) => ({ type: 'desc', col })),
+  count: vi.fn(() => ({ type: 'count' })),
+  gte: vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })),
+  lte: vi.fn((col: unknown, val: unknown) => ({ type: 'lte', col, val })),
+  ilike: mockIlike,
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+      id: 'id',
+      name: 'name',
+      email: 'email',
+      image: 'image',
+    },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: {
       id: 'id',
       timestamp: 'timestamp',
       userId: 'userId',
@@ -101,22 +124,7 @@ vi.mock('@pagespace/db', () => {
       logHash: 'logHash',
       chainSeed: 'chainSeed',
     },
-    users: {
-      id: 'id',
-      name: 'name',
-      email: 'email',
-      image: 'image',
-    },
-    eq: vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })),
-    and: vi.fn((...conditions: unknown[]) => ({ type: 'and', conditions })),
-    or: vi.fn((...conditions: unknown[]) => ({ type: 'or', conditions })),
-    desc: vi.fn((col: unknown) => ({ type: 'desc', col })),
-    count: vi.fn(() => ({ type: 'count' })),
-    gte: vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })),
-    lte: vi.fn((col: unknown, val: unknown) => ({ type: 'lte', col, val })),
-    ilike: mockIlike,
-  };
-});
+}));
 
 describe('/api/admin/audit-logs - Search Security', () => {
   const mockAdminUser = {

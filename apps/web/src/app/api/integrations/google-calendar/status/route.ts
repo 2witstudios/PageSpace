@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, count } from '@pagespace/db/operators'
+import { googleCalendarConnections, calendarEvents } from '@pagespace/db/schema/calendar';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -10,6 +14,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
  * Returns the Google Calendar connection status for the authenticated user.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;

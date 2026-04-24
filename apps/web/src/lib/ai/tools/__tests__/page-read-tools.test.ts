@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     selectDistinct: vi.fn().mockReturnThis(),
@@ -18,24 +18,8 @@ vi.mock('@pagespace/db', () => ({
       channelMessages: { findMany: vi.fn() },
     },
   },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
-  drives: { id: 'id' },
-  taskItems: { pageId: 'pageId' },
-  channelMessages: {
-    pageId: 'pageId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-  },
-  chatMessages: {
-    id: 'id',
-    pageId: 'pageId',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    role: 'role',
-    userId: 'userId',
-  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   asc: vi.fn(),
@@ -48,21 +32,44 @@ vi.mock('@pagespace/db', () => ({
   max: vi.fn(),
   min: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+  chatMessages: {
+    id: 'id',
+    pageId: 'pageId',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+    content: 'content',
+    role: 'role',
+    userId: 'userId',
+  },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { pageId: 'pageId' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: {
+    pageId: 'pageId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+  },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
-  getUserAccessLevel: vi.fn(),
-  getUserAccessiblePagesInDriveWithDetails: vi.fn(),
-  canUserViewPage: vi.fn(),
-  isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
-  isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
-  isChannelPage: vi.fn((type) => type === 'CHANNEL'),
-  getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
-  formatContentForAI: vi.fn((content) => content),
-  formatSheetForAI: vi.fn(),
-  formatTaskListForAI: vi.fn(),
-  getPagePath: vi.fn().mockResolvedValue('/drive/page'),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserDriveAccess: vi.fn(),
+    getUserAccessLevel: vi.fn(),
+    getUserAccessiblePagesInDriveWithDetails: vi.fn(),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getPageTypeEmoji: vi.fn((_type: string) => '📄'),
+    isFolderPage: vi.fn((type: string) => type === 'FOLDER'),
+    getCreatablePageTypes: vi.fn(() => []),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -80,15 +87,15 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
-
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
 import { pageReadTools } from '../page-read-tools';
-import { db } from '@pagespace/db';
-import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

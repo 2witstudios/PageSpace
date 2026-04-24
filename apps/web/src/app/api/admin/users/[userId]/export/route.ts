@@ -1,7 +1,8 @@
 import { withAdminAuth } from '@/lib/auth/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 type ExportRouteContext = { params: Promise<{ userId: string }> };
 

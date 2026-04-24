@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
-import { auditRequest } from '@pagespace/lib/server';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };

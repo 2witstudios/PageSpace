@@ -42,7 +42,7 @@ const mockInsertOnConflict = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
   const mockTx = {
     insert: vi.fn(() => ({
@@ -56,7 +56,6 @@ vi.mock('@pagespace/db', () => {
       }),
     })),
   };
-
   return {
     db: {
       select: vi.fn(() => ({
@@ -80,19 +79,21 @@ vi.mock('@pagespace/db', () => {
         await callback(mockTx);
       }),
     },
-    users: {},
-    subscriptions: {},
-    stripeEvents: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: {},
+  stripeEvents: {},
+}));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
-    loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
       api: {
         error: vi.fn(),
         info: vi.fn(),
@@ -105,13 +106,13 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    maskEmail,
-  };
-});
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
 
 // Import after mocks
 import { POST } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Helper to create mock Stripe event
 const mockStripeEvent = (type: string, data: unknown) => ({

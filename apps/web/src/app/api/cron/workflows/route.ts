@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
-import { db, workflows, taskItems, eq, and, lte, ne, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, lte, ne, inArray } from '@pagespace/db/operators'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
-import { loggers, audit } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_WORKFLOWS = 5;
@@ -59,7 +63,7 @@ export async function POST(req: Request) {
       );
 
     if (dueWorkflows.length === 0) {
-      audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } });
+      audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No workflows due', executed: 0 });
     }
 
@@ -192,7 +196,7 @@ export async function POST(req: Request) {
 
     loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',

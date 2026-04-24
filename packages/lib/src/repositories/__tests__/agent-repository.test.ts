@@ -4,11 +4,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'id', title: 'title', type: 'type', driveId: 'driveId',
     systemPrompt: 'systemPrompt', enabledTools: 'enabledTools',
@@ -18,6 +20,8 @@ vi.mock('@pagespace/db', () => ({
     pageTreeScope: 'pageTreeScope', revision: 'revision', stateHash: 'stateHash',
     isTrashed: 'isTrashed',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
 }));
@@ -27,7 +31,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { agentRepository } from '../agent-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

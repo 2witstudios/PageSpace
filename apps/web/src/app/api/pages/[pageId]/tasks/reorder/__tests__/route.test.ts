@@ -9,15 +9,21 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  PageType: { DOCUMENT: 'DOCUMENT', FOLDER: 'FOLDER', TASK_LIST: 'TASK_LIST' },
-  getDefaultContent: vi.fn(() => '{}'),
-  logger: {
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { DOCUMENT: 'DOCUMENT', FOLDER: 'FOLDER', TASK_LIST: 'TASK_LIST' },
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getDefaultContent: vi.fn(() => '{}'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logger: {
     child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
   },
 }));
@@ -30,13 +36,12 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockTxUpdate = vi.fn(() => ({
     set: vi.fn(() => ({
       where: vi.fn().mockResolvedValue(undefined),
     })),
   }));
-
   return {
     db: {
       query: {
@@ -48,12 +53,18 @@ vi.mock('@pagespace/db', () => {
         return callback(tx);
       }),
     },
-    taskItems: {},
-    taskLists: {},
-    pages: {},
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: {},
+  taskLists: {},
+}));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn().mockResolvedValue(undefined),
@@ -63,8 +74,8 @@ vi.mock('@/lib/websocket', () => ({
 
 import { PATCH } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 

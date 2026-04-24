@@ -13,7 +13,7 @@
 
 import { createHmac } from 'crypto';
 import { NextResponse } from 'next/server';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 
 let cronSecretWarningLogged = false;
 

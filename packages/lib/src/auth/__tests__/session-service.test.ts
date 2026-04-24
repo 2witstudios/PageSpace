@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, users, sessions } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
 import { eq, and, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { sessionService } from '../session-service';

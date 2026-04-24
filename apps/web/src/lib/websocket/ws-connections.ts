@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
-import { logger, sessionService } from '@pagespace/lib';
+import { logger } from '@pagespace/lib/logging/logger-config'
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 /**
  * WebSocket Connection Manager

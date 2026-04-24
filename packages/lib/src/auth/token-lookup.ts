@@ -2,12 +2,14 @@
  * Token Lookup Utilities (P1-T3)
  *
  * Hash-based token lookup for secure token storage.
- * All tokens are stored as SHA-256 hashes - plaintext tokens are never stored.
+ * All tokens are stored as SHA3-256 hashes - plaintext tokens are never stored.
  *
  * @module @pagespace/lib/auth/token-lookup
  */
 
-import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull } from '@pagespace/db/operators';
+import { mcpTokens } from '@pagespace/db/schema/auth';
 import { hashToken } from './token-utils';
 
 const MCP_TOKEN_PREFIX = 'mcp_';

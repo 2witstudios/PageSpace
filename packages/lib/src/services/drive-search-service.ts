@@ -5,7 +5,9 @@
  * Route handlers should call these service functions rather than accessing the database directly.
  */
 
-import { db, pages, drives, eq, and, inArray, sql, type PageTypeEnum } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, inArray, sql } from '@pagespace/db/operators';
+import { pages, drives, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 
 // ============================================================================

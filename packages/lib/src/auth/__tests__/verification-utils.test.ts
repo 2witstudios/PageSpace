@@ -5,8 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock @pagespace/db
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       verificationTokens: { findFirst: vi.fn() },
@@ -26,6 +25,8 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   verificationTokens: {
     userId: 'userId',
     tokenHash: 'tokenHash',
@@ -37,6 +38,8 @@ vi.mock('@pagespace/db', () => ({
     id: 'id',
     emailVerified: 'emailVerified',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_f, _v) => ({ _f, _v })),
   and: vi.fn((...args: unknown[]) => args),
   isNull: vi.fn((f) => ({ isNull: f })),
@@ -44,6 +47,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'test-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import {
@@ -52,7 +56,8 @@ import {
   markEmailVerified,
   isEmailVerified,
 } from '../verification-utils';
-import { db, verificationTokens, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { verificationTokens, users } from '@pagespace/db/schema/auth';
 
 describe('verification-utils', () => {
   beforeEach(() => {

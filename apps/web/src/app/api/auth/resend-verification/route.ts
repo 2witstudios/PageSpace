@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createVerificationToken } from '@pagespace/lib';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import React from 'react';
 import { authRepository } from '@/lib/repositories/auth-repository';
 

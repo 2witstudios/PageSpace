@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { getConnectionById, listGrantsByConnection } from '@pagespace/lib/integrations';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { listGrantsByConnection } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };

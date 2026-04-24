@@ -2,22 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock boundaries
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/content', () => ({
-  groupActivitiesForDiff: vi.fn(),
-  generateStackedDiff: vi.fn(),
-  truncateDiffsToTokenBudget: vi.fn(),
+    groupActivitiesForDiff: vi.fn(),
+    generateStackedDiff: vi.fn(),
+    truncateDiffsToTokenBudget: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  readPageContent: vi.fn(),
+vi.mock('@pagespace/lib/services/page-content-store', () => ({
+    readPageContent: vi.fn(),
 }));
 
 import { activityTools } from '../activity-tools';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);

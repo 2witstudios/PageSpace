@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess, auditRequest } from '@pagespace/lib/server';
-import { db, workflows, eq, and, ne } from '@pagespace/db';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db'
+import { eq, and, ne } from '@pagespace/db/operators'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 

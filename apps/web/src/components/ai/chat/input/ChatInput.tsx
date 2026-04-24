@@ -63,8 +63,6 @@ export interface ChatInputProps {
   onVoiceModeClick?: () => void;
   /** Whether voice mode is currently active */
   isVoiceModeActive?: boolean;
-  /** Whether voice mode is available (user has OpenAI key) */
-  isVoiceModeAvailable?: boolean;
   /** Image attachments for vision support */
   attachments?: ImageAttachment[];
   /** Handler to add image files */
@@ -122,7 +120,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onProviderModelChange,
       onVoiceModeClick,
       isVoiceModeActive = false,
-      isVoiceModeAvailable = false,
       attachments,
       onAddFiles,
       onRemoveFile,
@@ -279,7 +276,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onClearMicError={clearSpeechError}
           onVoiceModeClick={onVoiceModeClick}
           isVoiceModeActive={isVoiceModeActive}
-          isVoiceModeAvailable={isVoiceModeAvailable}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}

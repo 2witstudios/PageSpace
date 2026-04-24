@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
-import { db, connections, users, userProfiles, eq, and, or, desc, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members'
+import { connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { createNotification, isEmailVerified } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { createNotification } from '@pagespace/lib/notifications/notifications';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

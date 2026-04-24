@@ -8,7 +8,7 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -23,26 +23,38 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  users: { id: 'id', email: 'email' },
-  userProfiles: {},
-  connections: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: {},
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  connections: {},
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 

@@ -8,11 +8,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   listUserPasskeys: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -24,6 +24,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/security-audit', () => ({
   securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
@@ -42,8 +44,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { listUserPasskeys } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateSessionRequest,
   isAuthError,

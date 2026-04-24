@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
-import { pages, db, eq } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { generateExcel, sanitizeFilename } from '@pagespace/lib';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { generateExcel, sanitizeFilename } from '@pagespace/lib/content/export-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
+import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 

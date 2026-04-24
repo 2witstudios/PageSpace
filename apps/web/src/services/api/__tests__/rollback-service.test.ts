@@ -20,7 +20,7 @@ import {
 
 // @scaffold — ORM chain mock: rollback-service has no repository seam yet.
 // Replace with a rollback-repository seam when one is introduced.
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     select: vi.fn(),
     update: vi.fn(),
@@ -58,46 +58,57 @@ vi.mock('@pagespace/db', () => {
     where: vi.fn().mockResolvedValue(undefined),
   };
   mockDb.delete.mockReturnValue(deleteChain);
-
   return {
     db: mockDb,
-    activityLogs: { id: 'id' },
-    pages: { id: 'id' },
-    drives: { id: 'id' },
-    driveMembers: { id: 'id' },
-    driveRoles: { id: 'id' },
-    pagePermissions: { id: 'id' },
-    users: { id: 'id', subscriptionTier: 'subscriptionTier' },
-    chatMessages: { id: 'id' },
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
-    and: vi.fn((...args) => args),
-    desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
-    gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
-    lte: vi.fn((a, b) => ({ field: a, op: 'lte', value: b })),
-    count: vi.fn(() => 'count'),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...args) => args),
+  desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
+  gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
+  lte: vi.fn((a, b) => ({ field: a, op: 'lte', value: b })),
+  count: vi.fn(() => 'count'),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+  drives: { id: 'id' },
+  chatMessages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { id: 'id' },
+  driveRoles: { id: 'id' },
+  pagePermissions: { id: 'id' },
+}));
 
 // Mock permission checks
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserRollback: vi.fn(),
-  isRollbackableOperation: vi.fn(),
+vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
+    canUserRollback: vi.fn(),
+    isRollbackableOperation: vi.fn(),
 }));
 
 // Mock activity logger
-vi.mock('@pagespace/lib/monitoring', () => ({
-  logRollbackActivity: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    logRollbackActivity: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  createChangeGroupId: vi.fn(() => 'change-group-1'),
-  inferChangeGroupType: vi.fn(() => 'user'),
+}));
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-1'),
+    inferChangeGroupType: vi.fn(() => 'user'),
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -105,23 +116,31 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  readPageContent: vi.fn(),
-  computePageStateHash: vi.fn(() => 'state-hash'),
-  hashWithPrefix: vi.fn(() => 'content-ref'),
-  createPageVersion: vi.fn().mockResolvedValue({
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/services/page-content-store', () => ({
+    readPageContent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+    computePageStateHash: vi.fn(() => 'state-hash'),
+    createPageVersion: vi.fn().mockResolvedValue({
     id: 'version-123',
     contentRef: 'content-ref',
     contentSize: 42,
   }),
+}));
+vi.mock('@pagespace/lib/utils/hash-utils', () => ({
+    hashWithPrefix: vi.fn(() => 'content-ref'),
 }));
 
 vi.mock('@/services/api/page-mention-service', () => ({
   syncMentions: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { db } from '@pagespace/db';
-import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
-import { logRollbackActivity } from '@pagespace/lib/monitoring';
+import { db } from '@pagespace/db/db';
+import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
+import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db') above */
 type MockFn = ReturnType<typeof vi.fn>;

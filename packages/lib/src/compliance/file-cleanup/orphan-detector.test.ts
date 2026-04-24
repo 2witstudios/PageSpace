@@ -15,7 +15,7 @@ vi.mock('drizzle-orm', () => ({
   inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id' },
 }));
 
@@ -24,7 +24,7 @@ import {
   isFileOrphaned,
   deleteFileRecords,
 } from './orphan-detector';
-import { files } from '@pagespace/db';
+import { files } from '@pagespace/db/schema/storage';
 
 describe('findOrphanedFileRecords', () => {
   it('given_orphanedFilesExist_returnsAllWithParsedSizeBytes', async () => {
@@ -72,6 +72,20 @@ describe('findOrphanedFileRecords', () => {
     };
 
     await expect(findOrphanedFileRecords(db as never)).rejects.toThrow('connection refused');
+  });
+
+  it('given_sharedStoragePathDedupRequired_queryIncludesStoragePathGuard', async () => {
+    // Ensures the SQL excludes blobs shared with a live sibling file record (#905 gap).
+    // Uses storagePath (the actual CAS key in the files schema) — no contentHash column exists.
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await findOrphanedFileRecords(db as never);
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    expect(fullSql).toContain('storagePath');
   });
 });
 

@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
-import { secureCompare } from '@pagespace/lib'
+import { secureCompare } from '@pagespace/lib/auth/secure-compare'
 
 async function apiKeyAuthPlugin(app: FastifyInstance) {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {

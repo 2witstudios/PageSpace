@@ -12,7 +12,8 @@ import {
   SquareCheckBig,
   SquareTerminal,
 } from 'lucide-react';
-import { PageType, getPageTypeIconName } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { getPageTypeIconName } from '@pagespace/lib/content/page-types.config';
 
 interface PageTypeIconProps {
   type: PageType;
@@ -30,8 +31,8 @@ const iconMap = {
   File,
   MessagesSquare,
   BotMessageSquare,
-  SquareCheckBig,
   SquareTerminal,
+  SquareCheckBig,
 } as const;
 
 export function PageTypeIcon({ type, className, isTaskLinked }: PageTypeIconProps) {

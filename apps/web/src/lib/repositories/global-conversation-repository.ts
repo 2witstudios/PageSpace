@@ -3,7 +3,10 @@
  * Isolates database operations from route handlers for testability.
  */
 
-import { db, conversations, messages, aiUsageLogs, eq, and, desc, sql, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, sql, lt } from '@pagespace/db/operators'
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 
 // Types

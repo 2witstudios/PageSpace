@@ -1,17 +1,9 @@
-import {
-  db,
-  activityLogs,
-  users,
-  eq,
-  and,
-  or,
-  desc,
-  count,
-  gte,
-  lte,
-  ilike,
-} from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, count, gte, lte, ilike } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 

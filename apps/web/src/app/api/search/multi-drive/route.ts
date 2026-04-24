@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
-import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
-import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql, inArray } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
+import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };

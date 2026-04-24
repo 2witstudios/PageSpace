@@ -36,10 +36,14 @@ import {
   getUserPersonalization,
   getUserTimezone,
 } from '@/lib/ai/core';
-import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';

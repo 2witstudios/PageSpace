@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/table';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { FileItemContextMenu } from './FileItemContextMenu';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { toTitleCase } from '@/lib/utils/formatters';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { SortKey, SortDirection } from '@/components/layout/middle-content/page-views/folder/types';

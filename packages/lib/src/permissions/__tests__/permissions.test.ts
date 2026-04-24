@@ -4,20 +4,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
     query: {
       drives: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
   drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id', acceptedAt: 'acceptedAt' },
   pagePermissions: {
     pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit',
     canShare: 'canShare', canDelete: 'canDelete', expiresAt: 'expiresAt', id: 'id',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
@@ -58,7 +64,7 @@ import {
   getUserAccessiblePagesInDriveWithDetails,
   getUserDriveAccess,
 } from '../permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { parseUserId, parsePageId } from '../../validators';
 import { loggers } from '../../logging/logger-config';
 

@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -11,6 +13,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
  * Triggers a Google Calendar sync for the authenticated user.
  */
 export async function POST(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;

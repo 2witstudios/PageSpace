@@ -1,15 +1,6 @@
-import {
-  db,
-  calendarEvents,
-  eventAttendees,
-  eq,
-  and,
-  or,
-  gte,
-  lt,
-  inArray,
-  isNull,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, gte, lt, inArray, isNull } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 
 export interface PulseCalendarEvent {
   title: string;

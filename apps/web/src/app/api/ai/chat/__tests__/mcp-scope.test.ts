@@ -19,10 +19,14 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+    canUserEditPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
       info: vi.fn(),
@@ -39,10 +43,13 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
-  auditRequest: vi.fn(),
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -66,12 +73,18 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
-  eq: vi.fn(),
-  and: vi.fn(),
 }));
 
 vi.mock('@/lib/subscription/usage-service', () => ({
@@ -137,6 +150,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('generated_id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({

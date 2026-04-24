@@ -34,9 +34,11 @@ vi.mock('@/lib/repositories/global-conversation-repository', () => ({
 }));
 
 // Mock permissions
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -44,7 +46,11 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcasts
@@ -66,7 +72,7 @@ vi.mock('@/lib/logging/mask', () => ({
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);

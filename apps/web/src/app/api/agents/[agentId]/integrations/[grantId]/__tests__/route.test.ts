@@ -12,21 +12,27 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({ db: {} }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserEditPage: vi.fn().mockResolvedValue(true),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
+vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
   getGrantById: mockGetGrantById,
   updateGrant: vi.fn(),
   deleteGrant: mockDeleteGrant,
@@ -34,7 +40,7 @@ vi.mock('@pagespace/lib/integrations', () => ({
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';

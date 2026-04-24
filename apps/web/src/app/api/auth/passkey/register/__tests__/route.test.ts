@@ -8,13 +8,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifyRegistration: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   validateCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/passkey-register-handoff', () => ({
   consumePasskeyRegisterHandoff: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -23,6 +27,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
@@ -30,7 +36,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     PASSKEY_REGISTER: { maxAttempts: 5, windowMs: 300000, progressiveDelay: false },
@@ -49,14 +55,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import {
-  verifyRegistration,
-  validateCSRFToken,
-  consumePasskeyRegisterHandoff,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { verifyRegistration } from '@pagespace/lib/auth/passkey-service';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { consumePasskeyRegisterHandoff } from '@pagespace/lib/auth/passkey-register-handoff';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 

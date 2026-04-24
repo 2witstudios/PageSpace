@@ -3,22 +3,25 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { db, apiMetrics } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { apiMetrics } from '@pagespace/db/schema/monitoring';
 import { getMonitoringIngestStatus } from '../monitoring';
 
 // Mock the database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined)
     })
   },
-  apiMetrics: {}
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  apiMetrics: {},
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  logger: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       error: vi.fn(),
@@ -26,7 +29,7 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn()
     }))
   },
-  loggers: {
+    loggers: {
     performance: {
       info: vi.fn(),
       error: vi.fn(),
@@ -56,7 +59,7 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
     }
   },
-  extractRequestContext: vi.fn(() => ({
+    extractRequestContext: vi.fn(() => ({
     method: 'GET',
     endpoint: '/api/test',
     ip: '127.0.0.1',
@@ -64,7 +67,7 @@ vi.mock('@pagespace/lib/server', () => ({
     sessionId: 'test-session',
     query: {}
   })),
-  logResponse: vi.fn()
+    logResponse: vi.fn(),
 }));
 
 // Mock request-id (has transitive dep on @paralleldrive/cuid2)

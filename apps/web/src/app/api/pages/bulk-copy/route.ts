@@ -1,13 +1,17 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db'
+import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { createChangeGroupId } from '@pagespace/lib/monitoring';
+import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

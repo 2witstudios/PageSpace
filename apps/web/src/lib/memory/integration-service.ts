@@ -7,9 +7,11 @@
  */
 
 import { generateText } from 'ai';
-import { db, userPersonalization, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { DiscoveryResult } from './discovery-service';
 
 export interface UserPersonalizationData {

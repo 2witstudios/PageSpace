@@ -1,23 +1,13 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  db,
-  taskItems,
-  directMessages,
-  dmConversations,
-  pages,
-  drives,
-  driveMembers,
-  eq,
-  and,
-  or,
-  lt,
-  gte,
-  ne,
-  sql,
-  count,
-} from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, gte, ne, sql, count } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

@@ -28,9 +28,8 @@ import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
+import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
-import { InputCard } from '@/components/ui/floating-input';
 import { isEditingActive } from '@/stores/useEditingStore';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
@@ -255,9 +254,9 @@ const SidebarChatTab: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
+  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -417,44 +416,48 @@ const SidebarChatTab: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
+
+  // Track last AI response for voice mode TTS.
+  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
+  // messages are never spoken — only genuinely new responses trigger TTS.
   useEffect(() => {
     if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
+      voiceBaselineRef.current = undefined;
+      setLastAIResponse(null);
+      return;
     }
-  }, [isVoiceModeActive]);
 
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
+    // Initialize baseline BEFORE the streaming guard. If we waited until after,
+    // activating voice mid-stream would leave the baseline unset and then silence
+    // the in-flight response when it finishes.
+    if (voiceBaselineRef.current === undefined) {
+      const assistantMsgs = messages.filter((m) => m.role === 'assistant');
+      const lastOverallMsg = messages[messages.length - 1];
+      // During streaming the last overall message is the in-progress assistant reply;
+      // the baseline should be the previously-finalized message before it.
+      const streamingAssistantIdx =
+        displayIsStreaming && lastOverallMsg?.role === 'assistant'
+          ? assistantMsgs.length - 1
+          : assistantMsgs.length;
+      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
+      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      return;
+    }
 
-  // Track last AI response for voice mode TTS
-  useEffect(() => {
-    if (!isVoiceModeActive || displayIsStreaming) return;
+    if (displayIsStreaming) return;
 
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
-    }
+    if (!lastAssistantMsg) return;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    if (!text.trim()) return;
+    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
+
+    setLastAIResponse((current) =>
+      current?.id === lastAssistantMsg.id
+        ? current
+        : { id: lastAssistantMsg.id, text }
+    );
   }, [messages, displayIsStreaming, isVoiceModeActive]);
 
   // App state recovery - refresh messages when returning from background
@@ -612,7 +615,6 @@ const SidebarChatTab: React.FC = () => {
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
-      setShowVoiceSettings(false);
     } else {
       enableVoiceMode(VOICE_OWNER);
     }
@@ -816,44 +818,38 @@ const SidebarChatTab: React.FC = () => {
           />
         </div>
 
-        {isVoiceModeActive ? (
-          <InputCard>
-            <VoiceModeDock
-              owner={VOICE_OWNER}
-              onSend={handleVoiceSend}
-              aiResponse={lastAIResponse}
-              isAIStreaming={displayIsStreaming}
-              showSettings={showVoiceSettings}
-              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-              onClose={() => setShowVoiceSettings(false)}
-            />
-          </InputCard>
-        ) : (
-          <ChatInput
-            ref={chatInputRef}
-            value={input}
-            onChange={setInput}
-            onSend={handleSendMessage}
-            onStop={handleStop}
-            isStreaming={displayIsStreaming}
-            placeholder={locationContext
-              ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-              : 'Ask about your workspace...'}
-            driveId={locationContext?.currentDrive?.id}
-            crossDrive={true}
-            hideModelSelector={true}
-            variant="sidebar"
-            onVoiceModeClick={handleVoiceModeToggle}
-            isVoiceModeActive={isVoiceModeActive}
-            isVoiceModeAvailable={isOpenAIConfigured}
-            attachments={attachments}
-            onAddFiles={addFiles}
-            onRemoveFile={removeFile}
-            hasVision={hasVisionCapability(
-              (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
-            )}
+        {isVoiceModeActive && (
+          <VoiceCallPanel
+            owner={VOICE_OWNER}
+            onSend={handleVoiceSend}
+            latestAssistantMessage={lastAIResponse}
+            isAIStreaming={displayIsStreaming}
+            onClose={disableVoiceMode}
           />
         )}
+        <ChatInput
+          ref={chatInputRef}
+          value={input}
+          onChange={setInput}
+          onSend={handleSendMessage}
+          onStop={handleStop}
+          isStreaming={displayIsStreaming}
+          placeholder={locationContext
+            ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
+            : 'Ask about your workspace...'}
+          driveId={locationContext?.currentDrive?.id}
+          crossDrive={true}
+          hideModelSelector={true}
+          variant="sidebar"
+          onVoiceModeClick={handleVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeActive}
+          attachments={attachments}
+          onAddFiles={addFiles}
+          onRemoveFile={removeFile}
+          hasVision={hasVisionCapability(
+            (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
+          )}
+        />
       </div>
 
       <UndoAiChangesDialog

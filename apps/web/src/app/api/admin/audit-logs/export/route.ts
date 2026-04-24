@@ -1,15 +1,8 @@
-import {
-  db,
-  activityLogs,
-  users,
-  eq,
-  and,
-  desc,
-  gte,
-  lte,
-  sql,
-} from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, gte, lte, sql } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 

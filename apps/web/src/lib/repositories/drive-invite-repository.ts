@@ -4,16 +4,11 @@
  * enabling proper unit testing without ORM chain mocking.
  */
 
-import {
-  db,
-  drives,
-  driveMembers,
-  pages,
-  pagePermissions,
-  users,
-  eq,
-  and,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { drives, pages } from '@pagespace/db/schema/core'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {

@@ -22,30 +22,29 @@ vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
 }));
 
 // Mock logger (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-// Mock rate limit (boundary) - note: checkRateLimit is exported from @pagespace/lib/auth
-vi.mock('@pagespace/lib/auth', async () => {
-  const actual = await vi.importActual('@pagespace/lib/auth');
-  return {
-    ...actual,
-    checkRateLimit: vi.fn(),
-  };
-});
+vi.mock('@pagespace/lib/auth/rate-limit-utils', () => ({
+  checkRateLimit: vi.fn(),
+}));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';
-import { loggers } from '@pagespace/lib/server';
-import { checkRateLimit } from '@pagespace/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
 
 // Test fixtures
 const mockUserId = 'user-123';

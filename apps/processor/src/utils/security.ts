@@ -1,5 +1,5 @@
 import path from 'path';
-import { resolvePathWithinSync as libResolvePathWithinSync } from '@pagespace/lib/security';
+import { resolvePathWithinSync as libResolvePathWithinSync } from '@pagespace/lib/security/path-validator';
 
 export const SAFE_EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/i;
 export const DEFAULT_EXTENSION = '.bin';

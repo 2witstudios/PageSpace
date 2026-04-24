@@ -31,13 +31,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),
 }));
 
 // Mock database (boundary)
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const selectResult = {
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
@@ -51,32 +51,38 @@ vi.mock('@pagespace/db', () => {
         values: vi.fn().mockResolvedValue(undefined),
       })),
     },
-    chatMessages: {
+  };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((...args: unknown[]) => args),
+  and: vi.fn((...args: unknown[]) => args),
+  desc: vi.fn((col: unknown) => col),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  chatMessages: {
       pageId: 'pageId',
       isActive: 'isActive',
       createdAt: 'createdAt',
     },
-    eq: vi.fn((...args: unknown[]) => args),
-    and: vi.fn((...args: unknown[]) => args),
-    desc: vi.fn((col: unknown) => col),
-  };
-});
+}));
 
 // Mock loggers (boundary)
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       debug: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
-import { db } from '@pagespace/db';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // Test fixtures
 const mockUserId = 'user_123';

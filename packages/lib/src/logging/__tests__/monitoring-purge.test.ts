@@ -3,19 +3,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   systemLogs: { id: 'id', userId: 'system_logs.user_id' },
   apiMetrics: { id: 'id', userId: 'api_metrics.user_id' },
   errorLogs: { id: 'id', userId: 'error_logs.user_id' },
   userActivities: { id: 'id', userId: 'user_activities.user_id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
 }));
 
 import { deleteMonitoringDataForUser } from '../monitoring-purge';
-import { db, eq, systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 
 describe('deleteMonitoringDataForUser', () => {
   beforeEach(() => {

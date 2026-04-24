@@ -26,10 +26,12 @@ vi.mock('next/server', () => {
 // 3. Unauthorized access returns 403, not data
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
   getDriveIdsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -38,6 +40,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -45,25 +49,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', async () => {
-  const actual = await vi.importActual('@pagespace/db');
-  return {
-    ...actual,
-    db: {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue([]),
-    },
-  };
-});
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue([]),
+  },
+}));
 
 // Import after all mocks are set up
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/server';
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Fixtures

@@ -16,8 +16,10 @@
  */
 
 import { createHash } from 'crypto';
-import { db, securityAuditLog, desc, sql } from '@pagespace/db';
-import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
+import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
 
@@ -96,46 +98,20 @@ export function computeSecurityEventHash(
 /**
  * Security Audit Service with hash chain integrity.
  *
- * Maintains an in-memory reference to the last hash for building the chain.
- * Must be initialized before use by calling initialize().
+ * Must be initialized before first use by calling initialize().
+ * Each logEvent() reads the previous hash from the DB inside an advisory lock,
+ * so multi-instance deployments are safe without any in-memory state.
  */
 export class SecurityAuditService {
-  private lastHash: string = 'genesis';
   private initialized = false;
-  private initializePromise: Promise<void> | null = null;
 
   /**
-   * Initialize the service by loading the last hash from the database.
-   * Call this during service startup, not lazily.
-   *
-   * This method is idempotent - calling it multiple times is safe.
+   * Mark the service as initialized. Retained for callers that invoke it at
+   * app startup; logEvent() also self-initializes. Idempotent.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-
-    // Prevent concurrent initialization
-    if (this.initializePromise) {
-      return this.initializePromise;
-    }
-
-    this.initializePromise = this._doInitialize();
-    await this.initializePromise;
-  }
-
-  private async _doInitialize(): Promise<void> {
-    try {
-      const lastEvent = await db.query.securityAuditLog.findFirst({
-        orderBy: [desc(securityAuditLog.chainSeq)],
-        columns: { eventHash: true },
-      });
-
-      this.lastHash = lastEvent?.eventHash ?? 'genesis';
-      this.initialized = true;
-    } catch (error) {
-      // Reset promise so initialization can be retried
-      this.initializePromise = null;
-      throw error;
-    }
+    this.initialized = true;
   }
 
   /**

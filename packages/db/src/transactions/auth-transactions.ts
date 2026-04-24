@@ -11,7 +11,9 @@
  * @module @pagespace/db/transactions/auth-transactions
  */
 
-import { db, deviceTokens, users, eq, sql } from '../index';
+import { db } from '../db';
+import { deviceTokens, users } from '../schema/auth';
+import { eq, sql } from '../operators';
 import { createId } from '@paralleldrive/cuid2';
 
 /**

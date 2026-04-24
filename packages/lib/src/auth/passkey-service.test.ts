@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { db, users, passkeys, verificationTokens, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull } from '@pagespace/db/operators';
+import { users, passkeys, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 
 // Riteway-style assert helper

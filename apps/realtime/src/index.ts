@@ -1,10 +1,16 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
-import { sessionService } from '@pagespace/lib/auth';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, or, dmConversations, socketTokens, users, userProfiles, pages } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, gt, and, or } from '@pagespace/db/operators';
+import { dmConversations } from '@pagespace/db/schema/social';
+import { socketTokens, users } from '@pagespace/db/schema/auth';
+import { userProfiles } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 import {
   validatePageId,
   validateDriveId,
@@ -13,7 +19,6 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
@@ -34,7 +39,7 @@ async function validateSocketToken(token: string): Promise<{ userId: string } | 
     return null;
   }
 
-  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const tokenHash = hashToken(token);
 
   try {
     const record = await db.query.socketTokens.findFirst({

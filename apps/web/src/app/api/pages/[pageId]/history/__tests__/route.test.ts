@@ -27,19 +27,19 @@ vi.mock('../../../../../../lib/auth', () => ({
 }));
 
 // Mock permissions
-vi.mock('@pagespace/lib', () => ({
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
 }));
 
 // Mock the permission helper from lib/permissions
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
   isActivityEligibleForRollback: vi.fn(),
 }));
 
 import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
-import { canUserViewPage } from '@pagespace/lib';
-import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 
 // Test helpers
 const mockUserId = 'user_123';

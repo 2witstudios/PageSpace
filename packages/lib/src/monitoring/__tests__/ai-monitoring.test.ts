@@ -27,10 +27,12 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockDbSelectFn,
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     userId: 'userId',
     provider: 'provider',
@@ -45,6 +47,8 @@ vi.mock('@pagespace/db', () => ({
     error: 'error',
     metadata: 'metadata',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn(),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
@@ -284,6 +288,25 @@ describe('trackAIUsage', () => {
       'AI usage tracking failed',
       expect.objectContaining({ error: 'db error' })
     );
+  });
+
+  it('given AI request completes, should NOT write prompt or completion content to ai_usage_logs (#957 — GDPR data minimization)', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockWriteAiUsage).toHaveBeenCalledOnce();
+    const callArg = mockWriteAiUsage.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArg).not.toHaveProperty('prompt');
+    expect(callArg).not.toHaveProperty('completion');
+    // Token counts must still be present
+    expect(callArg.inputTokens).toBe(1000);
+    expect(callArg.outputTokens).toBe(500);
   });
 });
 

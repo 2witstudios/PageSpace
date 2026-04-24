@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveAccessResult } from '@pagespace/lib/server';
+import type { DriveAccessResult } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for /api/workflows/[workflowId]
@@ -29,12 +29,18 @@ const {
   mockSelect: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -50,20 +56,26 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
     delete: mockDelete,
   },
-  workflows: { id: 'id', driveId: 'driveId' },
-  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { id: 'id', driveId: 'driveId' },
+}));
 
 import { GET, PATCH, DELETE } from '../route';
-import { checkDriveAccess } from '@pagespace/lib/server';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findFirst: vi.fn() },
@@ -13,12 +13,16 @@ vi.mock('@pagespace/db', () => ({
     insert: vi.fn(),
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'id', title: 'title', type: 'type', content: 'content', driveId: 'driveId',
     parentId: 'parentId', position: 'position', isTrashed: 'isTrashed',
     trashedAt: 'trashedAt', updatedAt: 'updatedAt', revision: 'revision',
     stateHash: 'stateHash', contentMode: 'contentMode',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
   desc: vi.fn((a) => ({ desc: a })),
@@ -31,7 +35,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { pageRepository } from '../page-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

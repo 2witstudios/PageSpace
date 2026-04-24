@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock @paralleldrive/cuid2 before importing the module under test
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mocked-cuid-value'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { createChangeGroupId, inferChangeGroupType } from '../change-group';

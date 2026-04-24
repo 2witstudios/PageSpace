@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
+import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth/passkey-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const optionsSchema = z.object({

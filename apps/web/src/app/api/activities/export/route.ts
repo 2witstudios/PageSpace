@@ -1,26 +1,39 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, gte, lt, inArray } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { generateCSV } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, gte, lt, inArray } from '@pagespace/db/operators'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { format } from 'date-fns';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
-// Query parameter schema (same as main activities route)
 const querySchema = z.object({
   context: z.enum(['user', 'drive', 'page']),
   driveId: z.string().optional(),
   pageId: z.string().optional(),
-  // Filter parameters
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),
 });
+
+function escapeCsvField(value: string): string {
+  if (value.includes('"') || value.includes(',') || value.includes('\n') || value.includes('\r')) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function toCsvLine(fields: string[]): string {
+  return fields.map(f => escapeCsvField(String(f ?? ''))).join(',') + '\r\n';
+}
+
+const BATCH_SIZE = 1000;
 
 /**
  * GET /api/activities/export
@@ -37,8 +50,6 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
-
-  auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activities', resourceId: 'self' });
 
   try {
     const parseResult = querySchema.safeParse({
@@ -61,7 +72,6 @@ export async function GET(request: Request) {
 
     const params = parseResult.data;
 
-    // Build where condition based on context
     let whereCondition;
 
     switch (params.context) {
@@ -71,9 +81,7 @@ export async function GET(request: Request) {
           eq(activityLogs.isArchived, false)
         ];
 
-        // Optional drive filter for user context
         if (params.driveId) {
-          // Check MCP token scope before drive access
           const scopeError = checkMCPDriveScope(auth, params.driveId);
           if (scopeError) return scopeError;
 
@@ -86,7 +94,6 @@ export async function GET(request: Request) {
           }
           userConditions.push(eq(activityLogs.driveId, params.driveId));
         } else {
-          // Filter by MCP token scope when no driveId provided
           const allowedDriveIds = getAllowedDriveIds(auth);
           if (allowedDriveIds.length > 0) {
             userConditions.push(inArray(activityLogs.driveId, allowedDriveIds));
@@ -105,7 +112,6 @@ export async function GET(request: Request) {
           );
         }
 
-        // Check MCP token scope before drive access
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
@@ -132,7 +138,6 @@ export async function GET(request: Request) {
           );
         }
 
-        // Check MCP token scope before page access
         const scopeError = await checkMCPPageScope(auth, params.pageId);
         if (scopeError) return scopeError;
 
@@ -158,7 +163,6 @@ export async function GET(request: Request) {
         );
     }
 
-    // Apply additional filters
     const filterConditions = [];
     if (whereCondition) {
       filterConditions.push(whereCondition);
@@ -171,7 +175,6 @@ export async function GET(request: Request) {
       endOfDay.setDate(endOfDay.getDate() + 1);
       filterConditions.push(lt(activityLogs.timestamp, endOfDay));
     }
-    // actorId filter only applies in drive/page context (user context already filters by authenticated user)
     if (params.actorId && params.context !== 'user') {
       filterConditions.push(eq(activityLogs.userId, params.actorId));
     }
@@ -186,47 +189,6 @@ export async function GET(request: Request) {
       ? and(...filterConditions)
       : undefined;
 
-    // Fetch all activities (no pagination for export)
-    const activities = await db.query.activityLogs.findMany({
-      where: finalWhereCondition,
-      with: {
-        user: {
-          columns: { id: true, name: true, email: true },
-        },
-      },
-      orderBy: [desc(activityLogs.timestamp)],
-      limit: 10000, // Safety limit
-    });
-
-    // Build CSV data
-    const headers = [
-      'Timestamp',
-      'Actor Name',
-      'Actor Email',
-      'Operation',
-      'Resource Type',
-      'Resource Title',
-      'AI Generated',
-      'AI Model',
-      'Changed Fields',
-    ];
-
-    const rows = activities.map(activity => [
-      format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
-      activity.actorDisplayName || activity.user?.name || '',
-      activity.actorEmail || activity.user?.email || '',
-      activity.operation,
-      activity.resourceType,
-      activity.resourceTitle || '',
-      activity.isAiGenerated ? 'Yes' : 'No',
-      activity.isAiGenerated ? [activity.aiProvider, activity.aiModel].filter(Boolean).join('/') : '',
-      activity.updatedFields ? activity.updatedFields.join(', ') : '',
-    ]);
-
-    const csvData = [headers, ...rows];
-    const csvContent = generateCSV(csvData);
-
-    // Generate filename with date range
     let filename = 'activity-export';
     if (params.startDate && params.endDate) {
       filename += `-${format(params.startDate, 'yyyy-MM-dd')}-to-${format(params.endDate, 'yyyy-MM-dd')}`;
@@ -239,20 +201,77 @@ export async function GET(request: Request) {
     }
     filename += '.csv';
 
-    // Check if results were truncated
-    const isTruncated = activities.length === 10000;
+    auditRequest(request, {
+      eventType: 'data.export',
+      userId,
+      resourceType: 'activities',
+      resourceId: params.driveId ?? params.pageId ?? 'self',
+      details: { context: params.context },
+    });
 
-    auditRequest(request, { eventType: 'data.export', userId, resourceType: 'activity', resourceId: params.driveId ?? params.pageId ?? '*', details: {
-      context: params.context,
-      exportedCount: activities.length,
-      isTruncated,
-    } });
+    const encoder = new TextEncoder();
 
-    return new Response(csvContent, {
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          const headers = [
+            'Timestamp',
+            'Actor Name',
+            'Actor Email',
+            'Operation',
+            'Resource Type',
+            'Resource Title',
+            'AI Generated',
+            'AI Model',
+            'Changed Fields',
+          ];
+          controller.enqueue(encoder.encode(toCsvLine(headers)));
+
+          let offset = 0;
+          while (true) {
+            const batch = await db.query.activityLogs.findMany({
+              where: finalWhereCondition,
+              with: {
+                user: {
+                  columns: { id: true, name: true, email: true },
+                },
+              },
+              orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
+              limit: BATCH_SIZE,
+              offset,
+            });
+
+            for (const activity of batch) {
+              const row = [
+                format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
+                activity.actorDisplayName || activity.user?.name || '',
+                activity.actorEmail || activity.user?.email || '',
+                activity.operation,
+                activity.resourceType,
+                activity.resourceTitle || '',
+                activity.isAiGenerated ? 'Yes' : 'No',
+                activity.isAiGenerated ? [activity.aiProvider, activity.aiModel].filter(Boolean).join('/') : '',
+                activity.updatedFields ? activity.updatedFields.join(', ') : '',
+              ];
+              controller.enqueue(encoder.encode(toCsvLine(row)));
+            }
+
+            if (batch.length < BATCH_SIZE) break;
+            offset += BATCH_SIZE;
+          }
+
+          controller.close();
+        } catch (error) {
+          loggers.api.error('Error streaming activities export:', error as Error);
+          controller.error(error);
+        }
+      },
+    });
+
+    return new Response(stream, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        ...(isTruncated && { 'X-Truncated': 'true', 'X-Truncated-At': '10000' }),
       },
     });
   } catch (error) {

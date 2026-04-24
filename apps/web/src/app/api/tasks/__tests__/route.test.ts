@@ -12,7 +12,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
@@ -26,10 +26,8 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
-  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
-  taskLists: { id: 'id', pageId: 'pageId' },
-  taskStatusConfigs: { taskListId: 'taskListId' },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args) => args),
   desc: vi.fn(),
@@ -43,6 +41,14 @@ vi.mock('@pagespace/db', () => ({
   not: vi.fn(),
   sql: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
+  taskLists: { id: 'id', pageId: 'pageId' },
+  taskStatusConfigs: { taskListId: 'taskListId' },
+}));
 
 vi.mock('@/lib/task-status-config', () => ({
   DEFAULT_STATUS_CONFIG: {
@@ -53,8 +59,8 @@ vi.mock('@/lib/task-status-config', () => ({
   } as Record<string, { label: string; color: string; group: string }>,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -62,11 +68,15 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));
@@ -78,9 +88,10 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn((_auth: unknown, driveIds: string[]) => driveIds),
 }));
 
-import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

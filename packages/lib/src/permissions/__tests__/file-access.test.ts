@@ -4,11 +4,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   filePages: { fileId: 'fileId', pageId: 'pageId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
 }));
 
@@ -22,7 +26,7 @@ vi.mock('../permissions', () => ({
 // ---------------------------------------------------------------------------
 
 import { canUserAccessFile } from '../file-access';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { canUserViewPage, isUserDriveMember } from '../permissions';
 
 // ---------------------------------------------------------------------------

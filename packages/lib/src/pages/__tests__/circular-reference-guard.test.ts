@@ -4,15 +4,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
-      pages: {
-        findFirst: vi.fn(),
-      },
+      pages: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', parentId: 'parentId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
 }));
 
@@ -25,7 +27,7 @@ import {
   isDescendant,
   validatePageMove,
 } from '../circular-reference-guard';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

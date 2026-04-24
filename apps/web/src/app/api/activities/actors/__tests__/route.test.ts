@@ -11,7 +11,7 @@ vi.mock('@/lib/auth', () => ({
   getAllowedDriveIds: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -24,29 +24,39 @@ vi.mock('@pagespace/db', () => ({
       users: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
-  activityLogs: { userId: 'userId' },
-  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
   inArray: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { userId: 'userId' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: vi.fn().mockResolvedValue(true),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 

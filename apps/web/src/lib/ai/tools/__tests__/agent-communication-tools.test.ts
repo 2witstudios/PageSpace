@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -11,17 +11,23 @@ vi.mock('@pagespace/db', () => ({
       pages: { findFirst: vi.fn() },
     },
   },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
-  drives: { id: 'id', ownerId: 'ownerId' },
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -29,6 +35,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('ai', () => ({
@@ -42,6 +50,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 // Mock sibling tools to avoid circular imports
@@ -77,8 +86,8 @@ vi.mock('../../core', () => ({
 }));
 
 import { agentCommunicationTools } from '../agent-communication-tools';
-import { db } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';

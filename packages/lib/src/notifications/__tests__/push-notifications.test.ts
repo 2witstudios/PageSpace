@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     query: {
       pushNotificationTokens: {
@@ -15,26 +15,29 @@ vi.mock('@pagespace/db', () => {
     insert: vi.fn(),
     update: vi.fn(),
   };
-  return {
-    db: mockDb,
-    pushNotificationTokens: {
-      id: 'id',
-      userId: 'userId',
-      token: 'token',
-      platform: 'platform',
-      deviceId: 'deviceId',
-      isActive: 'isActive',
-      failedAttempts: 'failedAttempts',
-      lastFailedAt: 'lastFailedAt',
-      lastUsedAt: 'lastUsedAt',
-    },
-    eq: vi.fn((_a, _b) => 'eq'),
-    and: vi.fn((...args) => ({ and: args })),
-  };
+  return { db: mockDb };
 });
+vi.mock('@pagespace/db/schema/push-notifications', () => ({
+  pushNotificationTokens: {
+    id: 'id',
+    userId: 'userId',
+    token: 'token',
+    platform: 'platform',
+    deviceId: 'deviceId',
+    isActive: 'isActive',
+    failedAttempts: 'failedAttempts',
+    lastFailedAt: 'lastFailedAt',
+    lastUsedAt: 'lastUsedAt',
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a, _b) => 'eq'),
+  and: vi.fn((...args) => ({ and: args })),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-token-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('crypto', async (importOriginal) => {
@@ -56,7 +59,7 @@ import {
   sendPushNotification,
   getUserPushTokens,
 } from '../push-notifications';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import * as crypto from 'crypto';
 
 // ---------------------------------------------------------------------------

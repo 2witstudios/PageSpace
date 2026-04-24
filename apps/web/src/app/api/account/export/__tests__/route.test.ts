@@ -8,11 +8,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -20,6 +20,10 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -28,7 +32,7 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
@@ -54,7 +58,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
 // Test helpers
@@ -83,6 +87,10 @@ const mockUserData = {
   activity: [],
   aiUsage: [],
   tasks: [],
+  sessions: [],
+  notifications: [],
+  displayPreferences: [],
+  personalization: null,
 };
 
 describe('GET /api/account/export', () => {
@@ -182,8 +190,8 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      // Should append 8 JSON files
-      expect(mockArchive.append).toHaveBeenCalledTimes(8);
+      // Should append 11 JSON files (sessions, notifications, displayPreferences added; personalization omitted when null)
+      expect(mockArchive.append).toHaveBeenCalledTimes(11);
       // Verify each data category name pattern
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
@@ -196,6 +204,24 @@ describe('GET /api/account/export', () => {
       expect(appendCalls.some((n: string) => n.includes('activity.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('ai-usage.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('tasks.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('sessions.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('notifications.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('display-preferences.json'))).toBe(true);
+    });
+
+    it('appends personalization.json when personalization data exists', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue({
+        ...mockUserData,
+        personalization: { bio: 'test', writingStyle: null, rules: null, enabled: true, createdAt: new Date(), updatedAt: new Date() },
+      } as never);
+
+      await GET(createRequest());
+
+      expect(mockArchive.append).toHaveBeenCalledTimes(12);
+      const appendCalls = mockArchive.append.mock.calls.map(
+        (call: unknown[]) => (call[1] as { name: string }).name
+      );
+      expect(appendCalls.some((n: string) => n.includes('personalization.json'))).toBe(true);
     });
 
     it('calls archive.finalize()', async () => {

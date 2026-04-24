@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, channelMessageReactions, db, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { channelMessages, channelMessageReactions } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage, auditRequest } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

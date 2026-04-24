@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
-import { db, directMessages, dmConversations, eq, and, or, desc, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, lt } from '@pagespace/db/operators'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';

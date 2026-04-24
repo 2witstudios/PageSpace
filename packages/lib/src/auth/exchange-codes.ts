@@ -15,14 +15,16 @@
  * - Tokens never appear in URLs (no nginx log leakage)
  * - Codes are one-time use (atomic DELETE … RETURNING)
  * - Short TTL (5 minutes)
- * - Codes are SHA-256 hashed at rest (defense in depth)
+ * - Codes are SHA3-256 hashed at rest (defense in depth)
  *
  * @module @pagespace/lib/auth/exchange-codes
  */
 
 import { randomBytes } from 'crypto';
 import { hashToken } from './token-utils';
-import { db, authHandoffTokens, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import { loggers } from '../logging/logger-config';
 
 const EXCHANGE_CODE_KIND = 'exchange-code';

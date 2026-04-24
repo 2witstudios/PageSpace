@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       verificationTokens: { findFirst: vi.fn() },
@@ -21,8 +21,12 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email' },
   verificationTokens: { userId: 'userId', tokenHash: 'tokenHash', type: 'type', usedAt: 'usedAt', id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
@@ -30,6 +34,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'test-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('../token-utils', () => ({
@@ -47,7 +52,7 @@ vi.mock('../secure-compare', () => ({
 }));
 
 import { createMagicLinkToken, verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES } from '../magic-link-service';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { secureCompare } from '../secure-compare';
 
 describe('magic-link-service', () => {

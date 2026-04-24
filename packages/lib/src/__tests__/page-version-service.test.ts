@@ -3,16 +3,16 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 
 // Mock the database before importing the service
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
   },
-  pageVersions: {
-    id: 'id',
-  },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
+  pageVersions: { id: 'id' },
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   createPageVersion,
   computePageStateHash,

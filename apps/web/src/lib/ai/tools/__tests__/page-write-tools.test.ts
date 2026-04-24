@@ -11,17 +11,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 // Mock repository seams - the proper architectural boundaries
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
-  canUserDeletePage: vi.fn(),
-  logPageActivity: vi.fn(),
-  logDriveActivity: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
-  detectPageContentFormat: vi.fn(() => 'text'),
-  hashWithPrefix: vi.fn(() => 'content-ref'),
-  computePageStateHash: vi.fn(() => 'state-hash'),
-  createPageVersion: vi.fn().mockResolvedValue({ id: 'version-1', contentRef: 'content-ref', contentSize: 0 }),
-  PageType: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+    canUserDeletePage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    logPageActivity: vi.fn(),
+    logDriveActivity: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+}));
+vi.mock('@pagespace/lib/content/page-content-format', () => ({
+    detectPageContentFormat: vi.fn(() => 'text'),
+}));
+vi.mock('@pagespace/lib/utils/hash-utils', () => ({
+    hashWithPrefix: vi.fn(() => 'content-ref'),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+    computePageStateHash: vi.fn(() => 'state-hash'),
+    createPageVersion: vi.fn().mockResolvedValue({ id: 'version-1', contentRef: 'content-ref', contentSize: 0 }),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: {
     FOLDER: 'FOLDER',
     DOCUMENT: 'DOCUMENT',
     AI_CHAT: 'AI_CHAT',
@@ -33,16 +43,22 @@ vi.mock('@pagespace/lib/server', () => ({
     CODE: 'CODE',
     TERMINAL: 'TERMINAL',
   },
-  getDefaultContent: vi.fn(() => ''),
-  getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
-  isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
-  isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
-  parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
-  serializeSheetContent: vi.fn(() => ''),
-  updateSheetCells: vi.fn((data) => data),
-  isValidCellAddress: vi.fn((addr) => /^[A-Z]+\d+$/.test(addr.toUpperCase())),
-  isSheetType: vi.fn((type) => type === 'SHEET'),
-  loggers: {
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getDefaultContent: vi.fn(() => ''),
+    getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+    isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
+    isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
+}));
+vi.mock('@pagespace/lib/sheets', () => ({
+    parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
+    serializeSheetContent: vi.fn(() => ''),
+    updateSheetCells: vi.fn((data) => data),
+    isValidCellAddress: vi.fn((addr) => /^[A-Z]+\d+$/.test(addr.toUpperCase())),
+    isSheetType: vi.fn((type) => type === 'SHEET'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -52,8 +68,10 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
-  // Repository seams
-  pageRepository: {
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/repositories/page-repository', () => ({
+    pageRepository: {
     findById: vi.fn(),
     findTrashedById: vi.fn(),
     existsInDrive: vi.fn(),
@@ -65,7 +83,9 @@ vi.mock('@pagespace/lib/server', () => ({
     restore: vi.fn(),
     getChildIds: vi.fn(),
   },
-  driveRepository: {
+}));
+vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
+    driveRepository: {
     findById: vi.fn(),
     findByIdBasic: vi.fn(),
     findByIdAndOwner: vi.fn(),
@@ -90,7 +110,9 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage, pageRepository, driveRepository } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 

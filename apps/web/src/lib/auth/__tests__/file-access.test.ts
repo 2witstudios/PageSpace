@@ -10,7 +10,7 @@
  * using the same pattern as production, with a structural sync assertion to catch drift.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions';
+import { canUserAccessFile as productionFn } from '@pagespace/lib/permissions/file-access';
 
 const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted(() => ({
   mockWhereFn: vi.fn().mockResolvedValue([]),
@@ -18,7 +18,7 @@ const { mockWhereFn, mockCanUserViewPage, mockIsUserDriveMember } = vi.hoisted((
   mockIsUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -26,9 +26,20 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+  drives: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {},
+  pagePermissions: {},
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   filePages: { fileId: 'fileId', pageId: 'pageId' },
-  pages: {}, drives: {}, driveMembers: {}, pagePermissions: {},
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {
@@ -37,14 +48,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
   return { loggers: { api: logger, realtime: logger, security: logger } };
 });
 
-vi.mock('@pagespace/lib', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    parseUserId: vi.fn((v: unknown) => ({ success: true, data: v })),
-    parsePageId: vi.fn((v: unknown) => ({ success: true, data: v })),
-  };
-});
+vi.mock('@pagespace/lib/validators/id-validators', () => ({
+  parseUserId: vi.fn((v: unknown) => ({ success: true, data: v })),
+  parsePageId: vi.fn((v: unknown) => ({ success: true, data: v })),
+}));
 
 describe('canUserAccessFile', () => {
   let canUserAccessFile: (userId: string, fileId: string, driveId: string) => Promise<boolean>;
@@ -55,7 +62,9 @@ describe('canUserAccessFile', () => {
     mockCanUserViewPage.mockReset();
     mockIsUserDriveMember.mockReset();
 
-    const { db, eq, filePages } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
+    const { eq } = await import('@pagespace/db/operators');
+    const { filePages } = await import('@pagespace/db/schema/storage');
 
     canUserAccessFile = async (userId: string, fileId: string, driveId: string): Promise<boolean> => {
       const linkedPages = await db

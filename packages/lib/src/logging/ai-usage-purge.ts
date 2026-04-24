@@ -1,30 +1,12 @@
 /**
  * AI Usage Log Lifecycle Functions
  *
- * Provides TTL-based content anonymization, full row purge,
- * and user-scoped deletion for account removal.
+ * Provides TTL-based row purge and user-scoped deletion for account removal.
  */
 
-import { db, aiUsageLogs, lt, eq, and, or, isNotNull } from '@pagespace/db';
-
-/**
- * Anonymize prompt/completion text for logs older than the cutoff date.
- * Preserves metadata (tokens, cost, model) for analytics while removing PII.
- */
-export async function anonymizeAiUsageContent(olderThan: Date): Promise<number> {
-  const result = await db
-    .update(aiUsageLogs)
-    .set({ prompt: null, completion: null })
-    .where(
-      and(
-        lt(aiUsageLogs.timestamp, olderThan),
-        or(isNotNull(aiUsageLogs.prompt), isNotNull(aiUsageLogs.completion))
-      )
-    )
-    .returning({ id: aiUsageLogs.id });
-
-  return result.length;
-}
+import { db } from '@pagespace/db/db';
+import { lt, eq } from '@pagespace/db/operators';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 
 /**
  * Delete AI usage log rows older than the cutoff date.

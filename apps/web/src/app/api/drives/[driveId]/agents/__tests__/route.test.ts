@@ -6,21 +6,32 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/agents
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
-  canUserViewPage: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserDriveAccess: vi.fn(),
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(),
     },
-    pages: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
       id: 'col_pages_id',
       title: 'col_pages_title',
       parentId: 'col_pages_parentId',
@@ -36,15 +47,12 @@ vi.mock('@pagespace/db', () => {
       type: 'col_pages_type',
       isTrashed: 'col_pages_isTrashed',
     },
-    drives: {
+  drives: {
       id: 'col_drives_id',
       name: 'col_drives_name',
       slug: 'col_drives_slug',
     },
-    eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
-    and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
-  };
-});
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -53,8 +61,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers, getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================

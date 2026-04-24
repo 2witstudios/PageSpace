@@ -6,15 +6,14 @@ import {
   isEnforcedAuthError,
 } from '@/lib/auth';
 import { z } from 'zod/v4';
-import { createPermissionNotification } from '@pagespace/lib';
-import {
-  loggers,
-  auditRequest,
-  grantPagePermission,
-  revokePagePermission,
-} from '@pagespace/lib/server';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 import { permissionManagementService } from '@/services/api';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

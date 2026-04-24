@@ -3,7 +3,10 @@ import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
 import { authorizeFileAccess, assertFileAccess, type AuthorizationDecision } from '../services/authorization';
-import { db, files, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { files } from '@pagespace/db/schema/storage';
+import { pages } from '@pagespace/db/schema/core';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 import { rateLimitRead } from '../middleware/rate-limit';
 

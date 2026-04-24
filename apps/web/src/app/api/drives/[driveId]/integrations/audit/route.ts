@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, count, desc, integrationAuditLog } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { count, desc } from '@pagespace/db/operators'
+import { integrationAuditLog } from '@pagespace/db/schema/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { buildAuditLogWhereClause, parseAuditListParams } from './audit-filters';
 

@@ -72,6 +72,7 @@ export * from './auth/oauth-types';
 export * from './logging/logger';
 export * from './logging/logger-config';
 export * from './logging/logger-database';
+export * from './logging/siem-error-hook';
 export * from './logging/ai-usage-purge';
 export * from './logging/monitoring-purge';
 

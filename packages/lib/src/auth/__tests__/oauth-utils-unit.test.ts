@@ -20,7 +20,7 @@ vi.mock('apple-signin-auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: vi.fn() },
@@ -29,14 +29,23 @@ vi.mock('@pagespace/db', () => ({
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn() })) })),
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email', googleId: 'googleId', appleId: 'appleId' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   drives: { ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   or: vi.fn(),
   count: vi.fn(),
 }));
 
-vi.mock('@paralleldrive/cuid2', () => ({ createId: vi.fn(() => 'test-cuid') }));
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn(() => 'test-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
+}));
 vi.mock('../../utils/utils', () => ({ slugify: vi.fn((s: string) => s.toLowerCase().replace(/\s+/g, '-')) }));
 vi.mock('../../logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
@@ -46,7 +55,8 @@ import { verifyGoogleIdToken, verifyAppleIdToken, verifyOAuthIdToken, createOrLi
 import { OAuthProvider } from '../oauth-types';
 import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
-import { db, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
 
 describe('oauth-utils', () => {
   const origEnv = { ...process.env };

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
-import { canUserViewPage, auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { pages, db, drives, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 
 interface BreadcrumbPage {
   id: string;

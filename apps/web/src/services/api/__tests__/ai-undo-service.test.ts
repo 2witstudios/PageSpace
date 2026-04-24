@@ -14,7 +14,7 @@ import type { RollbackResult } from '../rollback-service';
 import type { ActivityActionPreview } from '../../../types/activity-actions';
 
 // Mock the database
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockDb = {
     query: {
       chatMessages: {
@@ -31,19 +31,26 @@ vi.mock('@pagespace/db', () => {
     update: vi.fn(),
     transaction: vi.fn(),
   };
-
   return {
     db: mockDb,
-    chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
-    messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
-    activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
-    and: vi.fn((...args) => args),
-    gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
-    lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
-    desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...args) => args),
+  gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
+  lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
+  desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+}));
 
 // Mock the rollback service
 vi.mock('../rollback-service', () => ({
@@ -52,17 +59,17 @@ vi.mock('../rollback-service', () => ({
 }));
 
 // Mock activity logger
-vi.mock('@pagespace/lib/monitoring', () => ({
-  logConversationUndo: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    logConversationUndo: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -70,12 +77,14 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { executeRollback, previewRollback } from '../rollback-service';
-import { logConversationUndo } from '@pagespace/lib/monitoring';
-import { loggers } from '@pagespace/lib/server';
+import { logConversationUndo } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db') above */
 type MockFn = ReturnType<typeof vi.fn>;

@@ -1,7 +1,7 @@
 import { createHash, createHmac } from 'crypto';
 import * as net from 'net';
 import * as dgram from 'dgram';
-import { validateExternalURL } from '@pagespace/lib/security';
+import { validateExternalURL } from '@pagespace/lib/security/url-validator';
 
 // Sources the SIEM worker can read from. Each source has its own cursor row
 // in siem_delivery_cursors and its own pure-function row mapper. The canonical

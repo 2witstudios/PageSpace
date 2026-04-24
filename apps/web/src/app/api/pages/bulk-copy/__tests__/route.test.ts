@@ -32,12 +32,18 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
-  canUserViewPage: vi.fn().mockResolvedValue(true),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -45,16 +51,17 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/monitoring', () => ({
-  createChangeGroupId: vi.fn(() => 'change-group-123'),
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-page-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
   isCuid: vi.fn(() => true),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const txInsertValues = vi.fn().mockResolvedValue(undefined);
   const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
@@ -65,7 +72,6 @@ vi.mock('@pagespace/db', () => {
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
   });
-
   return {
     db: {
       query: {
@@ -76,26 +82,32 @@ vi.mock('@pagespace/db', () => {
       transaction,
     },
     __test__: { txInsert, txInsertValues, txQueryPagesFindMany, transaction },
-    pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
-    drives: { id: 'id' },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    and: vi.fn((...args: unknown[]) => args),
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-    inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
-    desc: vi.fn((a: unknown) => a),
-    isNull: vi.fn((a: unknown) => a),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
+  desc: vi.fn((a: unknown) => a),
+  isNull: vi.fn((a: unknown) => a),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
-import { db, __test__ as dbTest } from '@pagespace/db';
+import { db, __test__ as dbTest } from '@pagespace/db/db';
 import { createId } from '@paralleldrive/cuid2';
 
 const { txInsert, txInsertValues, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {

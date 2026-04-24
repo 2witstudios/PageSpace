@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { pages: { findFirst: vi.fn() } },
     insert: vi.fn().mockReturnValue({
@@ -18,16 +18,26 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+}));
 
-vi.mock('@pagespace/lib', () => ({
-  PageType: { DOCUMENT: 'DOCUMENT', FILE: 'FILE' },
-  canConvertToType: vi.fn().mockReturnValue(true),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { DOCUMENT: 'DOCUMENT', FILE: 'FILE' },
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn().mockResolvedValue(true),
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/content/page-type-validators', () => ({
+    canConvertToType: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
 }));
 
 vi.mock('mammoth', () => ({
@@ -36,6 +46,7 @@ vi.mock('mammoth', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('new-page-1'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -49,19 +60,23 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';

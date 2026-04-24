@@ -44,7 +44,7 @@ const { testState, createMockTx } = vi.hoisted(() => {
   return { testState: state, createMockTx: createTx };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockImplementation((values: Record<string, unknown>) => {
@@ -70,7 +70,11 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { id: 'id', logHash: 'logHash', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
 }));
@@ -81,7 +85,7 @@ vi.mock('drizzle-orm', () => ({
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   logActivity,
   logPageActivity,

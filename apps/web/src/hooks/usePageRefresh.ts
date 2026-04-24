@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { useParams, usePathname } from 'next/navigation';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { usePageTree, TreePage } from './usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 

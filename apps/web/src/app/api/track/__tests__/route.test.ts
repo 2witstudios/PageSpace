@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     TRACKING: { maxAttempts: 100, windowMs: 60000 },
@@ -43,7 +43,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/monitoring/activity-tracker';
 
 const createRequest = (body: object, headers?: Record<string, string>) => {

@@ -40,11 +40,15 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateDeviceToken: vi.fn(),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
   generateDeviceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -56,10 +60,12 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
@@ -70,9 +76,11 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn(),
   getTokenPrefix: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -99,9 +107,11 @@ import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
@@ -374,8 +384,8 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
-      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
-      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth/token-utils');
+      const { generateDeviceToken } = await import('@pagespace/lib/auth/device-auth-utils');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'ps_dev_valid_token',
         expect.objectContaining({

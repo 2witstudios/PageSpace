@@ -4,12 +4,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/server';
+import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/logging/logger-config';
 import {
   getOrCreateRequestId,
   REQUEST_ID_HEADER,
 } from '@/lib/request-id/request-id';
-import { db, apiMetrics } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { apiMetrics } from '@pagespace/db/schema/monitoring';
 import { sanitizeEndpoint } from '@/lib/monitoring/ingest-sanitizer';
 
 // In-memory buffer for metrics (flushed to database every 30s or when buffer is full)

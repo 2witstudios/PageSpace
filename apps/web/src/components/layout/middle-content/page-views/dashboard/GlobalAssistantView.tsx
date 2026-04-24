@@ -52,7 +52,7 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
+import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
@@ -136,9 +136,9 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
+  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -250,21 +250,6 @@ const GlobalAssistantView: React.FC = () => {
     loadAgentConfig();
   }, [selectedAgent]);
 
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
 
   // ============================================
   // CHAT CONFIGURATION
@@ -589,12 +574,6 @@ const GlobalAssistantView: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
   // ============================================
   // HANDLERS
   // ============================================
@@ -694,31 +673,53 @@ const GlobalAssistantView: React.FC = () => {
     wrapSend,
   ]);
 
-  // Track last AI response for voice mode TTS
+  // Track last AI response for voice mode TTS.
+  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
+  // messages are never spoken — only genuinely new responses trigger TTS.
   useEffect(() => {
-    if (!isVoiceModeActive || isStreaming) return;
-
-    // Get the last assistant message
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      // Extract text from message parts
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
+    if (!isVoiceModeActive) {
+      voiceBaselineRef.current = undefined;
+      setLastAIResponse(null);
+      return;
     }
+
+    // Initialize baseline BEFORE the streaming guard. If we waited until after,
+    // activating voice mid-stream would leave the baseline unset and then silence
+    // the in-flight response when it finishes.
+    if (voiceBaselineRef.current === undefined) {
+      const assistantMsgs = messages.filter((m) => m.role === 'assistant');
+      const lastOverallMsg = messages[messages.length - 1];
+      // During streaming the last overall message is the in-progress assistant reply;
+      // the baseline should be the previously-finalized message before it.
+      const streamingAssistantIdx =
+        isStreaming && lastOverallMsg?.role === 'assistant'
+          ? assistantMsgs.length - 1
+          : assistantMsgs.length;
+      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
+      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      return;
+    }
+
+    if (isStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistantMsg) return;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    if (!text.trim()) return;
+    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
+
+    setLastAIResponse((current) =>
+      current?.id === lastAssistantMsg.id
+        ? current
+        : { id: lastAssistantMsg.id, text }
+    );
   }, [messages, isStreaming, isVoiceModeActive]);
 
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
-      setShowVoiceSettings(false);
     } else {
       enableVoiceMode(VOICE_OWNER);
     }
@@ -849,17 +850,16 @@ const GlobalAssistantView: React.FC = () => {
         onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
         renderInput={(props) => (
-          isVoiceModeActive ? (
-            <VoiceModeDock
-              owner={VOICE_OWNER}
-              onSend={handleVoiceSend}
-              aiResponse={lastAIResponse}
-              isAIStreaming={isStreaming}
-              showSettings={showVoiceSettings}
-              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-              onClose={() => setShowVoiceSettings(false)}
-            />
-          ) : (
+          <>
+            {isVoiceModeActive && (
+              <VoiceCallPanel
+                owner={VOICE_OWNER}
+                onSend={handleVoiceSend}
+                latestAssistantMessage={lastAIResponse}
+                isAIStreaming={isStreaming}
+                onClose={disableVoiceMode}
+              />
+            )}
             <ChatInput
               ref={inputRef}
               value={props.value}
@@ -882,7 +882,6 @@ const GlobalAssistantView: React.FC = () => {
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
               onVoiceModeClick={handleVoiceModeToggle}
               isVoiceModeActive={isVoiceModeActive}
-              isVoiceModeAvailable={isOpenAIConfigured}
               attachments={attachments}
               onAddFiles={addFiles}
               onRemoveFile={removeFile}
@@ -890,7 +889,7 @@ const GlobalAssistantView: React.FC = () => {
                 (selectedAgent ? agentSelectedModel : currentModel) || ''
               )}
             />
-          )
+          </>
         )}
       />
 

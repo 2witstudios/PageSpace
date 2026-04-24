@@ -17,10 +17,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockInsert = vi.hoisted(() => vi.fn());
 const mockValues = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   systemLogs: { tableName: 'system_logs' },
   apiMetrics: { tableName: 'api_metrics' },
   aiUsageLogs: {
@@ -33,6 +35,8 @@ vi.mock('@pagespace/db', () => ({
   },
   errorLogs: { tableName: 'error_logs' },
   userActivities: { tableName: 'user_activities' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   lt: vi.fn(),
   eq: vi.fn(),
   and: vi.fn(),
@@ -52,7 +56,7 @@ import {
   writeUserActivity,
   writeError,
 } from '../logger-database';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { isOnPrem } from '../../deployment-mode';
 
 // Helper: build a minimal LogEntry

@@ -9,10 +9,14 @@ const { mockAuditRequest } = vi.hoisted(() => ({
   mockAuditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: mockAuditRequest,
 }));
 
@@ -21,28 +25,38 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
   const mockSelect = vi.fn().mockReturnValue({ from: mockFrom });
   return {
     db: { select: mockSelect },
-    taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
-    directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead' },
-    dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
-    pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
-    drives: { id: 'id', ownerId: 'ownerId' },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    eq: vi.fn(),
-    and: vi.fn(),
-    or: vi.fn(),
-    lt: vi.fn(),
-    gte: vi.fn(),
-    ne: vi.fn(),
-    sql: Object.assign(vi.fn(), { join: vi.fn() }),
-    count: vi.fn(),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  or: vi.fn(),
+  lt: vi.fn(),
+  gte: vi.fn(),
+  ne: vi.fn(),
+  sql: Object.assign(vi.fn(), { join: vi.fn() }),
+  count: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead' },
+  dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
+}));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -78,7 +92,7 @@ describe('GET /api/activity/summary', () => {
   });
 
   it('does not log audit event when query throws', async () => {
-    const { db } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockRejectedValue(new Error('DB error')),

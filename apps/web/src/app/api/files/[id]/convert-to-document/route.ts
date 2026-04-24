@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, eq } from '@pagespace/db';
-import { PageType, canConvertToType, canUserEditPage, canUserViewPage, createPageServiceToken } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
+import { PageType } from '@pagespace/lib/utils/enums'
+import { canConvertToType } from '@pagespace/lib/content/page-type-validators'
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

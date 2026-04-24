@@ -4,10 +4,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
   drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: {
     id: 'id',
     driveId: 'driveId',
@@ -22,6 +26,8 @@ vi.mock('@pagespace/db', () => ({
     canView: 'canView',
     expiresAt: 'expiresAt',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
   or: vi.fn((...args: unknown[]) => ({ or: args })),
@@ -48,7 +54,8 @@ vi.mock('../../validators', () => ({
 }));
 
 import { getUserDrivePermissions, getUserDriveAccess } from '../permissions';
-import { db, isNotNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { isNotNull } from '@pagespace/db/operators';
 import { loggers } from '../../logging/logger-config';
 
 // ---------------------------------------------------------------------------

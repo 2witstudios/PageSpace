@@ -28,23 +28,33 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
   PageType: {},
+}));
+vi.mock('@pagespace/lib/sheets', () => ({
   isSheetType: vi.fn(() => false),
   parseSheetContent: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -60,8 +70,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -259,7 +273,7 @@ describe('MCP Documents API - Security Tests', () => {
     });
 
     it('should log security events when access is denied', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       mockGetUserAccessLevel.mockResolvedValue({
         canView: false,
@@ -293,7 +307,7 @@ describe('MCP Documents API - Security Tests', () => {
     it('should deny access when permission check returns null access level', async () => {
       mockGetUserAccessLevel.mockResolvedValue(null);
 
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const { POST } = await import('../route');
       const request = new NextRequest('http://localhost/api/mcp/documents', {

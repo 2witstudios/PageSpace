@@ -1,9 +1,7 @@
-import {
-  sweepExpiredRevokedJTIs,
-  sweepExpiredRateLimitBuckets,
-  sweepExpiredAuthHandoffTokens,
-} from '@pagespace/lib/security';
-import { audit } from '@pagespace/lib/server';
+import { sweepExpiredRevokedJTIs } from '@pagespace/lib/security/jti-revocation';
+import { sweepExpiredRateLimitBuckets } from '@pagespace/lib/security/distributed-rate-limit';
+import { sweepExpiredAuthHandoffTokens } from '@pagespace/lib/security/auth-handoff-sweep';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -63,7 +61,6 @@ export async function GET(request: Request) {
 
   audit({
     eventType: 'data.delete',
-    userId: 'system',
     resourceType: 'cron_job',
     resourceId: 'sweep_expired',
     details: results,

@@ -1,8 +1,8 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
-import { auditRequest } from '@pagespace/lib/server';
+import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import archiver from 'archiver';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -81,6 +81,12 @@ export async function GET(request: Request) {
     archive.append(JSON.stringify(data.activity, null, 2), { name: `pagespace-export-${dateStr}/activity.json` });
     archive.append(JSON.stringify(data.aiUsage, null, 2), { name: `pagespace-export-${dateStr}/ai-usage.json` });
     archive.append(JSON.stringify(data.tasks, null, 2), { name: `pagespace-export-${dateStr}/tasks.json` });
+    archive.append(JSON.stringify(data.sessions, null, 2), { name: `pagespace-export-${dateStr}/sessions.json` });
+    archive.append(JSON.stringify(data.notifications, null, 2), { name: `pagespace-export-${dateStr}/notifications.json` });
+    archive.append(JSON.stringify(data.displayPreferences, null, 2), { name: `pagespace-export-${dateStr}/display-preferences.json` });
+    if (data.personalization) {
+      archive.append(JSON.stringify(data.personalization, null, 2), { name: `pagespace-export-${dateStr}/personalization.json` });
+    }
 
     // Finalize the archive (must be called after all data is appended)
     archive.finalize();

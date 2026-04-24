@@ -1,5 +1,7 @@
-import { db, and, eq, or, isNull, isNotNull, gt, inArray } from '@pagespace/db';
-import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, or, isNull, isNotNull, gt, inArray } from '@pagespace/db/operators';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators';
 

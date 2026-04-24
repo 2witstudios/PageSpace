@@ -25,7 +25,7 @@ vi.mock('drizzle-orm', () => ({
   lte: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -46,6 +46,8 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: {
     id: 'id',
     eventType: 'eventType',

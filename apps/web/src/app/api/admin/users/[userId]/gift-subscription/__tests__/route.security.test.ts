@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
-import { db, users, subscriptions, sessions, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 
 /**
  * Security Tests for Gift Subscription Admin Routes
@@ -70,11 +75,8 @@ vi.mock('@/lib/stripe-config', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', async () => {
-  const actual = await vi.importActual('@pagespace/lib/server');
-  return {
-    ...actual,
-    loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
       api: {
         info: vi.fn(),
         error: vi.fn(),
@@ -87,14 +89,17 @@ vi.mock('@pagespace/lib/server', async () => {
         error: vi.fn(),
       },
       security: {
+        info: vi.fn(),
         warn: vi.fn(),
+        error: vi.fn(),
       },
     },
-    logSecurityEvent: vi.fn(),
-  };
-});
+  logSecurityEvent: vi.fn(),
 
-import { logSecurityEvent } from '@pagespace/lib/server';
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 
 describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   let adminUserId: string;

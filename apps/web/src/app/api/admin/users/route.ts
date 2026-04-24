@@ -1,21 +1,14 @@
-import {
-  db,
-  users,
-  drives,
-  pages,
-  chatMessages,
-  messages,
-  userAiSettings,
-  subscriptions,
-  and,
-  eq,
-  inArray,
-  desc,
-  count,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, inArray, desc, count } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { drives, pages, chatMessages } from '@pagespace/db/schema/core'
+import { messages } from '@pagespace/db/schema/conversations'
+import { subscriptions } from '@pagespace/db/schema/subscriptions'
+import { userAiSettings } from '@pagespace/db/schema/ai';
 import { stripe } from '@/lib/stripe';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { isOnPrem } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { withAdminAuth } from '@/lib/auth';
 
 export const GET = withAdminAuth(async (_adminUser, _request) => {

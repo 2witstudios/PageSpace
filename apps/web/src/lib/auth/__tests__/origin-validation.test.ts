@@ -29,7 +29,7 @@ import {
  */
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       warn: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 describe('origin-validation', () => {
   // Store original env values

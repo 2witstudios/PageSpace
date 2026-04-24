@@ -9,20 +9,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const mockExecute = vi.fn();
 const mockTransaction = vi.fn();
 
-vi.mock('../../index', () => {
+vi.mock('../../db', () => ({
+  db: { transaction: (...args: unknown[]) => mockTransaction(...args) },
+}));
+
+vi.mock('../../schema/auth', () => ({
+  deviceTokens: {},
+  users: {},
+}));
+
+vi.mock('../../operators', () => {
   // Build minimal sql tagged-template that captures call args
   const sql = (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values });
-  return {
-    db: { transaction: (...args: unknown[]) => mockTransaction(...args) },
-    deviceTokens: {},
-    users: {},
-    eq: vi.fn(),
-    sql,
-  };
+  return { eq: vi.fn(), sql };
 });
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => 'mock-cuid-id',
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import {

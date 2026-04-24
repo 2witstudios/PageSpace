@@ -22,7 +22,7 @@ vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: mockGlobalRepo,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
@@ -56,7 +56,7 @@ describe('/api/cron/purge-deleted-messages', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged: 5, globalMessagesPurged: 3, conversationsPurged: 2 } })
+      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged: 5, globalMessagesPurged: 3, conversationsPurged: 2 } })
     );
   });
 

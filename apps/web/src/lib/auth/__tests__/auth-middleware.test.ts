@@ -12,23 +12,27 @@ import {
 } from '../index';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
   EnforcedAuthContext: class EnforcedAuthContext {
     static fromSession(sessionClaims: unknown): unknown {
       return sessionClaims;
     }
   },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       mcpTokens: {
@@ -41,10 +45,14 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  mcpTokens: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
   isNull: vi.fn((field) => ({ field, isNull: true })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: {},
 }));
 
 vi.mock('../csrf-validation', () => ({
@@ -59,9 +67,9 @@ vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
-import { logSecurityEvent } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
+import { db } from '@pagespace/db/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';
 import { getSessionFromCookies } from '../cookie-config';

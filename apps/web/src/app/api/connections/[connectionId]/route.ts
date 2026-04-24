@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
-import { db, connections, users, userProfiles, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members'
+import { connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { createNotification } from '@pagespace/lib';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { createNotification } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

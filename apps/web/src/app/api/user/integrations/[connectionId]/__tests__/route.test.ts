@@ -12,7 +12,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
@@ -22,27 +22,35 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  integrationConnections: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/integrations', () => ({
+  integrationConnections: { id: 'id' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
+vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
   getConnectionById: mockGetConnectionById,
   deleteConnection: mockDeleteConnection,
 }));
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 const mockConnectionId = 'conn-1';

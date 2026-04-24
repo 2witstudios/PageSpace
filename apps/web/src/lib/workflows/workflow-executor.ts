@@ -11,8 +11,14 @@ import {
 } from '@/lib/ai/core';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { db, pages, drives, eq, and, inArray, workflows as workflowsTable, taskItems, taskAssignees, taskStatusConfigs, users } from '@pagespace/db';
-import { isUserDriveMember, loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { taskItems, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
+import { workflows as workflowsTable } from '@pagespace/db/schema/workflows';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface WorkflowExecutionResult {
   success: boolean;

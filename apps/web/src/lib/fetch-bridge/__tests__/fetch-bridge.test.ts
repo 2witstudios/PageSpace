@@ -6,8 +6,8 @@ vi.mock('@/lib/websocket', () => ({
   checkConnectionHealth: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  logger: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       warn: vi.fn(),
@@ -20,8 +20,8 @@ vi.mock('@pagespace/lib', () => ({
 const { mockValidateURL } = vi.hoisted(() => ({
   mockValidateURL: vi.fn(),
 }));
-vi.mock('@pagespace/lib/security', () => ({
-  validateLocalProviderURL: mockValidateURL,
+vi.mock('@pagespace/lib/security/url-validator', () => ({
+    validateLocalProviderURL: mockValidateURL,
 }));
 
 import { FetchBridge, getFetchBridge } from '../fetch-bridge';

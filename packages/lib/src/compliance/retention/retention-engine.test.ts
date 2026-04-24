@@ -15,16 +15,26 @@ vi.mock('drizzle-orm', () => ({
   isNotNull: (col: unknown) => ({ _op: 'isNotNull', col }),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
+vi.mock('@pagespace/db/schema/auth', () => ({
   verificationTokens: { id: 'vt.id', expiresAt: 'vt.expiresAt' },
   socketTokens: { id: 'st.id', expiresAt: 'st.expiresAt' },
   emailUnsubscribeTokens: { id: 'eut.id', expiresAt: 'eut.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/dashboard', () => ({
   pulseSummaries: { id: 'ps.id', expiresAt: 'ps.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  pagePermissions: { id: 'pp.id', expiresAt: 'pp.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: { id: 'aul.id', expiresAt: 'aul.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
+  sessions: { id: 'sessions.id', expiresAt: 'sessions.expiresAt' },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
   pageVersions: { id: 'pv.id', expiresAt: 'pv.expiresAt', isPinned: 'pv.isPinned' },
   driveBackups: { id: 'db.id', expiresAt: 'db.expiresAt', isPinned: 'db.isPinned' },
-  pagePermissions: { id: 'pp.id', expiresAt: 'pp.expiresAt' },
-  aiUsageLogs: { id: 'aul.id', expiresAt: 'aul.expiresAt' },
 }));
 
 vi.mock('./monitoring-retention', () => ({
@@ -47,17 +57,12 @@ import {
   runRetentionCleanup,
 } from './retention-engine';
 
-import {
-  sessions,
-  verificationTokens,
-  socketTokens,
-  emailUnsubscribeTokens,
-  pulseSummaries,
-  pageVersions,
-  driveBackups,
-  pagePermissions,
-  aiUsageLogs,
-} from '@pagespace/db';
+import { verificationTokens, socketTokens, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
 
 /**
  * Creates a mock DB that captures which table and condition were passed,

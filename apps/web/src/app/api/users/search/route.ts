@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and, or, ilike, userProfiles, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, ilike } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {

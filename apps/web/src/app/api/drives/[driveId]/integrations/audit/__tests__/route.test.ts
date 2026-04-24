@@ -6,49 +6,35 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/integrations/audit
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
-  const integrationAuditLog = {
-    driveId: 'col_driveId',
-    connectionId: 'col_connectionId',
-    success: 'col_success',
-    agentId: 'col_agentId',
-    createdAt: 'col_createdAt',
-    toolName: 'col_toolName',
-  };
-
-  return {
-    db: {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(),
-        })),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(),
       })),
-      query: {
-        integrationAuditLog: {
-          findMany: vi.fn(),
-        },
+    })),
+    query: {
+      integrationAuditLog: {
+        findMany: vi.fn(),
       },
     },
-    integrationAuditLog,
-    count: vi.fn(() => 'count_fn'),
-    desc: vi.fn((col: unknown) => ({ _type: 'desc', col })),
-    and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
-    eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
-    gte: vi.fn(),
-    lte: vi.fn(),
-  };
-});
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -61,11 +47,11 @@ vi.mock('../audit-filters', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseAuditListParams, buildAuditLogWhereClause } from '../audit-filters';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Helpers

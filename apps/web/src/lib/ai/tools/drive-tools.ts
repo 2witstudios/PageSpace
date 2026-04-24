@@ -1,7 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify, logDriveActivity, getActorInfo, getDriveAccessWithDrive } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, ne } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { slugify } from '@pagespace/lib/utils/utils';
+import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';

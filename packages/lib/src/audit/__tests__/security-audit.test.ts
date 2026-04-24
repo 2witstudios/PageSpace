@@ -30,46 +30,46 @@ const { testState, createMockTxFn } = vi.hoisted(() => {
 });
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
-      query: {
-        securityAuditLog: {
-          findFirst: vi.fn(),
-        },
-      },
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn(),
-        }),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      securityAuditLog: {},
+    },
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn(),
       }),
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn(),
-            }),
+    }),
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn(),
           }),
         }),
       }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      transaction: vi.fn().mockImplementation(async (callback: any) => {
-        const tx = createMockTxFn();
-        return callback(tx);
-      }),
-    },
-    securityAuditLog: {},
-    desc: vi.fn(),
-    and: vi.fn(),
-    gte: vi.fn(),
-    lte: vi.fn(),
-    eq: vi.fn(),
-    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-      strings,
-      values,
     }),
-  };
-});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transaction: vi.fn().mockImplementation(async (callback: any) => {
+      const tx = createMockTxFn();
+      return callback(tx);
+    }),
+  },
+}));
+vi.mock('@pagespace/db/schema/security-audit', () => ({
+  securityAuditLog: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  desc: vi.fn(),
+  and: vi.fn(),
+  gte: vi.fn(),
+  lte: vi.fn(),
+  eq: vi.fn(),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  }),
+}));
 
 // Import after mocking
 import {
@@ -77,7 +77,8 @@ import {
   computeSecurityEventHash,
   type AuditEvent,
 } from '../security-audit';
-import { db, securityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 
 describe('Security Audit Service', () => {
   let service: SecurityAuditService;
@@ -214,41 +215,23 @@ describe('Security Audit Service', () => {
   });
 
   describe('initialize', () => {
-    it('initializes with genesis hash when no previous events exist', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('marks service as initialized', async () => {
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
+      expect(service.isInitialized()).toBe(true);
     });
 
-    it('initializes with last event hash when events exist', async () => {
-      const lastEvent = {
-        id: 'evt123',
-        eventHash: 'abc123def456',
-        timestamp: new Date(),
-      };
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(lastEvent as never);
-
-      await service.initialize();
-
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalled();
-    });
-
-    it('only initializes once (idempotent)', async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
-
+    it('is idempotent when called multiple times', async () => {
       await service.initialize();
       await service.initialize();
       await service.initialize();
 
-      expect(db.query.securityAuditLog.findFirst).toHaveBeenCalledTimes(1);
+      expect(service.isInitialized()).toBe(true);
     });
   });
 
   describe('logEvent', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 
@@ -331,7 +314,6 @@ describe('Security Audit Service', () => {
 
   describe('convenience methods', () => {
     beforeEach(async () => {
-      vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
     });
 

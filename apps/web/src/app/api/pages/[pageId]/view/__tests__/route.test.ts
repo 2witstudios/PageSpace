@@ -20,22 +20,25 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
   const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
   const insert = vi.fn().mockReturnValue({ values });
-
   return {
     db: {
       query: {
@@ -43,11 +46,17 @@ vi.mock('@pagespace/db', () => {
       },
       insert: insert,
     },
-    pages: { id: 'id', driveId: 'driveId' },
-    userPageViews: { userId: 'userId', pageId: 'pageId' },
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/page-views', () => ({
+  userPageViews: { userId: 'userId', pageId: 'pageId' },
+}));
 
 vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data: unknown) => NextResponse.json(data)),
@@ -55,8 +64,8 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions';
-import { db } from '@pagespace/db';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

@@ -43,9 +43,13 @@
 # Fires scheduled agent work tied to calendar events
 */2 * * * * cron-curl POST http://web:3000/api/cron/calendar-triggers >> /var/log/cron/calendar-triggers.log 2>&1
 
-# Orphaned file cleanup - Weekly on Sundays at 5am UTC
+# Trashed page purge - Daily at 5am UTC
+# Hard-deletes pages that have been in the trash for 30+ days (GDPR Art. 17 #909)
+0 5 * * * cron-curl GET http://web:3000/api/cron/purge-trashed-pages >> /var/log/cron/purge-trashed-pages.log 2>&1
+
+# Orphaned file cleanup - Weekly on Sundays at 6am UTC
 # Detects and deletes file records with zero references + physical files
-0 5 * * 0 cron-curl GET http://web:3000/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
+0 6 * * 0 cron-curl GET http://web:3000/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
 
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;

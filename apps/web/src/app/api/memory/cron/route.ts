@@ -14,23 +14,17 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';
-import {
-  db,
-  users,
-  userPersonalization,
-  sessions,
-  eq,
-  and,
-  gte,
-  inArray,
-  isNull,
-} from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, gte, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
@@ -45,7 +39,6 @@ const PAYING_TIERS = ['pro', 'founder', 'business'];
 const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;

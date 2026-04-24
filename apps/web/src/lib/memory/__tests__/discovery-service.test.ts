@@ -17,21 +17,31 @@ import { assert } from './riteway';
 
 // Mock database - we don't want to hit real DB
 const mockDbSelect = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => mockDbSelect(),
   },
-  conversations: { id: 'id', userId: 'userId' },
-  messages: { content: 'content', role: 'role', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
-  chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
-  pages: { id: 'id', driveId: 'driveId' },
-  activityLogs: { operation: 'operation', resourceType: 'resourceType', resourceTitle: 'resourceTitle', userId: 'userId', driveId: 'driveId', timestamp: 'timestamp' },
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   gte: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
+  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { operation: 'operation', resourceType: 'resourceType', resourceTitle: 'resourceTitle', userId: 'userId', driveId: 'driveId', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', userId: 'userId' },
+  messages: { content: 'content', role: 'role', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
 }));
 
 // Mock AI provider
@@ -42,8 +52,8 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -51,6 +61,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 // Mock generateText from AI SDK

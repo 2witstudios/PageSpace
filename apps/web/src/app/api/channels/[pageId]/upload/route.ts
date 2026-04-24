@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, files, filePages, eq } from '@pagespace/db';
-import { canUserEditPage, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { files, filePages } from '@pagespace/db/schema/storage';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   checkStorageQuota,
   updateStorageUsage,

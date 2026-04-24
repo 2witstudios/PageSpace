@@ -1,10 +1,10 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
-import { db } from '@pagespace/db';
-import { createDriveServiceToken } from '@pagespace/lib';
-import { audit } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import type { ServiceScope } from '@pagespace/lib';
+import type { ServiceScope } from '@pagespace/lib/services/validated-service-token';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const orphans = await findOrphanedFileRecords(db as Parameters<typeof findOrphanedFileRecords>[0]);
 
     if (orphans.length === 0) {
-      audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 } });
+      audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 } });
       return NextResponse.json({
         success: true,
         orphansFound: 0,
@@ -104,7 +104,7 @@ export async function GET(request: Request) {
       `${physicalFilesDeleted} physical files deleted, ${dbDeleted} DB records deleted`
     );
 
-    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: orphans.length, filesDeleted: dbDeleted, physicalFilesDeleted } });
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: orphans.length, filesDeleted: dbDeleted, physicalFilesDeleted } });
 
     return NextResponse.json({
       success: true,

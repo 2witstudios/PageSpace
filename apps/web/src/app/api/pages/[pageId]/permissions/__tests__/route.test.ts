@@ -15,7 +15,7 @@ import type {
   GetPermissionsResult,
   PermissionEntry,
 } from '@/services/api';
-import type { GrantResult, RevokeResult } from '@pagespace/lib/server';
+import type { GrantResult, RevokeResult } from '@pagespace/lib/permissions/permission-mutations';
 
 // Mock service boundary for GET (still uses permissionManagementService)
 vi.mock('@/services/api', () => ({
@@ -33,15 +33,17 @@ vi.mock('@/lib/auth', () => ({
   isEnforcedAuthError: vi.fn((result) => 'error' in result),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPermissionNotification: vi.fn(),
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+    createPermissionNotification: vi.fn(),
 }));
 
 // Mock zero-trust functions
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -49,11 +51,15 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  grantPagePermission: vi.fn(),
-  revokePagePermission: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/permissions/permission-mutations', () => ({
+    grantPagePermission: vi.fn(),
+    revokePagePermission: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -61,8 +67,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
 }));
 
 // Mock websocket utilities for real-time permission revocation
@@ -73,8 +83,8 @@ vi.mock('@/lib/websocket', () => ({
 
 import { permissionManagementService } from '@/services/api';
 import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth';
-import { createPermissionNotification } from '@pagespace/lib';
-import { grantPagePermission, revokePagePermission } from '@pagespace/lib/server';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 
 // Test helpers
 const mockUserId = 'cluser123456789012345';

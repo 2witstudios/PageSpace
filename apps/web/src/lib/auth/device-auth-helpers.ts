@@ -1,5 +1,6 @@
-import { sessionService } from '@pagespace/lib/auth';
-import { validateOrCreateDeviceToken, loggers } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Revoke existing sessions before login, scoped to a specific device when possible.

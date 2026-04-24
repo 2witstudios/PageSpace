@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { FileCode2, FileDown, FileSpreadsheet, FileText, Printer, Sheet } from 'lucide-react';
 import { toast } from 'sonner';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 

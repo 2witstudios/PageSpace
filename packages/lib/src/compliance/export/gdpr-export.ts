@@ -1,20 +1,18 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, or, and, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import {
-  users,
-  drives,
-  pages,
-  chatMessages,
-  files,
-  filePages,
-  aiUsageLogs,
-  activityLogs,
-} from '@pagespace/db';
-import { driveMembers } from '@pagespace/db';
-import { channelMessages } from '@pagespace/db';
-import { conversations, messages } from '@pagespace/db';
-import { directMessages, dmConversations } from '@pagespace/db';
-import { taskLists, taskItems } from '@pagespace/db';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { aiUsageLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { files, filePages } from '@pagespace/db/schema/storage';
+import { driveMembers } from '@pagespace/db/schema/members';
+import { channelMessages } from '@pagespace/db/schema/chat';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { notifications } from '@pagespace/db/schema/notifications';
+import { displayPreferences } from '@pagespace/db/schema/display-preferences';
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 
 type DB = NodePgDatabase<Record<string, unknown>>;
 
@@ -50,6 +48,7 @@ export interface UserMessageExport {
   id: string;
   source: 'ai_chat' | 'channel' | 'conversation' | 'direct_message';
   content: string;
+  direction?: 'sent' | 'received';
   role?: string;
   pageId?: string;
   conversationId?: string;
@@ -96,6 +95,46 @@ export interface UserTaskExport {
   }>;
 }
 
+export interface UserSessionExport {
+  id: string;
+  type: string;
+  deviceId: string | null;
+  scopes: string[];
+  createdByIp: string | null;
+  lastUsedAt: Date | null;
+  lastUsedIp: string | null;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  revokedReason: string | null;
+  createdAt: Date;
+}
+
+export interface UserNotificationExport {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  metadata: Record<string, unknown> | null;
+  isRead: boolean;
+  createdAt: Date;
+  readAt: Date | null;
+}
+
+export interface UserDisplayPreferenceExport {
+  preferenceType: string;
+  enabled: boolean;
+  updatedAt: Date;
+}
+
+export interface UserPersonalizationExport {
+  bio: string | null;
+  writingStyle: string | null;
+  rules: string | null;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface AllUserData {
   profile: UserProfileExport;
   drives: UserDriveExport[];
@@ -105,6 +144,10 @@ export interface AllUserData {
   activity: UserActivityExport[];
   aiUsage: UserAiUsageExport[];
   tasks: UserTaskExport[];
+  sessions: UserSessionExport[];
+  notifications: UserNotificationExport[];
+  displayPreferences: UserDisplayPreferenceExport[];
+  personalization: UserPersonalizationExport | null;
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -270,8 +313,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     });
   }
 
-  // Direct messages
-  const dms = await database
+  // Sent direct messages
+  const sentDms = await database
     .select({
       id: directMessages.id,
       content: directMessages.content,
@@ -281,14 +324,55 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(directMessages)
     .where(eq(directMessages.senderId, userId));
 
-  for (const msg of dms) {
+  for (const msg of sentDms) {
     result.push({
       id: msg.id,
       source: 'direct_message',
       content: msg.content,
+      direction: 'sent',
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
     });
+  }
+
+  // Received direct messages — find conversations where user is a participant but not the sender
+  const userDmConversations = await database
+    .select({ id: dmConversations.id })
+    .from(dmConversations)
+    .where(
+      or(
+        eq(dmConversations.participant1Id, userId),
+        eq(dmConversations.participant2Id, userId),
+      )
+    );
+
+  if (userDmConversations.length > 0) {
+    const conversationIds = userDmConversations.map(c => c.id);
+    const receivedDms = await database
+      .select({
+        id: directMessages.id,
+        content: directMessages.content,
+        conversationId: directMessages.conversationId,
+        createdAt: directMessages.createdAt,
+      })
+      .from(directMessages)
+      .where(
+        and(
+          inArray(directMessages.conversationId, conversationIds),
+          ne(directMessages.senderId, userId),
+        )
+      );
+
+    for (const msg of receivedDms) {
+      result.push({
+        id: msg.id,
+        source: 'direct_message',
+        content: msg.content,
+        direction: 'received',
+        conversationId: msg.conversationId,
+        createdAt: msg.createdAt,
+      });
+    }
   }
 
   return result;
@@ -387,6 +471,74 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   }));
 }
 
+export async function collectUserSessions(database: DB, userId: string): Promise<UserSessionExport[]> {
+  return database
+    .select({
+      id: sessions.id,
+      type: sessions.type,
+      deviceId: sessions.deviceId,
+      scopes: sessions.scopes,
+      createdByIp: sessions.createdByIp,
+      lastUsedAt: sessions.lastUsedAt,
+      lastUsedIp: sessions.lastUsedIp,
+      expiresAt: sessions.expiresAt,
+      revokedAt: sessions.revokedAt,
+      revokedReason: sessions.revokedReason,
+      createdAt: sessions.createdAt,
+    })
+    .from(sessions)
+    .where(eq(sessions.userId, userId));
+}
+
+export async function collectUserNotifications(database: DB, userId: string): Promise<UserNotificationExport[]> {
+  const result = await database
+    .select({
+      id: notifications.id,
+      type: notifications.type,
+      title: notifications.title,
+      message: notifications.message,
+      metadata: notifications.metadata,
+      isRead: notifications.isRead,
+      createdAt: notifications.createdAt,
+      readAt: notifications.readAt,
+    })
+    .from(notifications)
+    .where(eq(notifications.userId, userId));
+
+  return result.map(n => ({
+    ...n,
+    metadata: n.metadata as Record<string, unknown> | null,
+  }));
+}
+
+export async function collectUserDisplayPreferences(database: DB, userId: string): Promise<UserDisplayPreferenceExport[]> {
+  return database
+    .select({
+      preferenceType: displayPreferences.preferenceType,
+      enabled: displayPreferences.enabled,
+      updatedAt: displayPreferences.updatedAt,
+    })
+    .from(displayPreferences)
+    .where(eq(displayPreferences.userId, userId));
+}
+
+export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
+  const result = await database
+    .select({
+      bio: userPersonalization.bio,
+      writingStyle: userPersonalization.writingStyle,
+      rules: userPersonalization.rules,
+      enabled: userPersonalization.enabled,
+      createdAt: userPersonalization.createdAt,
+      updatedAt: userPersonalization.updatedAt,
+    })
+    .from(userPersonalization)
+    .where(eq(userPersonalization.userId, userId))
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -394,13 +546,17 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   const userDrives = await collectUserDrives(database, userId);
   const driveIds = userDrives.map(d => d.id);
 
-  const [userPages, userMessages, userFiles, activity, aiUsage, tasks] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),
     collectUserAiUsage(database, userId),
     collectUserTasks(database, userId),
+    collectUserSessions(database, userId),
+    collectUserNotifications(database, userId),
+    collectUserDisplayPreferences(database, userId),
+    collectUserPersonalization(database, userId),
   ]);
 
   return {
@@ -412,5 +568,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     activity,
     aiUsage,
     tasks,
+    sessions: userSessions,
+    notifications: userNotifications,
+    displayPreferences: userDisplayPreferences,
+    personalization: userPersonalizationData,
   };
 }

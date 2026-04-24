@@ -1,5 +1,6 @@
 import { lt } from 'drizzle-orm';
-import { db, apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 import type { CleanupResult } from './retention-engine';
 
 const DEFAULT_API_METRICS_DAYS = 90;

@@ -28,7 +28,7 @@ vi.mock('../../../../../../lib/auth', () => ({
 }));
 
 // Mock database for idempotency check
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -39,14 +39,18 @@ vi.mock('@pagespace/db', () => ({
     }),
     transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})),
   },
-  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
+}));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       debug: vi.fn(),
     },
@@ -54,7 +58,11 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock websocket broadcasts
@@ -74,7 +82,7 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Test helpers
 const mockUserId = 'user_123';

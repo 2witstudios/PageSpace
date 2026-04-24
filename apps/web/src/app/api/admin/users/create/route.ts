@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, users, userAiSettings, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userAiSettings } from '@pagespace/db/schema/ai';
 import { createId } from '@paralleldrive/cuid2';
-import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),

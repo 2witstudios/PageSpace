@@ -4,27 +4,29 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((a, b) => ({ op: 'eq', a, b }));
-  const and = vi.fn((...args: unknown[]) => ({ op: 'and', args }));
-
-  return {
-    db: {
-      query: {
-        users: { findFirst: vi.fn() },
-        emailNotificationPreferences: { findFirst: vi.fn() },
-      },
-      insert: vi.fn(() => ({
-        values: vi.fn().mockResolvedValue(undefined),
-      })),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      users: { findFirst: vi.fn() },
+      emailNotificationPreferences: { findFirst: vi.fn() },
     },
-    users: { id: 'users.id', email: 'users.email', name: 'users.name' },
-    emailNotificationPreferences: { userId: 'enp.userId', notificationType: 'enp.notificationType', emailEnabled: 'enp.emailEnabled' },
-    emailNotificationLog: { userId: 'enl.userId' },
-    emailUnsubscribeTokens: { tokenHash: 'eut.tokenHash' },
-    eq, and,
-  };
-});
+    insert: vi.fn(() => ({
+      values: vi.fn().mockResolvedValue(undefined),
+    })),
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email', name: 'users.name' },
+  emailUnsubscribeTokens: { tokenHash: 'eut.tokenHash' },
+}));
+vi.mock('@pagespace/db/schema/email-notifications', () => ({
+  emailNotificationPreferences: { userId: 'enp.userId', notificationType: 'enp.notificationType', emailEnabled: 'enp.emailEnabled' },
+  emailNotificationLog: { userId: 'enl.userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+}));
 
 vi.mock('../email-service', () => ({
   sendEmail: vi.fn().mockResolvedValue(undefined),
@@ -48,7 +50,7 @@ vi.mock('../../auth/token-utils', () => ({
   getTokenPrefix: vi.fn((t: string) => t.substring(0, 12)),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { sendEmail } from '../email-service';
 import { sendNotificationEmail } from '../notification-email-service';
 

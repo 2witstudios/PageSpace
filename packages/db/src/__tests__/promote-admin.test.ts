@@ -28,7 +28,7 @@ const mockUpdate = vi.fn();
 mockSet.mockReturnValue({ where: mockWhere });
 mockUpdate.mockReturnValue({ set: mockSet });
 
-vi.mock('../index', () => ({
+vi.mock('../db', () => ({
   db: {
     query: {
       users: {
@@ -37,7 +37,13 @@ vi.mock('../index', () => ({
     },
     update: mockUpdate,
   },
+}));
+
+vi.mock('../schema/auth', () => ({
   users: { email: 'email_column' },
+}));
+
+vi.mock('../operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
 }));
 

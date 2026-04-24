@@ -20,7 +20,7 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
@@ -28,19 +28,22 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   googleCalendarConnections: { userId: 'userId' },
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@pagespace/lib/encryption', () => ({
   encrypt: vi.fn().mockResolvedValue('encrypted'),
+}));
+vi.mock('@pagespace/lib/auth/secure-compare', () => ({
   secureCompare: (a: string, b: string) => a === b,
 }));
 
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
       auth: {
         error: vi.fn(),
@@ -49,10 +52,12 @@ vi.mock('@pagespace/lib/server', async () => {
         debug: vi.fn(),
       },
     },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
-    maskEmail,
-  };
-});
+}));
 
 vi.mock('@/lib/integrations/google-calendar/return-url', () => ({
   GOOGLE_CALENDAR_DEFAULT_RETURN_PATH: '/settings',
@@ -60,7 +65,7 @@ vi.mock('@/lib/integrations/google-calendar/return-url', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const SECRET = 'test-oauth-state-secret';
 

@@ -1,6 +1,6 @@
 import { stripeConfig } from '../stripe-config';
 import type { SubscriptionTier } from '../subscription/plans';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Mapping from Stripe price IDs to subscription tiers.

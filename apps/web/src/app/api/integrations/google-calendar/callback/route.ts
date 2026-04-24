@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections } from '@pagespace/db';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
-import { encrypt } from '@pagespace/lib';
+import { db } from '@pagespace/db/db'
+import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { encrypt } from '@pagespace/lib/encryption';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
-import { secureCompare } from '@pagespace/lib';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import {
   GOOGLE_CALENDAR_DEFAULT_RETURN_PATH,
   normalizeGoogleCalendarReturnPath,
@@ -18,6 +22,7 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
  * Exchanges authorization code for tokens and stores encrypted credentials.
  */
 export async function GET(req: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
   try {

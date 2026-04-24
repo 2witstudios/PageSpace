@@ -39,7 +39,7 @@ vi.mock('@/lib/workflows/calendar-trigger-executor', () => ({
 
 const mockAudit = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       child: vi.fn(() => ({
@@ -47,14 +47,31 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  lte: vi.fn(),
+  inArray: vi.fn(),
+  asc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  calendarEvents: {
+    id: 'id',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   calendarTriggers: {
     id: 'id',
     status: 'status',
@@ -62,14 +79,6 @@ vi.mock('@pagespace/db', () => ({
     startedAt: 'startedAt',
     calendarEventId: 'calendarEventId',
   },
-  calendarEvents: {
-    id: 'id',
-  },
-  eq: vi.fn(),
-  and: vi.fn(),
-  lte: vi.fn(),
-  inArray: vi.fn(),
-  asc: vi.fn(),
 }));
 
 import { POST } from '../route';
@@ -301,7 +310,7 @@ describe('POST /api/cron/calendar-triggers', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
     );
   });
 
@@ -310,7 +319,7 @@ describe('POST /api/cron/calendar-triggers', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } })
     );
   });
 

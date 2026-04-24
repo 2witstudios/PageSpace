@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -20,30 +20,37 @@ vi.mock('@pagespace/db', () => ({
       pages: { findFirst: vi.fn() },
     },
   },
-  taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId' },
-  pages: { id: 'id', parentId: 'parentId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
   asc: vi.fn(),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', parentId: 'parentId' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
+  taskItems: { id: 'id', taskListId: 'taskListId' },
+}));
 
-vi.mock('@pagespace/lib/server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@pagespace/lib/server')>();
-  return {
-    ...actual,
-    canUserEditPage: vi.fn(),
-    canUserViewPage: vi.fn(),
-    getUserDriveAccess: vi.fn(),
-    logPageActivity: vi.fn(),
-    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com' }),
-  };
-});
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserEditPage: vi.fn(),
+  canUserViewPage: vi.fn(),
+  getUserDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  logPageActivity: vi.fn(),
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com' }),
+}));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
   getDefaultContent: vi.fn(() => ''),
-  PageType: { DOCUMENT: 'DOCUMENT' },
+  getCreatablePageTypes: vi.fn(() => ['DOCUMENT', 'FOLDER', 'TASK_LIST']),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { DOCUMENT: 'DOCUMENT' },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -53,8 +60,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { taskManagementTools } from '../task-management-tools';
-import { db } from '@pagespace/db';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

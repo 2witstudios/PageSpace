@@ -14,13 +14,26 @@ const { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, moc
   return { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, mockInsert, mockValues, mockOnConflict, mockQueryPages };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
     insert: mockInsert,
     query: { pages: mockQueryPages },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     taskItemId: 'taskItemId',
@@ -32,19 +45,14 @@ vi.mock('@pagespace/db', () => ({
     lastRunDurationMs: 'lastRunDurationMs',
     nextRunAt: 'nextRunAt',
   },
-  taskItems: { id: 'id' },
-  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed', driveId: 'driveId' },
-  eq: vi.fn(),
-  and: vi.fn(),
-  inArray: vi.fn(),
 }));
 
 vi.mock('../workflow-executor', () => ({
   executeWorkflow: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -54,6 +62,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import {
@@ -64,7 +73,7 @@ import {
   createTaskTriggerWorkflow,
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('task-trigger-helpers', () => {
   beforeEach(() => {

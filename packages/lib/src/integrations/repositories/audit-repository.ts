@@ -5,19 +5,9 @@
  * Every external API call is logged for security and debugging.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  and,
-  desc,
-  gte,
-  lte,
-  count,
-  isNotNull,
-  integrationAuditLog,
-  type IntegrationAuditLogEntry,
-  type NewIntegrationAuditLogEntry,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq, and, desc, gte, lte, count, isNotNull } from '@pagespace/db/operators';
+import { integrationAuditLog, type IntegrationAuditLogEntry, type NewIntegrationAuditLogEntry } from '@pagespace/db/schema/integrations';
 
 interface QueryOptions {
   limit?: number;

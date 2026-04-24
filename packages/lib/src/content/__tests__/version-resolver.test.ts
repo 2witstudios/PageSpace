@@ -10,10 +10,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/versioning', () => ({
   pageVersions: {
     id: 'id',
     pageId: 'pageId',
@@ -21,6 +23,8 @@ vi.mock('@pagespace/db', () => ({
     pageRevision: 'pageRevision',
     changeGroupId: 'changeGroupId',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _op: 'eq', field: a, value: b })),
   and: vi.fn((...args: unknown[]) => ({ _op: 'and', conditions: args })),
   or: vi.fn((...args: unknown[]) => ({ _op: 'or', conditions: args })),
@@ -33,7 +37,7 @@ import {
   resolveStackedVersionContent,
   type VersionResolveRequest,
 } from '../version-resolver';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('version-resolver', () => {
   beforeEach(() => {

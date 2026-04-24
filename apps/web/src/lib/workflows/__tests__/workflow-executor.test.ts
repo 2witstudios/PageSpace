@@ -15,14 +15,20 @@ const {
   mockSelect: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: { select: mockSelect },
-  pages: { id: 'id', isTrashed: 'isTrashed', title: 'title', content: 'content', parentId: 'parentId', driveId: 'driveId' },
-  drives: { id: 'id' },
-  workflows: { $inferSelect: {} },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', isTrashed: 'isTrashed', title: 'title', content: 'content', parentId: 'parentId', driveId: 'driveId' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { $inferSelect: {} },
 }));
 
 vi.mock('ai', () => ({
@@ -35,6 +41,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@/lib/ai/core', () => ({
@@ -56,10 +63,12 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import { executeWorkflow } from '../workflow-executor';
@@ -278,7 +287,7 @@ describe('executeWorkflow', () => {
   });
 
   test('context page query includes driveId filter', async () => {
-    const { eq, and, inArray } = await import('@pagespace/db');
+    const { eq, and, inArray } = await import('@pagespace/db/operators');
     setupSelectChain(
       [mockAgent],
       [mockDrive],

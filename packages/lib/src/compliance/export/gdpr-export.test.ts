@@ -12,8 +12,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
-  const mockTable = (name: string) => ({
+const { mockTable } = vi.hoisted(() => {
+  const fn = (name: string) => ({
     id: `${name}.id`,
     name: `${name}.name`,
     email: `${name}.email`,
@@ -49,31 +49,67 @@ vi.mock('@pagespace/db', () => {
     priority: `${name}.priority`,
     taskListId: `${name}.taskListId`,
     senderId: `${name}.senderId`,
+    participant1Id: `${name}.participant1Id`,
+    participant2Id: `${name}.participant2Id`,
+    isRead: `${name}.isRead`,
+    readAt: `${name}.readAt`,
+    message: `${name}.message`,
+    preferenceType: `${name}.preferenceType`,
+    enabled: `${name}.enabled`,
+    bio: `${name}.bio`,
+    writingStyle: `${name}.writingStyle`,
+    rules: `${name}.rules`,
+    scopes: `${name}.scopes`,
+    deviceId: `${name}.deviceId`,
+    createdByIp: `${name}.createdByIp`,
+    lastUsedAt: `${name}.lastUsedAt`,
+    lastUsedIp: `${name}.lastUsedIp`,
+    expiresAt: `${name}.expiresAt`,
+    revokedAt: `${name}.revokedAt`,
+    revokedReason: `${name}.revokedReason`,
   });
-
-  return {
-    users: mockTable('users'),
-    drives: mockTable('drives'),
-    driveMembers: mockTable('driveMembers'),
-    pages: mockTable('pages'),
-    chatMessages: mockTable('chatMessages'),
-    channelMessages: mockTable('channelMessages'),
-    conversations: mockTable('conversations'),
-    messages: mockTable('messages'),
-    directMessages: mockTable('directMessages'),
-    dmConversations: mockTable('dmConversations'),
-    files: mockTable('files'),
-    filePages: mockTable('filePages'),
-    activityLogs: mockTable('activityLogs'),
-    aiUsageLogs: mockTable('aiUsageLogs'),
-    taskLists: mockTable('taskLists'),
-    taskItems: mockTable('taskItems'),
-  };
+  return { mockTable: fn };
 });
+
+vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: mockTable('drives'),
+  pages: mockTable('pages'),
+  chatMessages: mockTable('chatMessages'),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  activityLogs: mockTable('activityLogs'),
+  aiUsageLogs: mockTable('aiUsageLogs'),
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: mockTable('files'),
+  filePages: mockTable('filePages'),
+}));
+vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
+vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: mockTable('channelMessages') }));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: mockTable('conversations'),
+  messages: mockTable('messages'),
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  directMessages: mockTable('directMessages'),
+  dmConversations: mockTable('dmConversations'),
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: mockTable('taskLists'),
+  taskItems: mockTable('taskItems'),
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
+vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
+vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: mockTable('userPersonalization') }));
 
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
   inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
+  or: (...conditions: unknown[]) => ({ _op: 'or', conditions }),
+  and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
+  ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
 }));
 
 import {
@@ -85,6 +121,10 @@ import {
   collectUserActivity,
   collectUserAiUsage,
   collectUserTasks,
+  collectUserSessions,
+  collectUserNotifications,
+  collectUserDisplayPreferences,
+  collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
 
@@ -207,7 +247,8 @@ describe('collectUserMessages', () => {
     const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
     const convMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date() };
     const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
-    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg]]);
+    // 5th call: dmConversations lookup returns [] so no 6th call for received DMs
+    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -218,11 +259,53 @@ describe('collectUserMessages', () => {
   });
 
   it('given_noMessages_returnsEmptyArray', async () => {
-    const db = createChainDb([[], [], [], []]);
+    // 5 calls: ai, channel, conv, sentDms, dmConversations
+    const db = createChainDb([[], [], [], [], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
     expect(result).toEqual([]);
+  });
+
+  it('given_userHasSentDMs_setsDirectionSent', async () => {
+    const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
+    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
+    const db = createChainDb([[], [], [], [sentDm], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe('direct_message');
+    expect(result[0].direction).toBe('sent');
+  });
+
+  it('given_userHasReceivedDMs_includesThemWithDirectionReceived', async () => {
+    const convId = { id: 'conv-1' };
+    const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
+    // ai=[], channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [], [], [convId], [receivedDm]]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].source).toBe('direct_message');
+    expect(result[0].direction).toBe('received');
+    expect(result[0].content).toBe('Received DM');
+  });
+
+  it('given_userHasBothSentAndReceivedDMs_includesBothWithCorrectDirections', async () => {
+    const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
+    const convId = { id: 'conv-1' };
+    const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
+    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [], [sentDm], [convId], [receivedDm]]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    const directions = result.map(r => r.direction);
+    expect(directions).toContain('sent');
+    expect(directions).toContain('received');
   });
 });
 
@@ -303,6 +386,124 @@ describe('collectUserTasks', () => {
   });
 });
 
+describe('collectUserSessions', () => {
+  it('given_userHasSessions_returnsSessionsWithoutCredentialFields', async () => {
+    const session = {
+      id: 'sess-1',
+      type: 'user',
+      deviceId: 'device-abc',
+      scopes: [],
+      createdByIp: '1.2.3.4',
+      lastUsedAt: new Date(),
+      lastUsedIp: '1.2.3.4',
+      expiresAt: new Date(),
+      revokedAt: null,
+      revokedReason: null,
+      createdAt: new Date(),
+    };
+    const db = createChainDb([[session]]);
+
+    const result = await collectUserSessions(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('sess-1');
+    expect(result[0].type).toBe('user');
+    expect(result[0].createdByIp).toBe('1.2.3.4');
+  });
+
+  it('given_userHasNoSessions_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserSessions(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserNotifications', () => {
+  it('given_userHasNotifications_returnsNotificationHistory', async () => {
+    const notification = {
+      id: 'notif-1',
+      type: 'MENTION',
+      title: 'You were mentioned',
+      message: 'Alice mentioned you in a page',
+      metadata: null,
+      isRead: true,
+      createdAt: new Date(),
+      readAt: new Date(),
+    };
+    const db = createChainDb([[notification]]);
+
+    const result = await collectUserNotifications(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('MENTION');
+    expect(result[0].isRead).toBe(true);
+  });
+
+  it('given_userHasNoNotifications_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserNotifications(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserDisplayPreferences', () => {
+  it('given_userHasDisplayPreferences_returnsAllPreferences', async () => {
+    const pref = {
+      preferenceType: 'SHOW_TOKEN_COUNTS',
+      enabled: true,
+      updatedAt: new Date(),
+    };
+    const db = createChainDb([[pref]]);
+
+    const result = await collectUserDisplayPreferences(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].preferenceType).toBe('SHOW_TOKEN_COUNTS');
+    expect(result[0].enabled).toBe(true);
+  });
+
+  it('given_userHasNoDisplayPreferences_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
+
+    const result = await collectUserDisplayPreferences(db as never, 'user-1');
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('collectUserPersonalization', () => {
+  it('given_userHasPersonalization_returnsPersonalizationData', async () => {
+    const personalization = {
+      bio: 'I am a software engineer',
+      writingStyle: 'concise and technical',
+      rules: 'always use TypeScript',
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const db = createLimitDb([personalization]);
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.bio).toBe('I am a software engineer');
+    expect(result!.writingStyle).toBe('concise and technical');
+    expect(result!.rules).toBe('always use TypeScript');
+  });
+
+  it('given_userHasNoPersonalization_returnsNull', async () => {
+    const db = createLimitDb([]);
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result).toBeNull();
+  });
+});
+
 describe('collectAllUserData', () => {
   it('given_userDoesNotExist_returnsNull', async () => {
     const db = createLimitDb([]);
@@ -318,6 +519,11 @@ describe('collectAllUserData', () => {
       image: null, timezone: 'UTC', createdAt: new Date(), updatedAt: new Date(),
     };
 
+    // Returns an empty array that also has a .limit() method so both
+    // callers that chain .limit() (profile, personalization) and callers
+    // that use the array directly (drives, messages, etc.) both work.
+    const emptyWithLimit = () => Object.assign([], { limit: vi.fn().mockReturnValue([]) });
+
     let callCount = 0;
     const db = {
       select: vi.fn().mockReturnThis(),
@@ -325,9 +531,9 @@ describe('collectAllUserData', () => {
       where: vi.fn(() => {
         callCount++;
         if (callCount === 1) {
-          return { limit: vi.fn().mockReturnValue([profile]) };
+          return Object.assign([], { limit: vi.fn().mockReturnValue([profile]) });
         }
-        return [];
+        return emptyWithLimit();
       }),
       innerJoin: vi.fn().mockReturnThis(),
     };
@@ -344,5 +550,9 @@ describe('collectAllUserData', () => {
     expect(Array.isArray(result!.activity)).toBe(true);
     expect(Array.isArray(result!.aiUsage)).toBe(true);
     expect(Array.isArray(result!.tasks)).toBe(true);
+    expect(Array.isArray(result!.sessions)).toBe(true);
+    expect(Array.isArray(result!.notifications)).toBe(true);
+    expect(Array.isArray(result!.displayPreferences)).toBe(true);
+    expect(result!.personalization).toBeNull();
   });
 });

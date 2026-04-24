@@ -1,11 +1,11 @@
 import { describe, expect, test, beforeEach, vi } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
-  drives: { ownerId: 'ownerId', isTrashed: 'isTrashed', createdAt: 'createdAt' },
-  users: { id: 'id' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions: unknown[]) => conditions),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   asc: vi.fn((field: unknown) => ({ field, direction: 'asc' })),
@@ -14,17 +14,25 @@ vi.mock('@pagespace/db', () => ({
     values,
   })),
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { ownerId: 'ownerId', isTrashed: 'isTrashed', createdAt: 'createdAt' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn(),
+vi.mock('@pagespace/lib/utils/utils', () => ({
+    slugify: vi.fn(),
 }));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({
   populateUserDrive: vi.fn(),
 }));
 
-import { db, drives, sql } from '@pagespace/db';
-import { slugify } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core';
+import { slugify } from '@pagespace/lib/utils/utils';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 import {
   GETTING_STARTED_DRIVE_NAME,

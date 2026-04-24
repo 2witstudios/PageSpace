@@ -1,12 +1,19 @@
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, auditRequest, validateOrCreateDeviceToken, maskEmail } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';

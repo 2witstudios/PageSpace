@@ -18,8 +18,7 @@ import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
 import type { DrivePermissionLevel } from '../../permissions/permissions';
 
-// Mock @pagespace/db
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       files: {
@@ -37,8 +36,12 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'id' },
   filePages: { fileId: 'fileId', pageId: 'pageId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ type: 'eq', a, b })),
   and: vi.fn((...args) => ({ type: 'and', conditions: args })),
 }));
@@ -64,7 +67,7 @@ import {
   ForbiddenError,
   type FileRecord,
 } from '../enforced-file-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { getUserDrivePermissions } from '../../permissions/permissions';
 
 // Helper to create mock SessionClaims

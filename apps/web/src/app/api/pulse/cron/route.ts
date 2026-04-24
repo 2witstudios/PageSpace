@@ -9,49 +9,36 @@ import {
   normalizeTimezone,
   formatDateInTimezone,
 } from '@/lib/ai/core';
-import {
-  db,
-  sessions,
-  users,
-  taskItems,
-  directMessages,
-  dmConversations,
-  pages,
-  drives,
-  driveMembers,
-  activityLogs,
-  pulseSummaries,
-  userMentions,
-  pagePermissions,
-  chatMessages,
-  eq,
-  and,
-  or,
-  lt,
-  gte,
-  ne,
-  desc,
-  inArray,
-  isNull,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social'
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
-  resolveStackedVersionContent,
-  generateDiffsWithinBudget,
-  calculateDiffBudget,
   type ActivityForDiff,
   type ActivityDiffGroup,
-  type DiffRequest,
   type StackedDiff,
-} from '@pagespace/lib/content';
-import { readPageContent, loggers } from '@pagespace/lib/server';
+} from '@pagespace/lib/content/activity-diff-utils';
+import { resolveStackedVersionContent } from '@pagespace/lib/content/version-resolver';
+import {
+  generateDiffsWithinBudget,
+  calculateDiffBudget,
+  type DiffRequest,
+} from '@pagespace/lib/content/diff-generator';
+import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
 export async function POST(req: Request) {
-  // Validate cron secret + internal network origin
   const authError = validateSignedCronRequest(req);
   if (authError) {
     return authError;

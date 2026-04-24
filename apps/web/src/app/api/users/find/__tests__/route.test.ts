@@ -8,7 +8,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Mock at the SERVICE SEAM level: auth and db.query.users.findFirst
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -17,6 +17,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -28,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
 
 const mockFindFirst = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -36,12 +40,17 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  users: { email: 'email-column' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { email: 'email-column' },
 }));
 
 import { GET } from '../route';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

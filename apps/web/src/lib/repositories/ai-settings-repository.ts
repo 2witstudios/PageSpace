@@ -5,7 +5,9 @@
  * making route handlers independently testable without ORM chain mocking.
  */
 
-import { db, users, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 
 // Types for user AI settings
 export interface UserAISettings {

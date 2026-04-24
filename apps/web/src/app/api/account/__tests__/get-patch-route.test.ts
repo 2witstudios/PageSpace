@@ -3,8 +3,7 @@ import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock at the service seam level
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', email: 'email' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -13,10 +12,15 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email' },
+}));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       info: vi.fn(),
@@ -25,6 +29,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: {
     findById: vi.fn(),
     getOwnedDrives: vi.fn(),
@@ -32,9 +40,13 @@ vi.mock('@pagespace/lib/server', () => ({
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/repositories/activity-log-repository', () => ({
   activityLogRepository: {
     anonymizeForUser: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -44,7 +56,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => {
+vi.mock('@pagespace/lib/validators/email', () => {
   const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return {
     isValidEmail: (email: string) => {
@@ -52,11 +64,17 @@ vi.mock('@pagespace/lib', () => {
       if (!EMAIL_PATTERN.test(email)) return false;
       return email.slice(email.lastIndexOf('@') + 1).includes('.');
     },
-    createUserServiceToken: vi.fn(),
-    deleteAiUsageLogsForUser: vi.fn(),
-    deleteMonitoringDataForUser: vi.fn(),
   };
 });
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+  createUserServiceToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  deleteAiUsageLogsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+  deleteMonitoringDataForUser: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/compliance/anonymize', () => ({
   createAnonymizedActorEmail: vi.fn(() => 'deleted_user_abc123'),
@@ -71,8 +89,8 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { GET, PATCH } from '../route';
-import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Helper to create mock SessionAuthResult

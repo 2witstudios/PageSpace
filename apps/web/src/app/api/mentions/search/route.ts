@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser, loggers, auditRequest } from '@pagespace/lib/server';
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { pages, users, db, and, eq, ilike, drives, inArray, desc, SQL } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
 
@@ -280,30 +286,29 @@ export async function GET(request: Request) {
       const authorizedUserIds = new Set<string>();
       
       if (crossDrive) {
-        // Cross-drive search: collect users from all accessible drives
+        // Cross-drive: only enumerate members of drives where requester is a member/owner
         for (const targetDriveId of targetDriveIds) {
-          // Get the drive owner
-          const driveResults = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, targetDriveId)).limit(1);
-          const drive = driveResults[0];
-          
-          if (drive) {
-            authorizedUserIds.add(drive.ownerId);
+          const memberIds = await getDriveRecipientUserIds(targetDriveId);
+          if (memberIds.includes(userId)) {
+            for (const id of memberIds) {
+              authorizedUserIds.add(id);
+            }
           }
         }
       } else {
-        // Within-drive search: only users from the specified drive
-        const driveResults = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId!)).limit(1);
-        const drive = driveResults[0];
-        
-        if (!drive) {
+        // Within-drive: surface members only to other drive members/owners
+        const memberIds = await getDriveRecipientUserIds(driveId!);
+        if (memberIds.length === 0) {
           return NextResponse.json(
             { error: 'Drive not found' },
             { status: 404 }
           );
         }
-
-        // Add the drive owner
-        authorizedUserIds.add(drive.ownerId);
+        if (memberIds.includes(userId)) {
+          for (const id of memberIds) {
+            authorizedUserIds.add(id);
+          }
+        }
       }
 
       // Search for users only within the authorized set

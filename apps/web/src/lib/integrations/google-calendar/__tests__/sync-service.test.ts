@@ -26,7 +26,7 @@ const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
   });
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       googleCalendarConnections: { findFirst: mockFindFirst, findMany: mockFindMany },
@@ -37,6 +37,22 @@ vi.mock('@pagespace/db', () => ({
     select: mockSelect,
     transaction: mockTransaction,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  isNull: vi.fn(),
+  inArray: vi.fn(),
+  sql: vi.fn(),
+  desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'id',
+    email: 'email',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   googleCalendarConnections: {
     userId: 'userId',
     status: 'status',
@@ -57,26 +73,18 @@ vi.mock('@pagespace/db', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
-  users: {
-    id: 'id',
-    email: 'email',
-  },
-  eq: vi.fn(),
-  and: vi.fn(),
-  isNull: vi.fn(),
-  inArray: vi.fn(),
-  sql: vi.fn(),
-  desc: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 const mockGetValidAccessToken = vi.fn();
@@ -109,6 +117,8 @@ vi.mock('../event-transform', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
+  isCuid: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../webhook-token', () => ({
@@ -232,7 +242,7 @@ describe('syncGoogleCalendar', () => {
     });
 
     // Mock the calendarEvents findFirst to return null (new event)
-    const { db } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
     (db.query.calendarEvents.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     // Mock watchCalendar for the post-sync webhook registration
@@ -372,6 +382,135 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
 });
 
 describe('syncGoogleCalendar error handling', () => {
+  it('should remove stale calendar from selectedCalendars when Google returns 404', async () => {
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['stale@group.calendar.google.com', 'user@gmail.com'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+
+    // First calendar returns 404, second succeeds
+    mockListEvents
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Not Found',
+        statusCode: 404,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { events: [], nextSyncToken: 'token-1' },
+      });
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'one calendar returns 404',
+      should: 'succeed overall',
+      actual: result.success,
+      expected: true,
+    });
+
+    // 404 warning log must be retained
+    const { loggers } = await import('@pagespace/lib/logging/logger-config');
+    assert({
+      given: 'a 404 from Google Calendar API',
+      should: 'log a warning for the not-found calendar',
+      actual: (loggers.api.warn as ReturnType<typeof vi.fn>).mock.calls.some(
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('not found')
+      ),
+      expected: true,
+    });
+
+    // The stale calendar should be removed from selectedCalendars in the DB update
+    const setArgs = mockUpdate.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<string, unknown> | undefined;
+    assert({
+      given: 'a 404 for one calendar with another valid calendar remaining',
+      should: 'persist selectedCalendars without the stale entry',
+      actual: setArgs?.selectedCalendars,
+      expected: ['user@gmail.com'],
+    });
+  });
+
+  it('should disable connection when all calendars return 404', async () => {
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['stale-1@group.calendar.google.com', 'stale-2@group.calendar.google.com'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+
+    mockListEvents.mockResolvedValue({
+      success: false,
+      error: 'Not Found',
+      statusCode: 404,
+    });
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'succeed overall',
+      actual: result.success,
+      expected: true,
+    });
+
+    const setArgs = mockUpdate.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<string, unknown> | undefined;
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'persist selectedCalendars as empty array in the DB write',
+      actual: setArgs?.selectedCalendars,
+      expected: [],
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set connection status to error in the same DB write',
+      actual: setArgs?.status,
+      expected: 'error',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set statusMessage to the inaccessible message in the same DB write',
+      actual: setArgs?.statusMessage,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'set lastSyncError to the inaccessible message in the same DB write',
+      actual: setArgs?.lastSyncError,
+      expected: 'All connected calendars are inaccessible. Please reconnect your Google Calendar.',
+    });
+
+    assert({
+      given: 'all calendars return 404',
+      should: 'not call updateConnectionStatus separately (single atomic write)',
+      actual: mockUpdateConnectionStatus.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   it('should handle token expiration (410) with sync token fallback', async () => {
     mockGetValidAccessToken.mockResolvedValue({
       success: true,

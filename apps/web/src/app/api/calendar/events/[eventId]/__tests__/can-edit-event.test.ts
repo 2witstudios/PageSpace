@@ -17,7 +17,7 @@ vi.mock('next/server', async () => {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       calendarEvents: { findFirst: vi.fn() },
@@ -36,6 +36,12 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -47,16 +53,14 @@ vi.mock('@pagespace/db', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
-  eq: vi.fn(),
-  and: vi.fn((...args: unknown[]) => args),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -65,6 +69,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -87,8 +95,8 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 }));
 
 import { PATCH } from '../route';
-import { db } from '@pagespace/db';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib';
+import { db } from '@pagespace/db/db';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 
 // ============================================================================

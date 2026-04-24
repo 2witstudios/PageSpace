@@ -22,7 +22,7 @@ import {
 } from '../ws-connections';
 
 // Mock logger and sessionService to prevent side effects during tests
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
@@ -31,6 +31,8 @@ vi.mock('@pagespace/lib', () => ({
       debug: vi.fn(),
     })),
   },
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     // Mock validateSession to return null by default (session invalid)
     // Tests that don't pass wsToken to registerConnection will skip revalidation anyway
@@ -464,7 +466,7 @@ describe('WebSocket Connection Manager', () => {
 
     it('should close connections with revoked sessions', async () => {
       // Import the mocked sessionService to configure the mock
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return null (session revoked)
       vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
@@ -481,7 +483,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should keep connections with valid sessions', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return valid claims
       vi.mocked(sessionService.validateSession).mockResolvedValueOnce({
@@ -506,7 +508,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should handle validation errors gracefully', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to throw an error
       vi.mocked(sessionService.validateSession).mockRejectedValueOnce(new Error('Network error'));
@@ -522,7 +524,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should skip recently revalidated connections', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession to return valid claims
       vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -553,7 +555,7 @@ describe('WebSocket Connection Manager', () => {
     });
 
     it('should validate multiple connections in parallel', async () => {
-      const { sessionService } = await import('@pagespace/lib');
+      const { sessionService } = await import('@pagespace/lib/auth/session-service');
 
       // Mock validateSession with a delay to test parallelism
       vi.mocked(sessionService.validateSession).mockImplementation(async () => {

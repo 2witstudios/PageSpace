@@ -5,16 +5,21 @@ import { hashToken, generateToken, getTokenPrefix } from '../auth/token-utils';
  * Token Utils Unit Tests (P1-T3)
  *
  * Validates token generation and hashing utilities for secure token storage.
- * Tokens must be stored as SHA-256 hashes with a prefix for debugging.
+ * Tokens must be stored as SHA3-256 hashes with a prefix for debugging.
  */
 describe('Token Utils', () => {
   describe('hashToken', () => {
-    it('given a token string, should return SHA-256 hex hash', () => {
+    it('given a token string, should return SHA3-256 hex hash', () => {
       const token = 'test_abc123xyz';
       const hash = hashToken(token);
 
-      // SHA-256 produces 64 hex characters
       expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('given a known input, should return the correct SHA3-256 digest', () => {
+      expect(hashToken('test_abc123xyz')).toBe(
+        'b880f9685ff6b335e981ebd15d00ad0eaf066b39020702c4806ee3898ee6c4b2'
+      );
     });
 
     it('given the same token twice, should produce identical hashes', () => {
@@ -36,11 +41,10 @@ describe('Token Utils', () => {
       expect(hash1).not.toBe(hash2);
     });
 
-    it('given an empty string, should still produce a valid hash', () => {
-      const hash = hashToken('');
-
-      // SHA-256 of empty string is a known value
-      expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    it('given an empty string, should return the SHA3-256 digest of empty input', () => {
+      expect(hashToken('')).toBe(
+        'a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a'
+      );
     });
 
     it('given a very long token (1000+ chars), should produce a valid hash', () => {
@@ -112,14 +116,14 @@ describe('Token Utils', () => {
       expect(result.tokenPrefix).toBe(result.token.substring(0, 12));
     });
 
-    it('should generate token with sufficient entropy (32 bytes = 43 base64url chars)', () => {
+    it('should generate token with sufficient length', () => {
       const result = generateToken('ps_test');
 
-      // Token format: {prefix}_{randomBase64url}
+      // Token format: {prefix}_{cuid2}
       // prefix = 'ps_test' (7 chars) + '_' (1 char) = 8 chars
-      // random = 32 bytes = 43 base64url chars
-      // Total minimum: 8 + 43 = 51 chars
-      expect(result.token.length).toBeGreaterThanOrEqual(51);
+      // CUID2 at max length = 32 chars
+      // Total minimum: 8 + 32 = 40 chars
+      expect(result.token.length).toBeGreaterThanOrEqual(40);
     });
   });
 

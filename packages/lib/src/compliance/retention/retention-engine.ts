@@ -1,16 +1,11 @@
 import { and, lt, eq, isNotNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import {
-  sessions,
-  verificationTokens,
-  socketTokens,
-  emailUnsubscribeTokens,
-  pageVersions,
-  driveBackups,
-  aiUsageLogs,
-  pagePermissions,
-  pulseSummaries,
-} from '@pagespace/db';
+import { verificationTokens, socketTokens, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
 import { runMonitoringRetentionCleanup } from './monitoring-retention';
 
 export interface CleanupResult {

@@ -30,9 +30,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      // Map monorepo packages to their source files for testing without building
-      '@pagespace/db': path.resolve(__dirname, '../../packages/db/src/index.ts'),
-      '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src/index.ts'),
     },
   },
 })

@@ -9,6 +9,146 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./db": {
+      "types": "./dist/db.d.ts",
+      "default": "./dist/db.js"
+    },
+    "./operators": {
+      "types": "./dist/operators.d.ts",
+      "default": "./dist/operators.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./schema/ai": {
+      "types": "./dist/schema/ai.d.ts",
+      "default": "./dist/schema/ai.js"
+    },
+    "./schema/auth": {
+      "types": "./dist/schema/auth.d.ts",
+      "default": "./dist/schema/auth.js"
+    },
+    "./schema/auth-handoff-tokens": {
+      "types": "./dist/schema/auth-handoff-tokens.d.ts",
+      "default": "./dist/schema/auth-handoff-tokens.js"
+    },
+    "./schema/calendar": {
+      "types": "./dist/schema/calendar.d.ts",
+      "default": "./dist/schema/calendar.js"
+    },
+    "./schema/calendar-triggers": {
+      "types": "./dist/schema/calendar-triggers.d.ts",
+      "default": "./dist/schema/calendar-triggers.js"
+    },
+    "./schema/chat": {
+      "types": "./dist/schema/chat.d.ts",
+      "default": "./dist/schema/chat.js"
+    },
+    "./schema/contact": {
+      "types": "./dist/schema/contact.d.ts",
+      "default": "./dist/schema/contact.js"
+    },
+    "./schema/conversations": {
+      "types": "./dist/schema/conversations.d.ts",
+      "default": "./dist/schema/conversations.js"
+    },
+    "./schema/core": {
+      "types": "./dist/schema/core.d.ts",
+      "default": "./dist/schema/core.js"
+    },
+    "./schema/dashboard": {
+      "types": "./dist/schema/dashboard.d.ts",
+      "default": "./dist/schema/dashboard.js"
+    },
+    "./schema/display-preferences": {
+      "types": "./dist/schema/display-preferences.d.ts",
+      "default": "./dist/schema/display-preferences.js"
+    },
+    "./schema/email-notifications": {
+      "types": "./dist/schema/email-notifications.d.ts",
+      "default": "./dist/schema/email-notifications.js"
+    },
+    "./schema/feedback": {
+      "types": "./dist/schema/feedback.d.ts",
+      "default": "./dist/schema/feedback.js"
+    },
+    "./schema/hotkeys": {
+      "types": "./dist/schema/hotkeys.d.ts",
+      "default": "./dist/schema/hotkeys.js"
+    },
+    "./schema/integrations": {
+      "types": "./dist/schema/integrations.d.ts",
+      "default": "./dist/schema/integrations.js"
+    },
+    "./schema/members": {
+      "types": "./dist/schema/members.d.ts",
+      "default": "./dist/schema/members.js"
+    },
+    "./schema/monitoring": {
+      "types": "./dist/schema/monitoring.d.ts",
+      "default": "./dist/schema/monitoring.js"
+    },
+    "./schema/notifications": {
+      "types": "./dist/schema/notifications.d.ts",
+      "default": "./dist/schema/notifications.js"
+    },
+    "./schema/page-views": {
+      "types": "./dist/schema/page-views.d.ts",
+      "default": "./dist/schema/page-views.js"
+    },
+    "./schema/permissions": {
+      "types": "./dist/schema/permissions.d.ts",
+      "default": "./dist/schema/permissions.js"
+    },
+    "./schema/personalization": {
+      "types": "./dist/schema/personalization.d.ts",
+      "default": "./dist/schema/personalization.js"
+    },
+    "./schema/push-notifications": {
+      "types": "./dist/schema/push-notifications.d.ts",
+      "default": "./dist/schema/push-notifications.js"
+    },
+    "./schema/rate-limit-buckets": {
+      "types": "./dist/schema/rate-limit-buckets.d.ts",
+      "default": "./dist/schema/rate-limit-buckets.js"
+    },
+    "./schema/revoked-service-tokens": {
+      "types": "./dist/schema/revoked-service-tokens.d.ts",
+      "default": "./dist/schema/revoked-service-tokens.js"
+    },
+    "./schema/security-audit": {
+      "types": "./dist/schema/security-audit.d.ts",
+      "default": "./dist/schema/security-audit.js"
+    },
+    "./schema/sessions": {
+      "types": "./dist/schema/sessions.d.ts",
+      "default": "./dist/schema/sessions.js"
+    },
+    "./schema/social": {
+      "types": "./dist/schema/social.d.ts",
+      "default": "./dist/schema/social.js"
+    },
+    "./schema/storage": {
+      "types": "./dist/schema/storage.d.ts",
+      "default": "./dist/schema/storage.js"
+    },
+    "./schema/subscriptions": {
+      "types": "./dist/schema/subscriptions.d.ts",
+      "default": "./dist/schema/subscriptions.js"
+    },
+    "./schema/tasks": {
+      "types": "./dist/schema/tasks.d.ts",
+      "default": "./dist/schema/tasks.js"
+    },
+    "./schema/versioning": {
+      "types": "./dist/schema/versioning.d.ts",
+      "default": "./dist/schema/versioning.js"
+    },
+    "./schema/workflows": {
+      "types": "./dist/schema/workflows.d.ts",
+      "default": "./dist/schema/workflows.js"
+    },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"
@@ -27,6 +167,7 @@
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
+    "lint": "eslint src",
     "promote-admin": "tsx src/promote-admin.ts"
   },
   "dependencies": {
@@ -38,6 +179,8 @@
   "devDependencies": {
     "@types/pg": "^8.15.4",
     "drizzle-kit": "^0.23.2",
-    "tsx": "^4.20.3"
+    "eslint": "^9.36.0",
+    "tsx": "^4.20.3",
+    "typescript-eslint": "^8.59.0"
   }
 }

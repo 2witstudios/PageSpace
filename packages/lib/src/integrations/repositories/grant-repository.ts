@@ -5,14 +5,9 @@
  * Handles which tools from a connection an agent can use.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  and,
-  integrationToolGrants,
-  type IntegrationToolGrant,
-  type NewIntegrationToolGrant,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { integrationToolGrants, type IntegrationToolGrant, type NewIntegrationToolGrant } from '@pagespace/db/schema/integrations';
 
 type GrantWithConnection = IntegrationToolGrant & {
   connection: {

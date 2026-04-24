@@ -18,7 +18,7 @@ import CodePageView from './page-views/code/CodePageView';
 import TerminalView from './page-views/terminal/TerminalView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
-import { getPageTypeComponent } from '@pagespace/lib/client-safe';
+import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
 import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';

@@ -1,22 +1,14 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
-import {
-  db,
-  calendarEvents,
-  eventAttendees,
-  workflows,
-  eq,
-  and,
-  or,
-  gte,
-  lte,
-  inArray,
-  isNull,
-  asc,
-} from '@pagespace/db';
-import { loggers, getDriveMemberUserIds, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { workflows } from '@pagespace/db/schema/workflows';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';

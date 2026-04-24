@@ -9,7 +9,7 @@ const createMockRequest = (url: string, init?: RequestInit): NextRequest => {
 
 // Mock database
 const mockDbSelect = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: () => ({
@@ -17,7 +17,11 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ a, b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
 }));
 
@@ -67,11 +71,15 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock @pagespace/lib/server
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -79,7 +87,7 @@ vi.mock('@pagespace/lib/server', () => ({
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

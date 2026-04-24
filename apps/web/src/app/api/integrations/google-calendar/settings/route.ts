@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, count } from '@pagespace/db/operators'
+import { googleCalendarConnections, calendarEvents } from '@pagespace/db/schema/calendar';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -18,6 +22,7 @@ const settingsSchema = z.object({
  * Returns the current settings and event statistics.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
@@ -76,6 +81,7 @@ export async function GET(request: Request) {
  * Updates Google Calendar sync settings.
  */
 export async function PATCH(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;

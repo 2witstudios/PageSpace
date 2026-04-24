@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveWithAccess } from '@pagespace/lib/server';
+import type { DriveWithAccess } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
 // Contract Tests for /api/drives
@@ -13,12 +13,16 @@ import type { DriveWithAccess } from '@pagespace/lib/server';
 // ============================================================================
 
 // Mock the service seam - this is the ONLY place we mock DB-related logic
-vi.mock('@pagespace/lib/server', () => ({
-  listAccessibleDrives: vi.fn(),
-  createDrive: vi.fn(),
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+    listAccessibleDrives: vi.fn(),
+    createDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -26,6 +30,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -50,7 +56,8 @@ vi.mock('@/lib/auth', () => ({
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
 }));
 
-import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
+import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';

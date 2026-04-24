@@ -7,12 +7,16 @@
  * 2. messages_and_changes - Soft-delete messages AND rollback all tool call changes
  */
 
-import { db, chatMessages, messages, activityLogs, eq, and, gte, lt, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { eq, and, gte, lt, desc } from '@pagespace/db/operators'
+import { chatMessages } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { messages } from '@pagespace/db/schema/conversations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   logConversationUndo,
   getActorInfo,
-} from '@pagespace/lib/monitoring';
+} from '@pagespace/lib/monitoring/activity-logger';
 import {
   executeRollback,
   previewRollback,

@@ -21,22 +21,19 @@
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 
 // Mock the permission functions
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
 }));
 
 // Mock the database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue([]),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
-  or: vi.fn(),
-  dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
 }));
 
 // Mock the logger
@@ -49,10 +46,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
-import { db } from '@pagespace/db';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // Create a mock socket that tracks room joins/leaves
 const createMockSocket = (userId?: string) => {

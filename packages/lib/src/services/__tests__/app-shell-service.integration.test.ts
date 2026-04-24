@@ -8,17 +8,12 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import {
-  db,
-  users,
-  drives,
-  pages,
-  pagePermissions,
-  driveMembers,
-  channelMessages,
-  chatMessages,
-  connections,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { channelMessages } from '@pagespace/db/schema/chat';
+import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
+import { connections } from '@pagespace/db/schema/social';
 import { loadAppShell } from '../app-shell-service';
 
 describe('loadAppShell (integration)', () => {

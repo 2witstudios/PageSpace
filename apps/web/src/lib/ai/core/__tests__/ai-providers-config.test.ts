@@ -1,11 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   PAGESPACE_MODEL_ALIASES,
+  ONPREM_ALLOWED_PROVIDERS,
   resolvePageSpaceModel,
   isPageSpaceModelAlias,
   getPageSpaceModelTier,
   getDefaultModel,
   getUserFacingModelName,
+  getVisibleProviders,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
@@ -101,6 +103,46 @@ describe('ai-providers-config', () => {
 
     it('should return glm-4.7 for unknown provider', () => {
       expect(getDefaultModel('unknown-provider')).toBe('glm-4.7');
+    });
+  });
+
+  describe('getVisibleProviders', () => {
+    const origNextPublic = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE;
+    const origServer = process.env.DEPLOYMENT_MODE;
+
+    afterEach(() => {
+      process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = origNextPublic;
+      process.env.DEPLOYMENT_MODE = origServer;
+    });
+
+    it('given cloud mode, should include all external providers', () => {
+      delete process.env.NEXT_PUBLIC_DEPLOYMENT_MODE;
+      delete process.env.DEPLOYMENT_MODE;
+      const providers = getVisibleProviders();
+      expect(providers).toHaveProperty('anthropic');
+      expect(providers).toHaveProperty('openai');
+      expect(providers).toHaveProperty('google');
+      expect(providers).toHaveProperty('xai');
+    });
+
+    it('given onprem mode, should include only ONPREM_ALLOWED_PROVIDERS', () => {
+      process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = 'onprem';
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const providers = getVisibleProviders();
+      expect(providers).not.toHaveProperty('anthropic');
+      expect(providers).not.toHaveProperty('openai');
+      Object.keys(providers).forEach((key) => {
+        expect(ONPREM_ALLOWED_PROVIDERS.has(key)).toBe(true);
+      });
+    });
+
+    it('given tenant mode, should include all external providers', () => {
+      process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = 'tenant';
+      process.env.DEPLOYMENT_MODE = 'tenant';
+      const providers = getVisibleProviders();
+      expect(providers).toHaveProperty('anthropic');
+      expect(providers).toHaveProperty('openai');
+      expect(providers).toHaveProperty('google');
     });
   });
 

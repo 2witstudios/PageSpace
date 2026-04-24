@@ -13,11 +13,11 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   cleanupExpiredDeviceTokens: mockCleanup,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
@@ -49,7 +49,7 @@ describe('/api/cron/cleanup-tokens', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: 5 } })
+      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_tokens', details: { cleaned: 5 } })
     );
   });
 

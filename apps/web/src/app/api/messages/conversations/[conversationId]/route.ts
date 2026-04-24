@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import type { ConversationDetailRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

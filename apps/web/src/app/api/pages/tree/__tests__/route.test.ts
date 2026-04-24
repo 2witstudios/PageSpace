@@ -23,15 +23,21 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  buildTree: vi.fn((pages: unknown[]) => pages),
-  loggers: {
+vi.mock('@pagespace/lib/content/tree-utils', () => ({
+    buildTree: vi.fn((pages: unknown[]) => pages),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: { findFirst: vi.fn() },
@@ -39,18 +45,24 @@ vi.mock('@pagespace/db', () => ({
       pages: { findMany: vi.fn() },
     },
   },
-  pages: { driveId: 'driveId', isTrashed: 'isTrashed', position: 'position' },
-  drives: { id: 'drives.id' },
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => args),
   eq: vi.fn((a: unknown, b: unknown) => [a, b]),
   asc: vi.fn((col: unknown) => col),
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { driveId: 'driveId', isTrashed: 'isTrashed', position: 'position' },
+  drives: { id: 'drives.id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId' },
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
-import { buildTree } from '@pagespace/lib/server';
-import { db } from '@pagespace/db';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

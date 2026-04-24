@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -33,26 +33,15 @@ vi.mock('@pagespace/db', () => ({
     }),
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
   },
-  conversations: {
-    id: 'id',
-    userId: 'userId',
-    isActive: 'isActive',
-    updatedAt: 'updatedAt',
-    title: 'title',
-    type: 'type',
-    contextId: 'contextId',
-    lastMessageAt: 'lastMessageAt',
-    createdAt: 'createdAt',
-  },
-  messages: {
-    id: 'id',
-    conversationId: 'conversationId',
-    isActive: 'isActive',
-    createdAt: 'createdAt',
-    content: 'content',
-    role: 'role',
-    editedAt: 'editedAt',
-  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
+  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  desc: vi.fn((field) => ({ type: 'desc', field })),
+  sql: vi.fn(),
+  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -73,19 +62,37 @@ vi.mock('@pagespace/db', () => ({
     messageCount: 'messageCount',
     wasTruncated: 'wasTruncated',
   },
-  eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
-  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
-  desc: vi.fn((field) => ({ type: 'desc', field })),
-  sql: vi.fn(),
-  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: {
+    id: 'id',
+    userId: 'userId',
+    isActive: 'isActive',
+    updatedAt: 'updatedAt',
+    title: 'title',
+    type: 'type',
+    contextId: 'contextId',
+    lastMessageAt: 'lastMessageAt',
+    createdAt: 'createdAt',
+  },
+  messages: {
+    id: 'id',
+    conversationId: 'conversationId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+    content: 'content',
+    role: 'role',
+    editedAt: 'editedAt',
+  },
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => 'mock-id',
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { globalConversationRepository } from '../global-conversation-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('globalConversationRepository hard-delete', () => {
   beforeEach(() => {

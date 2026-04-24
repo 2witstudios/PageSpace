@@ -18,7 +18,7 @@ import { buildReceipts } from '../services/siem-receipt-builder';
 import { writeReceipts } from './siem-receipt-writer';
 import { runChainPreflight } from './siem-delivery-preflight';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from '../services/siem-sources';
-import { notifyChainPreflightFailure } from '@pagespace/lib/audit';
+import { notifyChainPreflightFailure } from '@pagespace/lib/audit/security-audit-alerting';
 import { getPoolForWorker } from '../db';
 
 const DEFAULT_BATCH_SIZE = 100;

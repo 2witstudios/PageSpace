@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { checkRateLimit } from '@pagespace/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

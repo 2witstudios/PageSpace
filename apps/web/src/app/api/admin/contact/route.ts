@@ -1,13 +1,7 @@
-import {
-  db,
-  contactSubmissions,
-  asc,
-  desc,
-  ilike,
-  or,
-  count
-} from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { asc, desc, ilike, or, count } from '@pagespace/db/operators'
+import { contactSubmissions } from '@pagespace/db/schema/contact';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 

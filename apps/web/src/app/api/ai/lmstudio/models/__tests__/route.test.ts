@@ -4,8 +4,8 @@ import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       info: vi.fn(),
       error: vi.fn(),
@@ -13,6 +13,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -24,11 +26,11 @@ vi.mock('@/lib/ai/core', () => ({
   getUserLMStudioSettings: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateLocalProviderURL: vi.fn().mockResolvedValue({ valid: true, resolvedIPs: ['127.0.0.1'] }),
 }));
 
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
 

@@ -39,16 +39,24 @@ const {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
-  calendarTriggers: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
     id: 'id',
-    calendarEventId: 'calendarEventId',
-    status: 'status',
+    name: 'name',
+    email: 'email',
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'id',
     title: 'title',
@@ -56,17 +64,19 @@ vi.mock('@pagespace/db', () => ({
     driveId: 'driveId',
     isTrashed: 'isTrashed',
   },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   eventAttendees: {
     eventId: 'eventId',
     userId: 'userId',
   },
-  users: {
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
     id: 'id',
-    name: 'name',
-    email: 'email',
+    calendarEventId: 'calendarEventId',
+    status: 'status',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
@@ -81,12 +91,11 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id?.slice(-4) || ''}`),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: mockIsUserDriveMember,
-  logger: { child: vi.fn(() => makeChildLogger()) },
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: mockIsUserDriveMember,
 }));
-
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  logger: { child: vi.fn(() => makeChildLogger()) },
   loggers: {
     api: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     ai: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -94,7 +103,8 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
-import type { CalendarTrigger, CalendarEvent } from '@pagespace/db';
+import type { CalendarEvent } from '@pagespace/db/schema/calendar'
+import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 
 // ============================================================================
 // Fixtures

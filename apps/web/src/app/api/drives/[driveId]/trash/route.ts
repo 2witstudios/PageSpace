@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
-import { drives, pages, driveMembers, db, and, eq, asc } from '@pagespace/db';
-import { buildTree, loggers, auditRequest } from '@pagespace/lib/server';
+import { db } from '@pagespace/db/db'
+import { and, eq, asc } from '@pagespace/db/operators'
+import { drives, pages } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
+import { buildTree } from '@pagespace/lib/content/tree-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };

@@ -10,7 +10,8 @@
  * - Provides audit trail of failed attempts
  */
 
-import { db, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
 import { maskEmail } from '../audit/mask-email';

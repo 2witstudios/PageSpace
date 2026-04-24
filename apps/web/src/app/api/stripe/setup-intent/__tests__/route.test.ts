@@ -43,9 +43,8 @@ const mockSelectWhere = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateSet = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: mockSelectWhere,
@@ -57,10 +56,13 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({
@@ -69,11 +71,15 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock @pagespace/lib/server
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -81,7 +87,7 @@ vi.mock('@pagespace/lib/server', () => ({
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

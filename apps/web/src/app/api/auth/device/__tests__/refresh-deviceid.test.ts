@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn((t: string) => `hashed_${t}`),
   getTokenPrefix: vi.fn((t: string) => t.slice(0, 8)),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
     validateSession: vi.fn().mockResolvedValue({ sessionId: 'sid_123' }),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateDeviceToken: vi.fn().mockResolvedValue({
     id: 'dt_1',
     userId: 'user_1',
@@ -19,12 +21,18 @@ vi.mock('@pagespace/lib/server', () => ({
   }),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
   generateDeviceToken: vi.fn().mockReturnValue('new_device_token'),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('csrf_token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: { REFRESH: { maxAttempts: 10, windowMs: 60000 } },
@@ -54,8 +62,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../refresh/route';
-import { validateDeviceToken } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
+import { validateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 
 function makeRequest(body: Record<string, unknown>): Request {
   return new Request('http://localhost/api/auth/device/refresh', {

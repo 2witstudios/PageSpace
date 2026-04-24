@@ -15,17 +15,14 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       googleCalendarConnections: { findMany: vi.fn().mockResolvedValue([]) },
     },
   },
-  googleCalendarConnections: {
-    status: 'status',
-    lastSyncAt: 'lastSyncAt',
-    syncFrequencyMinutes: 'syncFrequencyMinutes',
-  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
@@ -33,13 +30,24 @@ vi.mock('@pagespace/db', () => ({
   isNull: vi.fn(),
   sql: Object.assign(vi.fn(), { raw: vi.fn() }),
 }));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  googleCalendarConnections: {
+    status: 'status',
+    lastSyncAt: 'lastSyncAt',
+    syncFrequencyMinutes: 'syncFrequencyMinutes',
+  },
+}));
 
 vi.mock('@/lib/integrations/google-calendar/sync-service', () => ({
   syncGoogleCalendar: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: mockLoggers,
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
@@ -55,7 +63,7 @@ vi.mock('next/server', () => ({
 
 import { GET } from '../route';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
 function makeRequest(): Request {
@@ -72,7 +80,7 @@ describe('/api/cron/calendar-sync', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 0, failed: 0 } })
     );
   });
 
@@ -88,7 +96,7 @@ describe('/api/cron/calendar-sync', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 1, failed: 1 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 1, failed: 1 } })
     );
   });
 

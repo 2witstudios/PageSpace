@@ -22,20 +22,27 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPageServiceToken: vi.fn(),
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createPageServiceToken: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const limit = vi.fn();
   const where = vi.fn().mockReturnValue({ limit });
   const from = vi.fn().mockReturnValue({ where });
   const select = vi.fn().mockReturnValue({ from });
-
   return {
     db: { select },
-    pages: {
+  };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
       id: 'id',
       processingStatus: 'processingStatus',
       processingError: 'processingError',
@@ -44,9 +51,7 @@ vi.mock('@pagespace/db', () => {
       processedAt: 'processedAt',
       content: 'content',
     },
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-  };
-});
+}));
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -54,8 +59,9 @@ vi.stubGlobal('fetch', mockFetch);
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
-import { db } from '@pagespace/db';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

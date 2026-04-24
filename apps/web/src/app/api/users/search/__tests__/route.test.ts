@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Mock at the SERVICE SEAM level: auth, db queries, and query-params utility
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
       info: vi.fn(),
@@ -15,6 +15,10 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -59,14 +63,25 @@ const profileLookupChain = {
   from: vi.fn(),
 };
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ _eq: true, col, val })),
   and: vi.fn((...args: unknown[]) => ({ _and: true, args })),
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'users.id',
+    email: 'users.email',
+    name: 'users.name',
+  },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: {
     userId: 'userProfiles.userId',
     username: 'userProfiles.username',
@@ -75,11 +90,6 @@ vi.mock('@pagespace/db', () => ({
     avatarUrl: 'userProfiles.avatarUrl',
     isPublic: 'userProfiles.isPublic',
   },
-  users: {
-    id: 'users.id',
-    email: 'users.email',
-    name: 'users.name',
-  },
 }));
 
 vi.mock('@/lib/utils/query-params', () => ({
@@ -87,9 +97,10 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { GET } from '../route';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Helpers

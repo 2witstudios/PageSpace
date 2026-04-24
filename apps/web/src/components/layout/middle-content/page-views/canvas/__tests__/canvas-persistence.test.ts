@@ -38,7 +38,7 @@ describe('Canvas content persistence', () => {
 
       // Step 1: Simulate a successful save
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, staleTreeContent, 'html');
+      store.upsertDocument(pageId, staleTreeContent, 'html');
       store.updateDocument(pageId, {
         content: savedContent,
         isDirty: false,
@@ -69,7 +69,7 @@ describe('Canvas content persistence', () => {
         const response = await mockFetchWithAuth(`/api/pages/${pageId}`);
         if (response.ok) {
           const page = await response.json();
-          store.createDocument(pageId, page.content || '', page.contentMode || 'html');
+          store.upsertDocument(pageId, page.content || '', page.contentMode || 'html');
           store.updateDocument(pageId, { revision: page.revision });
         }
       }
@@ -89,7 +89,7 @@ describe('Canvas content persistence', () => {
 
       // Document still exists in store (e.g., quick navigation back)
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, savedContent, 'html');
+      store.upsertDocument(pageId, savedContent, 'html');
       store.updateDocument(pageId, { revision: 2, isDirty: false });
 
       // On remount, should find existing document and skip API fetch
@@ -106,7 +106,7 @@ describe('Canvas content persistence', () => {
     it('given a 409 conflict on save, should refetch latest content and update revision so next save succeeds', async () => {
       const pageId = 'canvas-page-3';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>original</p>', 'html');
+      store.upsertDocument(pageId, '<p>original</p>', 'html');
       store.updateDocument(pageId, { revision: 3, isDirty: true });
 
       // Save attempt: server returns 409 conflict

@@ -34,7 +34,7 @@ let mockLogEntries: Array<{
 }> = [];
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       activityLogs: {
@@ -127,6 +127,8 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -144,7 +146,7 @@ import {
   verifyEntry,
   type HashChainVerificationResult,
 } from '../hash-chain-verifier';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 /**
  * Helper to create a valid hash chain of log entries

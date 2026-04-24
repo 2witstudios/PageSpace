@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import type { LegacyNotification } from '@pagespace/lib/client-safe';
+import type { LegacyNotification } from '@pagespace/lib/notifications/types';
 
 // Mock dependencies before importing the store
 vi.mock('../socketStore', () => ({

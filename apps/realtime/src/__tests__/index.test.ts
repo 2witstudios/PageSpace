@@ -38,6 +38,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 // broadcast-auth mock
@@ -46,15 +48,20 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 // permissions mock
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
 }));
 
 // auth/session mock
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
+  },
+  hashToken: (token: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createHash } = require('crypto');
+    return createHash('sha3-256').update(token).digest('hex');
   },
 }));
 
@@ -70,7 +77,7 @@ mockDbFrom.mockReturnValue({ where: mockDbWhere });
 mockDbWhere.mockReturnValue({ limit: mockDbLimit });
 mockDbLimit.mockResolvedValue([]);
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       socketTokens: {
@@ -79,14 +86,24 @@ vi.mock('@pagespace/db', () => ({
     },
     select: mockDbSelect,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
   gt: vi.fn((a, b) => ({ gt: [a, b] })),
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   socketTokens: { tokenHash: 'tokenHash', expiresAt: 'expiresAt' },
   users: { id: 'id', name: 'name', image: 'image' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { userId: 'userId', displayName: 'displayName', avatarUrl: 'avatarUrl' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: {
     id: 'id',
     participant1Id: 'participant1Id',
@@ -222,8 +239,8 @@ vi.mock('socket.io', () => ({
 // ---------------------------------------------------------------------------
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
-import { sessionService } from '@pagespace/lib/auth';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { emitValidationError } from '../validation';
 
 // ---------------------------------------------------------------------------

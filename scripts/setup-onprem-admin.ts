@@ -12,10 +12,13 @@
  * 4. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
-import { db, users, userAiSettings, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { userAiSettings } from '@pagespace/db/schema/ai';
+import { eq, and } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
-import { createVerificationToken } from '@pagespace/lib/auth';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { parseArgs } from 'node:util';
 
 async function generateSetupLink(userId: string): Promise<string> {

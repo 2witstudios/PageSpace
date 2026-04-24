@@ -20,11 +20,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  *   - zod/v4: schema validation (real implementation)
  */
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
   consumeExchangeCode: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -36,6 +36,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -44,8 +46,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createSessionCookie: vi.fn().mockReturnValue('session=mock-session-token; Path=/; HttpOnly'),
 }));
 
-import { consumeExchangeCode } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { consumeExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { POST } from '../route';
 

@@ -9,25 +9,24 @@ import { hashToken } from '../auth/token-utils';
  */
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  const mockDb = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
     query: {
-      mcpTokens: {
-        findFirst: vi.fn(),
-      },
+      mcpTokens: { findFirst: vi.fn() },
     },
-  };
-  return {
-    db: mockDb,
-    mcpTokens: { tokenHash: 'tokenHash', token: 'token' },
-    eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
-    and: vi.fn((...conditions) => ({ conditions, op: 'and' })),
-    isNull: vi.fn((field) => ({ field, op: 'isNull' })),
-  };
-});
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: { tokenHash: 'tokenHash', token: 'token' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
+  and: vi.fn((...conditions) => ({ conditions, op: 'and' })),
+  isNull: vi.fn((field) => ({ field, op: 'isNull' })),
+}));
 
 // Import after mocking
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   findMCPTokenByValue,
 } from '../auth/token-lookup';

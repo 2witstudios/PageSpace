@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 
 /**

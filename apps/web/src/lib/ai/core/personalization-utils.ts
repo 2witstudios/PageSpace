@@ -2,7 +2,10 @@
  * Personalization utilities for AI system prompt injection
  */
 
-import { db, users, userPersonalization, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 import type { PersonalizationInfo } from './system-prompt';
 
 /**

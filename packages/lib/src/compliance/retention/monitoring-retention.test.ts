@@ -16,7 +16,7 @@ vi.mock('drizzle-orm', () => ({
 const mockReturning = vi.fn();
 const mockDeleteTable = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: (table: unknown) => {
       mockDeleteTable(table);
@@ -27,6 +27,8 @@ vi.mock('@pagespace/db', () => ({
       };
     },
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   apiMetrics: { id: 'apiMetrics.id', timestamp: 'apiMetrics.timestamp' },
   systemLogs: { id: 'systemLogs.id', timestamp: 'systemLogs.timestamp' },
   errorLogs: { id: 'errorLogs.id', timestamp: 'errorLogs.timestamp' },
@@ -42,7 +44,7 @@ import {
   cleanupUserActivities,
   runMonitoringRetentionCleanup,
 } from './monitoring-retention';
-import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db';
+import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 
 const originalEnv = process.env;
 
