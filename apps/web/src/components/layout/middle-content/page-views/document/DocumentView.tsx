@@ -33,10 +33,8 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
-  const hasInitializedRef = useRef(false);
   const { user } = useAuth();
 
-  // Use the new document hook - will fetch content if not cached
   const {
     document: documentState,
     isLoading,
@@ -93,18 +91,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Initialize document when component mounts (only once)
   useEffect(() => {
-    if (!hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-      initializeAndActivate();
-    }
-  }, [pageId, initializeAndActivate]); // Re-initialize on pageId change
-
-  // Reset initialization flag when pageId changes
-  useEffect(() => {
-    hasInitializedRef.current = false;
-  }, [pageId]);
+    initializeAndActivate();
+  }, [initializeAndActivate]);
 
   // Register editing state when document is dirty
   useEffect(() => {
@@ -156,24 +145,17 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     return () => { abortController.abort(); };
   }, [user?.id, pageId]);
 
-  // Handle content updates from other sources (AI, other users)
-  // Uses usePageContentSocket to ensure we receive updates even when
-  // the page is in a different drive than the currently-viewed tree
+  // Live content updates from AI or other users while the document is open.
+  // contentMode is updated atomically with content to prevent mode/content mismatch
+  // if another user converts while we have unsaved edits.
   const handleContentUpdate = useCallback(async (_eventData: PageEventPayload) => {
-    // Note: pageId and socketId filtering is handled by usePageContentSocket
     try {
-      // Fetch the latest content from the server
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-
-        // Only update if content actually changed and we're not currently editing
-        // IMPORTANT: contentMode must be updated atomically with content to prevent
-        // mode/content mismatch when another user converts while we have unsaved edits
         if (!documentState?.isDirty) {
           const contentChanged = updatedPage.content !== documentState?.content;
           const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
-
           if (contentChanged || modeChanged) {
             useDocumentManagerStore.getState().updateDocument(pageId, {
               content: updatedPage.content,
@@ -191,11 +173,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     }
   }, [pageId, documentState?.isDirty, documentState?.content, documentState?.contentMode]);
 
-  // Subscribe to page content updates via Socket.IO
-  // This ensures we receive updates even when the page is in a different drive
   usePageContentSocket(pageId, driveId, {
     onContentUpdated: handleContentUpdate,
-    enabled: !!driveId, // Only enable if driveId is provided
+    enabled: !!driveId,
   });
 
 
