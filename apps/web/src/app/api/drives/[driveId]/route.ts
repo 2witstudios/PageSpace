@@ -1,13 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  getDriveById,
-  getDriveAccess,
-  getDriveWithAccess,
-  updateDrive,
-  trashDrive,
-} from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';

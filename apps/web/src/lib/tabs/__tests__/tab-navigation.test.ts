@@ -13,7 +13,7 @@ import {
   canGoForward,
   type Tab,
 } from '../tab-navigation';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 // Factory for creating test tabs
 const createTestTab = (overrides: Partial<Tab> = {}): Tab => ({

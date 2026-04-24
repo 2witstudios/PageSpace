@@ -6,7 +6,8 @@ import {
   executeRollbackToPoint,
   type RollbackToPointContext,
 } from '@/services/api';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   broadcastPageEvent,

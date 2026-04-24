@@ -33,12 +33,18 @@ vi.mock('@/lib/websocket', () => ({
   })),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-  auditRequest: vi.fn(),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
@@ -50,8 +56,8 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/monitoring', () => ({
-  createChangeGroupId: vi.fn(() => 'change-group-123'),
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
 vi.mock('@pagespace/db', () => {
@@ -93,7 +99,7 @@ vi.mock('@pagespace/db', () => {
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export

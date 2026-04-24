@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/useNotificationStore';
-import { isConnectionRequest, type LegacyNotification } from '@pagespace/lib/client-safe';
+import { isConnectionRequest } from '@pagespace/lib/notifications/guards';
+import { type LegacyNotification } from '@pagespace/lib/notifications/types';
 import { patch } from '@/lib/auth/auth-fetch';
 import { NotificationItem } from './NotificationItem';
 

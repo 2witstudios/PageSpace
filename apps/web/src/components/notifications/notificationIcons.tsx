@@ -12,7 +12,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { NotificationType } from '@pagespace/lib/client-safe';
+import type { NotificationType } from '@pagespace/lib/notifications/types';
 
 export const NOTIFICATION_ICONS: Record<NotificationType, LucideIcon> = {
   PERMISSION_GRANTED: Share2,

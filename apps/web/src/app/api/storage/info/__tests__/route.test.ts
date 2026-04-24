@@ -3,9 +3,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -43,7 +43,7 @@ vi.mock('@pagespace/db', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {

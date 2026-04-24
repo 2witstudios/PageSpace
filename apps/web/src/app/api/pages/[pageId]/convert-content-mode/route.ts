@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, pages, eq } from '@pagespace/db';
-import { canUserEditPage, createPageVersion } from '@pagespace/lib/server';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { createPageVersion } from '@pagespace/lib/services/page-version-service';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';

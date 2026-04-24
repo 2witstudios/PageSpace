@@ -51,15 +51,18 @@ vi.mock('@pagespace/db', () => ({
   inArray: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
   isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));
@@ -70,7 +73,7 @@ vi.mock('date-fns', () => ({
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user_123';
 
@@ -112,9 +115,16 @@ describe('GET /api/activities/export audit', () => {
   it('logs export audit event on successful activities export', async () => {
     await GET(new Request('http://localhost/api/activities/export?context=user'));
 
+    expect(auditRequest).toHaveBeenCalledTimes(1);
     expect(auditRequest).toHaveBeenCalledWith(
       expect.any(Request),
-      expect.objectContaining({ eventType: 'data.export', userId: mockUserId, resourceType: 'activities', resourceId: 'self' })
+      expect.objectContaining({
+        eventType: 'data.export',
+        userId: mockUserId,
+        resourceType: 'activities',
+        resourceId: 'self',
+        details: { context: 'user' },
+      })
     );
   });
 });

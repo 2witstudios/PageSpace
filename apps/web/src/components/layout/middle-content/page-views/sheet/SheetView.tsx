@@ -16,11 +16,11 @@ import {
   collectExternalReferences,
   encodeCellAddress,
   evaluateSheet,
-  PageType,
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
-} from '@pagespace/lib/client-safe';
+} from '@pagespace/lib/sheets';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { FloatingCellEditor } from './FloatingCellEditor';

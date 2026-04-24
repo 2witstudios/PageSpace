@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 

@@ -22,10 +22,12 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn((...args: unknown[]) => args),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -33,6 +35,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -58,7 +62,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { POST } from '../route';
 import { db } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';

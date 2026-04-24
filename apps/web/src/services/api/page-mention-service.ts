@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { db, mentions, userMentions, eq, and, inArray } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;

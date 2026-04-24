@@ -9,13 +9,20 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserEditPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
     ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
   },
-  auditRequest: vi.fn(),
+  logger: {
+    child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
+  },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
@@ -25,12 +32,11 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   disableTaskTriggers: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  PageType: { DOCUMENT: 'DOCUMENT', FOLDER: 'FOLDER', TASK_LIST: 'TASK_LIST' },
-  getDefaultContent: vi.fn(() => '{}'),
-  logger: {
-    child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
-  },
+vi.mock('@pagespace/lib/utils/enums', () => ({
+    PageType: { DOCUMENT: 'DOCUMENT', FOLDER: 'FOLDER', TASK_LIST: 'TASK_LIST' },
+}));
+vi.mock('@pagespace/lib/content/page-types.config', () => ({
+    getDefaultContent: vi.fn(() => '{}'),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -39,9 +45,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
     actorDisplayName: 'Test User',
   }),
   logPageActivity: vi.fn(),
+  DeferredWorkflowTrigger: undefined,
 }));
 
-vi.mock('@pagespace/lib/notifications', () => ({
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
   createTaskAssignedNotification: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -56,10 +63,6 @@ vi.mock('@/services/api/page-mutation-service', () => ({
       this.expectedRevision = expectedRevision;
     }
   },
-}));
-
-vi.mock('@pagespace/lib/monitoring', () => ({
-  DeferredWorkflowTrigger: undefined,
 }));
 
 // REVIEW: Deep ORM chain mocks (db.update().set().where().returning(), db.transaction(tx => ...))
@@ -132,11 +135,11 @@ vi.mock('@/lib/websocket', () => ({
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // ---------- Helpers ----------

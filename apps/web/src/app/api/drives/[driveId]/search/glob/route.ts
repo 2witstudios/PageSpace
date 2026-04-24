@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
-import {
-  checkDriveAccessForSearch,
-  globSearchPages,
-  loggers,
-  auditRequest,
-} from '@pagespace/lib/server';
+import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/services/drive-search-service'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 

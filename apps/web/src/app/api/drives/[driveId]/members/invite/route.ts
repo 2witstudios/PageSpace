@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/server';
+import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/roles
@@ -10,13 +10,15 @@ import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace
 // These tests mock at the SERVICE SEAM level, NOT at the ORM/query-builder level.
 // ============================================================================
 
-vi.mock('@pagespace/lib/server', () => ({
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  checkDriveAccessForRoles: vi.fn(),
-  listDriveRoles: vi.fn(),
-  createDriveRole: vi.fn(),
-  validateRolePermissions: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-role-service', () => ({
+    checkDriveAccessForRoles: vi.fn(),
+    listDriveRoles: vi.fn(),
+    createDriveRole: vi.fn(),
+    validateRolePermissions: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -24,12 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import {
-  checkDriveAccessForRoles,
-  listDriveRoles,
-  createDriveRole,
-  validateRolePermissions,
-} from '@pagespace/lib/server';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================

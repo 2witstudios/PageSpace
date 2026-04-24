@@ -8,7 +8,8 @@ import { FolderViewProps, ViewMode, SortKey, SortDirection } from './types';
 import { FolderViewHeader } from './FolderViewHeader';
 import { GridView } from './GridView';
 import { ListView } from './ListView';
-import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { isFolderPage } from '@pagespace/lib/content/page-types.config';
 
 export default function FolderView({ page }: FolderViewProps) {
   const params = useParams();

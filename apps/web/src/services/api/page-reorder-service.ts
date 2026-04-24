@@ -1,6 +1,6 @@
 import { db, pages, drives, driveMembers, eq, and } from '@pagespace/db';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
-import { getActorInfo } from '@pagespace/lib/server';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from './page-mutation-service';
 
 /**

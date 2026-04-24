@@ -13,7 +13,7 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/client-safe';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';

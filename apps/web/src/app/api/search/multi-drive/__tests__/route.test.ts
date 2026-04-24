@@ -7,12 +7,16 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
-  getDriveIdsForUser: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
+    getDriveIdsForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: { info: vi.fn(), error: vi.fn() },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -38,7 +42,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
-import { getDriveIdsForUser } from '@pagespace/lib/server';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 
 const mockSessionAuth = {
   userId: 'user_123',

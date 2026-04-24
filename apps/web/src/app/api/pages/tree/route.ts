@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { buildTree } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { pages, drives, driveMembers, db, and, eq, asc } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };

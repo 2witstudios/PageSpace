@@ -15,15 +15,19 @@ vi.mock('@pagespace/db', () => ({
   desc: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       debug: vi.fn(),
       child: vi.fn(() => ({
         warn: vi.fn(),
         error: vi.fn(),
-      })),
+      
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+})),
     },
   },
 }));
@@ -45,7 +49,7 @@ vi.mock('@/lib/ai/tools/channel-tools', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {

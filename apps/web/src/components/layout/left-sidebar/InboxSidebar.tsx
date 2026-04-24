@@ -20,7 +20,7 @@ import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
-import type { InboxItem, InboxResponse } from '@pagespace/lib';
+import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
