@@ -80,7 +80,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given content update, should mark document as dirty immediately', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
 
       store.updateDocument(pageId, {
         content: '<p>edited</p>',
@@ -96,7 +96,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given successful save, should clear isDirty', async () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
       store.updateDocument(pageId, { content: '<p>saved</p>', isDirty: true });
 
       // Simulate save succeeding
@@ -113,7 +113,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given newer edit during save, should not clear isDirty from stale save', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>v1</p>', 'html');
+      store.upsertDocument(pageId, '<p>v1</p>', 'html');
 
       // Simulate: version 1 save starts
       let saveVersion = 1;
@@ -139,7 +139,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given no newer edits during save, should clear isDirty', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>v1</p>', 'html');
+      store.upsertDocument(pageId, '<p>v1</p>', 'html');
 
       const saveVersion = 1;
       const currentVersion = 1;
@@ -159,7 +159,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given save fails, should keep isDirty true', async () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
       store.updateDocument(pageId, { content: '<p>unsaved</p>', isDirty: true });
 
       mockPatch.mockRejectedValueOnce(new Error('Network error'));
@@ -181,7 +181,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given dirty document on unmount, should attempt save before clearing', async () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
       store.updateDocument(pageId, { content: '<p>dirty</p>', isDirty: true });
 
       // Simulate successful unmount save
@@ -201,7 +201,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given dirty document and save fails on unmount, should keep document in store', async () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
       store.updateDocument(pageId, { content: '<p>dirty</p>', isDirty: true });
 
       mockPatch.mockRejectedValueOnce(new Error('Network error'));
@@ -222,7 +222,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given clean document on unmount, should clear document without saving', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>clean</p>', 'html');
+      store.upsertDocument(pageId, '<p>clean</p>', 'html');
 
       // Not dirty — just clear
       const doc = store.getDocument(pageId);
@@ -239,7 +239,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given document is dirty, should not overwrite with server content', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
       store.updateDocument(pageId, { content: '<p>local edit</p>', isDirty: true });
 
       // Simulate server update arriving while dirty
@@ -262,7 +262,7 @@ describe('CanvasPageView save lifecycle', () => {
     it('given document is clean, should apply server content', () => {
       const pageId = 'page-1';
       const store = useDocumentManagerStore.getState();
-      store.createDocument(pageId, '<p>initial</p>', 'html');
+      store.upsertDocument(pageId, '<p>initial</p>', 'html');
 
       // Document is clean — server update should apply
       const doc = store.getDocument(pageId);
