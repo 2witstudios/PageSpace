@@ -4,7 +4,8 @@ import { NextRequest } from 'next/server';
 import { db, users, subscriptions, sessions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 
 /**
  * Security Tests for Gift Subscription Admin Routes
@@ -69,7 +70,7 @@ vi.mock('@/lib/stripe-config', () => ({
   },
 }));
 
-// Mock loggers
+// Mock loggers (route.ts still uses @pagespace/lib/server for loggers)
 vi.mock('@pagespace/lib/server', async () => {
   const actual = await vi.importActual('@pagespace/lib/server');
   return {
@@ -90,11 +91,19 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
+  };
+});
+
+// auth.ts now imports logSecurityEvent from logger-config (not @pagespace/lib/server)
+vi.mock('@pagespace/lib/logging/logger-config', async () => {
+  const actual = await vi.importActual('@pagespace/lib/logging/logger-config');
+  return {
+    ...actual,
     logSecurityEvent: vi.fn(),
   };
 });
 
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 
 describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   let adminUserId: string;
