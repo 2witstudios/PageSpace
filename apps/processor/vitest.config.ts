@@ -1,7 +1,4 @@
 import { defineConfig } from 'vitest/config'
-import path from 'path'
-
-const packagesDir = path.resolve(__dirname, '../../packages')
 
 export default defineConfig({
   test: {
@@ -27,15 +24,6 @@ export default defineConfig({
         functions: 66,
         statements: 50,
       },
-    },
-  },
-  resolve: {
-    alias: {
-      '@pagespace/db': path.resolve(packagesDir, 'db/src'),
-      '@pagespace/lib/logging/logger-config': path.resolve(packagesDir, 'lib/src/logging/logger-config'),
-      '@pagespace/lib/permissions': path.resolve(packagesDir, 'lib/src/permissions'),
-      '@pagespace/lib/security': path.resolve(packagesDir, 'lib/src/security'),
-      '@pagespace/lib': path.resolve(packagesDir, 'lib/src'),
     },
   },
 })
