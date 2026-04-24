@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
-import { computeLogHash } from '@pagespace/lib/monitoring';
-import { computeSecurityEventHash, type AuditEvent } from '@pagespace/lib/audit';
+import { computeLogHash } from '@pagespace/lib/monitoring/activity-logger';
+import { computeSecurityEventHash, type AuditEvent } from '@pagespace/lib/audit/security-audit';
 import { assert } from '../../__tests__/riteway';
 import {
   recomputeActivityLogHash,

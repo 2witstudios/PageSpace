@@ -1,14 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // Mock the underlying lib security module
-vi.mock('@pagespace/lib/security', () => ({
-  validateExternalURL: vi.fn().mockResolvedValue({ valid: true }),
+vi.mock('@pagespace/lib/security/path-validator', () => ({
   resolvePathWithinSync: vi.fn((base: string, ...segs: string[]) => {
     const path = require('path');
     const joined = path.join(base, ...segs);
-    if (
-      segs.some(s => s.includes('..') || s.includes('\0'))
-    ) {
+    if (segs.some(s => s.includes('..') || s.includes('\0'))) {
       return null;
     }
     return joined;

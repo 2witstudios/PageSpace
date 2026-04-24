@@ -12,7 +12,7 @@ vi.mock('../file-links', () => ({
   getFileDriveId: (...args: unknown[]) => mockGetFileDriveId(...args),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
@@ -25,6 +25,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       error: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 import type { EnforcedAuthContext } from '../../middleware/auth';
