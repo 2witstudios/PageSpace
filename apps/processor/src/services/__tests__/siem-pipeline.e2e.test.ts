@@ -80,9 +80,7 @@ const { state, mockValidateExternalURL } = vi.hoisted(() => {
 // @pagespace/db — minimal stub that lets security-audit.logEvent run unchanged.
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => {
-  const securityAuditLog = { timestamp: 'timestamp' };
-
+vi.mock('@pagespace/db/db', () => {
   const findFirst = async (): Promise<{ eventHash: string } | undefined> => {
     const last = state.dbRows[state.dbRows.length - 1];
     return last ? { eventHash: last.eventHash } : undefined;
@@ -129,24 +127,19 @@ vi.mock('@pagespace/db', () => {
     return cb(tx);
   };
 
-  const noop = (): undefined => undefined;
-
   return {
     db: {
       query: { securityAuditLog: { findFirst } },
       transaction,
     },
-    securityAuditLog,
-    desc: noop,
-    sql: noop,
-    and: noop,
-    or: noop,
-    gte: noop,
-    lte: noop,
-    eq: noop,
-    lt: noop,
-    isNotNull: noop,
   };
+});
+vi.mock('@pagespace/db/schema/security-audit', () => ({
+  securityAuditLog: { timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/operators', () => {
+  const noop = (): undefined => undefined;
+  return { desc: noop, sql: noop, and: noop, or: noop, gte: noop, lte: noop, eq: noop, lt: noop, isNotNull: noop };
 });
 
 // ---------------------------------------------------------------------------
