@@ -167,6 +167,7 @@
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
+    "lint": "eslint src",
     "promote-admin": "tsx src/promote-admin.ts"
   },
   "dependencies": {
@@ -178,6 +179,8 @@
   "devDependencies": {
     "@types/pg": "^8.15.4",
     "drizzle-kit": "^0.23.2",
-    "tsx": "^4.20.3"
+    "eslint": "^9.36.0",
+    "tsx": "^4.20.3",
+    "typescript-eslint": "^8.59.0"
   }
 }

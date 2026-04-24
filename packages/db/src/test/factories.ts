@@ -1,7 +1,9 @@
 import { faker } from '@faker-js/faker'
 import { createId } from '@paralleldrive/cuid2'
-import { users, drives, pages, chatMessages, pagePermissions, driveMembers } from '../schema'
-import { db } from '../index'
+import { db } from '../db';
+import { users } from '../schema/auth';
+import { drives, pages, chatMessages } from '../schema/core';
+import { driveMembers, pagePermissions } from '../schema/members';
 
 export const factories = {
   async createUser(overrides?: Partial<typeof users.$inferInsert>) {

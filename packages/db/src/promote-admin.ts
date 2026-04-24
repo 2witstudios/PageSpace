@@ -1,4 +1,6 @@
-import { db, users, eq } from './index';
+import { db } from './db';
+import { users } from './schema/auth';
+import { eq } from './operators';
 
 const email = process.argv[2];
 
