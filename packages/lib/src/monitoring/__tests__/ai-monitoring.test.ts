@@ -27,10 +27,12 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockDbSelectFn,
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     userId: 'userId',
     provider: 'provider',
@@ -45,6 +47,8 @@ vi.mock('@pagespace/db', () => ({
     error: 'error',
     metadata: 'metadata',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn(),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),

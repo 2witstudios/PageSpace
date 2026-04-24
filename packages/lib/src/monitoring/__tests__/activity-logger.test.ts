@@ -39,7 +39,7 @@ const mockCreateTx = vi.hoisted(() => () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,8 +52,14 @@ vi.mock('@pagespace/db', () => ({
       users: { findFirst: mockUsersFindFirst },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { id: 'id', logHash: 'logHash', timestamp: 'timestamp' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col, val) => ({ type: 'eq', col, val })),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
     strings,

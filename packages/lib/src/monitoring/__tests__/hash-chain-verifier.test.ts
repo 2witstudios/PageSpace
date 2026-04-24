@@ -34,7 +34,7 @@ let mockLogEntries: Array<{
 }> = [];
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       activityLogs: {
@@ -127,6 +127,8 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {
     id: 'id',
     timestamp: 'timestamp',
