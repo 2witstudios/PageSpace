@@ -19,7 +19,7 @@ import { sql } from 'drizzle-orm';
 import { mkdir, writeFile, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import { resolvePathWithin } from '@pagespace/lib/security';
+import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type {
   ExportOptions,
   ExportManifest,
