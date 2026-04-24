@@ -835,7 +835,7 @@ const SidebarChatTab: React.FC = () => {
             latestAssistantMessage={lastAIResponse}
             isAIStreaming={displayIsStreaming}
             streamingText={streamingAssistantText}
-            onStopStream={stop}
+            onStopStream={handleStop}
             onClose={disableVoiceMode}
           />
         )}

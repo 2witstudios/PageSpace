@@ -98,14 +98,23 @@ export function VoiceCallPanel({
     pendingTextRef.current = pendingTextRef.current.slice(lastIndex);
   }, [streamingText, isAIStreaming, isOwnerActive, queueSentence]);
 
-  // When stream ends, speak any buffered tail
+  // Reset streamed marker and pending buffer when a new stream begins
+  useEffect(() => {
+    if (!isAIStreaming) return;
+    streamingSpokenRef.current = 0;
+    pendingTextRef.current = '';
+  }, [isAIStreaming]);
+
+  // When stream ends, flush any buffered tail — skip if barge-in already started capture
   useEffect(() => {
     if (isAIStreaming) return;
-    if (pendingTextRef.current.trim()) {
-      queueSentence(pendingTextRef.current.trim());
-      pendingTextRef.current = '';
+    const tail = pendingTextRef.current.trim();
+    pendingTextRef.current = '';
+    if (!tail) return;
+    const { voiceState: liveState } = useVoiceModeStore.getState();
+    if (liveState !== 'listening' && liveState !== 'processing') {
+      queueSentence(tail);
     }
-    streamingSpokenRef.current = 0;
   }, [isAIStreaming, queueSentence]);
 
   // Fallback: speak full message when voice mode was activated after streaming ended
