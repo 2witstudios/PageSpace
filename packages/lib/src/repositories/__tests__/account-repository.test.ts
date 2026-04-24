@@ -32,7 +32,7 @@ vi.mock('@pagespace/db', () => {
 // ---------------------------------------------------------------------------
 
 import { accountRepository } from '../account-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

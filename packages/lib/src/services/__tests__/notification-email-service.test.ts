@@ -48,7 +48,7 @@ vi.mock('../../auth/token-utils', () => ({
   getTokenPrefix: vi.fn((t: string) => t.substring(0, 12)),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { sendEmail } from '../email-service';
 import { sendNotificationEmail } from '../notification-email-service';
 

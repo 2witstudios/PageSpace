@@ -8,7 +8,9 @@ import {
   validateOrCreateDeviceToken,
 } from '../auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '../auth/opaque-tokens';
-import { db, deviceTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { deviceTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 
 describe('device-auth-utils', () => {

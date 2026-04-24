@@ -80,7 +80,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   PASSKEY_CONFIG,
   generateRegistrationOptions,

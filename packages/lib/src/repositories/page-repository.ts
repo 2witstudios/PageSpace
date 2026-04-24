@@ -5,7 +5,9 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, pages, eq, and, desc, isNull, inArray, isNotNull, lt, type PageTypeEnum } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, desc, isNull, inArray, isNotNull, lt } from '@pagespace/db/operators';
+import { pages, type PageTypeEnum } from '@pagespace/db/schema/core';
 
 export type PageTypeValue = PageTypeEnum;
 

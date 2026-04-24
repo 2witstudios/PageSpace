@@ -1,7 +1,9 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import mammoth from 'mammoth';
 import type { ExtractionResult, ProcessingStatus, ExtractionMethod } from '../types';
 

@@ -30,7 +30,9 @@
  * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
 
-import { db, rateLimitBuckets, sql, eq, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql, eq, lt } from '@pagespace/db/operators';
+import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { loggers } from '../logging/logger-config';
 
 // =============================================================================

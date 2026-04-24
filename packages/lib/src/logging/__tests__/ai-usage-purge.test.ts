@@ -28,7 +28,7 @@ import {
   purgeAiUsageLogs,
   deleteAiUsageLogsForUser,
 } from '../ai-usage-purge';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('ai-usage-purge', () => {
   beforeEach(() => {

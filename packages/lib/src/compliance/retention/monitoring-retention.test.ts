@@ -42,7 +42,7 @@ import {
   cleanupUserActivities,
   runMonitoringRetentionCleanup,
 } from './monitoring-retention';
-import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db';
+import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 
 const originalEnv = process.env;
 

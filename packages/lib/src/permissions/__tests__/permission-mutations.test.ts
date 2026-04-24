@@ -3,7 +3,11 @@ import { grantPagePermission, revokePagePermission } from '../permission-mutatio
 import { EnforcedAuthContext } from '../enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
 import { factories } from '@pagespace/db/test/factories';
-import { db, users, pagePermissions, driveMembers, pages, drives, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 
 // Generate fake but valid CUID2 IDs for "non-existent" entity tests

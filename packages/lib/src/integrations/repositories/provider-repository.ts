@@ -5,15 +5,9 @@
  * Handles listing, creating, updating, and deleting provider configurations.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  and,
-  integrationProviders,
-  integrationConnections,
-  type IntegrationProvider,
-  type NewIntegrationProvider,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { integrationProviders, integrationConnections, type IntegrationProvider, type NewIntegrationProvider } from '@pagespace/db/schema/integrations';
 import type { IntegrationProviderConfig } from '../types';
 
 /**

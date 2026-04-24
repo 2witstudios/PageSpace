@@ -1,4 +1,6 @@
-import { db, pushNotificationTokens, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { pushNotificationTokens } from '@pagespace/db/schema/push-notifications';
 import { createId } from '@paralleldrive/cuid2';
 import * as crypto from 'crypto';
 

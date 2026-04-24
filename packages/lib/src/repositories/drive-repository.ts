@@ -5,7 +5,9 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, drives, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
 
 // Types for repository operations
 export interface DriveRecord {

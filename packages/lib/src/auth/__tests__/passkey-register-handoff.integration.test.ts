@@ -8,7 +8,9 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { db, authHandoffTokens, inArray, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { inArray, eq } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import {
   createPasskeyRegisterHandoff,
   peekPasskeyRegisterHandoff,

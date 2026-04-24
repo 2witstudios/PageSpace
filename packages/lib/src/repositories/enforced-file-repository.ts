@@ -7,7 +7,9 @@
  * @module @pagespace/lib/repositories/enforced-file-repository
  */
 
-import { db, files, filePages, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { files, filePages } from '@pagespace/db/schema/storage';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import { getUserDrivePermissions } from '../permissions/permissions';
 import { loggers } from '../logging/logger-config';

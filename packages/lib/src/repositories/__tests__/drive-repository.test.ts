@@ -22,7 +22,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { driveRepository } from '../drive-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

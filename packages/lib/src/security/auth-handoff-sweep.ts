@@ -13,7 +13,9 @@
  * handler can surface a 500; swallows and warns in non-production.
  */
 
-import { db, authHandoffTokens, sql, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql, lt } from '@pagespace/db/operators';
+import { authHandoffTokens } from '@pagespace/db/schema/auth-handoff-tokens';
 import { loggers } from '../logging/logger-config';
 
 export async function sweepExpiredAuthHandoffTokens(): Promise<number> {

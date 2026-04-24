@@ -17,7 +17,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { activityLogRepository } from '../activity-log-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

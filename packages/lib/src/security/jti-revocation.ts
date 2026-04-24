@@ -12,7 +12,9 @@
  * @module @pagespace/lib/security/jti-revocation
  */
 
-import { db, revokedServiceTokens, and, eq, gt, lt, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, gt, lt, sql } from '@pagespace/db/operators';
+import { revokedServiceTokens } from '@pagespace/db/schema/revoked-service-tokens';
 import { loggers } from '../logging/logger-config';
 
 /**

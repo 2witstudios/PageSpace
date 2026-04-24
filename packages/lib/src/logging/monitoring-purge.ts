@@ -6,7 +6,9 @@
  * (tamper-evident hash chain must remain intact for compliance).
  */
 
-import { db, systemLogs, apiMetrics, errorLogs, userActivities, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 
 export interface MonitoringDeleteResult {
   systemLogs: number;

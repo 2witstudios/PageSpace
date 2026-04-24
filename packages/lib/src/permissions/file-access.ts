@@ -9,7 +9,9 @@
  * by any drive member via direct URL.
  */
 
-import { db, eq, filePages } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { filePages } from '@pagespace/db/schema/storage';
 import { canUserViewPage, isUserDriveMember } from './permissions';
 
 /**

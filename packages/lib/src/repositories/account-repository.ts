@@ -5,7 +5,11 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, users, drives, driveMembers, eq, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
+import { driveMembers } from '@pagespace/db/schema/members';
 
 export interface UserAccount {
   id: string;

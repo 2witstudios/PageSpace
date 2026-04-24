@@ -52,7 +52,7 @@ import {
   writeUserActivity,
   writeError,
 } from '../logger-database';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { isOnPrem } from '../../deployment-mode';
 
 // Helper: build a minimal LogEntry

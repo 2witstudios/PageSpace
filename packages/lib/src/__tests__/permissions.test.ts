@@ -7,7 +7,11 @@ import {
   canUserDeletePage,
 } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
-import { db, users, pagePermissions, driveMembers, pages, drives, eq, and } from '@pagespace/db'
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2'
 
 describe('permissions system', () => {

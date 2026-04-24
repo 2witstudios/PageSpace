@@ -94,7 +94,7 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicValidateOrCreateDeviceToken: (...args: unknown[]) => mockAtomicValidateOrCreate(...args),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { hashToken } from '../token-utils';
 import {
   TOKEN_LIFETIMES,

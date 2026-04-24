@@ -50,7 +50,8 @@ vi.mock('../../validators', () => ({
 }));
 
 import { getBatchPagePermissions } from '../permissions';
-import { db, isNotNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { isNotNull } from '@pagespace/db/operators';
 import { loggers } from '../../logging/logger-config';
 
 // ---------------------------------------------------------------------------

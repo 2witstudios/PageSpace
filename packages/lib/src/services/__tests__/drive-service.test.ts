@@ -33,7 +33,7 @@ vi.mock('@pagespace/db', () => ({
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   listAccessibleDrives,
   createDrive,

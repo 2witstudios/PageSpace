@@ -20,7 +20,9 @@
  * receive a blocked `UsageTrackingResult`.
  */
 
-import { db, rateLimitBuckets, sql, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql, eq, and } from '@pagespace/db/operators';
+import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { loggers } from '../logging/logger-config';
 
 export type ProviderType = 'standard' | 'pro';

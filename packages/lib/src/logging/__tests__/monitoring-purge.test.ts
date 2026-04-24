@@ -15,7 +15,9 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { deleteMonitoringDataForUser } from '../monitoring-purge';
-import { db, eq, systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
 
 describe('deleteMonitoringDataForUser', () => {
   beforeEach(() => {

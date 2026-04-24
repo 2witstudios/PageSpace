@@ -12,7 +12,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { db, rateLimitBuckets, sql, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql, eq } from '@pagespace/db/operators';
+import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { RateLimitCache, type ProviderType } from '../rate-limit-cache';
 
 interface AssertParams {

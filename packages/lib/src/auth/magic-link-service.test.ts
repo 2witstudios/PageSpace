@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { db, users, verificationTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import {
   createMagicLinkToken,

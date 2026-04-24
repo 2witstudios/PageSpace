@@ -7,7 +7,9 @@
  * @module @pagespace/lib/auth/token-lookup
  */
 
-import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, isNull } from '@pagespace/db/operators';
+import { mcpTokens } from '@pagespace/db/schema/auth';
 import { hashToken } from './token-utils';
 
 const MCP_TOKEN_PREFIX = 'mcp_';

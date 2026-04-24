@@ -3,7 +3,9 @@
  * Comprehensive tracking for AI provider usage, tokens, costs, and performance
  */
 
-import { db, aiUsageLogs, sql, and, eq, gte, lte } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
 

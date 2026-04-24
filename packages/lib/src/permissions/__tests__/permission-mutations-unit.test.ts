@@ -54,7 +54,7 @@ vi.mock('../../monitoring/activity-logger', () => ({
 // ---------------------------------------------------------------------------
 
 import { grantPagePermission, revokePagePermission } from '../permission-mutations';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { EnforcedAuthContext } from '../enforced-context';
 
 // ---------------------------------------------------------------------------

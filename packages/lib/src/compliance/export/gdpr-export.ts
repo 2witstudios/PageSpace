@@ -1,24 +1,18 @@
 import { eq, inArray, or, and, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import {
-  users,
-  drives,
-  pages,
-  chatMessages,
-  files,
-  filePages,
-  aiUsageLogs,
-  activityLogs,
-} from '@pagespace/db';
-import { driveMembers } from '@pagespace/db';
-import { channelMessages } from '@pagespace/db';
-import { conversations, messages } from '@pagespace/db';
-import { directMessages, dmConversations } from '@pagespace/db';
-import { taskLists, taskItems } from '@pagespace/db';
-import { sessions } from '@pagespace/db';
-import { notifications } from '@pagespace/db';
-import { displayPreferences } from '@pagespace/db';
-import { userPersonalization } from '@pagespace/db';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { aiUsageLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { files, filePages } from '@pagespace/db/schema/storage';
+import { driveMembers } from '@pagespace/db/schema/members';
+import { channelMessages } from '@pagespace/db/schema/chat';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { notifications } from '@pagespace/db/schema/notifications';
+import { displayPreferences } from '@pagespace/db/schema/display-preferences';
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 
 type DB = NodePgDatabase<Record<string, unknown>>;
 
