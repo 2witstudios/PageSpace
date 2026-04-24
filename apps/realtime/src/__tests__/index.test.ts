@@ -77,7 +77,7 @@ mockDbFrom.mockReturnValue({ where: mockDbWhere });
 mockDbWhere.mockReturnValue({ limit: mockDbLimit });
 mockDbLimit.mockResolvedValue([]);
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       socketTokens: {
@@ -86,14 +86,24 @@ vi.mock('@pagespace/db', () => ({
     },
     select: mockDbSelect,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
   gt: vi.fn((a, b) => ({ gt: [a, b] })),
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   socketTokens: { tokenHash: 'tokenHash', expiresAt: 'expiresAt' },
   users: { id: 'id', name: 'name', image: 'image' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { userId: 'userId', displayName: 'displayName', avatarUrl: 'avatarUrl' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: {
     id: 'id',
     participant1Id: 'participant1Id',

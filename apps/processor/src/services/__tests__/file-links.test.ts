@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const insert = vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
       onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
@@ -33,19 +33,23 @@ vi.mock('@pagespace/db', () => {
     },
   };
 
-  return {
-    db,
-    filePages: {
-      fileId: 'filePages.fileId',
-      pageId: 'filePages.pageId',
-    },
-    files: { id: 'files.id' },
-    pages: { id: 'pages.id', driveId: 'pages.driveId' },
-    eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
-  };
+  return { db };
 });
+vi.mock('@pagespace/db/schema/storage', () => ({
+  filePages: {
+    fileId: 'filePages.fileId',
+    pageId: 'filePages.pageId',
+  },
+  files: { id: 'files.id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', driveId: 'pages.driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
+}));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { ensureFileLinked, getLinksForFile, getFileDriveId, getLinkForPage } from '../file-links';
 
 /** @boundary-contract */
