@@ -30,44 +30,46 @@ const { testState, createMockTxFn } = vi.hoisted(() => {
 });
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
-      query: {
-        securityAuditLog: {},
-      },
-      insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn(),
-        }),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      securityAuditLog: {},
+    },
+    insert: vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn(),
       }),
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn(),
-            }),
+    }),
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn(),
           }),
         }),
       }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      transaction: vi.fn().mockImplementation(async (callback: any) => {
-        const tx = createMockTxFn();
-        return callback(tx);
-      }),
-    },
-    securityAuditLog: {},
-    desc: vi.fn(),
-    and: vi.fn(),
-    gte: vi.fn(),
-    lte: vi.fn(),
-    eq: vi.fn(),
-    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-      strings,
-      values,
     }),
-  };
-});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    transaction: vi.fn().mockImplementation(async (callback: any) => {
+      const tx = createMockTxFn();
+      return callback(tx);
+    }),
+  },
+}));
+vi.mock('@pagespace/db/schema/security-audit', () => ({
+  securityAuditLog: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  desc: vi.fn(),
+  and: vi.fn(),
+  gte: vi.fn(),
+  lte: vi.fn(),
+  eq: vi.fn(),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  }),
+}));
 
 // Import after mocking
 import {

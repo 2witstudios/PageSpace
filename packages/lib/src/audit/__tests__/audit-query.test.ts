@@ -23,9 +23,13 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: mockDb,
+}));
+vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: mockSecurityAuditLog,
+}));
+vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((col: string) => `desc(${col})`),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
   gte: vi.fn((col: string, val: unknown) => ({ gte: [col, val] })),

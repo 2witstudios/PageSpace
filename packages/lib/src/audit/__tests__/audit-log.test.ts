@@ -18,7 +18,10 @@ vi.mock('../security-audit', () => ({
   securityAudit: mockSecurityAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
+vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: {},
 }));
 
