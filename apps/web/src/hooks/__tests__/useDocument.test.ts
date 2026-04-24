@@ -1,14 +1,8 @@
-/**
- * useDocument Hook Tests
- * Tests for dirty flag integration with useDirtyStore
- */
-
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useDirtyStore } from '@/stores/useDirtyStore';
 
-// Mock dependencies
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn().mockResolvedValue({
     ok: true,
@@ -29,14 +23,12 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 describe('useDocument dirty flag integration', () => {
   beforeEach(() => {
-    // Reset stores
     useDocumentManagerStore.setState({
       documents: new Map(),
       activeDocumentId: null,
       savingDocuments: new Set(),
     });
     useDirtyStore.setState({ dirtyFlags: {} });
-
     vi.clearAllMocks();
   });
 
@@ -48,23 +40,18 @@ describe('useDocument dirty flag integration', () => {
     it('given a document save succeeds, should call clearDirty with the page ID', async () => {
       const pageId = 'page-123';
 
-      // Setup: Create a dirty document
-      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html');
       useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
       useDirtyStore.getState().setDirty(pageId, true);
 
-      // Verify dirty state before save
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(true);
 
-      // Render the saving hook
       const { result } = renderHook(() => useDocumentSaving(pageId));
 
-      // Act: Save the document
       await act(async () => {
         await result.current.saveDocument('content');
       });
 
-      // Assert: Dirty flag should be cleared
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(false);
       expect(useDirtyStore.getState().dirtyFlags[pageId]).toBeUndefined();
     });
@@ -72,11 +59,9 @@ describe('useDocument dirty flag integration', () => {
     it('given a document save succeeds, should update stored revision from response', async () => {
       const pageId = 'page-123';
 
-      // Setup: Create a document with initial revision
-      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html');
       useDocumentManagerStore.getState().updateDocument(pageId, { revision: 5 });
 
-      // Mock response with incremented revision
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ content: 'content', revision: 6 }),
@@ -88,7 +73,6 @@ describe('useDocument dirty flag integration', () => {
         await result.current.saveDocument('content');
       });
 
-      // Assert: Stored revision should be updated
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
       expect(doc?.revision).toBe(6);
     });
@@ -96,8 +80,7 @@ describe('useDocument dirty flag integration', () => {
     it('given a document save fails, should retain the dirty flag for retry', async () => {
       const pageId = 'page-123';
 
-      // Setup: Create a dirty document and mock failure
-      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html');
       useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
       useDirtyStore.getState().setDirty(pageId, true);
 
@@ -107,10 +90,8 @@ describe('useDocument dirty flag integration', () => {
         json: () => Promise.resolve({ error: 'Server error' }),
       } as Response);
 
-      // Render the saving hook
       const { result } = renderHook(() => useDocumentSaving(pageId));
 
-      // Act: Attempt to save (will fail)
       await act(async () => {
         try {
           await result.current.saveDocument('content');
@@ -119,7 +100,6 @@ describe('useDocument dirty flag integration', () => {
         }
       });
 
-      // Assert: Dirty flag should remain
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(true);
     });
 
@@ -127,17 +107,14 @@ describe('useDocument dirty flag integration', () => {
       const pageId = 'page-123';
       const { toast } = await import('sonner');
 
-      // Setup: Create a document with revision
-      useDocumentManagerStore.getState().createDocument(pageId, 'content');
-      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true, revision: 3 });
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
 
-      // First call: PATCH returns 409
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
         json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
       } as Response);
-      // Second call: GET refetch returns latest page
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ content: 'newer content', revision: 4 }),
@@ -150,14 +127,11 @@ describe('useDocument dirty flag integration', () => {
         saveResult = await result.current.saveDocument('content');
       });
 
-      // Assert: Should return false (not throw)
       expect(saveResult).toBe(false);
-      // Assert: Conflict toast shown
       expect(toast.error).toHaveBeenCalledWith(
         'Document was modified elsewhere. Your local copy has been updated.',
         { id: `conflict-${pageId}` },
       );
-      // Assert: Document updated with latest server state
       const doc = useDocumentManagerStore.getState().documents.get(pageId);
       expect(doc?.content).toBe('newer content');
       expect(doc?.revision).toBe(4);
@@ -167,9 +141,7 @@ describe('useDocument dirty flag integration', () => {
     it('given a save with revision, should send expectedRevision in request body', async () => {
       const pageId = 'page-123';
 
-      // Setup: Create a document with a known revision
-      useDocumentManagerStore.getState().createDocument(pageId, 'content');
-      useDocumentManagerStore.getState().updateDocument(pageId, { revision: 7 });
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'content', 'html', 7);
 
       const { result } = renderHook(() => useDocumentSaving(pageId));
 
@@ -177,7 +149,6 @@ describe('useDocument dirty flag integration', () => {
         await result.current.saveDocument('content');
       });
 
-      // Assert: fetchWithAuth called with expectedRevision in body
       const call = vi.mocked(fetchWithAuth).mock.calls[0];
       expect(call[0]).toBe(`/api/pages/${pageId}`);
       const opts = call[1] as { method: string; body: string };
@@ -190,22 +161,65 @@ describe('useDocument dirty flag integration', () => {
     it('given a document content changes, should set dirty flag in useDirtyStore', async () => {
       const pageId = 'page-123';
 
-      // Setup: Create document
-      useDocumentManagerStore.getState().createDocument(pageId, 'initial');
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'initial', 'html');
 
-      // Render the document hook
-      const { result } = renderHook(() => useDocument(pageId, 'initial'));
+      const { result } = renderHook(() => useDocument(pageId));
 
-      // Verify not dirty initially
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(false);
 
-      // Act: Update content
       act(() => {
         result.current.updateContent('new content');
       });
 
-      // Assert: Should be marked dirty
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(true);
+    });
+  });
+
+  describe('useDocument initializeAndActivate', () => {
+    it('given a page, should always fetch from server regardless of cached state', async () => {
+      const pageId = 'page-123';
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', revision: 2 }),
+      } as Response);
+
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'stale cached content', 'html');
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      await act(async () => {
+        await result.current.initializeAndActivate();
+      });
+
+      expect(fetchWithAuth).toHaveBeenCalledWith(`/api/pages/${pageId}`);
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      expect(doc?.content).toBe('server content');
+      expect(doc?.revision).toBe(2);
+    });
+
+    it('given a dirty document, should fetch from server but preserve unsaved content', async () => {
+      const pageId = 'page-123';
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: 'server content', contentMode: 'html', revision: 3 }),
+      } as Response);
+
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'unsaved user edits', 'html');
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      await act(async () => {
+        await result.current.initializeAndActivate();
+      });
+
+      expect(fetchWithAuth).toHaveBeenCalledWith(`/api/pages/${pageId}`);
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      // upsertDocument preserves content when isDirty
+      expect(doc?.content).toBe('unsaved user edits');
+      expect(doc?.isDirty).toBe(true);
     });
   });
 });

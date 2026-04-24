@@ -5,23 +5,18 @@ export interface DocumentState {
   content: string;
   contentMode: 'html' | 'markdown';
   isDirty: boolean;
-  version: number;
   lastSaved: number;
-  lastUpdateTime: number; // Timestamp of last content update
+  lastUpdateTime: number;
   saveTimeout?: NodeJS.Timeout;
-  revision?: number; // Server revision for optimistic locking
+  revision?: number;
 }
 
 export interface DocumentManagerState {
-  // Document storage
   documents: Map<string, DocumentState>;
   activeDocumentId: string | null;
-  
-  // Saving state
   savingDocuments: Set<string>;
-  
-  // Actions
-  createDocument: (pageId: string, initialContent?: string, contentMode?: 'html' | 'markdown') => void;
+
+  upsertDocument: (pageId: string, content: string, contentMode: 'html' | 'markdown', revision?: number) => void;
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
   getDocument: (pageId: string) => DocumentState | undefined;
   setActiveDocument: (pageId: string | null) => void;
@@ -33,33 +28,40 @@ export interface DocumentManagerState {
 }
 
 export const useDocumentManagerStore = create<DocumentManagerState>((set, get) => ({
-  // Initial state
   documents: new Map(),
   activeDocumentId: null,
   savingDocuments: new Set(),
-  
-  // Actions
-  createDocument: (pageId: string, initialContent = '', contentMode: 'html' | 'markdown' = 'html') => {
+
+  upsertDocument: (pageId, content, contentMode, revision) => {
     const state = get();
+    const existing = state.documents.get(pageId);
+    const now = Date.now();
     const newDocuments = new Map(state.documents);
 
-    if (!newDocuments.has(pageId)) {
-      const now = Date.now();
+    if (existing?.isDirty) {
+      // Preserve unsaved edits — only update revision; contentMode stays
+      // aligned with the preserved local content to avoid parse mismatch
+      newDocuments.set(pageId, {
+        ...existing,
+        ...(revision !== undefined ? { revision } : {}),
+      });
+    } else {
       newDocuments.set(pageId, {
         id: pageId,
-        content: initialContent,
+        content,
         contentMode,
         isDirty: false,
-        version: 0,
         lastSaved: now,
         lastUpdateTime: now,
+        ...(existing?.saveTimeout ? { saveTimeout: existing.saveTimeout } : {}),
+        ...(revision !== undefined ? { revision } : {}),
       });
-
-      set({ documents: newDocuments });
     }
+
+    set({ documents: newDocuments });
   },
-  
-  updateDocument: (pageId: string, updates: Partial<DocumentState>) => {
+
+  updateDocument: (pageId, updates) => {
     const state = get();
     const document = state.documents.get(pageId);
 
@@ -69,56 +71,51 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
       set({ documents: newDocuments });
     }
   },
-  
-  getDocument: (pageId: string): DocumentState | undefined => {
+
+  getDocument: (pageId) => {
     return get().documents.get(pageId);
   },
-  
-  setActiveDocument: (pageId: string | null) => {
+
+  setActiveDocument: (pageId) => {
     set({ activeDocumentId: pageId });
   },
-  
-  getActiveDocument: (): DocumentState | undefined => {
+
+  getActiveDocument: () => {
     const state = get();
     if (!state.activeDocumentId) return undefined;
     return state.documents.get(state.activeDocumentId);
   },
-  
-  markAsSaving: (pageId: string) => {
+
+  markAsSaving: (pageId) => {
     const state = get();
     const newSaving = new Set(state.savingDocuments);
     newSaving.add(pageId);
     set({ savingDocuments: newSaving });
   },
-  
-  markAsSaved: (pageId: string) => {
+
+  markAsSaved: (pageId) => {
     const state = get();
     const newSaving = new Set(state.savingDocuments);
     newSaving.delete(pageId);
     set({ savingDocuments: newSaving });
-
-    // Update the document's saved timestamp
-    get().updateDocument(pageId, {
-      isDirty: false,
-      lastSaved: Date.now(),
-    });
+    get().updateDocument(pageId, { isDirty: false, lastSaved: Date.now() });
   },
-  
-  clearDocument: (pageId: string) => {
+
+  clearDocument: (pageId) => {
     const state = get();
     const newDocuments = new Map(state.documents);
     newDocuments.delete(pageId);
-    
+
     const newSaving = new Set(state.savingDocuments);
     newSaving.delete(pageId);
-    
-    set({ 
+
+    set({
       documents: newDocuments,
       savingDocuments: newSaving,
       activeDocumentId: state.activeDocumentId === pageId ? null : state.activeDocumentId,
     });
   },
-  
+
   clearAllDocuments: () => {
     set({
       documents: new Map(),
