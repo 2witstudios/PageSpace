@@ -15,7 +15,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/db', () => ({ db: {} }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
@@ -23,13 +23,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations', () => ({
-    getOrCreateConfig: mockGetOrCreateConfig,
-    updateConfig: mockUpdateConfig,
+  getOrCreateConfig: mockGetOrCreateConfig,
+  updateConfig: mockUpdateConfig,
 }));
 
 import { GET, PUT } from '../route';

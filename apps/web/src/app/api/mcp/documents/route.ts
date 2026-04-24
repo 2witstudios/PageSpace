@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions'
-import { PageType } from '@pagespace/lib/utils/enums'
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';

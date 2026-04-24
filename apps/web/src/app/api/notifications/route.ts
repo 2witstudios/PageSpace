@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getUserNotifications, getUnreadNotificationCount } from '@pagespace/lib/notifications/notifications';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';

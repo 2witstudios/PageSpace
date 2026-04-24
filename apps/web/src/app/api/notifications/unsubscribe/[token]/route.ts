@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, emailNotificationPreferences, emailUnsubscribeTokens, eq, and, gt, isNull } from '@pagespace/db';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
 type NotificationType =

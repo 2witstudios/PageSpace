@@ -10,14 +10,14 @@ const { mockAuditRequest } = vi.hoisted(() => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: mockAuditRequest,
+  auditRequest: mockAuditRequest,
 }));
 
 vi.mock('@/lib/auth', () => ({

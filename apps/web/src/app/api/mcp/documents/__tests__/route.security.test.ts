@@ -29,20 +29,20 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
+  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
 }));
 vi.mock('@pagespace/lib/utils/enums', () => ({
-    PageType: {},
+  PageType: {},
 }));
 vi.mock('@pagespace/lib/sheets', () => ({
-    isSheetType: vi.fn(() => false),
-    parseSheetContent: vi.fn(),
-    serializeSheetContent: vi.fn(),
-    updateSheetCells: vi.fn(),
-    isValidCellAddress: vi.fn(() => true),
+  isSheetType: vi.fn(() => false),
+  parseSheetContent: vi.fn(),
+  serializeSheetContent: vi.fn(),
+  updateSheetCells: vi.fn(),
+  isValidCellAddress: vi.fn(() => true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
@@ -50,8 +50,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({

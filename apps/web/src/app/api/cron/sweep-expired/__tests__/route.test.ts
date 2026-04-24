@@ -23,17 +23,17 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/jti-revocation', () => ({
-    sweepExpiredRevokedJTIs: mockSweepJTI,
+  sweepExpiredRevokedJTIs: mockSweepJTI,
 }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    sweepExpiredRateLimitBuckets: mockSweepRateLimit,
+  sweepExpiredRateLimitBuckets: mockSweepRateLimit,
 }));
 vi.mock('@pagespace/lib/security/auth-handoff-sweep', () => ({
-    sweepExpiredAuthHandoffTokens: mockSweepAuthHandoff,
+  sweepExpiredAuthHandoffTokens: mockSweepAuthHandoff,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: mockAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

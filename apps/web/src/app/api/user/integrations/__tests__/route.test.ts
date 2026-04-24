@@ -14,7 +14,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/db', () => ({ db: {} }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
@@ -22,26 +22,26 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
-    listUserConnections: mockListUserConnections,
-    createConnection: vi.fn(),
-    findUserConnection: vi.fn(),
+  listUserConnections: mockListUserConnections,
+  createConnection: vi.fn(),
+  findUserConnection: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/repositories/provider-repository', () => ({
-    getProviderById: vi.fn(),
+  getProviderById: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/credentials/encrypt-credentials', () => ({
-    encryptCredentials: vi.fn(),
+  encryptCredentials: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/oauth/oauth-handler', () => ({
-    buildOAuthAuthorizationUrl: vi.fn(),
+  buildOAuthAuthorizationUrl: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
-    createSignedState: vi.fn(),
+  createSignedState: vi.fn(),
 }));
 
 import { GET } from '../route';

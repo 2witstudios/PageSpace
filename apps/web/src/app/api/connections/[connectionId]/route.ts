@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, connections, users, userProfiles, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createNotification } from '@pagespace/lib/notifications/notifications';
 

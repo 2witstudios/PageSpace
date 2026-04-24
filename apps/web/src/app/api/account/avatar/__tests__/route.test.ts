@@ -18,12 +18,12 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
-    createUserServiceToken: vi.fn().mockResolvedValue({ token: 'mock-service-token' }),
+  createUserServiceToken: vi.fn().mockResolvedValue({ token: 'mock-service-token' }),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 // Mock global fetch

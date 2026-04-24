@@ -27,12 +27,12 @@ vi.mock('next/server', () => {
 // ============================================================================
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserAccessLevel: vi.fn(),
-    getUserDriveAccess: vi.fn(),
-    getDriveIdsForUser: vi.fn(),
+  getUserAccessLevel: vi.fn(),
+  getUserDriveAccess: vi.fn(),
+  getDriveIdsForUser: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),

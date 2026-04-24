@@ -32,8 +32,8 @@ vi.mock('@/lib/auth', () => ({
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    canUserViewPage: vi.fn(),
-    canUserEditPage: vi.fn(),
+  canUserViewPage: vi.fn(),
+  canUserEditPage: vi.fn(),
 }));
 
 // Mock database (boundary)
@@ -64,7 +64,7 @@ vi.mock('@pagespace/db', () => {
 
 // Mock loggers (boundary)
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: {
       debug: vi.fn(),
       error: vi.fn(),

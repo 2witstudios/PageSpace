@@ -31,7 +31,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       info: vi.fn(),
       error: vi.fn(),
@@ -42,16 +42,16 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
-    hashToken: vi.fn((token: string) => `hashed_${token}`),
+  hashToken: vi.fn((token: string) => `hashed_${token}`),
 }));
 vi.mock('@pagespace/lib/auth/opaque-tokens', () => ({
-    isValidTokenFormat: vi.fn(),
-    getTokenType: vi.fn(),
+  isValidTokenFormat: vi.fn(),
+  getTokenType: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/secure-compare', () => ({

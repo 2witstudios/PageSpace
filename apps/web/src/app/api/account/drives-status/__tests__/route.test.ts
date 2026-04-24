@@ -27,7 +27,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       info: vi.fn(),
       error: vi.fn(),

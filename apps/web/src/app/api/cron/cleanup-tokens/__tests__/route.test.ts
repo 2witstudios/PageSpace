@@ -14,11 +14,11 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
-    cleanupExpiredDeviceTokens: mockCleanup,
+  cleanupExpiredDeviceTokens: mockCleanup,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: mockAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

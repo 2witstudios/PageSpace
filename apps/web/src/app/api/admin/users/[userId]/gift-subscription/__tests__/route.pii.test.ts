@@ -93,7 +93,7 @@ vi.mock('@/lib/stripe-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
       api: {
         info: vi.fn(),
         warn: vi.fn(),

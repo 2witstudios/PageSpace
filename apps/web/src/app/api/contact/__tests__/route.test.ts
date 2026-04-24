@@ -32,7 +32,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -45,8 +45,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn(),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
     CONTACT_FORM: { maxAttempts: 10, windowMs: 60000 },
   },
 }));

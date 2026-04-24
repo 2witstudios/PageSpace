@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions'
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, users, db, and, eq, ilike, drives, inArray, desc, SQL } from '@pagespace/db';

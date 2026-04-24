@@ -47,7 +47,7 @@ import {
   calculateDiffBudget,
   type DiffRequest,
 } from '@pagespace/lib/content/diff-generator';
-import { readPageContent } from '@pagespace/lib/services/page-content-store'
+import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';

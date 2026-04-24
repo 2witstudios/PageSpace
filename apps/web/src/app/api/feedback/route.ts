@@ -1,7 +1,7 @@
 import { db, feedbackSubmissions } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { FeedbackNotificationEmail } from '@pagespace/lib/email-templates/FeedbackNotificationEmail';

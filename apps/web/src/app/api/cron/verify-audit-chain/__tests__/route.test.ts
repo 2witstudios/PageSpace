@@ -20,18 +20,18 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/security-audit-alerting', () => ({
-    verifyAndAlert: mockVerifyAndAlert,
+  verifyAndAlert: mockVerifyAndAlert,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: mockLoggers,
+  loggers: mockLoggers,
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: mockAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

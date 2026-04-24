@@ -66,26 +66,26 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: mockLoggers,
+  loggers: mockLoggers,
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: mockAuditRequest,
+  audit: vi.fn(),
+  auditRequest: mockAuditRequest,
 }));
 
 vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
-    verifySignedState: mockVerifySignedState,
+  verifySignedState: mockVerifySignedState,
 }));
 vi.mock('@pagespace/lib/integrations/oauth/oauth-handler', () => ({
-    exchangeOAuthCode: mockExchangeOAuthCode,
+  exchangeOAuthCode: mockExchangeOAuthCode,
 }));
 vi.mock('@pagespace/lib/integrations/credentials/encrypt-credentials', () => ({
-    encryptCredentials: mockEncryptCredentials,
+  encryptCredentials: mockEncryptCredentials,
 }));
 vi.mock('@pagespace/lib/integrations/repositories/provider-repository', () => ({
-    getProviderById: mockGetProviderById,
+  getProviderById: mockGetProviderById,
 }));
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
   createConnection: mockCreateConnection,

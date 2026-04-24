@@ -55,7 +55,7 @@ vi.mock('@/lib/websocket/ws-security', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     validateSession: vi.fn(),
     createSession: vi.fn(),
   },
@@ -76,7 +76,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import {

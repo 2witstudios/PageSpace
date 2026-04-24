@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: mockAudit,
+  audit: mockAudit,
 }));
 
 vi.mock('next/server', () => ({

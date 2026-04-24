@@ -3,7 +3,7 @@ import { db, drives } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';

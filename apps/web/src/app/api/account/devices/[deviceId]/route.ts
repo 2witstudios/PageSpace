@@ -1,5 +1,5 @@
 import { db, eq, deviceTokens } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { hashToken } from '@pagespace/lib/auth/token-utils';

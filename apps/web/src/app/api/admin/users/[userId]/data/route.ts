@@ -1,10 +1,10 @@
 import { withAdminAuth } from '@/lib/auth/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { accountRepository, activityLogRepository } from '@pagespace/lib/repositories';
 import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
-import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge'
-import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge'
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';

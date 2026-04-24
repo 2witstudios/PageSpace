@@ -88,7 +88,7 @@ vi.mock('@pagespace/db', () => {
 });
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
       api: {
         error: vi.fn(),
         info: vi.fn(),

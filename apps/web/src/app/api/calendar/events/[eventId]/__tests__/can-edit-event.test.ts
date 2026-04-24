@@ -52,12 +52,12 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    isUserDriveMember: vi.fn(),
-    isDriveOwnerOrAdmin: vi.fn(),
+  isUserDriveMember: vi.fn(),
+  isDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -69,8 +69,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('../../../../../../lib/auth', () => ({

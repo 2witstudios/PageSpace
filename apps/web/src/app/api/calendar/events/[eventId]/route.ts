@@ -7,7 +7,7 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';

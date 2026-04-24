@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { registerPushToken, unregisterPushToken, getUserPushTokens } from '@pagespace/lib/notifications/push-notifications';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

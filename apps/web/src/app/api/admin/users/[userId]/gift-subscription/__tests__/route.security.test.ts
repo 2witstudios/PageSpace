@@ -72,7 +72,7 @@ vi.mock('@/lib/stripe-config', () => ({
 
 // Mock loggers
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
       api: {
         info: vi.fn(),
         error: vi.fn(),
@@ -88,7 +88,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
         warn: vi.fn(),
       },
     },
-    logSecurityEvent: vi.fn(),
+  logSecurityEvent: vi.fn(),
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));

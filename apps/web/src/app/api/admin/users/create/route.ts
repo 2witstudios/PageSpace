@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, users, userAiSettings, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { isOnPrem } from '@pagespace/lib/deployment-mode'
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';

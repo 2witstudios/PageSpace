@@ -28,8 +28,8 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn(),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
     TRACKING: { maxAttempts: 100, windowMs: 60000 },
   },
 }));

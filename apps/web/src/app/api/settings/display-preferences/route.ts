@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, displayPreferences, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };

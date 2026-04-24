@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, calendarTriggers, calendarEvents, eq, and, lte, inArray, asc } from '@pagespace/db';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
 const STUCK_TRIGGER_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
