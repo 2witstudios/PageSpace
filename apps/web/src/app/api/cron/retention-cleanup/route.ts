@@ -31,7 +31,7 @@ export async function GET(request: Request) {
       }
     }
 
-    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted, tables: results } });
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'retention_cleanup', details: { totalDeleted, tables: results } });
 
     return NextResponse.json({
       success: true,

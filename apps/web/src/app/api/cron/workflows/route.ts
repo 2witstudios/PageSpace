@@ -59,7 +59,7 @@ export async function POST(req: Request) {
       );
 
     if (dueWorkflows.length === 0) {
-      audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } });
+      audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No workflows due', executed: 0 });
     }
 
@@ -192,7 +192,7 @@ export async function POST(req: Request) {
 
     loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalClaimed}`);
 
-    audit({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',

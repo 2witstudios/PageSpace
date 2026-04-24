@@ -301,7 +301,7 @@ describe('POST /api/cron/calendar-triggers', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 1, failed: 0 } })
     );
   });
 
@@ -310,7 +310,7 @@ describe('POST /api/cron/calendar-triggers', () => {
     await POST(request);
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } })
     );
   });
 

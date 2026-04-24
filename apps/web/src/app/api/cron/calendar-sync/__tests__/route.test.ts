@@ -72,7 +72,7 @@ describe('/api/cron/calendar-sync', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 0, failed: 0 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 0, failed: 0 } })
     );
   });
 
@@ -88,7 +88,7 @@ describe('/api/cron/calendar-sync', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.write', userId: 'system', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 1, failed: 1 } })
+      expect.objectContaining({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_sync', details: { synced: 1, failed: 1 } })
     );
   });
 

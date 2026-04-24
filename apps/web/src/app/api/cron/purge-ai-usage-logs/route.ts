@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
     console.log(`[Cron] AI usage logs: anonymized ${anonymized}, purged ${purged}`);
 
-    audit({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { anonymized, purged } });
+    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { anonymized, purged } });
 
     return NextResponse.json({
       success: true,
