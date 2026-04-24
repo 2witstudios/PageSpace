@@ -7,10 +7,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockTransaction = vi.hoisted(() => vi.fn());
 const mockGetUserAccessLevel = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: mockTransaction,
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'pages.id',
     title: 'pages.title',
@@ -25,6 +27,8 @@ vi.mock('@pagespace/db', () => ({
     slug: 'drives.slug',
     name: 'drives.name',
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
