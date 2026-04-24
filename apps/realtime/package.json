@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
@@ -19,7 +20,9 @@
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
+    "eslint": "^10.2.1",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.2"
+    "typescript": "^5.5.2",
+    "typescript-eslint": "^8.59.0"
   }
 }
