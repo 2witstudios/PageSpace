@@ -55,11 +55,11 @@ export function getTokenPrefix(token: string): string {
 }
 
 /**
- * Generate a token using CUID2 at max length (32 chars).
+ * Generate a cryptographically secure token using CUID2 at max length (32 chars).
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - 32-char CUID2 random part (init'd at max length)
+ * - 32-char CUID2 random part backed by crypto.getRandomValues() (CSPRNG)
  *
  * @param prefix - Token type prefix (e.g., 'ps_refresh', 'mcp', 'ps_device')
  * @returns Object with token, hash, and tokenPrefix
