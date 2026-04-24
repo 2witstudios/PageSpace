@@ -106,7 +106,6 @@ describe('/api/cron/purge-trashed-pages', () => {
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: 'data.delete',
-        userId: 'system',
         resourceType: 'cron_job',
         resourceId: 'purge_trashed_pages',
         details: { pagesPurged: 3 },

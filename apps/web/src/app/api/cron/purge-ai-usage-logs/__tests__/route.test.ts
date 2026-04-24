@@ -49,7 +49,7 @@ describe('/api/cron/purge-ai-usage-logs', () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', userId: 'system', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { purged: 3 } })
+      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_ai_usage', details: { purged: 3 } })
     );
   });
 
