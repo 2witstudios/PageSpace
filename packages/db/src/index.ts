@@ -1,23 +1,11 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
-import { schema } from './schema';
-import 'dotenv/config';
-
-// Re-export commonly used drizzle-orm functions
 export {
-  eq, and, or, not, inArray, sql, asc, desc, count, sum, avg, max, min,
-  like, ilike, exists, between, gt, gte, lt, lte, ne, isNull, isNotNull
-} from 'drizzle-orm';
+  eq, ne, gt, gte, lt, lte, and, or, not, like, ilike, between,
+  exists, isNull, isNotNull, inArray, count, sum, avg, max, min, asc,
+  desc, sql,
+} from './operators';
+export type { SQL, InferSelectModel, InferInsertModel } from './operators';
 
-// Re-export types
-export type { SQL, InferSelectModel, InferInsertModel } from 'drizzle-orm';
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: false,
-});
-
-export const db = drizzle(pool, { schema });
+export { db } from './db';
 
 // Export schema for external use
 export * from './schema';
