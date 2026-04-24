@@ -174,16 +174,17 @@ describe('authenticateService - catch block', () => {
 
   it('responds 401 when validateSession throws an error', async () => {
     // Set up mocks before importing the module
-    vi.doMock('@pagespace/lib/auth', () => ({
+    vi.doMock('@pagespace/lib/auth/session-service', () => ({
       sessionService: {
         validateSession: vi.fn().mockRejectedValue(new Error('JWT parsing failed')),
       },
     }));
-    vi.doMock('@pagespace/lib/permissions', () => ({
+    vi.doMock('@pagespace/lib/permissions/enforced-context', () => ({
       EnforcedAuthContext: { fromSession: vi.fn() },
     }));
     vi.doMock('@pagespace/lib/logging/logger-config', () => ({
       loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
+      logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
     }));
 
     const { authenticateService } = await import('../auth');
@@ -210,16 +211,17 @@ describe('authenticateService - catch block', () => {
   });
 
   it('responds 401 when validateSession throws a non-Error object', async () => {
-    vi.doMock('@pagespace/lib/auth', () => ({
+    vi.doMock('@pagespace/lib/auth/session-service', () => ({
       sessionService: {
         validateSession: vi.fn().mockRejectedValue('string error'),
       },
     }));
-    vi.doMock('@pagespace/lib/permissions', () => ({
+    vi.doMock('@pagespace/lib/permissions/enforced-context', () => ({
       EnforcedAuthContext: { fromSession: vi.fn() },
     }));
     vi.doMock('@pagespace/lib/logging/logger-config', () => ({
       loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
+      logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
     }));
 
     const { authenticateService } = await import('../auth');
