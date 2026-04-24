@@ -255,6 +255,8 @@ const SidebarChatTab: React.FC = () => {
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
+  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
+  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -415,22 +417,35 @@ const SidebarChatTab: React.FC = () => {
   }, [error]);
 
 
-  // Track last AI response for voice mode TTS
+  // Track last AI response for voice mode TTS.
+  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
+  // messages are never spoken — only genuinely new responses trigger TTS.
   useEffect(() => {
-    if (!isVoiceModeActive || displayIsStreaming) return;
+    if (!isVoiceModeActive) {
+      voiceBaselineRef.current = undefined;
+      setLastAIResponse(null);
+      return;
+    }
+    if (displayIsStreaming) return;
 
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
+
+    if (voiceBaselineRef.current === undefined) {
+      voiceBaselineRef.current = lastAssistantMsg?.id ?? null;
+      return;
     }
+
+    if (!lastAssistantMsg) return;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    if (!text.trim()) return;
+    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
+
+    setLastAIResponse((current) =>
+      current?.id === lastAssistantMsg.id
+        ? current
+        : { id: lastAssistantMsg.id, text }
+    );
   }, [messages, displayIsStreaming, isVoiceModeActive]);
 
   // App state recovery - refresh messages when returning from background

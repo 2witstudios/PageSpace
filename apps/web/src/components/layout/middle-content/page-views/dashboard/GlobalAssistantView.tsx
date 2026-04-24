@@ -137,6 +137,8 @@ const GlobalAssistantView: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
+  // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
+  const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -671,24 +673,35 @@ const GlobalAssistantView: React.FC = () => {
     wrapSend,
   ]);
 
-  // Track last AI response for voice mode TTS
+  // Track last AI response for voice mode TTS.
+  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
+  // messages are never spoken — only genuinely new responses trigger TTS.
   useEffect(() => {
-    if (!isVoiceModeActive || isStreaming) return;
-
-    // Get the last assistant message
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      // Extract text from message parts
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
+    if (!isVoiceModeActive) {
+      voiceBaselineRef.current = undefined;
+      setLastAIResponse(null);
+      return;
     }
+    if (isStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+
+    if (voiceBaselineRef.current === undefined) {
+      voiceBaselineRef.current = lastAssistantMsg?.id ?? null;
+      return;
+    }
+
+    if (!lastAssistantMsg) return;
+    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
+    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    if (!text.trim()) return;
+    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
+
+    setLastAIResponse((current) =>
+      current?.id === lastAssistantMsg.id
+        ? current
+        : { id: lastAssistantMsg.id, text }
+    );
   }, [messages, isStreaming, isVoiceModeActive]);
 
   // Voice mode toggle handler
