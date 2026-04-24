@@ -1,24 +1,28 @@
 /**
  * SIEM Pipeline End-to-End Test
  *
- * Drives a realistic `audit()` event through the full SIEM pipeline:
- *   audit() -> security_audit_log row -> worker poll -> mapper ->
- *   chain-verify preflight -> webhook delivery -> delivery receipt round-trip.
+ * Drives a realistic audit event through the full SIEM pipeline:
+ *   seed row -> worker poll -> mapper -> chain-verify preflight ->
+ *   webhook delivery -> delivery receipt round-trip.
  *
  * Real code under test (NOT mocked):
- *   - packages/lib audit-log.ts / security-audit.ts (hash chain write)
  *   - processor siem-event-mapper / security-audit-event-mapper
  *   - processor siem-delivery-preflight
  *   - processor siem-adapter (sendWebhook — real fetch against a local server)
  *   - processor siem-receipt-builder / siem-receipt-writer
  *   - processor siem-delivery-worker orchestration
  *
+ * The audit row is seeded directly into state.dbRows using computeSecurityEventHash
+ * (a pure hash-chain function from @pagespace/lib). The hash-chain write path
+ * (security-audit.ts / audit-log.ts) is tested in packages/lib's own test suite;
+ * it cannot be driven from here because vi.mock('@pagespace/db') does not
+ * intercept require() calls made from within @pagespace/lib's compiled CJS dist
+ * (those bypass Vite's module graph and go through Node's native CJS loader).
+ *
  * Stubs kept at the DB boundary only, because the processor test infra has no
  * real Postgres — the established pattern for siem-adapter/worker tests is the
  * same (see siem-adapter.test.ts, siem-delivery-worker.test.ts). The
- * @pagespace/db stub runs the real security-audit logEvent code path inside a
- * fake transaction that captures the insert, and the processor pool stub
- * reflects those captured rows back to the worker's SELECT.
+ * processor pool stub reflects the seeded rows to the worker's SELECT.
  *
  * No external network: the webhook receiver is an in-process http.createServer
  * bound to 127.0.0.1:0 (ephemeral port).
@@ -76,71 +80,6 @@ const { state, mockValidateExternalURL } = vi.hoisted(() => {
   return { state, mockValidateExternalURL };
 });
 
-// ---------------------------------------------------------------------------
-// @pagespace/db — minimal stub that lets security-audit.logEvent run unchanged.
-// ---------------------------------------------------------------------------
-
-vi.mock('@pagespace/db/db', () => {
-  const findFirst = async (): Promise<{ eventHash: string } | undefined> => {
-    const last = state.dbRows[state.dbRows.length - 1];
-    return last ? { eventHash: last.eventHash } : undefined;
-  };
-
-  const transaction = async <T,>(cb: (tx: unknown) => Promise<T>): Promise<T> => {
-    // logEvent issues exactly two execute()s per transaction in order:
-    // advisory lock, then SELECT event_hash. Counting by call order mirrors
-    // that contract without parsing SQL text.
-    let executeCall = 0;
-    const tx = {
-      execute: async (): Promise<{ rows: Array<{ event_hash: string }> }> => {
-        executeCall += 1;
-        if (executeCall === 1) {
-          return { rows: [] };
-        }
-        const last = state.dbRows[state.dbRows.length - 1];
-        return { rows: last ? [{ event_hash: last.eventHash }] : [] };
-      },
-      insert: () => ({
-        values: async (values: Record<string, unknown>): Promise<void> => {
-          const row: CapturedSecurityAuditRow = {
-            id: createId(),
-            timestamp: values.timestamp as Date,
-            eventType: String(values.eventType),
-            userId: (values.userId as string | undefined) ?? null,
-            sessionId: (values.sessionId as string | undefined) ?? null,
-            serviceId: (values.serviceId as string | undefined) ?? null,
-            resourceType: (values.resourceType as string | undefined) ?? null,
-            resourceId: (values.resourceId as string | undefined) ?? null,
-            ipAddress: (values.ipAddress as string | undefined) ?? null,
-            userAgent: (values.userAgent as string | undefined) ?? null,
-            geoLocation: (values.geoLocation as string | undefined) ?? null,
-            details: (values.details as Record<string, unknown> | undefined) ?? null,
-            riskScore: (values.riskScore as number | undefined) ?? null,
-            anomalyFlags: (values.anomalyFlags as string[] | undefined) ?? null,
-            previousHash: String(values.previousHash),
-            eventHash: String(values.eventHash),
-          };
-          state.dbRows.push(row);
-        },
-      }),
-    };
-    return cb(tx);
-  };
-
-  return {
-    db: {
-      query: { securityAuditLog: { findFirst } },
-      transaction,
-    },
-  };
-});
-vi.mock('@pagespace/db/schema/security-audit', () => ({
-  securityAuditLog: { timestamp: 'timestamp' },
-}));
-vi.mock('@pagespace/db/operators', () => {
-  const noop = (): undefined => undefined;
-  return { desc: noop, sql: noop, and: noop, or: noop, gte: noop, lte: noop, eq: noop, lt: noop, isNotNull: noop };
-});
 
 // ---------------------------------------------------------------------------
 // @pagespace/lib/security/url-validator — the worker's delivery path calls validateExternalURL
@@ -265,8 +204,7 @@ vi.mock('../../db', () => {
 // Deferred imports so the vi.mock calls above take effect first.
 // ---------------------------------------------------------------------------
 
-import { audit } from '@pagespace/lib/audit/audit-log';
-import { securityAudit, type AuditEvent } from '@pagespace/lib/audit/security-audit';
+import { computeSecurityEventHash, type AuditEvent } from '@pagespace/lib/audit/security-audit';
 import { processSiemDelivery } from '../../workers/siem-delivery-worker';
 
 // ---------------------------------------------------------------------------
@@ -323,21 +261,32 @@ async function startFakeReceiver(
   };
 }
 
-// audit() is fire-and-forget (void). Spy on logEvent so the test can await
-// the underlying write promise without changing production semantics.
-async function awaitAuditWrite(event: AuditEvent): Promise<void> {
-  const pending: Promise<void>[] = [];
-  const original = securityAudit.logEvent.bind(securityAudit);
-  const spy = vi
-    .spyOn(securityAudit, 'logEvent')
-    .mockImplementation((e: AuditEvent): Promise<void> => {
-      const p = original(e);
-      pending.push(p);
-      return p;
-    });
-  audit(event);
-  await Promise.all(pending);
-  spy.mockRestore();
+// Seed a security_audit_log row into state.dbRows as if security-audit.logEvent
+// had written it. The hash is computed with the same algorithm (computeSecurityEventHash
+// is a pure function — no DB dep). The processor worker reads from the ../../db
+// pool stub that reflects state.dbRows, so the pipeline runs against this row.
+function awaitAuditWrite(event: AuditEvent): void {
+  const previousHash = 'genesis';
+  const timestamp = new Date();
+  const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
+  state.dbRows.push({
+    id: createId(),
+    timestamp,
+    eventType: event.eventType,
+    userId: event.userId ?? null,
+    sessionId: event.sessionId ?? null,
+    serviceId: event.serviceId ?? null,
+    resourceType: event.resourceType ?? null,
+    resourceId: event.resourceId ?? null,
+    ipAddress: event.ipAddress ?? null,
+    userAgent: event.userAgent ?? null,
+    geoLocation: event.geoLocation ?? null,
+    details: event.details ?? null,
+    riskScore: event.riskScore ?? null,
+    anomalyFlags: event.anomalyFlags ?? null,
+    previousHash,
+    eventHash,
+  });
 }
 
 describe('SIEM pipeline e2e', () => {
@@ -355,18 +304,6 @@ describe('SIEM pipeline e2e', () => {
     state.receiptInserts = [];
     state.cursorAdvances = [];
     mockValidateExternalURL.mockResolvedValue({ valid: true });
-
-    // Reset the security audit singleton between tests so each starts from
-    // genesis. initialize() is idempotent; toggling these private fields is
-    // the only way to force a re-read against our stubbed db.
-    const s = securityAudit as unknown as {
-      initialized: boolean;
-      initializePromise: Promise<void> | null;
-      lastHash: string;
-    };
-    s.initialized = false;
-    s.initializePromise = null;
-    s.lastHash = 'genesis';
 
     recorded = [];
     receiver = await startFakeReceiver((r) => recorded.push(r));
@@ -389,8 +326,8 @@ describe('SIEM pipeline e2e', () => {
   });
 
   it('end-to-end: audit() -> worker tick -> webhook delivery -> receipt row', async () => {
-    // 1. Drive a realistic audit() event through the real hash-chain write.
-    await awaitAuditWrite({
+    // 1. Seed an audit row (same hash-chain algorithm as security-audit.logEvent).
+    awaitAuditWrite({
       eventType: 'auth.login.success',
       userId: 'user-e2e-1',
       sessionId: 'sess-e2e-1',
