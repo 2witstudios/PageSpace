@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export const NONCE_HEADER = 'x-nonce';
 
 const PERMISSIONS_POLICY =
-  'geolocation=(), microphone=(), camera=(), payment=(self "https://js.stripe.com")';
+  'geolocation=(), microphone=(self), camera=(), payment=(self "https://js.stripe.com")';
 
 // Security headers for error responses (API routes)
 const ERROR_RESPONSE_HEADERS: Record<string, string> = {
