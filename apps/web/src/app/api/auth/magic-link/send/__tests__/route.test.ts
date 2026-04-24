@@ -15,12 +15,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies BEFORE imports
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn().mockResolvedValue({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
     retryAfter: undefined,
   }),
-    DISTRIBUTED_RATE_LIMITS: {
+  DISTRIBUTED_RATE_LIMITS: {
     MAGIC_LINK: { maxAttempts: 5, windowMs: 900000, progressiveDelay: false },
   },
 }));
@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/email-templates/MagicLinkEmail', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -49,14 +49,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       debug: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/mask-email', () => ({
-    maskEmail: (email: string) => {
+  maskEmail: (email: string) => {
     const [local, domain] = email.split('@');
     if (!local || !domain) return '***@***';
     return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
@@ -82,7 +80,7 @@ import { POST } from '../route';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { parse } from 'cookie';

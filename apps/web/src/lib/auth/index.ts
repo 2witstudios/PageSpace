@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
-import { hashToken } from '@pagespace/lib/auth/token-utils'
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
-import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context'
+import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 

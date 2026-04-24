@@ -11,7 +11,7 @@ import { GET } from '../callback/route';
 
 // Mock dependencies for signin
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
       auth: {
         error: vi.fn(),
         info: vi.fn(),
@@ -22,23 +22,21 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
         warn: vi.fn(),
       },
     },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
-    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
     }),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
-    resetDistributedRateLimit: vi.fn(),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, blockDurationMs: 900000, progressiveDelay: true },
     REFRESH: { maxAttempts: 10, windowMs: 60000 },
   },
@@ -98,7 +96,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -113,14 +111,14 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
-    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 vi.mock('@pagespace/lib/auth/pkce', () => ({
-    generatePKCE: vi.fn().mockResolvedValue(null),
-    consumePKCEVerifier: vi.fn().mockResolvedValue(null),
+  generatePKCE: vi.fn().mockResolvedValue(null),
+  consumePKCEVerifier: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@pagespace/lib/auth/constants', () => ({
-    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
 // Mock cookie utilities

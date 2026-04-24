@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';

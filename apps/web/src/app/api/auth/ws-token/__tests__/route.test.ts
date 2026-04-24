@@ -24,29 +24,27 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_ws_token'),
   },
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn().mockResolvedValue({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 9,
   }),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 import { verifyAuth, getClientIP } from '@/lib/auth';

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth/passkey-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import {
   checkDistributedRateLimit,

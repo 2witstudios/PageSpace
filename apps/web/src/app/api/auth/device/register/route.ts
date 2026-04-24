@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP, createWebDeviceToken } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import {
   checkDistributedRateLimit,

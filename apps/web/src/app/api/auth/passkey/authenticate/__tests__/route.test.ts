@@ -18,10 +18,10 @@ vi.mock('next/server', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
-    verifyAuthentication: vi.fn(),
+  verifyAuthentication: vi.fn(),
 }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -36,17 +36,17 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
-    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
-    createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+  createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
 }));
 vi.mock('@pagespace/lib/auth/constants', () => ({
-    SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -54,11 +54,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       debug: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -66,9 +64,9 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn(),
-    resetDistributedRateLimit: vi.fn(),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
     PASSKEY_AUTH: { maxAttempts: 5, windowMs: 300000, progressiveDelay: true },
   },
 }));
@@ -93,11 +91,11 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 import { POST } from '../route';
-import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service'
-import { sessionService } from '@pagespace/lib/auth/session-service'
-import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';

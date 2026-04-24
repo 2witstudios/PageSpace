@@ -30,7 +30,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
-    createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
+  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
 }));
 
 vi.mock('@pagespace/lib/services/email-service', () => ({
@@ -42,7 +42,7 @@ vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
       auth: {
         error: vi.fn(),
         info: vi.fn(),
@@ -53,21 +53,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
         warn: vi.fn(),
       },
     },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn().mockResolvedValue({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 2,
     retryAfter: undefined,
   }),
-    DISTRIBUTED_RATE_LIMITS: {
+  DISTRIBUTED_RATE_LIMITS: {
     EMAIL_RESEND: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
   },
 }));

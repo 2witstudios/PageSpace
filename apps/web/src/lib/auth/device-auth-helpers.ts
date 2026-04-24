@@ -1,5 +1,5 @@
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**

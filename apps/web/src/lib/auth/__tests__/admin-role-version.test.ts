@@ -6,7 +6,7 @@ import { updateUserRole, validateAdminAccess } from '../admin-role';
 // Mock sessionService to avoid race conditions with parallel test execution
 // The real sessionService has a TOCTOU gap between user lookup and session insert
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
       createSession: vi.fn(),
       validateSession: vi.fn(),
     },

@@ -1,5 +1,5 @@
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';

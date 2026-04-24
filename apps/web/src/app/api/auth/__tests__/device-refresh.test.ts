@@ -18,15 +18,15 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
-    validateDeviceToken: vi.fn(),
-    updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-    generateDeviceToken: vi.fn().mockReturnValue('ps_dev_mock_token'),
+  validateDeviceToken: vi.fn(),
+  updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+  generateDeviceToken: vi.fn().mockReturnValue('ps_dev_mock_token'),
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
-    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -37,11 +37,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -59,11 +57,11 @@ vi.mock('cookie', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
-    hashToken: vi.fn().mockReturnValue('mock-token-hash'),
-    getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
+  hashToken: vi.fn().mockReturnValue('mock-token-hash'),
+  getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
 }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'session-123',
@@ -95,8 +93,8 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { sessionService } from '@pagespace/lib/auth/session-service';

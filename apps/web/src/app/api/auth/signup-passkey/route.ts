@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { oauthRepository } from '@/lib/repositories/oauth-repository';
-import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service'
-import { sessionService } from '@pagespace/lib/auth/session-service'
-import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {

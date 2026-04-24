@@ -9,11 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
-    listUserPasskeys: vi.fn(),
+  listUserPasskeys: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -24,11 +24,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/security-audit', () => ({
-    securityAudit: {
+  securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
     logTokenCreated: vi.fn().mockResolvedValue(undefined),

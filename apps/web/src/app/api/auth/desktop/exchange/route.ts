@@ -18,7 +18,7 @@
  */
 
 import { consumeExchangeCode } from '@pagespace/lib/auth/exchange-codes';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { z } from 'zod/v4';

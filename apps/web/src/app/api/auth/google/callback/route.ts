@@ -1,6 +1,6 @@
-import { sessionService } from '@pagespace/lib/auth/session-service'
-import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
-import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes'
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import {
   checkDistributedRateLimit,
@@ -8,9 +8,9 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';

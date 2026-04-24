@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { generateAuthenticationOptions } from '@pagespace/lib/auth/passkey-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   checkDistributedRateLimit,

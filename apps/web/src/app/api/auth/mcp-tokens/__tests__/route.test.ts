@@ -38,7 +38,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -48,16 +48,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
-    generateToken: vi.fn().mockReturnValue({
+  generateToken: vi.fn().mockReturnValue({
     token: 'mcp_randomBase64UrlString',
     hash: 'mockTokenHash123',
     tokenPrefix: 'mcp_randomBas',

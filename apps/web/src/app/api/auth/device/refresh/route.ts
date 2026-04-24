@@ -2,16 +2,16 @@ import { z } from 'zod/v4';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils'
+import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth/token-utils'
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth/token-utils';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, appendSessionCookie } from '@/lib/auth';

@@ -9,15 +9,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
-    deletePasskey: vi.fn(),
-    updatePasskeyName: vi.fn(),
+  deletePasskey: vi.fn(),
+  updatePasskeyName: vi.fn(),
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
-    validateCSRFToken: vi.fn(),
+  validateCSRFToken: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -25,11 +25,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       debug: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -44,9 +42,9 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { DELETE, PATCH } from '../route';
-import { deletePasskey, updatePasskeyName } from '@pagespace/lib/auth/passkey-service'
+import { deletePasskey, updatePasskeyName } from '@pagespace/lib/auth/passkey-service';
 import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';

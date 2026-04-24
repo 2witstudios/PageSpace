@@ -8,8 +8,8 @@ import {
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';

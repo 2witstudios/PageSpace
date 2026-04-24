@@ -8,17 +8,15 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     security: {
       warn: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/security-audit', () => ({
-    securityAudit: {
+  securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
     logTokenCreated: vi.fn().mockResolvedValue(undefined),
@@ -30,9 +28,9 @@ vi.mock('@pagespace/lib/audit/security-audit', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn(),
-    resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn(),
+  resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
+  DISTRIBUTED_RATE_LIMITS: {
     REFRESH: { maxAttempts: 10, windowMs: 300000 },
   },
 }));

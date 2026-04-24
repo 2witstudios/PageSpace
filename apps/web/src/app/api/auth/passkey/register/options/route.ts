@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { generateRegistrationOptions } from '@pagespace/lib/auth/passkey-service'
-import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { generateRegistrationOptions } from '@pagespace/lib/auth/passkey-service';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { peekPasskeyRegisterHandoff, markPasskeyRegisterOptionsIssued } from '@pagespace/lib/auth/passkey-register-handoff';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   checkDistributedRateLimit,

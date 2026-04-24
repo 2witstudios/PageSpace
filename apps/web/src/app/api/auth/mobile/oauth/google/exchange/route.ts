@@ -47,7 +47,7 @@
  */
 
 import { z } from 'zod/v4';
-import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils'
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import {
@@ -56,11 +56,11 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils'
+import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
 import { OAuthProvider } from '@pagespace/lib/auth/oauth-types';
 import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';

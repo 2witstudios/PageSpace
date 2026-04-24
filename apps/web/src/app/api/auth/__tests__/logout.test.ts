@@ -15,7 +15,7 @@ import { POST } from '../logout/route';
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'test-session-id',
       userId: 'test-user-id',
@@ -30,7 +30,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
-    generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 
 // Mock cookie utilities
@@ -46,7 +46,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
@@ -57,11 +57,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
     },
   },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    auditRequest: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
