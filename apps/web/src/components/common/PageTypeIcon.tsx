@@ -32,13 +32,14 @@ const iconMap = {
   MessagesSquare,
   BotMessageSquare,
   SquareTerminal,
+  SquareCheckBig,
 } as const;
 
 export function PageTypeIcon({ type, className, isTaskLinked }: PageTypeIconProps) {
   const iconName = getPageTypeIconName(type);
 
   if (type === 'DOCUMENT' && isTaskLinked) {
-    return <SquareCheckBig className={className} />;
+    return <FileCheck2 className={className} />;
   }
 
   const Icon = iconMap[iconName as keyof typeof iconMap] || FileText;
