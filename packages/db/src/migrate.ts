@@ -1,7 +1,7 @@
 
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { sql } from "drizzle-orm";
-import { db } from ".";
+import { db } from "./db";
 
 /**
  * Custom migration runner that executes each migration in its own transaction.

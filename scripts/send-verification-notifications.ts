@@ -14,7 +14,7 @@
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq, isNull } from '@pagespace/db/operators';
-import { createNotification } from '@pagespace/lib';
+import { createNotification } from '@pagespace/lib/notifications/notifications';
 
 async function sendVerificationNotifications() {
   console.log('🔍 Finding users with unverified emails...');

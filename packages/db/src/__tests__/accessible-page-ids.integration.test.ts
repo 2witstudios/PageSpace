@@ -13,7 +13,11 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '../test/factories';
-import { db, sql, users, drives, pages, driveMembers, pagePermissions } from '..';
+import { db } from '../db';
+import { sql } from '../operators';
+import { users } from '../schema/auth';
+import { drives, pages } from '../schema/core';
+import { driveMembers, pagePermissions } from '../schema/members';
 
 async function callFunction(uid: string): Promise<string[]> {
   const result = await db.execute<{ page_id: string }>(

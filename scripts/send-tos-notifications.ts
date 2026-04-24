@@ -20,7 +20,7 @@
  *   docker compose run --rm migrate npx tsx scripts/send-tos-notifications.ts
  */
 
-import { broadcastTosPrivacyUpdate } from '@pagespace/lib';
+import { broadcastTosPrivacyUpdate } from '@pagespace/lib/notifications/notifications';
 
 async function sendTosNotifications() {
   const arg = process.argv[2]?.toLowerCase();

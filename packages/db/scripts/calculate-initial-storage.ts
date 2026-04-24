@@ -7,7 +7,10 @@
  * Usage: tsx packages/db/scripts/calculate-initial-storage.ts
  */
 
-import { db, users, pages, drives, eq, and, isNull, sql, inArray } from '../src';
+import { db } from '../src/db';
+import { users } from '../src/schema/auth';
+import { pages, drives } from '../src/schema/core';
+import { eq, and, isNull, sql, inArray } from '../src/operators';
 import { config } from 'dotenv';
 import path from 'path';
 

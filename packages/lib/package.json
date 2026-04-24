@@ -2,23 +2,15 @@
   "name": "@pagespace/lib",
   "version": "0.1.0",
   "license": "UNLICENSED",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "email:dev": "email dev --dir emails"
+    "email:dev": "email dev --dir emails",
+    "lint": "eslint src"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "default": "./dist/index.js",
-      "browser": "./dist/client-safe.js"
-    },
     "./content": {
       "types": "./dist/content/index.d.ts",
       "import": "./dist/content/index.js",
@@ -1139,6 +1131,8 @@
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
     "@types/react": "^19.1.13",
-    "@types/xlsx": "^0.0.36"
+    "@types/xlsx": "^0.0.36",
+    "eslint": "^9.36.0",
+    "typescript-eslint": "^8.59.0"
   }
 }

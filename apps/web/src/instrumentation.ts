@@ -14,7 +14,7 @@ export async function register() {
     console.log('[Instrumentation] Environment validation passed');
 
     // Initialize activity broadcast hook for real-time updates
-    const { setActivityBroadcastHook } = await import('@pagespace/lib');
+    const { setActivityBroadcastHook } = await import('@pagespace/lib/monitoring/activity-logger');
     const { broadcastActivityEvent } = await import('@/lib/websocket/socket-utils');
 
     setActivityBroadcastHook(broadcastActivityEvent);
@@ -30,7 +30,7 @@ export async function register() {
       process.env.AUDIT_WEBHOOK_URL &&
       process.env.AUDIT_WEBHOOK_SECRET
     ) {
-      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib');
+      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib/logging');
       setSiemErrorHook(buildWebhookSiemErrorHook(
         process.env.AUDIT_WEBHOOK_URL,
         process.env.AUDIT_WEBHOOK_SECRET,
