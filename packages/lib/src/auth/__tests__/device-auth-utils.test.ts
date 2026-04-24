@@ -86,6 +86,7 @@ vi.mock('../opaque-tokens', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'test-cuid-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 const mockAtomicValidateOrCreate = vi.fn();

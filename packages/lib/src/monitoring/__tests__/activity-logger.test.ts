@@ -72,6 +72,7 @@ vi.mock('drizzle-orm', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-activity-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 // ── Import after mocking ──────────────────────────────────────────────────────

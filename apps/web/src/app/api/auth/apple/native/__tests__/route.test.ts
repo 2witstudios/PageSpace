@@ -58,6 +58,7 @@ vi.mock('@pagespace/lib/auth', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 vi.mock('@pagespace/lib/server', async () => {

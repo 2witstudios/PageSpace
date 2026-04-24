@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock cuid2 to return predictable IDs
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-stream-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 // Tests use dynamic imports to get fresh module state - no static imports needed

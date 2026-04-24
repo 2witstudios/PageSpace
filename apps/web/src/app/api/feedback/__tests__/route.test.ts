@@ -61,6 +61,7 @@ vi.mock('@pagespace/lib/security', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-feedback-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { db } from '@pagespace/db';

@@ -25,6 +25,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-perm-id'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
   isCuid: vi.fn((id: string) => id.startsWith('cl') && id.length === 25),
 }));
 

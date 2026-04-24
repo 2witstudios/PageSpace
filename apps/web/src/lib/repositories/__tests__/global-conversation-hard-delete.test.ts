@@ -82,6 +82,7 @@ vi.mock('@pagespace/db', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => 'mock-id',
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 import { globalConversationRepository } from '../global-conversation-repository';

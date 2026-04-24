@@ -42,6 +42,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-cuid'),
+  init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
 // Mock sibling tools to avoid circular imports
