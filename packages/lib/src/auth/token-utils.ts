@@ -7,10 +7,7 @@
  * @module @pagespace/lib/auth/token-utils
  */
 
-import { createHash } from 'crypto';
-import { init } from '@paralleldrive/cuid2';
-
-const createId = init({ length: 32 });
+import { createHash, randomBytes } from 'crypto';
 
 /**
  * Token generation result containing the raw token (shown once),
@@ -55,14 +52,12 @@ export function getTokenPrefix(token: string): string {
 }
 
 /**
- * Generate a collision-resistant token.
+ * Generate a cryptographically secure bearer token.
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - CUID2 random part at max length (32 chars — timestamp + fingerprint + counter + randomness)
- *
- * Security comes from storing only the SHA3-256 hash — the raw token
- * is never persisted, so collision-resistance is sufficient for lookup.
+ * - 32 bytes (256 bits) from the OS CSPRNG via randomBytes
+ * - Base64URL encoding for URL-safe transmission
  *
  * @param prefix - Token type prefix (e.g., 'ps_refresh', 'mcp', 'ps_device')
  * @returns Object with token, hash, and tokenPrefix
@@ -76,7 +71,7 @@ export function getTokenPrefix(token: string): string {
  * ```
  */
 export function generateToken(prefix: string): GeneratedToken {
-  const randomPart = createId();
+  const randomPart = randomBytes(32).toString('base64url');
   const token = `${prefix}_${randomPart}`;
 
   return {
