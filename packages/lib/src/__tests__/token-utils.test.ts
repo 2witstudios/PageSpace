@@ -121,9 +121,9 @@ describe('Token Utils', () => {
 
       // Token format: {prefix}_{cuid2}
       // prefix = 'ps_test' (7 chars) + '_' (1 char) = 8 chars
-      // CUID2 = 24 chars
-      // Total minimum: 8 + 24 = 32 chars
-      expect(result.token.length).toBeGreaterThanOrEqual(32);
+      // CUID2 at max length = 32 chars
+      // Total minimum: 8 + 32 = 40 chars
+      expect(result.token.length).toBeGreaterThanOrEqual(40);
     });
   });
 

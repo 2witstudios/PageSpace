@@ -8,7 +8,9 @@
  */
 
 import { createHash } from 'crypto';
-import { createId } from '@paralleldrive/cuid2';
+import { init } from '@paralleldrive/cuid2';
+
+const createId = init({ length: 32 });
 
 /**
  * Token generation result containing the raw token (shown once),
@@ -57,7 +59,7 @@ export function getTokenPrefix(token: string): string {
  *
  * Creates a token with:
  * - Custom prefix for identification (e.g., 'ps_refresh', 'mcp')
- * - CUID2 random part (timestamp + fingerprint + counter + randomness)
+ * - CUID2 random part at max length (32 chars — timestamp + fingerprint + counter + randomness)
  *
  * Security comes from storing only the SHA3-256 hash — the raw token
  * is never persisted, so collision-resistance is sufficient for lookup.

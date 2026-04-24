@@ -22,7 +22,7 @@
  * one-options-per-mint replay guard.
  *
  * Security posture:
- * - 32-byte base64url token, SHA-256 hashed at rest
+ * - 32-byte base64url token, SHA3-256 hashed at rest
  * - 300s TTL
  * - Atomic DELETE … RETURNING for consume (no select-then-delete race)
  * - Fail-closed on create when DB is unavailable; log-and-return-null on

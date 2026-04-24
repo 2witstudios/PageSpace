@@ -1,7 +1,8 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/server';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { randomBytes, createHash } from 'crypto';
+import { hashToken } from '@pagespace/lib/auth';
+import { randomBytes } from 'crypto';
 
 /**
  * Socket Token Endpoint (P2-T0 Hotfix)
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
 
   // Generate short-lived socket token (5 minutes)
   const tokenValue = `ps_sock_${randomBytes(24).toString('base64url')}`;
-  const tokenHash = createHash('sha256').update(tokenValue).digest('hex');
+  const tokenHash = hashToken(tokenValue);
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
   // Store hash in database (never store plaintext)

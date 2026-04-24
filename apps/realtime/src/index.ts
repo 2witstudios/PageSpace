@@ -1,7 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, hashToken } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db, eq, gt, and, or, dmConversations, socketTokens, users, userProfiles, pages } from '@pagespace/db';
@@ -13,7 +13,6 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logger-config';
-import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
@@ -34,7 +33,7 @@ async function validateSocketToken(token: string): Promise<{ userId: string } | 
     return null;
   }
 
-  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const tokenHash = hashToken(token);
 
   try {
     const record = await db.query.socketTokens.findFirst({

@@ -15,7 +15,7 @@
  * - Tokens never appear in URLs (no nginx log leakage)
  * - Codes are one-time use (atomic DELETE … RETURNING)
  * - Short TTL (5 minutes)
- * - Codes are SHA-256 hashed at rest (defense in depth)
+ * - Codes are SHA3-256 hashed at rest (defense in depth)
  *
  * @module @pagespace/lib/auth/exchange-codes
  */
