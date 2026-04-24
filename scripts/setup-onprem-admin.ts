@@ -15,7 +15,7 @@
 import { db, users, userAiSettings, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
-import { createVerificationToken } from '@pagespace/lib/auth';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { parseArgs } from 'node:util';
 
 async function generateSetupLink(userId: string): Promise<string> {
