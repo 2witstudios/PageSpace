@@ -20,7 +20,7 @@ vi.mock('@pagespace/db', () => ({
 }));
 
 import { findMCPTokenByValue } from '../token-lookup';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('token-lookup', () => {
   beforeEach(() => {

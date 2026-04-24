@@ -8,7 +8,9 @@ import {
   validateOrCreateDeviceToken,
 } from '../auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '../auth/opaque-tokens';
-import { db, deviceTokens, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users, deviceTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 
 describe('device-auth-utils', () => {
@@ -19,7 +21,6 @@ describe('device-auth-utils', () => {
 
   // Create test user before each test (required for foreign key constraint)
   beforeEach(async () => {
-    const { users } = await import('@pagespace/db');
     await db.insert(users).values({
       id: testUserId,
       name: 'Test User',
@@ -33,7 +34,6 @@ describe('device-auth-utils', () => {
   afterEach(async () => {
     await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
     // Also clean up test user
-    const { users } = await import('@pagespace/db');
     await db.delete(users).where(eq(users.id, testUserId));
   });
 
@@ -180,7 +180,6 @@ describe('device-auth-utils', () => {
 
       // Simulate user's tokenVersion being bumped to 1
       // (e.g., after password change or refresh token reuse detection)
-      const { users } = await import('@pagespace/db');
       await db
         .update(users)
         .set({ tokenVersion: 1 })
@@ -311,7 +310,6 @@ describe('device-auth-utils', () => {
       );
 
       // Create the different user that we're testing with
-      const { users } = await import('@pagespace/db');
       await db.insert(users).values({
         id: 'different_user',
         name: 'Different User',

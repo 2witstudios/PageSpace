@@ -31,10 +31,7 @@ const {
 
 // ---------- vi.mock declarations ----------
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
-  const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
-
+vi.mock('@pagespace/db/db', () => {
   const createChain = (resolveRef: { value: Record<string, unknown>[] }) => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {};
     chain.from = vi.fn().mockReturnValue(chain);
@@ -49,7 +46,6 @@ vi.mock('@pagespace/db', () => {
     });
     return chain;
   };
-
   return {
     db: {
       select: vi.fn().mockImplementation(() => {
@@ -64,14 +60,16 @@ vi.mock('@pagespace/db', () => {
         return outerChain;
       }),
     },
-    drives: DRIVES_TABLE,
-    pages: PAGES_TABLE,
-    pagePermissions: PAGE_PERMISSIONS_TABLE,
-    driveMembers: DRIVE_MEMBERS_TABLE,
-    eq,
-    and,
   };
 });
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: DRIVES_TABLE,
+  pages: PAGES_TABLE,
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  pagePermissions: PAGE_PERMISSIONS_TABLE,
+  driveMembers: DRIVE_MEMBERS_TABLE,
+}));
 
 vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),

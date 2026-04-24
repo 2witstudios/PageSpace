@@ -1,6 +1,6 @@
 import { eq, sql, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { files } from '@pagespace/db';
+import { files } from '@pagespace/db/schema/storage';
 
 export interface OrphanedFile {
   id: string;

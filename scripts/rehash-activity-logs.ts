@@ -21,7 +21,8 @@
  */
 
 import 'dotenv/config';
-import { db, activityLogs } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { isNotNull, count, sql } from 'drizzle-orm';
 
 const DRY_RUN = process.argv.includes('--dry-run');

@@ -25,7 +25,7 @@ import {
   isDescendant,
   validatePageMove,
 } from '../circular-reference-guard';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

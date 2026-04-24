@@ -13,7 +13,7 @@ const mockSet = vi.hoisted(() => vi.fn());
 const mockReturning = vi.hoisted(() => vi.fn());
 const mockFindFirst = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     insert: mockInsert,
@@ -24,9 +24,13 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args) => args),
+}));
+vi.mock('@pagespace/db/schema/hotkeys', () => ({
+  userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
 }));
 
 vi.mock('@/lib/auth', () => ({

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and } from '@pagespace/db';
-import { drives, pages, pagePermissions, driveMembers } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators';
+import { drives, pages } from '@pagespace/db/schema/core'
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

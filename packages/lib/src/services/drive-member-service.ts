@@ -5,19 +5,11 @@
  * providing a clean seam for testing route handlers.
  */
 
-import {
-  db,
-  eq,
-  and,
-  sql,
-  driveMembers,
-  drives,
-  users,
-  userProfiles,
-  driveRoles,
-  pagePermissions,
-  pages,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 
 // ============================================================================
 // Types

@@ -1,27 +1,14 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  db,
-  pulseSummaries,
-  taskItems,
-  directMessages,
-  dmConversations,
-  pages,
-  driveMembers,
-  calendarEvents,
-  eventAttendees,
-  users,
-  eq,
-  and,
-  or,
-  lt,
-  gte,
-  ne,
-  desc,
-  count,
-  inArray,
-  isNull,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { directMessages, dmConversations } from '@pagespace/db/schema/social'
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
 

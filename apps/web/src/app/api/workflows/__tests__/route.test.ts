@@ -53,15 +53,21 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     insert: mockInsert,
   },
-  workflows: { driveId: 'driveId', createdAt: 'createdAt' },
-  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { driveId: 'driveId', createdAt: 'createdAt' },
 }));
 
 import { GET, POST } from '../route';

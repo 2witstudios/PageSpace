@@ -12,7 +12,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
@@ -22,8 +22,12 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  integrationConnections: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/integrations', () => ({
+  integrationConnections: { id: 'id' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

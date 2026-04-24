@@ -1,6 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, chatMessages, eq, and, sql, inArray, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
+import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
 import { type ToolExecutionContext } from '../core';
 

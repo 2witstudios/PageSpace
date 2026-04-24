@@ -42,7 +42,7 @@ const mockInsertOnConflict = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
   const mockTx = {
     insert: vi.fn(() => ({
@@ -56,7 +56,6 @@ vi.mock('@pagespace/db', () => {
       }),
     })),
   };
-
   return {
     db: {
       select: vi.fn(() => ({
@@ -80,12 +79,18 @@ vi.mock('@pagespace/db', () => {
         await callback(mockTx);
       }),
     },
-    users: {},
-    subscriptions: {},
-    stripeEvents: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: {},
+  stripeEvents: {},
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {

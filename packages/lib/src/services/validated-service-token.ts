@@ -7,7 +7,9 @@
  * @module @pagespace/lib/services/validated-service-token
  */
 
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,

@@ -1,4 +1,8 @@
-import { db, channelMessages, eq, filePages, files, pages } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { channelMessages } from '@pagespace/db/schema/chat';
+import { filePages, files } from '@pagespace/db/schema/storage';
+import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import type { EnforcedAuthContext } from '../middleware/auth';

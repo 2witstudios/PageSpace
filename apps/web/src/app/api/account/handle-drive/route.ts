@@ -1,4 +1,7 @@
-import { db, eq, and, drives, driveMembers } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

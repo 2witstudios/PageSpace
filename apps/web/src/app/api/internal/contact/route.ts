@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db, contactSubmissions } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 

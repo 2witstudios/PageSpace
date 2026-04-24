@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
-import { pages, drives, driveMembers, db, and, eq, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, asc } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';

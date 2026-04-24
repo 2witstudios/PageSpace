@@ -5,7 +5,7 @@
  * to resolve and convert integration tools into AI SDK format.
  */
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import {
   resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,

@@ -16,8 +16,10 @@
  */
 
 import { createHash } from 'crypto';
-import { db, securityAuditLog, sql } from '@pagespace/db';
-import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
+import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
 

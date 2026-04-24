@@ -17,7 +17,7 @@
  *   2 - Error during verification
  */
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { sql } from 'drizzle-orm';
 
 export interface VerificationResult {

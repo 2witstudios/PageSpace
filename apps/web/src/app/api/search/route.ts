@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray, SQL } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'

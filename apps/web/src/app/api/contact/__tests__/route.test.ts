@@ -22,12 +22,14 @@ import { POST } from '../route';
  *   - Strict schema validation
  */
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockResolvedValue(undefined),
     }),
   },
+}));
+vi.mock('@pagespace/db/schema/contact', () => ({
   contactSubmissions: {},
 }));
 
@@ -55,7 +57,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 

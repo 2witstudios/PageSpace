@@ -1,4 +1,6 @@
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { maskIdentifier } from '@/lib/logging/mask';

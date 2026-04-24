@@ -67,7 +67,7 @@ import {
   createTaskAssignedNotification,
   broadcastTosPrivacyUpdate,
 } from '../notifications';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { sendPushNotification } from '../push-notifications';
 
 // ---------------------------------------------------------------------------

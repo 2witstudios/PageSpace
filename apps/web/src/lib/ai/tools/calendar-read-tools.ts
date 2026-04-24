@@ -1,20 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import {
-  db,
-  calendarEvents,
-  calendarTriggers,
-  eventAttendees,
-  eq,
-  and,
-  or,
-  gte,
-  lte,
-  inArray,
-  isNull,
-  desc,
-} from '@pagespace/db';
-import type { CalendarTriggerMetadata } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, gte, lte, inArray, isNull, desc } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { type ToolExecutionContext } from '../core';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';

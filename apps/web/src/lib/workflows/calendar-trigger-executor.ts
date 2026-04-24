@@ -1,5 +1,11 @@
-import { db, calendarTriggers, pages, eventAttendees, users, eq, and } from '@pagespace/db';
-import type { CalendarTrigger, CalendarEvent } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages } from '@pagespace/db/schema/core'
+import { eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import type { CalendarEvent } from '@pagespace/db/schema/calendar'
+import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult } from './workflow-executor';
 import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';

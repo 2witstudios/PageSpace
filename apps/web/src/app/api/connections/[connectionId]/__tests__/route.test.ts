@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -33,11 +33,19 @@ vi.mock('@pagespace/db', () => ({
       where: vi.fn().mockResolvedValue(undefined),
     }),
   },
-  connections: { id: 'id', user1Id: 'user1Id', user2Id: 'user2Id', status: 'status' },
-  users: {},
-  userProfiles: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: {},
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  connections: { id: 'id', user1Id: 'user1Id', user2Id: 'user2Id', status: 'status' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

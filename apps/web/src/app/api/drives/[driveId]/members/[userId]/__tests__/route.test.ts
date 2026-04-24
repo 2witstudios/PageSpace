@@ -71,7 +71,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 // Mock database for DELETE handler's transaction
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockTx = {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -91,14 +91,20 @@ vi.mock('@pagespace/db', () => {
         }),
       }),
     },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    pagePermissions: { pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit', canShare: 'canShare', canDelete: 'canDelete', grantedBy: 'grantedBy', note: 'note' },
-    pages: { id: 'id', driveId: 'driveId', title: 'title' },
-    eq: vi.fn(),
-    and: vi.fn(),
-    inArray: vi.fn(),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', title: 'title' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  pagePermissions: { pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit', canShare: 'canShare', canDelete: 'canDelete', grantedBy: 'grantedBy', note: 'note' },
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -119,7 +125,7 @@ import {
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Fixtures

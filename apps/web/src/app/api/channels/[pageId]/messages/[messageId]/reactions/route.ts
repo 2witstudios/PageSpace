@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, channelMessageReactions, db, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { channelMessages, channelMessageReactions } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

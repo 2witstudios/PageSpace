@@ -7,8 +7,10 @@
 
 import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
-import { users, drives } from '@pagespace/db';
-import { db, eq, or, count } from '@pagespace/db';
+import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
+import { db } from '@pagespace/db/db';
+import { eq, or, count } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '../utils/utils';
 import { loggers } from '../logging/logger-config';

@@ -8,13 +8,17 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
     update: vi.fn(),
   },
-  users: { id: 'id', image: 'image' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', image: 'image' },
 }));
 
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
@@ -32,7 +36,7 @@ vi.stubGlobal('fetch', mockFetch);
 
 import { POST, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Test helpers

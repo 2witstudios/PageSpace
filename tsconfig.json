@@ -11,6 +11,7 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
+      "@pagespace/db/*": ["packages/db/src/*"],
       "@pagespace/*": ["packages/*/src"]
     },
     "typeRoots": ["./node_modules/@types", "./types"]

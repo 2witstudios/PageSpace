@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -20,13 +20,19 @@ vi.mock('@pagespace/db', () => ({
       pages: { findFirst: vi.fn() },
     },
   },
-  taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId' },
-  pages: { id: 'id', parentId: 'parentId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
   asc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', parentId: 'parentId' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
+  taskItems: { id: 'id', taskListId: 'taskListId' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -54,7 +60,7 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { taskManagementTools } from '../task-management-tools';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 

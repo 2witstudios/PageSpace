@@ -36,7 +36,7 @@ vi.mock('@pagespace/lib/security', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       googleCalendarConnections: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -50,12 +50,18 @@ vi.mock('@pagespace/db', () => ({
     }),
     update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: vi.fn() }) }),
   },
-  googleCalendarConnections: { userId: 'userId' },
-  calendarEvents: { createdById: 'x', syncedFromGoogle: 'x', isTrashed: 'x' },
-  users: { id: 'id', email: 'email' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   count: vi.fn(() => 'count_agg'),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email' },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  googleCalendarConnections: { userId: 'userId' },
+  calendarEvents: { createdById: 'x', syncedFromGoogle: 'x', isTrashed: 'x' },
 }));
 
 vi.mock('@/lib/auth', () => ({

@@ -12,16 +12,10 @@
  * Composes inside a transaction when one is provided (so `loadAppShell` gets a
  * single-tx app shell), or opens its own transaction otherwise.
  */
-import {
-  db,
-  pages,
-  channelMessages,
-  chatMessages,
-  and,
-  eq,
-  desc,
-  sql,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { and, eq, desc, sql } from '@pagespace/db/operators';
+import { channelMessages } from '@pagespace/db/schema/chat';
+import { pages, chatMessages } from '@pagespace/db/schema/core';
 import type {
   PagePayload,
   BreadcrumbEntry,

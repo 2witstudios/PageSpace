@@ -1,4 +1,6 @@
-import { db, eq, deviceTokens } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { deviceTokens } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';

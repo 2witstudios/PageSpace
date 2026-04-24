@@ -25,7 +25,7 @@ vi.mock('@/lib/auth', () => ({
   getAllowedDriveIds: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       activityLogs: {
@@ -33,6 +33,16 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn().mockReturnValue({}),
+  and: vi.fn().mockReturnValue({}),
+  desc: vi.fn().mockReturnValue({}),
+  gte: vi.fn().mockReturnValue({}),
+  lt: vi.fn().mockReturnValue({}),
+  inArray: vi.fn().mockReturnValue({}),
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: {
     id: 'activityLogs.id',
     timestamp: 'activityLogs.timestamp',
@@ -43,12 +53,6 @@ vi.mock('@pagespace/db', () => ({
     operation: 'activityLogs.operation',
     resourceType: 'activityLogs.resourceType',
   },
-  eq: vi.fn().mockReturnValue({}),
-  and: vi.fn().mockReturnValue({}),
-  desc: vi.fn().mockReturnValue({}),
-  gte: vi.fn().mockReturnValue({}),
-  lt: vi.fn().mockReturnValue({}),
-  inArray: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

@@ -1,4 +1,6 @@
-import { db, eq, integrationConnections } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { integrationConnections } from '@pagespace/db/schema/integrations';
 import { decryptCredentials } from '../../integrations/credentials/encrypt-credentials';
 import type { IntegrationProviderConfig } from '../../integrations/types';
 

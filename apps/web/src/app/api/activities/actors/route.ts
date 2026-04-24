@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, users, eq, and, sql, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';

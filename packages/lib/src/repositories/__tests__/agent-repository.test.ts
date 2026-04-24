@@ -27,7 +27,7 @@ vi.mock('@pagespace/db', () => ({
 // ---------------------------------------------------------------------------
 
 import { agentRepository } from '../agent-repository';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
 // Helpers

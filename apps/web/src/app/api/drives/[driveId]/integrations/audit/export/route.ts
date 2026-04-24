@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, desc, integrationAuditLog } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { desc } from '@pagespace/db/operators'
+import { integrationAuditLog } from '@pagespace/db/schema/integrations';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';

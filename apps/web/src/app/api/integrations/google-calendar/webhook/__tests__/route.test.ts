@@ -326,7 +326,7 @@ describe('Google Calendar Webhook Route', () => {
 
   describe('logging', () => {
     it('given auth failure, should log with channel/resource IDs', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const request = createWebhookRequest({
         channelId: 'log-test-channel',
@@ -348,7 +348,7 @@ describe('Google Calendar Webhook Route', () => {
     });
 
     it('given successful auth, should log sync trigger with userId', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       const userId = 'log-user-123';
       const token = generateWebhookToken(userId);
 

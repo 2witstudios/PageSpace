@@ -27,16 +27,13 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 // Mock the database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue([]),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
-  or: vi.fn(),
-  dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
 }));
 
 // Mock the logger
@@ -54,7 +51,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Create a mock socket that tracks room joins/leaves
 const createMockSocket = (userId?: string) => {

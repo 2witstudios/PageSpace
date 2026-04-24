@@ -1,4 +1,5 @@
-import { db, pageVersions } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { pageVersions } from '@pagespace/db/schema/versioning';
 import { detectPageContentFormat, type PageContentFormat } from '../content/page-content-format';
 import { writePageContent, type WritePageContentResult } from './page-content-store';
 import { hashObject } from '../utils/hash-utils';

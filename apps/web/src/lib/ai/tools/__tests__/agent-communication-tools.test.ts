@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -11,12 +11,16 @@ vi.mock('@pagespace/db', () => ({
       pages: { findFirst: vi.fn() },
     },
   },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
-  drives: { id: 'id', ownerId: 'ownerId' },
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+  chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -82,7 +86,7 @@ vi.mock('../../core', () => ({
 }));
 
 import { agentCommunicationTools } from '../agent-communication-tools';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';

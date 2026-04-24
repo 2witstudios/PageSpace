@@ -1,4 +1,6 @@
-import { users, db, eq, deviceTokens, sql, and, isNull, gt } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, sql, and, isNull, gt } from '@pagespace/db/operators'
+import { users, deviceTokens } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { hashToken } from '@pagespace/lib/auth/token-utils';

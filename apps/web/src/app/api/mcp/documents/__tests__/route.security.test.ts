@@ -54,7 +54,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -70,8 +70,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -269,7 +273,7 @@ describe('MCP Documents API - Security Tests', () => {
     });
 
     it('should log security events when access is denied', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       mockGetUserAccessLevel.mockResolvedValue({
         canView: false,
@@ -303,7 +307,7 @@ describe('MCP Documents API - Security Tests', () => {
     it('should deny access when permission check returns null access level', async () => {
       mockGetUserAccessLevel.mockResolvedValue(null);
 
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const { POST } = await import('../route');
       const request = new NextRequest('http://localhost/api/mcp/documents', {

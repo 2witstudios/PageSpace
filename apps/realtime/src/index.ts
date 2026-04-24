@@ -5,7 +5,12 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, or, dmConversations, socketTokens, users, userProfiles, pages } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, gt, and, or } from '@pagespace/db/operators';
+import { dmConversations } from '@pagespace/db/schema/social';
+import { socketTokens, users } from '@pagespace/db/schema/auth';
+import { userProfiles } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 import {
   validatePageId,
   validateDriveId,

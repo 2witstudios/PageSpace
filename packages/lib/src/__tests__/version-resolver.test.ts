@@ -24,7 +24,7 @@ import {
   resolveStackedVersionContent,
   type VersionResolveRequest,
 } from '../content/version-resolver';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 describe('version-resolver', () => {
   beforeEach(() => {

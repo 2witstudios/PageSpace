@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
  */
 
 // Mock database
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       channelMessages: { findFirst: vi.fn() },
@@ -23,12 +23,20 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  channelMessages: {},
-  channelReadStatus: { userId: 'userId', channelId: 'channelId' },
-  driveMembers: { driveId: 'driveId' },
-  pages: { id: 'id', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: {},
+  channelReadStatus: { userId: 'userId', channelId: 'channelId' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -78,7 +86,7 @@ vi.mock('@/lib/logging/mask', () => ({
 import { channelTools } from '../channel-tools';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../../core';
 

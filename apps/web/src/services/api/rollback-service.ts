@@ -5,7 +5,14 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, channelMessages, eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives, chatMessages } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members'
+import { channelMessages } from '@pagespace/db/schema/chat'
+import { messages } from '@pagespace/db/schema/conversations';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult, ActivityChangeSummary } from '@/types/activity-actions';
 import {
   canUserRollback,

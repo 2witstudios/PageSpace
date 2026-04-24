@@ -3,7 +3,10 @@
  * Provides a clean seam for testing SessionService without ORM chain mocks.
  */
 
-import { db, sessions, users, eq, and, or, isNull, gt, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq, and, or, isNull, gt, lt } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
 
 export interface SessionUserRecord {
   id: string;

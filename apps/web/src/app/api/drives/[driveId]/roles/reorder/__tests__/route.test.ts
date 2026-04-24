@@ -39,13 +39,17 @@ const { mockOrderBy, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
   return { mockOrderBy, mockWhere, mockFrom, mockSelect };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
   },
-  driveRoles: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   asc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveRoles: {},
 }));
 
 import { checkDriveAccessForRoles, reorderDriveRoles } from '@pagespace/lib/services/drive-role-service';

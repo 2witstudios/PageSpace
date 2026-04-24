@@ -19,17 +19,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import {
-  db,
-  users,
-  userPersonalization,
-  sessions,
-  eq,
-  and,
-  gte,
-  inArray,
-  isNull,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, gte, inArray, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';

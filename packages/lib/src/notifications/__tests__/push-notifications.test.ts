@@ -57,7 +57,7 @@ import {
   sendPushNotification,
   getUserPushTokens,
 } from '../push-notifications';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import * as crypto from 'crypto';
 
 // ---------------------------------------------------------------------------

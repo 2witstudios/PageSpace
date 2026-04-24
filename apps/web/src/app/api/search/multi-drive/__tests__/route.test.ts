@@ -19,7 +19,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -29,12 +29,16 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
-  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', title: 'title', content: 'content', type: 'type', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
+  drives: { id: 'id', name: 'name', slug: 'slug', isTrashed: 'isTrashed' },
 }));
 
 vi.mock('@/lib/utils/query-params', () => ({

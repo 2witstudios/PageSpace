@@ -32,7 +32,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       mcpTokens: {
@@ -45,10 +45,14 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  mcpTokens: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
   isNull: vi.fn((field) => ({ field, isNull: true })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: {},
 }));
 
 vi.mock('../csrf-validation', () => ({
@@ -65,7 +69,7 @@ vi.mock('../cookie-config', () => ({
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';
 import { getSessionFromCookies } from '../cookie-config';

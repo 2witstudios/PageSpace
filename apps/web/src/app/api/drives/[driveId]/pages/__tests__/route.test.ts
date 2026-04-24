@@ -29,17 +29,7 @@ const {
 
 // ---------- vi.mock declarations ----------
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
-  const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
-  const inArray = vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' }));
-  const asc = vi.fn((_col: unknown) => ({ type: 'asc' }));
-  const isNotNull = vi.fn((_col: unknown) => ({ type: 'isNotNull' }));
-  const sql = Object.assign(
-    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
-    { join: vi.fn(() => ({ type: 'sql.join' })) }
-  );
-
+vi.mock('@pagespace/db/db', () => {
   const selectDistinctChain = {
     from: vi.fn().mockReturnThis(),
     leftJoin: vi.fn().mockReturnThis(),
@@ -52,7 +42,6 @@ vi.mock('@pagespace/db', () => {
     where: mockSelectWhere.mockReturnThis(),
     limit: mockSelectLimit,
   };
-
   return {
     db: {
       query: {
@@ -63,20 +52,31 @@ vi.mock('@pagespace/db', () => {
       select: vi.fn().mockReturnValue(selectChain),
       execute: mockExecute,
     },
-    pages: { id: 'pages.id', driveId: 'pages.driveId', isTrashed: 'pages.isTrashed', parentId: 'pages.parentId', position: 'pages.position' },
-    drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
-    pagePermissions: { pageId: 'pp.pageId', userId: 'pp.userId', canView: 'pp.canView' },
-    driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', id: 'dm.id' },
-    taskItems: { pageId: 'ti.pageId', taskListId: 'ti.taskListId' },
-    taskLists: { id: 'tl.id', pageId: 'tl.pageId' },
-    eq,
-    and,
-    inArray,
-    asc,
-    isNotNull,
-    sql,
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' })),
+  and: vi.fn((..._args: unknown[]) => ({ type: 'and' })),
+  inArray: vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' })),
+  asc: vi.fn((_col: unknown) => ({ type: 'asc' })),
+  isNotNull: vi.fn((_col: unknown) => ({ type: 'isNotNull' })),
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
+    { join: vi.fn(() => ({ type: 'sql.join' })) }
+  ),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', driveId: 'pages.driveId', isTrashed: 'pages.isTrashed', parentId: 'pages.parentId', position: 'pages.position' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  pagePermissions: { pageId: 'pp.pageId', userId: 'pp.userId', canView: 'pp.canView' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', id: 'dm.id' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { pageId: 'ti.pageId', taskListId: 'ti.taskListId' },
+  taskLists: { id: 'tl.id', pageId: 'tl.pageId' },
+}));
 
 vi.mock('@pagespace/lib/content/tree-utils', () => ({
     buildTree: vi.fn((items: unknown[]) => items),

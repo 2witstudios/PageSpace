@@ -17,7 +17,7 @@ vi.mock('next/server', async () => {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       calendarEvents: { findFirst: vi.fn() },
@@ -36,6 +36,12 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -47,8 +53,6 @@ vi.mock('@pagespace/db', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
-  eq: vi.fn(),
-  and: vi.fn((...args: unknown[]) => args),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -91,7 +95,7 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 }));
 
 import { PATCH } from '../route';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 

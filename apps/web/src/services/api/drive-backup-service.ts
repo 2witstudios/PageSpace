@@ -1,20 +1,9 @@
-import {
-  db,
-  pages,
-  driveBackups,
-  driveBackupPages,
-  driveBackupPermissions,
-  driveBackupMembers,
-  driveBackupRoles,
-  driveBackupFiles,
-  pagePermissions,
-  driveMembers,
-  driveRoles,
-  files,
-  eq,
-  inArray,
-  desc,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, inArray, desc } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
+import { files } from '@pagespace/db/schema/storage'
+import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'

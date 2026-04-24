@@ -8,8 +8,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Tests mock at the SERVICE SEAM level, not ORM level.
 // ============================================================================
 
-vi.mock('@pagespace/db', () => ({
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -18,8 +17,13 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args: unknown[]) => args),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -61,7 +65,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';

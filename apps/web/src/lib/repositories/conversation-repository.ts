@@ -4,7 +4,11 @@
  * enabling proper unit testing of routes without ORM chain mocking.
  */
 
-import { db, chatMessages, pages, userActivities, conversations, eq, and, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql } from '@pagespace/db/operators'
+import { chatMessages, pages } from '@pagespace/db/schema/core'
+import { userActivities } from '@pagespace/db/schema/monitoring'
+import { conversations } from '@pagespace/db/schema/conversations';
 
 // Types for repository operations
 export interface AiAgent {

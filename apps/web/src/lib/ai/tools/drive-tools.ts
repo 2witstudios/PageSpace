@@ -1,6 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, ne } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';

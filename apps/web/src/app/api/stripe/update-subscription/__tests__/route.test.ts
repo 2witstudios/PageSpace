@@ -69,7 +69,7 @@ const {
   subscriptionsTable: Symbol('subscriptions'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
@@ -92,14 +92,20 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: usersTable,
-    subscriptions: subscriptionsTable,
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+  desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: usersTable,
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: subscriptionsTable,
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({

@@ -5,12 +5,9 @@
  * Each user has a single config row for their global assistant preferences.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  globalAssistantConfig,
-  type GlobalAssistantConfig,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { globalAssistantConfig, type GlobalAssistantConfig } from '@pagespace/db/schema/integrations';
 
 /**
  * Get or create a global assistant config for a user.

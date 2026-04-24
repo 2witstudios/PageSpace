@@ -26,7 +26,7 @@ const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
   });
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       googleCalendarConnections: { findFirst: mockFindFirst, findMany: mockFindMany },
@@ -37,6 +37,22 @@ vi.mock('@pagespace/db', () => ({
     select: mockSelect,
     transaction: mockTransaction,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  isNull: vi.fn(),
+  inArray: vi.fn(),
+  sql: vi.fn(),
+  desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'id',
+    email: 'email',
+  },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   googleCalendarConnections: {
     userId: 'userId',
     status: 'status',
@@ -57,16 +73,6 @@ vi.mock('@pagespace/db', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
-  users: {
-    id: 'id',
-    email: 'email',
-  },
-  eq: vi.fn(),
-  and: vi.fn(),
-  isNull: vi.fn(),
-  inArray: vi.fn(),
-  sql: vi.fn(),
-  desc: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -236,7 +242,7 @@ describe('syncGoogleCalendar', () => {
     });
 
     // Mock the calendarEvents findFirst to return null (new event)
-    const { db } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
     (db.query.calendarEvents.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     // Mock watchCalendar for the post-sync webhook registration
@@ -415,7 +421,7 @@ describe('syncGoogleCalendar error handling', () => {
     });
 
     // 404 warning log must be retained
-    const { loggers } = await import('@pagespace/lib/server');
+    const { loggers } = await import('@pagespace/lib/logging/logger-config');
     assert({
       given: 'a 404 from Google Calendar API',
       should: 'log a warning for the not-found calendar',

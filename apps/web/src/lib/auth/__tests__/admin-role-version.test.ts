@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { db, users, sessions, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole, validateAdminAccess } from '../admin-role';
 

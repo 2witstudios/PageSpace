@@ -5,7 +5,10 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, isNull, inArray, sql, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { googleCalendarConnections, calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';

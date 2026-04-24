@@ -53,7 +53,8 @@ import {
   markEmailVerified,
   isEmailVerified,
 } from '../verification-utils';
-import { db, verificationTokens, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { verificationTokens, users } from '@pagespace/db/schema/auth';
 
 describe('verification-utils', () => {
   beforeEach(() => {

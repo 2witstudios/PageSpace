@@ -44,9 +44,8 @@ const mockSelectWhere = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateSet = vi.fn();
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: mockSelectWhere,
@@ -58,10 +57,13 @@ vi.mock('@pagespace/db', () => {
         }),
       })),
     },
-    users: {},
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  };
-});
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({

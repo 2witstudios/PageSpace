@@ -5,14 +5,9 @@
  * Handles CRUD operations for both user-scoped and drive-scoped connections.
  */
 
-import {
-  db as defaultDb,
-  eq,
-  and,
-  integrationConnections,
-  type IntegrationConnection,
-  type NewIntegrationConnection,
-} from '@pagespace/db';
+import { db as defaultDb } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { integrationConnections, type IntegrationConnection, type NewIntegrationConnection } from '@pagespace/db/schema/integrations';
 
 // Type for the database instance (allows dependency injection for testing)
 export type ConnectionRepository = {

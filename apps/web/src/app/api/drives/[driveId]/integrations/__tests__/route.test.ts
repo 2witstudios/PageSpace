@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
     createSignedState: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: 'mock-db',
 }));
 

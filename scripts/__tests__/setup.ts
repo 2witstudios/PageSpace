@@ -9,7 +9,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import * as schema from '@pagespace/db';
+import { schema } from '@pagespace/db/schema';
 import path from 'path';
 
 const TEST_DB_URL =
@@ -24,7 +24,7 @@ export function getTestDatabaseUrl(): string {
 
 export function createTestDb() {
   pool = new Pool({ connectionString: TEST_DB_URL, ssl: false });
-  return drizzle(pool, { schema: schema.schema ?? schema });
+  return drizzle(pool, { schema });
 }
 
 export type TestDb = ReturnType<typeof createTestDb>;

@@ -28,7 +28,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       mcpTokens: {
@@ -41,10 +41,14 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  mcpTokens: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: {},
 }));
 
 vi.mock('../csrf-validation', () => ({

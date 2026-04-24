@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       favorites: { findMany: vi.fn(), findFirst: vi.fn() },
@@ -22,13 +22,17 @@ vi.mock('@pagespace/db', () => ({
       }),
     }),
   },
-  favorites: { userId: 'userId', id: 'id', pageId: 'pageId', driveId: 'driveId', position: 'position', createdAt: 'createdAt' },
-  pages: { id: 'id' },
-  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
   asc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  favorites: { userId: 'userId', id: 'id', pageId: 'pageId', driveId: 'driveId', position: 'position', createdAt: 'createdAt' },
+  pages: { id: 'id' },
+  drives: { id: 'id' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -47,7 +51,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 const mockUserId = 'user_123';
 

@@ -39,11 +39,19 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: (...args: unknown[]) => mockDbSelect(...args),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
     id: 'id',
     timestamp: 'timestamp',
@@ -64,8 +72,6 @@ vi.mock('@pagespace/db', () => ({
     messageCount: 'messageCount',
     wasTruncated: 'wasTruncated',
   },
-  eq: vi.fn(),
-  desc: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

@@ -1,20 +1,11 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import {
-  db,
-  activityLogs,
-  drives,
-  driveMembers,
-  sessions,
-  eq,
-  and,
-  or,
-  desc,
-  gte,
-  ne,
-  isNull,
-  inArray,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, desc, gte, ne, isNull, inArray } from '@pagespace/db/operators'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { drives } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,

@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/compliance/file-cleanup/orphan-detector', () => ({
   deleteFileRecords: mockDeleteRecords,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 

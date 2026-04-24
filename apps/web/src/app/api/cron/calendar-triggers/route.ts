@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, calendarTriggers, calendarEvents, eq, and, lte, inArray, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, lte, inArray, asc } from '@pagespace/db/operators'
+import { calendarEvents } from '@pagespace/db/schema/calendar'
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';

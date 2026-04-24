@@ -7,20 +7,12 @@
  */
 
 import { generateText } from 'ai';
-import {
-  db,
-  conversations,
-  messages,
-  chatMessages,
-  pages,
-  activityLogs,
-  driveMembers,
-  eq,
-  and,
-  gte,
-  desc,
-  inArray,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, gte, desc, inArray } from '@pagespace/db/operators'
+import { chatMessages, pages } from '@pagespace/db/schema/core'
+import { activityLogs } from '@pagespace/db/schema/monitoring'
+import { driveMembers } from '@pagespace/db/schema/members'
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 

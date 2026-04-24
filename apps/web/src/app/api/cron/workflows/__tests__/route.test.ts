@@ -48,11 +48,20 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  lte: vi.fn(),
+  ne: vi.fn(),
+  inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     isEnabled: 'isEnabled',
@@ -61,11 +70,6 @@ vi.mock('@pagespace/db', () => ({
     lastRunAt: 'lastRunAt',
     triggerType: 'triggerType',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  lte: vi.fn(),
-  ne: vi.fn(),
-  inArray: vi.fn(),
 }));
 
 import { POST } from '../route';

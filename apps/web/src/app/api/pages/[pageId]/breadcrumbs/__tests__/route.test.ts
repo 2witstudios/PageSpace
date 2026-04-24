@@ -27,19 +27,23 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     execute: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: 'pages_table',
   drives: 'drives_table',
-  sql: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

@@ -39,16 +39,24 @@ const {
   };
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
-  calendarTriggers: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
     id: 'id',
-    calendarEventId: 'calendarEventId',
-    status: 'status',
+    name: 'name',
+    email: 'email',
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'id',
     title: 'title',
@@ -56,17 +64,19 @@ vi.mock('@pagespace/db', () => ({
     driveId: 'driveId',
     isTrashed: 'isTrashed',
   },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   eventAttendees: {
     eventId: 'eventId',
     userId: 'userId',
   },
-  users: {
+}));
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
     id: 'id',
-    name: 'name',
-    email: 'email',
+    calendarEventId: 'calendarEventId',
+    status: 'status',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
@@ -93,7 +103,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
-import type { CalendarTrigger, CalendarEvent } from '@pagespace/db';
+import type { CalendarEvent } from '@pagespace/db/schema/calendar'
+import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 
 // ============================================================================
 // Fixtures

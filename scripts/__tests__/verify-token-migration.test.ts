@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { db } from '@pagespace/db'
+import { db } from '@pagespace/db/db'
 import {
   countTokens,
   reportTableStatus,

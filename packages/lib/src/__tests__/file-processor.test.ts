@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { FileProcessor } from '../file-processing/file-processor'
-import { db, sql, users, pagePermissions, driveMembers, pages, drives } from '@pagespace/db'
+import { db } from '@pagespace/db/db';
+import { sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories'
 import { createHash } from 'crypto'
 

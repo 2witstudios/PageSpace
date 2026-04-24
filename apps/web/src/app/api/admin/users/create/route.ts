@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, users, userAiSettings, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userAiSettings } from '@pagespace/db/schema/ai';
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';

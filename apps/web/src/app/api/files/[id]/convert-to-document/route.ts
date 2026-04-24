@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums'
 import { canConvertToType } from '@pagespace/lib/content/page-type-validators'
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'

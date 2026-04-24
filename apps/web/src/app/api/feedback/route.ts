@@ -1,4 +1,5 @@
-import { db, feedbackSubmissions } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { feedbackSubmissions } from '@pagespace/db/schema/feedback';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';

@@ -24,7 +24,7 @@ import {
   isFileOrphaned,
   deleteFileRecords,
 } from './orphan-detector';
-import { files } from '@pagespace/db';
+import { files } from '@pagespace/db/schema/storage';
 
 describe('findOrphanedFileRecords', () => {
   it('given_orphanedFilesExist_returnsAllWithParsedSizeBytes', async () => {

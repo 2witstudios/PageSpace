@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -14,6 +14,19 @@ vi.mock('@pagespace/db', () => ({
       eventAttendees: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  or: vi.fn(),
+  gte: vi.fn(),
+  lte: vi.fn(),
+  inArray: vi.fn(),
+  isNull: vi.fn(),
+  desc: vi.fn(),
+  not: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
     driveId: 'driveId',
@@ -29,15 +42,6 @@ vi.mock('@pagespace/db', () => ({
     userId: 'userId',
     status: 'status',
   },
-  eq: vi.fn(),
-  and: vi.fn(),
-  or: vi.fn(),
-  gte: vi.fn(),
-  lte: vi.fn(),
-  inArray: vi.fn(),
-  isNull: vi.fn(),
-  desc: vi.fn(),
-  not: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -64,7 +68,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { calendarReadTools } from '../calendar-read-tools';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 

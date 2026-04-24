@@ -76,13 +76,17 @@ vi.mock('@/lib/ai/core', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: (...args: unknown[]) => mockDbSelect(...args),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
-  eq: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

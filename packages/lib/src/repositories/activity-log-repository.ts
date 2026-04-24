@@ -5,7 +5,9 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, activityLogs, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 
 export interface AnonymizeResult {
   success: boolean;

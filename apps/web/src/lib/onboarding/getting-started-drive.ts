@@ -1,4 +1,7 @@
-import { db, drives, users, and, eq, sql, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, sql, asc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { drives } from '@pagespace/db/schema/core';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 

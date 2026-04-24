@@ -11,23 +11,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  */
 
 // Mock the database module
-vi.mock('@pagespace/db', () => {
-  const mockDb = {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
     query: {
       users: {
         findFirst: vi.fn(),
       },
     },
-  };
-  return {
-    db: mockDb,
-    users: { id: 'id' },
-    eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
-  };
-});
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
+}));
 
 // Import after mocking
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { validateServiceUser, type ServiceUserValidationResult } from '../user-validator';
 
 describe('validateServiceUser', () => {

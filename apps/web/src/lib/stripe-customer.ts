@@ -3,7 +3,9 @@
  * Handles stale customer IDs that may no longer exist in Stripe.
  */
 
-import { db, eq, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 
 interface UserForCustomer {

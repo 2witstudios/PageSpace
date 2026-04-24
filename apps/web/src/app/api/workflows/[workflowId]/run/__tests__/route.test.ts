@@ -25,15 +25,19 @@ const {
   mockSelect: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
   },
-  workflows: { id: 'id', driveId: 'driveId', lastRunStatus: 'lastRunStatus' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   ne: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { id: 'id', driveId: 'driveId', lastRunStatus: 'lastRunStatus' },
 }));
 
 vi.mock('@/lib/auth', () => ({

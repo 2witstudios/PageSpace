@@ -22,7 +22,7 @@ import { computeCronSignature } from '@/lib/auth/cron-auth';
 // Mock database
 const mockDbSelect = vi.fn();
 const mockDbQuery = vi.fn();
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => mockDbSelect(),
     query: {
@@ -31,14 +31,22 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
-  userPersonalization: { userId: 'userId', enabled: 'enabled' },
-  sessions: { userId: 'userId', type: 'type', revokedAt: 'revokedAt', lastUsedAt: 'lastUsedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   gte: vi.fn(),
   inArray: vi.fn(),
   isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', subscriptionTier: 'subscriptionTier' },
+}));
+vi.mock('@pagespace/db/schema/sessions', () => ({
+  sessions: { userId: 'userId', type: 'type', revokedAt: 'revokedAt', lastUsedAt: 'lastUsedAt' },
+}));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: { userId: 'userId', enabled: 'enabled' },
 }));
 
 // Mock memory services

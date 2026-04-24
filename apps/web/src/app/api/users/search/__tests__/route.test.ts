@@ -63,14 +63,25 @@ const profileLookupChain = {
   from: vi.fn(),
 };
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ _eq: true, col, val })),
   and: vi.fn((...args: unknown[]) => ({ _and: true, args })),
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+    id: 'users.id',
+    email: 'users.email',
+    name: 'users.name',
+  },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: {
     userId: 'userProfiles.userId',
     username: 'userProfiles.username',
@@ -78,11 +89,6 @@ vi.mock('@pagespace/db', () => ({
     bio: 'userProfiles.bio',
     avatarUrl: 'userProfiles.avatarUrl',
     isPublic: 'userProfiles.isPublic',
-  },
-  users: {
-    id: 'users.id',
-    email: 'users.email',
-    name: 'users.name',
   },
 }));
 
@@ -94,7 +100,7 @@ import { GET } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Helpers

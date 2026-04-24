@@ -59,7 +59,7 @@ vi.mock('@pagespace/lib/permissions/permission-mutations', () => ({
     revokePagePermission: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -67,8 +67,12 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
 }));
 
 // Mock websocket utilities for real-time permission revocation

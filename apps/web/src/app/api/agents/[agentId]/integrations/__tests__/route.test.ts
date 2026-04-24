@@ -11,7 +11,9 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({ db: {} }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {

@@ -22,7 +22,7 @@ vi.mock('../permissions', () => ({
 // ---------------------------------------------------------------------------
 
 import { canUserAccessFile } from '../file-access';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { canUserViewPage, isUserDriveMember } from '../permissions';
 
 // ---------------------------------------------------------------------------

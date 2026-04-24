@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, workflows, taskItems, eq, and, lte, ne, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, lte, ne, inArray } from '@pagespace/db/operators'
+import { taskItems } from '@pagespace/db/schema/tasks'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';

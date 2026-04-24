@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { db, eq, and, inArray, desc, subscriptions, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { getStorageConfigFromSubscription, type SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 

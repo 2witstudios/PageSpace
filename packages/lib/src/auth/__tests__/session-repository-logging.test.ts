@@ -21,7 +21,7 @@ vi.mock('@pagespace/db', () => ({
   lt: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { sessionRepository } from '../session-repository';
 
 describe('sessionRepository.touchSession error handling', () => {

@@ -53,16 +53,22 @@ const activeSubsSelect = {
 
 const { dbSelectMock } = vi.hoisted(() => ({ dbSelectMock: vi.fn() }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: dbSelectMock,
   },
-  users: {},
-  subscriptions: { userId: 'userId', status: 'status', updatedAt: 'updatedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
   desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: { userId: 'userId', status: 'status', updatedAt: 'updatedAt' },
 }));
 
 vi.mock('@/lib/stripe', () => ({

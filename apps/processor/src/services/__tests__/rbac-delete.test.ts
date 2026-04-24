@@ -31,7 +31,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       files: {
@@ -48,11 +48,19 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id' },
   filePages: { fileId: 'filePages.fileId' },
+}));
+vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { fileId: 'channelMessages.fileId' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { filePath: 'pages.filePath' },
-  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
 }));
 
 import type { EnforcedAuthContext } from '../../middleware/auth';

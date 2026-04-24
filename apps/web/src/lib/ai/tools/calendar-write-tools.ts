@@ -1,17 +1,11 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import {
-  db,
-  calendarEvents,
-  calendarTriggers,
-  eventAttendees,
-  pages,
-  eq,
-  and,
-  ne,
-  inArray,
-} from '@pagespace/db';
-import type { CalendarTriggerMetadata } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, ne, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';

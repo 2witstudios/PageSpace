@@ -54,7 +54,7 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
     createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
@@ -66,7 +66,6 @@ vi.mock('@pagespace/db', () => {
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
   });
-
   return {
     db: {
       query: {
@@ -75,11 +74,15 @@ vi.mock('@pagespace/db', () => {
       transaction,
     },
     __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
-    pages: { id: 'id', parentId: 'parentId' },
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-    inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', parentId: 'parentId' },
+}));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
@@ -90,7 +93,7 @@ import { canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
-import { db, __test__ as dbTest } from '@pagespace/db';
+import { db, __test__ as dbTest } from '@pagespace/db/db';
 
 const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;

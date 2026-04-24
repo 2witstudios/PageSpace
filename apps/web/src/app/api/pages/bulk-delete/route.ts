@@ -3,7 +3,9 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { pages, db, eq, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';

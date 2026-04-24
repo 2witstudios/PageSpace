@@ -13,15 +13,21 @@ const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
   await cb({ insert: mockTxInsert });
 });
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     transaction: mockTransaction,
   },
-  users: { id: 'id', email: 'email' },
-  eventAttendees: { eventId: 'eventId', userId: 'userId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn(),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => `lower(${String(values[0])})`),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email' },
+}));
+vi.mock('@pagespace/db/schema/calendar', () => ({
+  eventAttendees: { eventId: 'eventId', userId: 'userId' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

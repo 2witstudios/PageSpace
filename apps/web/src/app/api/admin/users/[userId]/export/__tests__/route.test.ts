@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: (...args: unknown[]) => mockCollectAllUserData(...args),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 

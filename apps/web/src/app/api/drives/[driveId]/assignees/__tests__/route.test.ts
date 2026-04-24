@@ -14,9 +14,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
-  return {
-    db: {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
       select: vi.fn(),
       query: {
         drives: {
@@ -24,7 +23,21 @@ vi.mock('@pagespace/db', () => {
         },
       },
     },
-    pages: {
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {
+      id: 'col_users_id',
+      email: 'col_users_email',
+      name: 'col_users_name',
+      image: 'col_users_image',
+    },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
       id: 'col_pages_id',
       title: 'col_pages_title',
       driveId: 'col_pages_driveId',
@@ -32,27 +45,20 @@ vi.mock('@pagespace/db', () => {
       isTrashed: 'col_pages_isTrashed',
       position: 'col_pages_position',
     },
-    drives: { id: 'col_drives_id' },
-    driveMembers: {
+  drives: { id: 'col_drives_id' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {
       userId: 'col_dm_userId',
       role: 'col_dm_role',
       driveId: 'col_dm_driveId',
     },
-    userProfiles: {
+  userProfiles: {
       displayName: 'col_up_displayName',
       avatarUrl: 'col_up_avatarUrl',
       userId: 'col_up_userId',
     },
-    users: {
-      id: 'col_users_id',
-      email: 'col_users_email',
-      name: 'col_users_name',
-      image: 'col_users_image',
-    },
-    eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
-    and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
-  };
-});
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -61,7 +67,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../route';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
