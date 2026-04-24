@@ -49,13 +49,13 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 
 // permissions mock
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserAccessLevel: vi.fn(),
-    getUserDriveAccess: vi.fn(),
+  getUserAccessLevel: vi.fn(),
+  getUserDriveAccess: vi.fn(),
 }));
 
 // auth/session mock
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     validateSession: vi.fn(),
   },
   hashToken: (token: string) => {

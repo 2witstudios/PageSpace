@@ -22,8 +22,8 @@ import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
 
 // Mock the permission functions
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserAccessLevel: vi.fn(),
-    getUserDriveAccess: vi.fn(),
+  getUserAccessLevel: vi.fn(),
+  getUserDriveAccess: vi.fn(),
 }));
 
 // Mock the database

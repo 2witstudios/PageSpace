@@ -17,8 +17,8 @@ vi.mock('resend', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
-    checkDistributedRateLimit: vi.fn(),
-    DISTRIBUTED_RATE_LIMITS: {
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: {
     MARKETING_CONTACT_FORM: { maxAttempts: 5, windowMs: 3_600_000 },
   },
 }));

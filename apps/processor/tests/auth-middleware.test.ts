@@ -9,13 +9,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
 vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
-    EnforcedAuthContext: {
+  EnforcedAuthContext: {
     fromSession: vi.fn((claims) => ({
       userId: claims.userId,
       userRole: claims.userRole,

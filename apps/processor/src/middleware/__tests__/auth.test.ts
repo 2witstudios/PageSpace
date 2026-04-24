@@ -13,13 +13,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock all external dependencies that auth.ts imports
 vi.mock('@pagespace/lib/auth/session-service', () => ({
-    sessionService: {
+  sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
 vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
-    EnforcedAuthContext: {
+  EnforcedAuthContext: {
     fromSession: vi.fn(),
   },
 }));

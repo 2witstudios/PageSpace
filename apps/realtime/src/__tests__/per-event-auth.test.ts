@@ -16,7 +16,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 });
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserAccessLevel: vi.fn(),
+  getUserAccessLevel: vi.fn(),
 }));
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';

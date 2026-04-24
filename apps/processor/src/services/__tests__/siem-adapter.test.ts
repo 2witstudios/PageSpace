@@ -67,14 +67,14 @@ vi.mock('dgram', () => ({
 }));
 
 vi.mock('@pagespace/lib/security/path-validator', () => ({
-    resolvePathWithinSync: vi.fn((base: string, ...segs: string[]) => {
+  resolvePathWithinSync: vi.fn((base: string, ...segs: string[]) => {
     const path = require('path');
     const joined = path.join(base, ...segs);
     return joined.startsWith(base) ? joined : null;
   }),
 }));
 vi.mock('@pagespace/lib/security/url-validator', () => ({
-    validateExternalURL: mockValidateExternalURL,
+  validateExternalURL: mockValidateExternalURL,
 }));
 
 import {
