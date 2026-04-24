@@ -26,7 +26,7 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     label: 'Quick Create Page',
     description: 'Open the quick-create palette to create a new page',
     category: 'navigation',
-    defaultBinding: 'Meta+N',
+    defaultBinding: 'Alt+N',
   },
   {
     id: 'navigation.search',
