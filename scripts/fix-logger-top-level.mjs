@@ -52,38 +52,6 @@ function findMockCallEnd(content, start) {
   return -1;
 }
 
-/**
- * Find the position of the top-level factory object's closing brace inside the vi.mock call.
- * The vi.mock structure is: vi.mock('path', () => ({ ... }))
- * We want the index of the '}' that closes the factory object (just before the final `)`).
- */
-function findFactoryObjectEnd(content, mockStart, mockEnd) {
-  // The mock ends with })) - the last ) is at mockEnd
-  // Walk backwards from mockEnd to find the matching {
-  // Structure: vi.mock(..., () => ({ ...BODY... }))
-  // mockEnd is the outer )
-  // mockEnd-1 is )  <- closes the factory function call `() => (...)`
-  // mockEnd-2 is }  <- closes the factory object
-  // We need to find the position just before this final `}` to insert our line
-
-  let i = mockEnd;
-  // Go back to find the `}` that closes the factory object
-  let depth = 0;
-  while (i >= mockStart) {
-    const ch = content[i];
-    if (ch === ')') depth++;
-    else if (ch === '(') {
-      depth--;
-      if (depth < 0) break;
-    }
-    if (ch === '}' && depth <= 1) {
-      return i; // This is the closing brace of the factory object
-    }
-    i--;
-  }
-  return -1;
-}
-
 const targetFiles = [
   'apps/web/src/app/api/cron/calendar-triggers/__tests__/route.test.ts',
   'apps/web/src/lib/ai/tools/__tests__/agent-tools.test.ts',

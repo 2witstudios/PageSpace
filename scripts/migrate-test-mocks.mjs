@@ -716,7 +716,7 @@ function buildMockReplacement(barrelPath, factoryRaw, barrelMap) {
     // Instead, skip the mock and report it for manual handling.
     const names = unknown.map(u => u.spread ? `...${u.spread}` : (u.computedKey || u.key)).join(', ');
     console.warn(`  SKIP (manual): ${barrelPath} — unmapped keys: ${names}`);
-    return { canSplit: false, replacement: null };
+    return { canSplit: false, reason: `unmapped-keys: ${names}`, replacement: null };
   }
 
   return { canSplit: true, replacement: lines.join('\n') };

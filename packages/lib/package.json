@@ -94,11 +94,6 @@
       "import": "./dist/monitoring/hash-chain-verifier.js",
       "require": "./dist/monitoring/hash-chain-verifier.js"
     },
-    "./auth-utils": {
-      "types": "./dist/auth/auth-utils.d.ts",
-      "import": "./dist/auth/auth-utils.js",
-      "require": "./dist/auth/auth-utils.js"
-    },
     "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
       "import": "./dist/auth/device-auth-utils.js",
@@ -128,11 +123,6 @@
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
-    },
-    "./scribe-processor": {
-      "types": "./dist/scribe-processor.d.ts",
-      "import": "./dist/scribe-processor.js",
-      "require": "./dist/scribe-processor.js"
     },
     "./services/storage-limits": {
       "types": "./dist/services/storage-limits.d.ts",
@@ -258,11 +248,6 @@
       "types": "./dist/email-templates/FeedbackNotificationEmail.d.ts",
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
-    },
-    "./test/auth-helpers": {
-      "types": "./dist/test/auth-helpers.d.ts",
-      "import": "./dist/test/auth-helpers.js",
-      "require": "./dist/test/auth-helpers.js"
     },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
@@ -747,9 +732,6 @@
       "monitoring/hash-chain-verifier": [
         "./dist/monitoring/hash-chain-verifier.d.ts"
       ],
-      "auth-utils": [
-        "./dist/auth/auth-utils.d.ts"
-      ],
       "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"
       ],
@@ -764,9 +746,6 @@
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
-      ],
-      "scribe-processor": [
-        "./dist/scribe-processor.d.ts"
       ],
       "services/storage-limits": [
         "./dist/services/storage-limits.d.ts"
@@ -842,9 +821,6 @@
       ],
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
-      ],
-      "test/auth-helpers": [
-        "./dist/test/auth-helpers.d.ts"
       ],
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"

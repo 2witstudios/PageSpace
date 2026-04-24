@@ -104,7 +104,10 @@ for (const filePath of testFiles) {
   // The mockBlock ends with })) - insert before }}
   const newMockBlock = mockBlock.replace(
     /(\n[ \t]*\}\)\))$/,
-    `,\n  logger: { child: ${CHILD_FN} },\n}))`
+    (_, closing) => {
+      const needsComma = !mockBlock.slice(0, mockBlock.length - closing.length).trimEnd().endsWith(',');
+      return `${needsComma ? ',' : ''}\n  logger: { child: ${CHILD_FN} },\n}))`;
+    }
   );
 
   if (newMockBlock !== mockBlock) {

@@ -88,7 +88,6 @@ function splitImportBlock(fullMatch, symbols, fromPath, targetSymbols, targetPat
   // Build target import
   if (inTarget.length > 0) {
     const allType = inTarget.every(s => s.isType);
-    const hasType = inTarget.some(s => s.isType);
     const names = inTarget.map(s => {
       const prefix = !allType && s.isType ? 'type ' : '';
       return s.alias ? `${prefix}${s.name} as ${s.alias}` : `${prefix}${s.name}`;
@@ -100,7 +99,6 @@ function splitImportBlock(fullMatch, symbols, fromPath, targetSymbols, targetPat
   // Build remaining import (if any)
   if (remaining.length > 0) {
     const allType = remaining.every(s => s.isType);
-    const hasType = remaining.some(s => s.isType);
     const names = remaining.map(s => {
       const prefix = !allType && s.isType ? 'type ' : '';
       return s.alias ? `${prefix}${s.name} as ${s.alias}` : `${prefix}${s.name}`;
