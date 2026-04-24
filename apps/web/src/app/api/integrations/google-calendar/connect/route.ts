@@ -1,5 +1,7 @@
 import { z } from 'zod/v4';
-import { db, users, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

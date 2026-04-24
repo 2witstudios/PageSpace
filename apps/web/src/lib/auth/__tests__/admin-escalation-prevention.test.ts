@@ -24,7 +24,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFindFirst = vi.fn();
 const mockUpdateReturning = vi.fn();
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -39,13 +39,17 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
     id: 'users.id',
     role: 'users.role',
     adminRoleVersion: 'users.adminRoleVersion',
   },
-  eq: vi.fn(),
-  sql: vi.fn(),
 }));
 
 import { validateAdminAccess } from '../admin-role';

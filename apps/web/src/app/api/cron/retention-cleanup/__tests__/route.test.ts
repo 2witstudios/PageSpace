@@ -17,7 +17,7 @@ vi.mock('@pagespace/lib/compliance/retention/retention-engine', () => ({
   runRetentionCleanup: mockRunRetentionCleanup,
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray, desc } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { withAdminAuth } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';

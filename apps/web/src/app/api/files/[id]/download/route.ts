@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { db, pages, files, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { files } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums'
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { isFilePage } from '@pagespace/lib/content/page-types.config'

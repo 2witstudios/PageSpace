@@ -14,7 +14,10 @@ import {
 } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

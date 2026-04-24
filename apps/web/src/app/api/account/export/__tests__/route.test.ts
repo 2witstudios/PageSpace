@@ -8,7 +8,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {},
 }));
 

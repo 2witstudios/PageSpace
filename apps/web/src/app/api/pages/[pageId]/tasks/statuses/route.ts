@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskStatusConfigs, taskItems, eq, and, asc, desc, inArray } from '@pagespace/db';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
+import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
+import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

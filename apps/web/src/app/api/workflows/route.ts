@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { db, workflows, pages, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

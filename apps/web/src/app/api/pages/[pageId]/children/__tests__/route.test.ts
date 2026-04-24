@@ -33,19 +33,25 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
     },
     selectDistinct: vi.fn(),
   },
-  pages: { parentId: 'parentId', isTrashed: 'isTrashed', position: 'position', id: 'id' },
-  taskItems: { pageId: 'taskItems.pageId' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => args),
   eq: vi.fn((a: unknown, b: unknown) => [a, b]),
   asc: vi.fn((col: unknown) => col),
   isNotNull: vi.fn((col: unknown) => col),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { parentId: 'parentId', isTrashed: 'isTrashed', position: 'position', id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { pageId: 'taskItems.pageId' },
 }));
 
 vi.mock('@pagespace/lib/utils/api-utils', () => ({
@@ -55,7 +61,7 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

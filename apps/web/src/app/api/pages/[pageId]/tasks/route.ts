@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, asc } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
+import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, users, userProfiles, connections, eq, and, or } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { userProfiles } from '@pagespace/db/schema/members'
+import { connections } from '@pagespace/db/schema/social';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

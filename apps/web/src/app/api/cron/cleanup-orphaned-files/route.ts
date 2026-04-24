@@ -1,5 +1,5 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';

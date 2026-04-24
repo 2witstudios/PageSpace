@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       userPageViews: {
@@ -17,9 +17,13 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  userPageViews: { userId: 'userId', viewedAt: 'viewedAt' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   desc: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/page-views', () => ({
+  userPageViews: { userId: 'userId', viewedAt: 'viewedAt' },
 }));
 
 vi.mock('@pagespace/lib/client-safe', () => ({

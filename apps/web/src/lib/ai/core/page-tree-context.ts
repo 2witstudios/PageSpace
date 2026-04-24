@@ -5,7 +5,9 @@
  * to help AI agents understand navigation and organization.
  */
 
-import { db, pages, drives, eq, and, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, asc } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree } from '@pagespace/lib/content/tree-utils';

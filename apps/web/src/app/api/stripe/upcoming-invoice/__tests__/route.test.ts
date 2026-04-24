@@ -50,7 +50,7 @@ const {
   subscriptionsTable: Symbol('subscriptions'),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   return {
     db: {
       select: vi.fn(() => ({
@@ -58,22 +58,12 @@ vi.mock('@pagespace/db', () => {
           if (table === usersTable) {
             return { where: mockUserQuery };
           }
-          return {
-            where: vi.fn(() => ({
+  return {
+    where: vi.fn(() => ({
               orderBy: vi.fn(() => ({
                 limit: mockSubscriptionQuery,
               })),
             })),
-          };
-        }),
-      })),
-    },
-    users: usersTable,
-    subscriptions: subscriptionsTable,
-    eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-    and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-    inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
-    desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
   };
 });
 

@@ -25,28 +25,38 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
   const mockSelect = vi.fn().mockReturnValue({ from: mockFrom });
   return {
     db: { select: mockSelect },
-    taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
-    directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead' },
-    dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
-    pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
-    drives: { id: 'id', ownerId: 'ownerId' },
-    driveMembers: { driveId: 'driveId', userId: 'userId' },
-    eq: vi.fn(),
-    and: vi.fn(),
-    or: vi.fn(),
-    lt: vi.fn(),
-    gte: vi.fn(),
-    ne: vi.fn(),
-    sql: Object.assign(vi.fn(), { join: vi.fn() }),
-    count: vi.fn(),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  or: vi.fn(),
+  lt: vi.fn(),
+  gte: vi.fn(),
+  ne: vi.fn(),
+  sql: Object.assign(vi.fn(), { join: vi.fn() }),
+  count: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
+}));
+vi.mock('@pagespace/db/schema/social', () => ({
+  directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead' },
+  dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
+}));
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

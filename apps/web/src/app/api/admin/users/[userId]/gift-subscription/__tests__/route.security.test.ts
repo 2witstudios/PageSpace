@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
-import { db, users, subscriptions, sessions, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { sessions } from '@pagespace/db/schema/sessions'
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
 import { sessionService } from '@pagespace/lib/auth/session-service';

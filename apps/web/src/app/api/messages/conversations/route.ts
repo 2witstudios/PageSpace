@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, sql } from '@pagespace/db/operators'
+import { dmConversations, connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

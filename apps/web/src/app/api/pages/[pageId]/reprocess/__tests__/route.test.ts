@@ -39,21 +39,24 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const limit = vi.fn();
   const where = vi.fn().mockReturnValue({ limit });
   const from = vi.fn().mockReturnValue({ where });
   const select = vi.fn().mockReturnValue({ from });
-
   return {
     db: { select },
-    pages: {
+  };
+});
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {
       id: 'id',
       revision: 'revision',
     },
-    eq: vi.fn((a: unknown, b: unknown) => [a, b]),
-  };
-});
+}));
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -65,7 +68,7 @@ import { createPageServiceToken } from '@pagespace/lib/services/validated-servic
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';

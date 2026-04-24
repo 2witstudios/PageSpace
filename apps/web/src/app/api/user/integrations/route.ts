@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listUserConnections, createConnection, findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';

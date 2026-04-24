@@ -1,19 +1,9 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
-import {
-  db,
-  calendarEvents,
-  eventAttendees,
-  workflows,
-  eq,
-  and,
-  or,
-  gte,
-  lte,
-  inArray,
-  isNull,
-  asc,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

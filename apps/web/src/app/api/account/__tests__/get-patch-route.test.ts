@@ -3,8 +3,7 @@ import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock at the service seam level
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', email: 'email' },
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -13,7 +12,12 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', email: 'email' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -85,7 +89,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { GET, PATCH } from '../route';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

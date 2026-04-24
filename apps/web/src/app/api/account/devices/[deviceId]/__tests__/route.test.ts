@@ -8,17 +8,21 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       deviceTokens: { findFirst: vi.fn() },
     },
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ eq: [a, b] })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   deviceTokens: {
     id: 'id',
     tokenHash: 'tokenHash',
   },
-  eq: vi.fn((a, b) => ({ eq: [a, b] })),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -56,7 +60,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { revokeDeviceToken } from '@pagespace/lib/auth/device-auth-utils';

@@ -3,10 +3,12 @@ import { GET } from '../route';
 const mockExecute = vi.hoisted(() => vi.fn());
 const mockGetMonitoringIngestStatus = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     execute: mockExecute,
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   sql: (strings: TemplateStringsArray) => strings.join(''),
 }));
 

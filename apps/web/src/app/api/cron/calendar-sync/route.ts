@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, eq, and, or, lt, isNull, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, lt, isNull, sql } from '@pagespace/db/operators'
+import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';

@@ -2,7 +2,9 @@ import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
-import { db, pages, chatMessages, drives, eq, and, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, sql } from '@pagespace/db/operators'
+import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import {
   sanitizeMessagesForModel,

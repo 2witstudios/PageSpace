@@ -8,7 +8,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: { findFirst: vi.fn() },
@@ -16,6 +16,15 @@ vi.mock('@pagespace/db', () => ({
     },
     update: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  isNull: vi.fn((a) => ({ isNull: a })),
+  gt: vi.fn((a, b) => ({ gt: [a, b] })),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', tokenVersion: 'tokenVersion' },
   deviceTokens: {
     userId: 'userId',
@@ -23,11 +32,6 @@ vi.mock('@pagespace/db', () => ({
     revokedAt: 'revokedAt',
     expiresAt: 'expiresAt',
   },
-  eq: vi.fn((a, b) => ({ eq: [a, b] })),
-  and: vi.fn((...args: unknown[]) => ({ and: args })),
-  isNull: vi.fn((a) => ({ isNull: a })),
-  gt: vi.fn((a, b) => ({ gt: [a, b] })),
-  sql: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -67,7 +71,7 @@ vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
 
 import { GET, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';

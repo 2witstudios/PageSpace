@@ -6,7 +6,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // @scaffold — ORM chain mock: drives-status route has no repository seam yet.
 // Replace with a drives-status-repository seam that exposes getOwnedDrives(),
 // getDriveMemberCount(), and getDriveAdmins() when one is introduced.
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       drives: {
@@ -18,12 +18,20 @@ vi.mock('@pagespace/db', () => ({
     },
     select: vi.fn(),
   },
-  drives: {},
-  driveMembers: {},
-  users: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value, type: 'eq' })),
   and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values, type: 'sql' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: {},
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: {},
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: {},
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -44,7 +52,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

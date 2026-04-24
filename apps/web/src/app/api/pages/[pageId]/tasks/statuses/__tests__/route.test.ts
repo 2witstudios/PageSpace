@@ -44,7 +44,7 @@ const createTxMock = () => {
   };
 };
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       taskLists: { findFirst: vi.fn() },
@@ -66,6 +66,15 @@ vi.mock('@pagespace/db', () => ({
     })),
     transaction: vi.fn(async (callback) => callback(createTxMock())),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  and: vi.fn((...c: unknown[]) => c),
+  asc: vi.fn((col) => ({ type: 'asc', col })),
+  desc: vi.fn((col) => ({ type: 'desc', col })),
+  inArray: vi.fn((col, vals) => ({ col, vals })),
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: {},
   taskStatusConfigs: {},
   taskItems: {},
@@ -75,11 +84,6 @@ vi.mock('@pagespace/db', () => ({
     { slug: 'blocked', name: 'Blocked', color: 'bg-red-100', group: 'in_progress', position: 2 },
     { slug: 'completed', name: 'Done', color: 'bg-green-100', group: 'done', position: 3 },
   ],
-  eq: vi.fn((a, b) => ({ field: a, value: b })),
-  and: vi.fn((...c: unknown[]) => c),
-  asc: vi.fn((col) => ({ type: 'asc', col })),
-  desc: vi.fn((col) => ({ type: 'desc', col })),
-  inArray: vi.fn((col, vals) => ({ col, vals })),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -91,7 +95,7 @@ vi.mock('@/lib/websocket', () => ({
 import { GET, POST, PUT, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 // ---------- Helpers ----------

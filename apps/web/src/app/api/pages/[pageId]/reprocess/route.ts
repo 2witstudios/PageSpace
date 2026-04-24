@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';

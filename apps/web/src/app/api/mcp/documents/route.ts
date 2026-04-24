@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets';

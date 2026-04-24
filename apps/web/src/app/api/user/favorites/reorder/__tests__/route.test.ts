@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       favorites: {
@@ -26,10 +26,14 @@ vi.mock('@pagespace/db', () => ({
       });
     }),
   },
-  favorites: { id: 'id', userId: 'userId', position: 'position' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  favorites: { id: 'id', userId: 'userId', position: 'position' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

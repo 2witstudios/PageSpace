@@ -10,7 +10,9 @@
  * - Refresh happens server-side, never exposed to client
  */
 
-import { db, googleCalendarConnections, eq, type GoogleCalendarConnection } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { googleCalendarConnections, type GoogleCalendarConnection } from '@pagespace/db/schema/calendar';
 import { encrypt, decrypt } from '@pagespace/lib/encryption';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { OAuth2Client } from 'google-auth-library';

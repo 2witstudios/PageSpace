@@ -4,7 +4,9 @@
  * enabling proper unit testing of routes without ORM chain mocking.
  */
 
-import { db, chatMessages, eq, and, lt } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, lt } from '@pagespace/db/operators'
+import { chatMessages } from '@pagespace/db/schema/core';
 
 // Types for repository operations
 export interface ChatMessage {

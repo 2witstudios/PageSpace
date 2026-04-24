@@ -12,7 +12,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 
 // Mock dependencies
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: { findMany: vi.fn() },
@@ -26,10 +26,8 @@ vi.mock('@pagespace/db', () => ({
       })),
     })),
   },
-  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
-  taskLists: { id: 'id', pageId: 'pageId' },
-  taskStatusConfigs: { taskListId: 'taskListId' },
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args) => args),
   desc: vi.fn(),
@@ -42,6 +40,14 @@ vi.mock('@pagespace/db', () => ({
   isNull: vi.fn(),
   not: vi.fn(),
   sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
+  taskLists: { id: 'id', pageId: 'pageId' },
+  taskStatusConfigs: { taskListId: 'taskListId' },
 }));
 
 vi.mock('@/lib/task-status-config', () => ({
@@ -82,7 +88,7 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn((_auth: unknown, driveIds: string[]) => driveIds),
 }));
 
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';

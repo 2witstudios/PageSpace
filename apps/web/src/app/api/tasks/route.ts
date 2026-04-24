@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
 import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

@@ -4,18 +4,9 @@
  * enabling proper unit testing of auth routes without ORM chain mocking.
  */
 
-import {
-  db,
-  users,
-  deviceTokens,
-  eq,
-  and,
-  or,
-  isNull,
-  sql,
-  type InferSelectModel,
-  type InferInsertModel,
-} from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, or, isNull, sql, type InferSelectModel, type InferInsertModel } from '@pagespace/db/operators'
+import { users, deviceTokens } from '@pagespace/db/schema/auth';
 
 // Types derived from Drizzle schema - ensures type safety without manual definitions
 export type User = InferSelectModel<typeof users>;

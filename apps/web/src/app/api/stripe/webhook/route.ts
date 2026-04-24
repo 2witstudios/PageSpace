@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, eq, subscriptions, stripeEvents, users } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';

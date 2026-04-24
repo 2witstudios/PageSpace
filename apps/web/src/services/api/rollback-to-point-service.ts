@@ -5,7 +5,9 @@
  * Similar to AI undo but for any activities, not just AI-generated ones.
  */
 
-import { db, activityLogs, eq, and, gte, desc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, gte, desc } from '@pagespace/db/operators'
+import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   executeRollback,

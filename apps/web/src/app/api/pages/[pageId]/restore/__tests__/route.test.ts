@@ -72,7 +72,7 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: (...args: unknown[]) => mockCreatePageEventPayload(...args),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -81,6 +81,12 @@ vi.mock('@pagespace/db', () => ({
     },
     transaction: (...args: unknown[]) => mockTransaction(...args),
   },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(),
+  eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
     id: 'id',
     parentId: 'parentId',
@@ -88,8 +94,6 @@ vi.mock('@pagespace/db', () => ({
     revision: 'revision',
     originalParentId: 'originalParentId',
   },
-  and: vi.fn(),
-  eq: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

@@ -26,7 +26,10 @@ import {
   buildInlineInstructions,
   buildGlobalAssistantInstructions,
 } from '@/lib/ai/core';
-import { db, driveMembers, drives, pages, eq, and, asc } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, asc } from '@pagespace/db/operators'
+import { drives, pages } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 
 interface PromptSection {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifySignedState } from '@pagespace/lib/integrations/oauth/oauth-state';

@@ -3,7 +3,10 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core'
+import { driveMembers } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';

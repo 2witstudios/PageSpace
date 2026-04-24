@@ -21,7 +21,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const integrationAuditLog = {
     driveId: 'col_driveId',
     connectionId: 'col_connectionId',
@@ -30,7 +30,6 @@ vi.mock('@pagespace/db', () => {
     createdAt: 'col_createdAt',
     toolName: 'col_toolName',
   };
-
   return {
     db: {
       select: vi.fn(() => ({
@@ -44,13 +43,6 @@ vi.mock('@pagespace/db', () => {
         },
       },
     },
-    integrationAuditLog,
-    count: vi.fn(() => 'count_fn'),
-    desc: vi.fn((col: unknown) => ({ _type: 'desc', col })),
-    and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
-    eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
-    gte: vi.fn(),
-    lte: vi.fn(),
   };
 });
 
@@ -69,7 +61,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseAuditListParams, buildAuditLogWhereClause } from '../audit-filters';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Helpers

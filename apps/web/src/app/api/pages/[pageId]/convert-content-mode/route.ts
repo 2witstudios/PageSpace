@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, pages, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'

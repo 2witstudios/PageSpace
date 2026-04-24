@@ -59,7 +59,10 @@ import {
   sanitizeToolNamesForProvider,
   getUserPersonalization,
 } from '@/lib/ai/core';
-import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

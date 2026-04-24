@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';

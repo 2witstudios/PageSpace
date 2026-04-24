@@ -18,7 +18,7 @@ import {
   kickUserFromPage,
   kickUserFromPageActivity,
 } from '@/lib/websocket';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 

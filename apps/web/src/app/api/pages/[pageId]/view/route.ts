@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { db, eq, userPageViews, pages } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
+import { userPageViews } from '@pagespace/db/schema/page-views';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';

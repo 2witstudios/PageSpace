@@ -1,4 +1,6 @@
-import { db, pages, eq, and } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { logActivityWithTx, type ActivityOperation, type ActivityResourceType, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger'
 import { inferChangeGroupType, createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'

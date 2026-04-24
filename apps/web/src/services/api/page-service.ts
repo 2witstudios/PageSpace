@@ -1,4 +1,7 @@
-import { db, pages, drives, users, chatMessages, eq, and, desc, isNull } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq, and, desc, isNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'

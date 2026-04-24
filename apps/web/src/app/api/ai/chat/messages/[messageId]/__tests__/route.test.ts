@@ -54,7 +54,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 // Mock database for page lookup (boundary)
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pages: {
@@ -62,13 +62,17 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  pages: {},
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
 }));
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';

@@ -36,13 +36,12 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logPageActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => {
   const mockTxUpdate = vi.fn(() => ({
     set: vi.fn(() => ({
       where: vi.fn().mockResolvedValue(undefined),
     })),
   }));
-
   return {
     db: {
       query: {
@@ -54,12 +53,18 @@ vi.mock('@pagespace/db', () => {
         return callback(tx);
       }),
     },
-    taskItems: {},
-    taskLists: {},
-    pages: {},
-    eq: vi.fn((a, b) => ({ field: a, value: b })),
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ field: a, value: b })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: {},
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskItems: {},
+  taskLists: {},
+}));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn().mockResolvedValue(undefined),
@@ -70,7 +75,7 @@ vi.mock('@/lib/websocket', () => ({
 import { PATCH } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db';
+import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 

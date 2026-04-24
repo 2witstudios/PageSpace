@@ -15,14 +15,20 @@ const {
   mockSelect: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: { select: mockSelect },
-  pages: { id: 'id', isTrashed: 'isTrashed', title: 'title', content: 'content', parentId: 'parentId', driveId: 'driveId' },
-  drives: { id: 'id' },
-  workflows: { $inferSelect: {} },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', isTrashed: 'isTrashed', title: 'title', content: 'content', parentId: 'parentId', driveId: 'driveId' },
+  drives: { id: 'id' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { $inferSelect: {} },
 }));
 
 vi.mock('ai', () => ({

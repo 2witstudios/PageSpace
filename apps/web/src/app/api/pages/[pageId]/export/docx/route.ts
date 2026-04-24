@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { pages, db, eq } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateDOCX, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config'

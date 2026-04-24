@@ -1,4 +1,6 @@
-import { db, pages, taskItems, taskLists } from '@pagespace/db';
+import { db } from '@pagespace/db/db'
+import { pages } from '@pagespace/db/schema/core'
+import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { createId } from '@paralleldrive/cuid2';
 import { getAboutPageSpaceAgentSystemPrompt, getReferenceSeedTemplate, type SeedNodeTemplate, type SeedTaskTemplate } from './onboarding-faq';
 import { buildBudgetSheetContent } from './faq/content-page-types';
