@@ -714,7 +714,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('logs rate limit reset failures', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
       vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Reset failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {

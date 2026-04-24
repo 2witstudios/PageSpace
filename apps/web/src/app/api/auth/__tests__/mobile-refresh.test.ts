@@ -243,8 +243,8 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
-      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth/token-utils');
+      const { generateDeviceToken } = await import('@pagespace/lib/auth/device-auth-utils');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         validRefreshPayload.deviceToken,
         {
@@ -563,7 +563,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('logs device ID mismatch warning', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',

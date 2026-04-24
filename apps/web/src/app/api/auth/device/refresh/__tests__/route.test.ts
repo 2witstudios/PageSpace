@@ -384,8 +384,8 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
-      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
-      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth/token-utils');
+      const { generateDeviceToken } = await import('@pagespace/lib/auth/device-auth-utils');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'ps_dev_valid_token',
         expect.objectContaining({

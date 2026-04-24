@@ -280,8 +280,8 @@ describe('/api/auth/device/refresh', () => {
       const body = await response.json();
 
       // Assert
-      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
-      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth/token-utils');
+      const { generateDeviceToken } = await import('@pagespace/lib/auth/device-auth-utils');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         'valid-device-token',
         {
