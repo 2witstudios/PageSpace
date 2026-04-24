@@ -5,20 +5,28 @@ import { createId } from '@paralleldrive/cuid2';
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
     transaction: vi.fn(),
     delete: vi.fn(),
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
   drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id' },
   pagePermissions: {
     pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit',
     canShare: 'canShare', canDelete: 'canDelete', id: 'id', grantedBy: 'grantedBy',
   },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
 }));

@@ -7,20 +7,25 @@ const { insertMock, deleteMock, selectMock, executeMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
 }));
 
-vi.mock('@pagespace/db', () => {
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    insert: insertMock,
+    delete: deleteMock,
+    select: selectMock,
+    execute: executeMock,
+  },
+}));
+vi.mock('@pagespace/db/schema/rate-limit-buckets', () => ({
+  rateLimitBuckets: { key: 'key', windowStart: 'window_start', count: 'count', expiresAt: 'expires_at' },
+}));
+vi.mock('@pagespace/db/operators', () => {
   const noop = () => ({});
   const sqlFn = (() => ({})) as unknown;
   Object.assign(sqlFn as object, { raw: noop });
   return {
-    db: {
-      insert: insertMock,
-      delete: deleteMock,
-      select: selectMock,
-      execute: executeMock,
-    },
-    rateLimitBuckets: { key: 'key', windowStart: 'window_start', count: 'count', expiresAt: 'expires_at' },
     sql: sqlFn,
     eq: () => ({}),
+    lt: () => ({}),
   };
 });
 
