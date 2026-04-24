@@ -162,14 +162,14 @@ export default function QuickCreatePalette() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const binding = getEffectiveBinding('pages.quick-create');
-      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId) {
+      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen) {
         e.preventDefault();
         openQuickCreate();
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [driveId, openQuickCreate]);
+  }, [driveId, openQuickCreate, quickCreateOpen]);
 
   // Reset when palette closes
   useEffect(() => {
