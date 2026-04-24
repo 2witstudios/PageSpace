@@ -77,7 +77,13 @@ export function matchesKeyEvent(binding: string, event: KeyboardEvent): boolean 
   if (!binding) return false;
 
   const parsed = parseBinding(binding);
-  const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+
+  // On macOS, Alt/Option remaps e.key for many letters (e.g. Alt+N → "~").
+  // Fall back to e.code for alt+single-letter bindings so they work cross-platform.
+  let eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (event.altKey && parsed.alt && parsed.key.length === 1 && event.code.startsWith('Key')) {
+    eventKey = event.code.slice(3).toLowerCase();
+  }
 
   return (
     event.ctrlKey === parsed.ctrl &&
