@@ -40,12 +40,12 @@ vi.mock('@pagespace/db', () => ({
   not: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
       child: vi.fn(() => ({
@@ -56,6 +56,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -64,7 +65,7 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);

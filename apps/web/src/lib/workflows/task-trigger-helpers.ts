@@ -1,6 +1,6 @@
 import { db, workflows, taskItems, pages, eq, and, inArray } from '@pagespace/db';
 import { executeWorkflow } from './workflow-executor';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface AgentTriggerInput {
   agentPageId: string;

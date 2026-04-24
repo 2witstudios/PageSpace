@@ -26,12 +26,18 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock permissions (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  loggers: {
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: { info: vi.fn(), error: vi.fn() },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock message converter (boundary)
@@ -44,7 +50,7 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // ============================================================================

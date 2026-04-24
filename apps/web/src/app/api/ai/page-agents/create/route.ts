@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
 
 /**

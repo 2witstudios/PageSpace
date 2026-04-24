@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   conversationRepository,
   extractPreviewText,

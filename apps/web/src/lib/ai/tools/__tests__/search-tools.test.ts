@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock only the boundary we actually test
-vi.mock('@pagespace/lib/server', () => ({
-  getUserDriveAccess: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    getUserDriveAccess: vi.fn(),
 }));
 
 import { searchTools } from '../search-tools';
-import { getUserDriveAccess } from '@pagespace/lib/server';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);

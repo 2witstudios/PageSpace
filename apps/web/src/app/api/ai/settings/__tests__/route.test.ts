@@ -25,8 +25,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock logging (boundary)
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       info: vi.fn(),
       error: vi.fn(),
@@ -34,7 +34,11 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  auditRequest: vi.fn(),
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 // Mock AI provider settings functions (boundary)
@@ -79,7 +83,7 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   getDefaultPageSpaceSettings,
   getUserOpenRouterSettings,

@@ -15,7 +15,7 @@ import {
   desc,
 } from '@pagespace/db';
 import type { CalendarTriggerMetadata } from '@pagespace/db';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
+import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { type ToolExecutionContext } from '../core';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 
