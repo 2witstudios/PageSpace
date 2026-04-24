@@ -302,7 +302,7 @@
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js",
-      "default": "./dist/types.js"
+      "require": "./dist/types.js"
     },
     "./utils/utils": {
       "types": "./dist/utils/utils.d.ts",
@@ -317,7 +317,7 @@
     "./utils/enums": {
       "types": "./dist/utils/enums.d.ts",
       "import": "./dist/utils/enums.js",
-      "default": "./dist/utils/enums.js"
+      "require": "./dist/utils/enums.js"
     },
     "./encryption": {
       "types": "./dist/encryption/index.d.ts",
@@ -332,7 +332,7 @@
     "./sheets": {
       "types": "./dist/sheets/index.d.ts",
       "import": "./dist/sheets/index.js",
-      "default": "./dist/sheets/index.js"
+      "require": "./dist/sheets/index.js"
     },
     "./repositories": {
       "types": "./dist/repositories/index.d.ts",
@@ -432,17 +432,17 @@
     "./content/page-types.config": {
       "types": "./dist/content/page-types.config.d.ts",
       "import": "./dist/content/page-types.config.js",
-      "default": "./dist/content/page-types.config.js"
+      "require": "./dist/content/page-types.config.js"
     },
     "./content/page-type-validators": {
       "types": "./dist/content/page-type-validators.d.ts",
       "import": "./dist/content/page-type-validators.js",
-      "default": "./dist/content/page-type-validators.js"
+      "require": "./dist/content/page-type-validators.js"
     },
     "./content/tree-utils": {
       "types": "./dist/content/tree-utils.d.ts",
       "import": "./dist/content/tree-utils.js",
-      "default": "./dist/content/tree-utils.js"
+      "require": "./dist/content/tree-utils.js"
     },
     "./audit/audit-log": {
       "types": "./dist/audit/audit-log.d.ts",

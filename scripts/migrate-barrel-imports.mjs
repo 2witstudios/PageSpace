@@ -89,6 +89,10 @@ const SERVER_MAP = {
   ActivityOperation: '@pagespace/lib/monitoring/activity-logger',
   logActivityWithTx: '@pagespace/lib/monitoring/activity-logger',
   DeferredWorkflowTrigger: '@pagespace/lib/monitoring/activity-logger',
+  ActivityResourceType: '@pagespace/lib/monitoring/activity-logger',
+  logRollbackActivity: '@pagespace/lib/monitoring/activity-logger',
+  logPermissionActivity: '@pagespace/lib/monitoring/activity-logger',
+  logConversationUndo: '@pagespace/lib/monitoring/activity-logger',
 
   // Monitoring - change group
   createChangeGroupId: '@pagespace/lib/monitoring/change-group',

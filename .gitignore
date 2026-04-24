@@ -22,7 +22,7 @@ pids
 # Directory for compiled output
 dist/
 build/
-# Symlinks to dist (created by pnpm worktrees — never commit)
+# Build artifacts (tsup output — never commit)
 packages/lib/dist
 packages/db/dist
 # Allow desktop app build config (entitlements, etc)

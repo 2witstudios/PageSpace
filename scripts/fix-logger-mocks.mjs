@@ -65,10 +65,11 @@ for (const filePath of testFiles) {
   const block = content.slice(mockIdx, mockEnd + 1);
   const after = content.slice(mockEnd + 1);
 
-  // block ends with })) — insert before the final newline+}))
-  const newBlock = block.replace(/(\n?[ \t]*\}\)\))$/, (_, closing) => {
+  // block ends with })) or })); — insert before the final newline+}))
+  const newBlock = block.replace(/(\n?[ \t]*\}\)\);?)$/, (_, closing) => {
+    const hasSemicolon = closing.trimStart().endsWith(';');
     const needsComma = !block.slice(0, block.length - closing.length).trimEnd().endsWith(',');
-    return `${needsComma ? ',' : ''}\n  logger: { child: ${childFn} },\n}))`;
+    return `${needsComma ? ',' : ''}\n  logger: { child: ${childFn} },\n}))${hasSemicolon ? ';' : ''}`;
   });
 
   if (newBlock !== block) {
