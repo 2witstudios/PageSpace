@@ -286,15 +286,17 @@ export async function GET(request: Request) {
       const authorizedUserIds = new Set<string>();
       
       if (crossDrive) {
-        // Cross-drive search: collect owner + members from all accessible drives
+        // Cross-drive: only enumerate members of drives where requester is a member/owner
         for (const targetDriveId of targetDriveIds) {
           const memberIds = await getDriveRecipientUserIds(targetDriveId);
-          for (const id of memberIds) {
-            authorizedUserIds.add(id);
+          if (memberIds.includes(userId)) {
+            for (const id of memberIds) {
+              authorizedUserIds.add(id);
+            }
           }
         }
       } else {
-        // Within-drive search: owner + all drive members
+        // Within-drive: surface members only to other drive members/owners
         const memberIds = await getDriveRecipientUserIds(driveId!);
         if (memberIds.length === 0) {
           return NextResponse.json(
@@ -302,8 +304,10 @@ export async function GET(request: Request) {
             { status: 404 }
           );
         }
-        for (const id of memberIds) {
-          authorizedUserIds.add(id);
+        if (memberIds.includes(userId)) {
+          for (const id of memberIds) {
+            authorizedUserIds.add(id);
+          }
         }
       }
 
