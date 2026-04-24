@@ -42,7 +42,7 @@ vi.mock('../../cache/content-store', () => ({
   },
 }));
 
-vi.mock('@pagespace/db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       files: {
@@ -53,8 +53,14 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
   files: { id: 'files.id' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
 }));
 
