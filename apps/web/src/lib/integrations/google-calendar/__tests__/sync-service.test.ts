@@ -373,6 +373,65 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
 });
 
 describe('syncGoogleCalendar error handling', () => {
+  it('should remove stale calendar from selectedCalendars when Google returns 404', async () => {
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['stale@group.calendar.google.com', 'user@gmail.com'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+
+    // First calendar returns 404, second succeeds
+    mockListEvents
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Not Found',
+        statusCode: 404,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { events: [], nextSyncToken: 'token-1' },
+      });
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'one calendar returns 404',
+      should: 'succeed overall',
+      actual: result.success,
+      expected: true,
+    });
+
+    // 404 warning log must be retained
+    const { loggers } = await import('@pagespace/lib/server');
+    assert({
+      given: 'a 404 from Google Calendar API',
+      should: 'log a warning for the not-found calendar',
+      actual: (loggers.api.warn as ReturnType<typeof vi.fn>).mock.calls.some(
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('not found')
+      ),
+      expected: true,
+    });
+
+    // The stale calendar should be removed from selectedCalendars in the DB update
+    const setArgs = mockUpdate.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<string, unknown> | undefined;
+    assert({
+      given: 'a 404 for one calendar with another valid calendar remaining',
+      should: 'persist selectedCalendars without the stale entry',
+      actual: setArgs?.selectedCalendars,
+      expected: ['user@gmail.com'],
+    });
+  });
+
   it('should handle token expiration (410) with sync token fallback', async () => {
     mockGetValidAccessToken.mockResolvedValue({
       success: true,
