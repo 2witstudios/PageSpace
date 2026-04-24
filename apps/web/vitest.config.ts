@@ -7,7 +7,8 @@ import path from 'path'
 const packagesDir = path.resolve(__dirname, '../../packages')
 
 export default defineConfig({
-  plugins: [react()],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  plugins: [react() as any],
   test: {
     globals: true,
     environment: 'jsdom',
