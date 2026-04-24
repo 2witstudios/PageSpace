@@ -1,5 +1,6 @@
-import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 export async function GET(req: Request) {

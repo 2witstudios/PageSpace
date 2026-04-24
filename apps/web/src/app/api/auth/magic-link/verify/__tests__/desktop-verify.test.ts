@@ -23,7 +23,7 @@ vi.mock('next/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock'),
     validateSession: vi.fn().mockResolvedValue({
@@ -38,9 +38,17 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 604800000,
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
   createExchangeCode: vi.fn().mockResolvedValue('exchange-code-abc'),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'ps_dev_desktop',
     deviceTokenRecordId: 'dt-1',
@@ -56,13 +64,15 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     security: {
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
@@ -93,7 +103,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { createExchangeCode } from '@pagespace/lib/auth';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 

@@ -17,8 +17,10 @@ vi.mock('next/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifyAuthentication: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -32,12 +34,18 @@ vi.mock('@pagespace/lib/auth', () => ({
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
   createExchangeCode: vi.fn().mockResolvedValue('mock-exchange-code'),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -46,6 +54,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
@@ -53,7 +63,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
@@ -81,15 +91,14 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 import { POST } from '../route';
-import {
-  verifyAuthentication,
-  sessionService,
-  generateCSRFToken,
-  createExchangeCode,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 

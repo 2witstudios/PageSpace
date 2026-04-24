@@ -8,7 +8,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -20,6 +20,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
@@ -29,7 +31,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 import { verifyToken, markEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/verify-email', () => {

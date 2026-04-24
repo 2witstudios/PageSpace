@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../logout/route';
 
 // Mock session service from @pagespace/lib/auth
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn().mockResolvedValue({
       sessionId: 'test-session-id',
@@ -28,6 +28,8 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 
@@ -43,7 +45,7 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('unknown'),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -55,6 +57,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
@@ -62,10 +66,10 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 describe('/api/auth/logout', () => {

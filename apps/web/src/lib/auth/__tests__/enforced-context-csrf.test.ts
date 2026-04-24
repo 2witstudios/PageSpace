@@ -2,14 +2,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
   EnforcedAuthContext: class EnforcedAuthContext {
     userId: string;
     userRole: string;
@@ -21,6 +23,8 @@ vi.mock('@pagespace/lib/server', () => ({
       return { ctx: claims };
     }
   },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
@@ -56,8 +60,8 @@ vi.mock('../cookie-config', () => ({
 }));
 
 import { authenticateWithEnforcedContext, isEnforcedAuthError } from '../index';
-import { sessionService } from '@pagespace/lib/auth';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { validateCSRF } from '../csrf-validation';
 import { getSessionFromCookies } from '../cookie-config';
 

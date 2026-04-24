@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Origin Header Validation for API Routes (Defense-in-Depth)

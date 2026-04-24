@@ -47,21 +47,22 @@
  */
 
 import { z } from 'zod/v4';
-import {
-  generateCSRFToken,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
-import { loggers, auditRequest, maskEmail } from '@pagespace/lib/server';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
-import type { MobileOAuthResponse } from '@pagespace/lib/server';
+import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
+import { OAuthProvider } from '@pagespace/lib/auth/oauth-types';
+import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';

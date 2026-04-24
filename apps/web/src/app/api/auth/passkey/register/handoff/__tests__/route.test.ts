@@ -9,12 +9,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/passkey-register-handoff', () => ({
   createPasskeyRegisterHandoff: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   validateCSRFToken: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -23,10 +25,12 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     PASSKEY_REGISTER: { maxAttempts: 5, windowMs: 300000, progressiveDelay: false },
@@ -45,9 +49,11 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { createPasskeyRegisterHandoff, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { createPasskeyRegisterHandoff } from '@pagespace/lib/auth/passkey-register-handoff';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import {
   authenticateSessionRequest,
   isAuthError,
