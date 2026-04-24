@@ -23,8 +23,8 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPageServiceToken: vi.fn(),
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createPageServiceToken: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -35,8 +35,8 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserEditPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserEditPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => {
@@ -61,10 +61,10 @@ vi.stubGlobal('fetch', mockFetch);
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { createPageServiceToken } from '@pagespace/lib';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { canUserEditPage } from '@pagespace/lib/permissions';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test helpers

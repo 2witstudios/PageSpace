@@ -12,19 +12,23 @@ import {
 } from '../index';
 
 // Mock dependencies
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
   EnforcedAuthContext: class EnforcedAuthContext {
     static fromSession(sessionClaims: unknown): unknown {
       return sessionClaims;
     }
   },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
@@ -59,8 +63,8 @@ vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
 
-import { sessionService } from '@pagespace/lib/auth';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';

@@ -1,5 +1,5 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { hashToken } from '@pagespace/lib/auth';
 import { randomBytes } from 'crypto';

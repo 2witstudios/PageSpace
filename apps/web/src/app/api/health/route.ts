@@ -1,5 +1,5 @@
 import { db, sql } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getMonitoringIngestStatus } from '@/middleware/monitoring';
 
 interface HealthResponse {

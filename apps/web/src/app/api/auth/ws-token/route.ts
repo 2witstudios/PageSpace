@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth, getClientIP } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // WS tokens for desktop/mobile persistent connections need long TTL to match device sessions.
 // The connection is persistent and authenticated - we don't want to kick users mid-interaction.

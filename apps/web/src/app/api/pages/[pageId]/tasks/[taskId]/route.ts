@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, taskStatusConfigs, taskAssignees, pages, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, auditRequest } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
-import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
-import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
+import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };

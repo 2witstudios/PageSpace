@@ -7,13 +7,15 @@ vi.mock('@/lib/auth', () => ({
   createWebDeviceToken: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     security: {
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/security-audit', () => ({
   securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
@@ -25,7 +27,7 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
@@ -41,7 +43,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, createWebDeviceToken } from '@/lib/auth';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 function createRequest(body: Record<string, unknown>) {

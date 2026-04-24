@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import {
-  verifyRegistration,
-  validateCSRFToken,
-  consumePasskeyRegisterHandoff,
-} from '@pagespace/lib/auth';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { verifyRegistration } from '@pagespace/lib/auth/passkey-service';
+import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { consumePasskeyRegisterHandoff } from '@pagespace/lib/auth/passkey-register-handoff';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+} from '@pagespace/lib/security/distributed-rate-limit';
 import {
   authenticateSessionRequest,
   getBearerToken,

@@ -17,7 +17,7 @@ import {
 import type { Tab } from '@/stores/useTabsStore';
 import { parseTabPath } from '@/lib/tabs/tab-title';
 import { useTabMeta } from '@/hooks/useTabMeta';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface TabItemProps {
   tab: Tab;

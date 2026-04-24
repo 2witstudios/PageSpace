@@ -54,13 +54,15 @@ vi.mock('@pagespace/db', () => ({
   inArray: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  isUserDriveMember: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    isUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveMemberUserIds: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    getDriveMemberUserIds: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     ai: {
       child: vi.fn(() => ({
         info: vi.fn(),
@@ -70,6 +72,7 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({
@@ -137,8 +140,8 @@ vi.mock('chrono-node', () => ({
 
 import { calendarWriteTools } from '../calendar-write-tools';
 import { db, inArray } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
-import { getDriveMemberUserIds } from '@pagespace/lib/server';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../../core';
 

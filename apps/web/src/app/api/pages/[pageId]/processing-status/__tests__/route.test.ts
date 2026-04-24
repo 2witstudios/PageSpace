@@ -22,9 +22,11 @@ vi.mock('@/lib/auth', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib', () => ({
-  createPageServiceToken: vi.fn(),
-  canUserViewPage: vi.fn(),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/validated-service-token', () => ({
+    createPageServiceToken: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => {
@@ -54,7 +56,8 @@ vi.stubGlobal('fetch', mockFetch);
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
+import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db';
 
 // Test helpers

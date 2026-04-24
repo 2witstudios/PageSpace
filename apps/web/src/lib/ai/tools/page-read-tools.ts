@@ -1,7 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, taskItems, taskLists, chatMessages, channelMessages, eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db';
-import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
+import { buildTree } from '@pagespace/lib/content/tree-utils';
+import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 

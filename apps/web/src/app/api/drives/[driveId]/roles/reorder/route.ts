@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  auditRequest,
-  checkDriveAccessForRoles,
-  reorderDriveRoles,
-} from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { checkDriveAccessForRoles, reorderDriveRoles } from '@pagespace/lib/services/drive-role-service';
 import { db, driveRoles, eq, asc } from '@pagespace/db';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 

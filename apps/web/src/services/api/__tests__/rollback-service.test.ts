@@ -79,25 +79,27 @@ vi.mock('@pagespace/db', () => {
 });
 
 // Mock permission checks
-vi.mock('@pagespace/lib/permissions', () => ({
-  canUserRollback: vi.fn(),
-  isRollbackableOperation: vi.fn(),
+vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
+    canUserRollback: vi.fn(),
+    isRollbackableOperation: vi.fn(),
 }));
 
 // Mock activity logger
-vi.mock('@pagespace/lib/monitoring', () => ({
-  logRollbackActivity: vi.fn(),
-  getActorInfo: vi.fn().mockResolvedValue({
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    logRollbackActivity: vi.fn(),
+    getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
   }),
-  createChangeGroupId: vi.fn(() => 'change-group-1'),
-  inferChangeGroupType: vi.fn(() => 'user'),
+}));
+vi.mock('@pagespace/lib/monitoring/change-group', () => ({
+    createChangeGroupId: vi.fn(() => 'change-group-1'),
+    inferChangeGroupType: vi.fn(() => 'user'),
 }));
 
 // Mock loggers
-vi.mock('@pagespace/lib/server', () => ({
-  loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -105,14 +107,22 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
-  readPageContent: vi.fn(),
-  computePageStateHash: vi.fn(() => 'state-hash'),
-  hashWithPrefix: vi.fn(() => 'content-ref'),
-  createPageVersion: vi.fn().mockResolvedValue({
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/services/page-content-store', () => ({
+    readPageContent: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/page-version-service', () => ({
+    computePageStateHash: vi.fn(() => 'state-hash'),
+    createPageVersion: vi.fn().mockResolvedValue({
     id: 'version-123',
     contentRef: 'content-ref',
     contentSize: 42,
   }),
+}));
+vi.mock('@pagespace/lib/utils/hash-utils', () => ({
+    hashWithPrefix: vi.fn(() => 'content-ref'),
 }));
 
 vi.mock('@/services/api/page-mention-service', () => ({
@@ -120,8 +130,8 @@ vi.mock('@/services/api/page-mention-service', () => ({
 }));
 
 import { db } from '@pagespace/db';
-import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
-import { logRollbackActivity } from '@pagespace/lib/monitoring';
+import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
+import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 /** Matches the mock shape defined in vi.mock('@pagespace/db') above */
 type MockFn = ReturnType<typeof vi.fn>;

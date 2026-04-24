@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Drive } from '@pagespace/lib/client';
+import { Drive } from '@pagespace/lib/types';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 export type { Drive };
 

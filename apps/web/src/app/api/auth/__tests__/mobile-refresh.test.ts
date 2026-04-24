@@ -28,11 +28,15 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateDeviceToken: vi.fn(),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
   generateDeviceToken: vi.fn().mockReturnValue('new-device-token'),
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
@@ -44,6 +48,8 @@ vi.mock('@pagespace/lib/server', () => ({
       warn: vi.fn(),
     },
   },
+}));
+vi.mock('@pagespace/lib/audit/security-audit', () => ({
   securityAudit: {
     logAuthSuccess: vi.fn().mockResolvedValue(undefined),
     logAuthFailure: vi.fn().mockResolvedValue(undefined),
@@ -55,9 +61,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn((token) => `hashed-${token}`),
   getTokenPrefix: vi.fn((token) => token.substring(0, 8)),
+}));
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_refreshed-token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -72,7 +80,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 9,
@@ -93,16 +101,13 @@ vi.mock('@/lib/auth', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
-import {
-  validateDeviceToken,
-  updateDeviceTokenActivity,
-} from '@pagespace/lib/server';
+import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
-import { sessionService } from '@pagespace/lib/auth';
+} from '@pagespace/lib/security/distributed-rate-limit';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getClientIP } from '@/lib/auth';
 
 describe('/api/auth/mobile/refresh', () => {
@@ -238,8 +243,8 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth');
-      const { generateDeviceToken } = await import('@pagespace/lib/server');
+      const { hashToken, getTokenPrefix } = await import('@pagespace/lib/auth/token-utils');
+      const { generateDeviceToken } = await import('@pagespace/lib/auth/device-auth-utils');
       expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
         validRefreshPayload.deviceToken,
         {
@@ -558,7 +563,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('logs device ID mismatch warning', async () => {
-      const { loggers } = await import('@pagespace/lib/server');
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',

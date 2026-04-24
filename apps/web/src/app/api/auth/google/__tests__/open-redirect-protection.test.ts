@@ -10,12 +10,8 @@ import { POST } from '../signin/route';
 import { GET } from '../callback/route';
 
 // Mock dependencies for signin
-vi.mock('@pagespace/lib/server', async () => {
-  const { maskEmail } = await vi.importActual<typeof import('@pagespace/lib/audit/mask-email')>(
-    '@pagespace/lib/audit/mask-email'
-  );
-  return {
-    loggers: {
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
       auth: {
         error: vi.fn(),
         info: vi.fn(),
@@ -26,16 +22,18 @@ vi.mock('@pagespace/lib/server', async () => {
         warn: vi.fn(),
       },
     },
-    auditRequest: vi.fn(),
-    validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
     }),
-    maskEmail,
-  };
-});
+}));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
@@ -97,7 +95,7 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 // Mock session service from @pagespace/lib/auth
-vi.mock('@pagespace/lib/auth', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
     validateSession: vi.fn().mockResolvedValue({
@@ -111,9 +109,15 @@ vi.mock('@pagespace/lib/auth', () => ({
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
+}));
+vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+vi.mock('@pagespace/lib/auth/pkce', () => ({
   generatePKCE: vi.fn().mockResolvedValue(null),
   consumePKCEVerifier: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@pagespace/lib/auth/constants', () => ({
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 
@@ -179,7 +183,7 @@ const createSignedState = (data: Record<string, unknown>) => {
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 describe('Open Redirect Protection', () => {
   const originalEnv = { ...process.env };

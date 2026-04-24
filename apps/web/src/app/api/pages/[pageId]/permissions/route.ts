@@ -6,13 +6,10 @@ import {
   isEnforcedAuthError,
 } from '@/lib/auth';
 import { z } from 'zod/v4';
-import { createPermissionNotification } from '@pagespace/lib';
-import {
-  loggers,
-  auditRequest,
-  grantPagePermission,
-  revokePagePermission,
-} from '@pagespace/lib/server';
+import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log'
+import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
 import { permissionManagementService } from '@/services/api';
 import { db, pages, eq } from '@pagespace/db';
 import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';

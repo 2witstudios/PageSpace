@@ -19,10 +19,14 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
-  canUserEditPage: vi.fn().mockResolvedValue(true),
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+    canUserViewPage: vi.fn().mockResolvedValue(true),
+    canUserEditPage: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+    getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@test.com', actorDisplayName: 'Test' }),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
       info: vi.fn(),
@@ -39,7 +43,10 @@ vi.mock('@pagespace/lib/server', () => ({
       })),
     },
   },
-  auditRequest: vi.fn(),
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    auditRequest: vi.fn(),
 }));
 
 vi.mock('@pagespace/db', () => ({

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, sql, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

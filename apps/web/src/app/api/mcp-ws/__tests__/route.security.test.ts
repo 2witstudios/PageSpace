@@ -54,11 +54,13 @@ vi.mock('@/lib/websocket/ws-security', () => ({
   isSecureConnection: vi.fn(() => true),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
     createSession: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
@@ -68,13 +70,12 @@ vi.mock('@pagespace/lib', () => ({
       fatal: vi.fn(),
     })),
   },
-}));
-
-vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     security: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
@@ -87,8 +88,8 @@ import {
   getConnectionFingerprint,
   validateMessageSize,
 } from '@/lib/websocket';
-import { sessionService } from '@pagespace/lib';
-import { auditRequest } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Mock session expiry (1 hour from now)
 const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);

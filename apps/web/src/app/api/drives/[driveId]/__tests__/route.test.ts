@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
+import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]
@@ -13,15 +13,19 @@ import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/server';
 // ============================================================================
 
 // Mock the service seam - this is the ONLY place we mock DB-related logic
-vi.mock('@pagespace/lib/server', () => ({
-  getDriveById: vi.fn(),
-  getDriveAccess: vi.fn(),
-  getDriveWithAccess: vi.fn(),
-  updateDrive: vi.fn(),
-  trashDrive: vi.fn(),
-  audit: vi.fn(),
-  auditRequest: vi.fn(),
-  loggers: {
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+    getDriveById: vi.fn(),
+    getDriveAccess: vi.fn(),
+    getDriveWithAccess: vi.fn(),
+    updateDrive: vi.fn(),
+    trashDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+    audit: vi.fn(),
+    auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+    loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -29,6 +33,8 @@ vi.mock('@pagespace/lib/server', () => ({
       debug: vi.fn(),
     },
   },
+
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -53,14 +59,8 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
 
-import {
-  getDriveById,
-  getDriveAccess,
-  getDriveWithAccess,
-  updateDrive,
-  trashDrive,
-  loggers,
-} from '@pagespace/lib/server';
+import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 

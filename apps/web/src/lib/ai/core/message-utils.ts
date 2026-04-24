@@ -5,7 +5,7 @@ import {
   type DynamicToolUIPart,
 } from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** Narrow a UIMessage part to TextUIPart */
 function isTextPart(part: { type: string }): part is TextUIPart {

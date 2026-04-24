@@ -6,7 +6,7 @@
  */
 
 import { db, activityLogs, eq, and, gte, desc } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   executeRollback,
   previewRollback,

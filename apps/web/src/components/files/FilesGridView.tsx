@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { FileItemContextMenu } from './FileItemContextMenu';
-import { PageType } from '@pagespace/lib/client-safe';
+import { PageType } from '@pagespace/lib/utils/enums';
 import type { TreePage } from '@/hooks/usePageTree';
 
 interface FilesGridViewProps {

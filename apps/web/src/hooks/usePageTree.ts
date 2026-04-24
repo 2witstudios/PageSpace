@@ -1,7 +1,7 @@
 import useSWR, { useSWRConfig } from 'swr';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { mergeChildren } from '@/lib/tree/tree-utils';
-import { Page } from '@pagespace/lib/client';
+import { Page } from '@pagespace/lib/types';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 

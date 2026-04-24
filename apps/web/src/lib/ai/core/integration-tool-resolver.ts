@@ -9,21 +9,26 @@ import { db } from '@pagespace/db';
 import {
   resolveAgentIntegrations,
   resolveGlobalAssistantIntegrations,
+  type ResolutionDependencies,
+} from '@pagespace/lib/integrations/resolution/resolve-agent-integrations';
+import {
   convertIntegrationToolsToAISDK,
+  type CoreTool,
+  type GrantWithConnectionAndProvider,
+} from '@pagespace/lib/integrations/converter/ai-sdk';
+import {
   createToolExecutor,
+  type ExecuteToolDependencies,
+} from '@pagespace/lib/integrations/saga/execute-tool';
+import {
   getConnectionWithProvider,
-  logAuditEntry,
-  listGrantsByAgent,
   listUserConnections,
   listDriveConnections,
-  getConfig,
-  type CoreTool,
-  type DriveRole,
-  type ResolutionDependencies,
-  type ExecuteToolDependencies,
-  type GrantWithConnectionAndProvider,
-  type GlobalAssistantConfigData,
-} from '@pagespace/lib/integrations';
+} from '@pagespace/lib/integrations/repositories/connection-repository';
+import { logAuditEntry } from '@pagespace/lib/integrations/repositories/audit-repository';
+import { listGrantsByAgent } from '@pagespace/lib/integrations/repositories/grant-repository';
+import { getConfig } from '@pagespace/lib/integrations/repositories/config-repository';
+import { type DriveRole, type GlobalAssistantConfigData } from '@pagespace/lib/integrations/types';
 
 /** The connection type expected by the tool executor's loadConnection dependency. */
 type LoadConnectionResult = ExecuteToolDependencies['loadConnection'] extends

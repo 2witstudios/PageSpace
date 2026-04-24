@@ -11,31 +11,20 @@ import {
   canUserRollback,
   isRollbackableOperation,
   type RollbackContext,
-} from '@pagespace/lib/permissions';
+} from '@pagespace/lib/permissions/rollback-permissions';
 
 // Re-export RollbackContext for consumers
 export type { RollbackContext };
-import {
-  logRollbackActivity,
-  getActorInfo,
-  type ActivityResourceType,
-  type ActivityOperation,
-  type DeferredWorkflowTrigger,
-  createChangeGroupId,
-  inferChangeGroupType,
-} from '@pagespace/lib/monitoring';
-import {
-  loggers,
-  readPageContent,
-  computePageStateHash,
-  hashWithPrefix,
-  createPageVersion,
-  type PageVersionSource,
-  type ChangeGroupType,
-} from '@pagespace/lib/server';
-import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content';
+import { logRollbackActivity, getActorInfo, type ActivityResourceType, type ActivityOperation, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger'
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { readPageContent } from '@pagespace/lib/services/page-content-store'
+import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
+import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
-import { createMentionNotification } from '@pagespace/lib/notifications';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 
 /**
  * Valid activity operations for filtering

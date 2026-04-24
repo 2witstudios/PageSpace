@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { pages, taskItems, db, and, eq, asc, isNotNull } from '@pagespace/db';
-import { canUserViewPage, loggers, auditRequest } from '@pagespace/lib/server';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 

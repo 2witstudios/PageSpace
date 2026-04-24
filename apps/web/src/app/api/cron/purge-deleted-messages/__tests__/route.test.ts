@@ -22,7 +22,7 @@ vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: mockGlobalRepo,
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 

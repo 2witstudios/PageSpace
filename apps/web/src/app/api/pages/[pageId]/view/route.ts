@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { db, eq, userPageViews, pages } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config'
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
-import { canUserViewPage } from '@pagespace/lib/permissions';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

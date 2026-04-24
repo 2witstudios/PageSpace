@@ -22,7 +22,7 @@ import {
   inArray,
   isNull,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };

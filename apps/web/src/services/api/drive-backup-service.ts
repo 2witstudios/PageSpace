@@ -15,10 +15,11 @@ import {
   inArray,
   desc,
 } from '@pagespace/db';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/server';
-import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
-import { computePageStateHash, createPageVersion, hashWithPrefix } from '@pagespace/lib/server';
-import { detectPageContentFormat } from '@pagespace/lib/content';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
+import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
+import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
 
 export type DriveBackupSource = 'manual' | 'scheduled' | 'pre_restore' | 'system';
 

@@ -8,7 +8,7 @@
 
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
-import { loggers } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   updatePersonalization,
   getCurrentPersonalization,

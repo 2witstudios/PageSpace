@@ -21,8 +21,8 @@ vi.mock('@pagespace/db', () => {
 });
 
 // Mock @pagespace/lib to provide isValidId
-vi.mock('@pagespace/lib', () => ({
-  isValidId: vi.fn((id: string) => /^[a-z0-9]{20,30}$/.test(id)),
+vi.mock('@pagespace/lib/validators/id-validators', () => ({
+    isValidId: vi.fn((id: string) => /^[a-z0-9]{20,30}$/.test(id)),
 }));
 
 beforeEach(() => {

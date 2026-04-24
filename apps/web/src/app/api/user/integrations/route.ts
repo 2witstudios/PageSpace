@@ -2,17 +2,14 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
-import { loggers, auditRequest } from '@pagespace/lib/server';
-import {
-  listUserConnections,
-  createConnection,
-  getProviderById,
-  findUserConnection,
-  encryptCredentials,
-  buildOAuthAuthorizationUrl,
-  createSignedState,
-} from '@pagespace/lib/integrations';
-import type { IntegrationProviderConfig } from '@pagespace/lib/integrations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { listUserConnections, createConnection, findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
+import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler';
+import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
+import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

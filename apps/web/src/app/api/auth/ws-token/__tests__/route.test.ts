@@ -23,31 +23,33 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-vi.mock('@pagespace/lib', () => ({
+vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_ws_token'),
   },
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 9,
   }),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { warn: vi.fn() },
   },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
 
 import { verifyAuth, getClientIP } from '@/lib/auth';
-import { sessionService } from '@pagespace/lib';
-import { checkDistributedRateLimit } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { POST } from '../route';
 
 describe('/api/auth/ws-token', () => {
