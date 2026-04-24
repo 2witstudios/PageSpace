@@ -21,30 +21,20 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/db/db', () => {
-  const integrationAuditLog = {
-    driveId: 'col_driveId',
-    connectionId: 'col_connectionId',
-    success: 'col_success',
-    agentId: 'col_agentId',
-    createdAt: 'col_createdAt',
-    toolName: 'col_toolName',
-  };
-  return {
-    db: {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(),
-        })),
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(),
       })),
-      query: {
-        integrationAuditLog: {
-          findMany: vi.fn(),
-        },
+    })),
+    query: {
+      integrationAuditLog: {
+        findMany: vi.fn(),
       },
     },
-  };
-});
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),

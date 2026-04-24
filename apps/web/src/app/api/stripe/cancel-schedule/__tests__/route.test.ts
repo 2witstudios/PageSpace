@@ -60,14 +60,35 @@ vi.mock('@pagespace/db/db', () => {
           if (table === usersTable) {
             return { where: mockUserQuery };
           }
-  return {
-    where: vi.fn(() => ({
+          return {
+            where: vi.fn(() => ({
               orderBy: vi.fn(() => ({
                 limit: mockSubscriptionQuery,
               })),
             })),
+          };
+        }),
+      })),
+      update: vi.fn(() => ({
+        set: mockUpdateSet.mockReturnValue({
+          where: mockUpdateWhere,
+        }),
+      })),
+    },
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ field, values, type: 'inArray' })),
+  desc: vi.fn((field: unknown) => ({ field, type: 'desc' })),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: usersTable,
+}));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({
+  subscriptions: subscriptionsTable,
+}));
 
 // Mock auth
 vi.mock('@/lib/auth', () => ({

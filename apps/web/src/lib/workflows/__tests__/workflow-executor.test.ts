@@ -287,7 +287,7 @@ describe('executeWorkflow', () => {
   });
 
   test('context page query includes driveId filter', async () => {
-    const { eq, and, inArray } = await import('@pagespace/db');
+    const { eq, and, inArray } = await import('@pagespace/db/operators');
     setupSelectChain(
       [mockAgent],
       [mockDrive],

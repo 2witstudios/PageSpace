@@ -32,9 +32,6 @@ const {
 // ---------- vi.mock declarations ----------
 
 vi.mock('@pagespace/db/db', () => {
-  const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
-  const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
-
   const createChain = (resolveRef: { value: Record<string, unknown>[] }) => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {};
     chain.from = vi.fn().mockReturnValue(chain);

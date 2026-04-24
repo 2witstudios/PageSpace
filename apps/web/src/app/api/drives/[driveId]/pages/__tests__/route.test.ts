@@ -30,16 +30,6 @@ const {
 // ---------- vi.mock declarations ----------
 
 vi.mock('@pagespace/db/db', () => {
-  const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
-  const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
-  const inArray = vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' }));
-  const asc = vi.fn((_col: unknown) => ({ type: 'asc' }));
-  const isNotNull = vi.fn((_col: unknown) => ({ type: 'isNotNull' }));
-  const sql = Object.assign(
-    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
-    { join: vi.fn(() => ({ type: 'sql.join' })) }
-  );
-
   const selectDistinctChain = {
     from: vi.fn().mockReturnThis(),
     leftJoin: vi.fn().mockReturnThis(),
@@ -64,6 +54,17 @@ vi.mock('@pagespace/db/db', () => {
     },
   };
 });
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' })),
+  and: vi.fn((..._args: unknown[]) => ({ type: 'and' })),
+  inArray: vi.fn((_col: unknown, _vals: unknown[]) => ({ type: 'inArray' })),
+  asc: vi.fn((_col: unknown) => ({ type: 'asc' })),
+  isNotNull: vi.fn((_col: unknown) => ({ type: 'isNotNull' })),
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ..._values: unknown[]) => ({ strings, _values, type: 'sql' }),
+    { join: vi.fn(() => ({ type: 'sql.join' })) }
+  ),
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId', isTrashed: 'pages.isTrashed', parentId: 'pages.parentId', position: 'pages.position' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },

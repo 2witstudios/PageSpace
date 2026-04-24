@@ -1,7 +1,22 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 // Mock @pagespace/db to provide the Drizzle operators and schema references
-;
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...conditions: unknown[]) => ({ _type: 'and', conditions })),
+  eq: vi.fn((col: unknown, val: unknown) => ({ _type: 'eq', col, val })),
+  gte: vi.fn((col: unknown, val: unknown) => ({ _type: 'gte', col, val })),
+  lte: vi.fn((col: unknown, val: unknown) => ({ _type: 'lte', col, val })),
+}));
+vi.mock('@pagespace/db/schema/integrations', () => ({
+  integrationAuditLog: {
+    driveId: 'col_driveId',
+    connectionId: 'col_connectionId',
+    success: 'col_success',
+    agentId: 'col_agentId',
+    createdAt: 'col_createdAt',
+    toolName: 'col_toolName',
+  },
+}));
 
 // Mock @pagespace/lib to provide isValidId
 vi.mock('@pagespace/lib/validators/id-validators', () => ({

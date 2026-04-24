@@ -242,7 +242,7 @@ describe('syncGoogleCalendar', () => {
     });
 
     // Mock the calendarEvents findFirst to return null (new event)
-    const { db } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
     (db.query.calendarEvents.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     // Mock watchCalendar for the post-sync webhook registration

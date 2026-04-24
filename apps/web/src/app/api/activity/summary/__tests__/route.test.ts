@@ -92,7 +92,7 @@ describe('GET /api/activity/summary', () => {
   });
 
   it('does not log audit event when query throws', async () => {
-    const { db } = await import('@pagespace/db');
+    const { db } = await import('@pagespace/db/db');
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockRejectedValue(new Error('DB error')),
