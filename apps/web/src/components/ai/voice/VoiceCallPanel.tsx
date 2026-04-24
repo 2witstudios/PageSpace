@@ -18,6 +18,8 @@ export interface VoiceCallPanelProps {
   onSend: (text: string) => void;
   latestAssistantMessage?: VoiceResponse | null;
   isAIStreaming?: boolean;
+  streamingText?: string | null;
+  onStopStream?: () => void;
   onClose?: () => void;
   className?: string;
 }
@@ -27,12 +29,16 @@ export function VoiceCallPanel({
   onSend,
   latestAssistantMessage,
   isAIStreaming = false,
+  streamingText,
+  onStopStream,
   onClose,
   className,
 }: VoiceCallPanelProps) {
   const [showSettings, setShowSettings] = useState(false);
   const spokenMessageIdsRef = useRef<Set<string>>(new Set());
   const hasAutoStartedRef = useRef(false);
+  const streamingSpokenRef = useRef(0);
+  const pendingTextRef = useRef('');
 
   const activeOwner = useVoiceModeStore((state) => state.owner);
   const isEnabled = useVoiceModeStore((state) => state.isEnabled);
@@ -49,10 +55,12 @@ export function VoiceCallPanel({
     startListening,
     stopListening,
     speak,
+    queueSentence,
     bargeIn,
     interactionMode,
   } = useVoiceMode({
     onSend,
+    onStopStream,
   });
 
   const isOwnerActive = isEnabled && activeOwner === owner;
@@ -72,12 +80,50 @@ export function VoiceCallPanel({
     void startListening();
   }, [isOwnerActive, hasLoadedSettings, startListening]);
 
-  // Speak each new assistant message once
+  // Queue complete sentences as text streams in
+  useEffect(() => {
+    if (!isOwnerActive || !streamingText || !isAIStreaming) return;
+    const newChunk = streamingText.slice(streamingSpokenRef.current);
+    if (!newChunk) return;
+    pendingTextRef.current += newChunk;
+    streamingSpokenRef.current = streamingText.length;
+
+    const sentenceRe = /[^.!?\n]+[.!?\n]+(?=\s|$)/g;
+    let match: RegExpExecArray | null;
+    let lastIndex = 0;
+    while ((match = sentenceRe.exec(pendingTextRef.current)) !== null) {
+      queueSentence(match[0].trim());
+      lastIndex = sentenceRe.lastIndex;
+    }
+    pendingTextRef.current = pendingTextRef.current.slice(lastIndex);
+  }, [streamingText, isAIStreaming, isOwnerActive, queueSentence]);
+
+  // Reset streamed marker and pending buffer when a new stream begins
+  useEffect(() => {
+    if (!isAIStreaming) return;
+    streamingSpokenRef.current = 0;
+    pendingTextRef.current = '';
+  }, [isAIStreaming]);
+
+  // When stream ends, flush any buffered tail — skip if barge-in already started capture
+  useEffect(() => {
+    if (isAIStreaming) return;
+    const tail = pendingTextRef.current.trim();
+    pendingTextRef.current = '';
+    if (!tail) return;
+    const { voiceState: liveState } = useVoiceModeStore.getState();
+    if (liveState !== 'listening' && liveState !== 'processing') {
+      queueSentence(tail);
+    }
+  }, [isAIStreaming, queueSentence]);
+
+  // Fallback: speak full message when voice mode was activated after streaming ended
   useEffect(() => {
     if (!isOwnerActive || !latestAssistantMessage || isAIStreaming) return;
     if (isListening || isProcessing) return;
     if (spokenMessageIdsRef.current.has(latestAssistantMessage.id)) return;
     if (!latestAssistantMessage.text.trim()) return;
+    if (streamingSpokenRef.current > 0) return;
 
     spokenMessageIdsRef.current.add(latestAssistantMessage.id);
     void speak(latestAssistantMessage.text);

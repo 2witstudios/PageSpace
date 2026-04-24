@@ -53,6 +53,8 @@ export interface UseVoiceModeOptions {
   onSpeakComplete?: () => void;
   /** Callback when an error occurs */
   onError?: (error: string) => void;
+  /** Callback to abort the in-flight LLM stream on barge-in */
+  onStopStream?: () => void;
   /** Language for transcription (default: 'en') */
   language?: string;
 }
@@ -74,6 +76,8 @@ export interface UseVoiceModeReturn {
   startListening: () => Promise<void>;
   stopListening: () => void;
   speak: (text: string) => Promise<void>;
+  queueSentence: (text: string) => void;
+  clearSpeechQueue: () => void;
   stopSpeaking: () => void;
   bargeIn: () => void;
 
@@ -126,6 +130,7 @@ export function useVoiceMode({
   onSend,
   onSpeakComplete,
   onError,
+  onStopStream,
   language = 'en',
 }: UseVoiceModeOptions = {}): UseVoiceModeReturn {
   // Store state
@@ -185,8 +190,11 @@ export function useVoiceMode({
   const stopListeningRef = useRef<(() => void) | null>(null);
 
   // Callbacks ref to avoid stale closures
-  const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError });
-  callbacksRef.current = { onTranscript, onSend, onSpeakComplete, onError };
+  const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError, onStopStream });
+  callbacksRef.current = { onTranscript, onSend, onSpeakComplete, onError, onStopStream };
+
+  // Sentence queue for chained TTS playback
+  const speechQueueRef = useRef<string[]>([]);
 
   // Derived state
   const isListening = voiceState === 'listening';
@@ -256,7 +264,11 @@ export function useVoiceMode({
         }
 
         const result = await response.json();
-        return result.text as string;
+        const text = (result.text as string).trim();
+        const WHISPER_ARTIFACTS = new Set(['you', 'thank you', 'thanks', 'bye', 'goodbye']);
+        const normalized = text.toLowerCase().replace(/[.!?,\s]+$/, '').trim();
+        if (WHISPER_ARTIFACTS.has(normalized)) return null;
+        return text;
       } catch (err) {
         const message = getTranscriptionErrorMessage(err);
         setError(message);
@@ -408,6 +420,11 @@ export function useVoiceMode({
         setVoiceState('processing');
 
         const audioBlob = new Blob(recordingRefs.current.audioChunks, { type: mimeType });
+
+        if (audioBlob.size < 6000) {
+          setVoiceState('idle');
+          return;
+        }
         const transcript = await transcribeAudio(audioBlob);
 
         if (transcript) {
@@ -492,7 +509,7 @@ export function useVoiceMode({
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const SPEECH_THRESHOLD = 22;
-      const REQUIRED_SPEECH_FRAMES = 7;
+      const REQUIRED_SPEECH_FRAMES = 15;
       let speechFrames = 0;
 
       const checkSpeech = () => {
@@ -514,6 +531,8 @@ export function useVoiceMode({
 
         if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
           stopBargeInMonitoring();
+          speechQueueRef.current = [];
+          callbacksRef.current.onStopStream?.();
           bargeInStore();
           stopAudioPlayback();
           setCurrentAudioId(null);
@@ -594,6 +613,12 @@ export function useVoiceMode({
           stopBargeInMonitoring();
           if (playbackRefs.current.audioSource === source) {
             playbackRefs.current.audioSource = null;
+
+            if (speechQueueRef.current.length > 0) {
+              void speak(speechQueueRef.current.shift()!);
+              return;
+            }
+
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
@@ -638,9 +663,28 @@ export function useVoiceMode({
     ]
   );
 
-  // Barge-in: interrupt TTS and start listening
+  const clearSpeechQueue = useCallback(() => {
+    speechQueueRef.current = [];
+  }, []);
 
+  const queueSentence = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      const { voiceState: currentState } = useVoiceModeStore.getState();
+      if (currentState === 'speaking') {
+        speechQueueRef.current.push(text);
+      } else {
+        speechQueueRef.current = [];
+        void speak(text);
+      }
+    },
+    [speak]
+  );
+
+  // Barge-in: interrupt TTS and start listening
   const bargeIn = useCallback(() => {
+    speechQueueRef.current = [];
+    callbacksRef.current.onStopStream?.();
     bargeInStore();
     stopAudioPlayback();
     setCurrentAudioId(null);
@@ -721,6 +765,8 @@ export function useVoiceMode({
     startListening,
     stopListening,
     speak,
+    queueSentence,
+    clearSpeechQueue,
     stopSpeaking,
     bargeIn,
 

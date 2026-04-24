@@ -235,6 +235,16 @@ const SidebarChatTab: React.FC = () => {
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
 
+  const streamingAssistantText = useMemo(() => {
+    if (!displayIsStreaming) return null;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return null;
+    return (last.parts ?? [])
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { type: 'text'; text: string }).text)
+      .join('');
+  }, [messages, displayIsStreaming]);
+
   // Effect-based handoff for pending send → streaming transition
   const { wrapSend } = useSendHandoff(currentConversationId, status);
 
@@ -824,6 +834,8 @@ const SidebarChatTab: React.FC = () => {
             onSend={handleVoiceSend}
             latestAssistantMessage={lastAIResponse}
             isAIStreaming={displayIsStreaming}
+            streamingText={streamingAssistantText}
+            onStopStream={handleStop}
             onClose={disableVoiceMode}
           />
         )}
