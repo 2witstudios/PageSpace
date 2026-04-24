@@ -67,6 +67,7 @@ vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
 
 vi.mock('@pagespace/lib/deployment-mode', () => ({
   isCloud: vi.fn().mockReturnValue(false),
+  isOnPrem: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
