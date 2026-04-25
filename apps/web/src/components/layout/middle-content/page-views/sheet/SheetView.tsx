@@ -148,6 +148,19 @@ const getCellRect = (row: number, column: number, gridElement: HTMLElement | nul
   return cellElement.getBoundingClientRect();
 };
 
+const clampContextMenuPosition = (x: number, y: number, bounds?: DOMRect) => {
+  const menuW = 180; // min-w-[160px] + padding buffer
+  const menuH = 200; // approximate rendered height
+  const minLeft = bounds?.left ?? 0;
+  const minTop = bounds?.top ?? 0;
+  const maxLeft = (bounds?.right ?? window.innerWidth) - menuW;
+  const maxTop = (bounds?.bottom ?? window.innerHeight) - menuH;
+  return {
+    left: `${Math.max(minLeft, Math.min(x, Math.max(minLeft, maxLeft)))}px`,
+    top: `${Math.max(minTop, Math.min(y, Math.max(minTop, maxTop)))}px`,
+  };
+};
+
 const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
   const {
@@ -1507,11 +1520,16 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
     window.addEventListener('resize', handleResize, { passive: true });
 
+    // Also recompute when the panel container resizes (sidebar drag)
+    const resizeObserver = new ResizeObserver(updateCellRect);
+    if (gridRef.current) resizeObserver.observe(gridRef.current);
+
     return () => {
       if (scrollElement) {
         scrollElement.removeEventListener('scroll', handleScroll);
       }
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
     };
   }, [editingCell, cancelCellEdit]);
 
@@ -1950,19 +1968,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       {contextMenu.show && (
         <div
           className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
-          style={(() => {
-            const MENU_W = 180; // min-w-[160px] + padding
-            const MENU_H = 200; // approximate rendered height
-            const b = gridRef.current?.getBoundingClientRect();
-            const minLeft = b ? b.left : 0;
-            const minTop = b ? b.top : 0;
-            const maxLeft = (b ? b.right : window.innerWidth) - MENU_W;
-            const maxTop = (b ? b.bottom : window.innerHeight) - MENU_H;
-            return {
-              left: `${Math.max(minLeft, Math.min(contextMenu.x, Math.max(minLeft, maxLeft)))}px`,
-              top: `${Math.max(minTop, Math.min(contextMenu.y, Math.max(minTop, maxTop)))}px`,
-            };
-          })()}
+          style={clampContextMenuPosition(contextMenu.x, contextMenu.y, gridRef.current?.getBoundingClientRect())}
           onClick={(e) => e.stopPropagation()}
         >
           <div

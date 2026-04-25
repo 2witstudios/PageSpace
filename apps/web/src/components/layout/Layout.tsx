@@ -39,6 +39,10 @@ const noopStorage = {
   setItem: (_key: string, _value: string): void => {},
 } satisfies Pick<Storage, 'getItem' | 'setItem'>;
 
+const sidebarDefaultSize = 18; // % of panel group width
+const sidebarMinSize = 13;
+const sidebarMaxSize = 32;
+
 interface LayoutProps {
   children?: React.ReactNode;
 }
@@ -76,7 +80,7 @@ function Layout({ children }: LayoutProps) {
   const leftPanelVisible = !shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen;
   const rightPanelVisible = !shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen;
   const panelCount = 1 + (leftPanelVisible ? 1 : 0) + (rightPanelVisible ? 1 : 0);
-  const mainDefaultSize = (100 - (leftPanelVisible ? 18 : 0) - (rightPanelVisible ? 18 : 0)).toString();
+  const mainDefaultSize = (100 - (leftPanelVisible ? sidebarDefaultSize : 0) - (rightPanelVisible ? sidebarDefaultSize : 0)).toString();
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: `pagespace-layout-${panelCount}`,
@@ -279,9 +283,9 @@ function Layout({ children }: LayoutProps) {
               <>
                 <ResizablePanel
                   id="left-sidebar"
-                  defaultSize="18"
-                  minSize="13"
-                  maxSize="32"
+                  defaultSize={String(sidebarDefaultSize)}
+                  minSize={String(sidebarMinSize)}
+                  maxSize={String(sidebarMaxSize)}
                   className="pt-4 overflow-hidden"
                 >
                   <MemoizedSidebar className="h-full w-full" />
@@ -373,9 +377,9 @@ function Layout({ children }: LayoutProps) {
                 <ResizableHandle />
                 <ResizablePanel
                   id="right-sidebar"
-                  defaultSize="18"
-                  minSize="13"
-                  maxSize="32"
+                  defaultSize={String(sidebarDefaultSize)}
+                  minSize={String(sidebarMinSize)}
+                  maxSize={String(sidebarMaxSize)}
                   className="pt-4 overflow-hidden"
                 >
                   <RightPanel className="h-full w-full" />
