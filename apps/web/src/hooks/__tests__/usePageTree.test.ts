@@ -70,7 +70,7 @@ import { usePageTree, type TreePage } from '../usePageTree';
 const createMockTreePage = (overrides: Partial<TreePage> = {}): TreePage => ({
   id: 'page-' + Math.random().toString(36).slice(2, 11),
   title: 'Test Page',
-  type: 'DOCUMENT' as import('@pagespace/lib/client').PageType,
+  type: 'DOCUMENT' as import('@pagespace/lib/utils/enums').PageType,
   parentId: null,
   originalParentId: null,
   driveId: 'drive-123',

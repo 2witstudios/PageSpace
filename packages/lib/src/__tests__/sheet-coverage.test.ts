@@ -826,13 +826,9 @@ describe('address.ts catch blocks', () => {
   });
 });
 
-// ============================================================
-// Task 8: barrel export test for index.ts
-// ============================================================
-/** @scaffold — barrel export presence check */
-describe('sheets barrel export (index.ts) @scaffold', () => {
+describe('sheets module exports', () => {
   it('exports all expected public symbols', async () => {
-    const sheets = await import('../sheets/index');
+    const sheets = await import('../sheets/sheet');
     const expectedFunctions = [
       'evaluateSheet', 'createEmptySheet', 'parseSheetContent',
       'serializeSheetContent', 'collectExternalReferences',

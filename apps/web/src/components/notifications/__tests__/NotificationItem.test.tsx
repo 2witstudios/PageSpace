@@ -250,6 +250,34 @@ describe('NotificationItem', () => {
       expect(screen.queryByRole('button', { name: 'Accept' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Decline' })).not.toBeInTheDocument();
     });
+
+    it('hides Accept/Decline buttons when notification is actioned', () => {
+      const actioned = build({
+        type: 'CONNECTION_REQUEST',
+        metadata: { connectionId: 'conn-42', senderId: 'jane-1', actioned: true, actionedStatus: 'accepted' },
+      });
+      render(<NotificationItem notification={actioned} onAccept={vi.fn()} onDecline={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: 'Accept' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Decline' })).not.toBeInTheDocument();
+    });
+
+    it('shows accepted status text when actionedStatus is accepted', () => {
+      const accepted = build({
+        type: 'CONNECTION_REQUEST',
+        metadata: { connectionId: 'conn-42', senderId: 'jane-1', actioned: true, actionedStatus: 'accepted' },
+      });
+      render(<NotificationItem notification={accepted} />);
+      expect(screen.getByText('You accepted this request')).toBeInTheDocument();
+    });
+
+    it('shows declined status text when actionedStatus is rejected', () => {
+      const rejected = build({
+        type: 'CONNECTION_REQUEST',
+        metadata: { connectionId: 'conn-42', senderId: 'jane-1', actioned: true, actionedStatus: 'rejected' },
+      });
+      render(<NotificationItem notification={rejected} />);
+      expect(screen.getByText('You declined this request')).toBeInTheDocument();
+    });
   });
 
   describe('Theme tokens only', () => {

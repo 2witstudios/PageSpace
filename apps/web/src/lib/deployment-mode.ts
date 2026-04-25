@@ -2,7 +2,7 @@
  * Deployment mode detection utilities (client-side).
  *
  * Uses NEXT_PUBLIC_DEPLOYMENT_MODE which is inlined at build time by Next.js.
- * For server-side code, import from '@pagespace/lib' instead.
+ * For server-side code, import from '@pagespace/lib/deployment-mode' instead.
  *
  * Build-time env var audit (Epic 2):
  * - NEXT_PUBLIC_APP_URL: Only used in server-side route handlers and packages/lib.

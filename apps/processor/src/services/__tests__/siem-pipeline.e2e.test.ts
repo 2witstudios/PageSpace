@@ -15,9 +15,9 @@
  * The audit row is seeded directly into state.dbRows using computeSecurityEventHash
  * (a pure hash-chain function from @pagespace/lib). The hash-chain write path
  * (security-audit.ts / audit-log.ts) is tested in packages/lib's own test suite;
- * it cannot be driven from here because vi.mock('@pagespace/db') does not
- * intercept require() calls made from within @pagespace/lib's compiled CJS dist
- * (those bypass Vite's module graph and go through Node's native CJS loader).
+ * it cannot be driven from here because vi.mock() does not intercept require()
+ * calls made from within @pagespace/lib's compiled CJS dist (those bypass
+ * Vite's module graph and go through Node's native CJS loader).
  *
  * Stubs kept at the DB boundary only, because the processor test infra has no
  * real Postgres — the established pattern for siem-adapter/worker tests is the

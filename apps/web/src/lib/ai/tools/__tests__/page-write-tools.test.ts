@@ -50,7 +50,7 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
     isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
     isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
 }));
-vi.mock('@pagespace/lib/sheets', () => ({
+vi.mock('@pagespace/lib/sheets/sheet', () => ({
     parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
     serializeSheetContent: vi.fn(() => ''),
     updateSheetCells: vi.fn((data) => data),

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  * Dependencies mocked at service seam:
  *   - @/lib/auth: verifyAuth, getClientIP
  *   - @pagespace/lib: sessionService.createSession
- *   - @pagespace/lib/security: checkDistributedRateLimit
+ *   - @pagespace/lib/security/distributed-rate-limit: checkDistributedRateLimit
  */
 
 vi.mock('@/lib/auth', () => ({

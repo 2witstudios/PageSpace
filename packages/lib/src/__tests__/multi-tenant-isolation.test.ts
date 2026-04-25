@@ -268,7 +268,6 @@ describe('Multi-Tenant Isolation', () => {
 
     describe('given a file stored in a drive', () => {
       it('should not allow user from tenant A to access files from tenant B', async () => {
-        // The EnforcedFileRepository checks permissions before returning files
         // A user from Tenant A should NOT be able to access Tenant B's files
 
         // Simulate permission check returning null (no access)
@@ -280,8 +279,6 @@ describe('Multi-Tenant Isolation', () => {
         });
         const context = EnforcedAuthContext.fromSession(claims);
 
-        // Context is created but when EnforcedFileRepository.getFile is called,
-        // it should check permissions and return null for cross-tenant access
         expect(context.userId).toBe(TENANT_A.ownerId);
         expect(context.hasScope('files:read')).toBe(true);
 

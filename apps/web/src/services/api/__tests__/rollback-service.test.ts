@@ -142,7 +142,7 @@ import { db } from '@pagespace/db/db';
 import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions/rollback-permissions';
 import { logRollbackActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-/** Matches the mock shape defined in vi.mock('@pagespace/db') above */
+/** Matches the mock shape defined in vi.mock('@pagespace/db/db') above */
 type MockFn = ReturnType<typeof vi.fn>;
 interface MockDb {
   select: MockFn;

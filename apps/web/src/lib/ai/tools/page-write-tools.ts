@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
-import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets';
+import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';

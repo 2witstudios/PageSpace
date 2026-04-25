@@ -11,11 +11,11 @@ import {
   builtinProviderList,
   getBuiltinProvider,
   isBuiltinProvider,
-  genericWebhookProvider,
-  githubProvider,
-  notionProvider,
-  slackProvider,
-} from './index';
+} from './builtin-providers';
+import { genericWebhookProvider } from './generic-webhook';
+import { githubProvider } from './github';
+import { notionProvider } from './notion';
+import { slackProvider } from './slack';
 
 const expectedProviderIds = ['generic-webhook', 'github', 'notion', 'slack'] as const;
 

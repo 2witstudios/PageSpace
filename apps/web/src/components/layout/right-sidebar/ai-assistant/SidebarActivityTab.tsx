@@ -471,7 +471,7 @@ export default function SidebarActivityTab() {
                           {activity.resourceTitle && (
                             <>
                               <span className="text-muted-foreground/60">-</span>
-                              <span className="truncate max-w-[120px]">
+                              <span className="truncate min-w-0">
                                 {activity.resourceTitle}
                               </span>
                             </>
@@ -621,7 +621,7 @@ export default function SidebarActivityTab() {
                                   {activity.resourceTitle && (
                                     <>
                                       <span className="text-muted-foreground/60">-</span>
-                                      <span className="truncate max-w-[100px]">
+                                      <span className="truncate min-w-0">
                                         {activity.resourceTitle}
                                       </span>
                                     </>

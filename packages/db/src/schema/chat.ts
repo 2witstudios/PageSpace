@@ -22,6 +22,7 @@ export const channelMessages = pgTable('channel_messages', {
   } | null>(),
   // Soft-delete flag for rollback support (matches messages/chatMessages pattern)
   isActive: boolean('isActive').default(true).notNull(),
+  editedAt: timestamp('editedAt', { mode: 'date' }),
   // AI sender metadata: set when message is posted by an AI tool
   aiMeta: jsonb('aiMeta').$type<{
     senderType: 'global_assistant' | 'agent';

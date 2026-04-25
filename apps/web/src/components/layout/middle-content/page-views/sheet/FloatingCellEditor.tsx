@@ -17,6 +17,7 @@ interface FloatingCellEditorProps {
   isReadOnly?: boolean;
   initialKey?: string;
   driveId?: string;
+  containerWidth?: number;
 }
 
 export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
@@ -29,6 +30,7 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   isReadOnly = false,
   initialKey,
   driveId,
+  containerWidth,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [mounted, setMounted] = useState(false);
@@ -152,8 +154,8 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
     return null;
   }
 
-  // Responsive sizing for mobile
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+  // Responsive sizing for mobile — use container width when available, fall back to viewport
+  const isMobile = containerWidth != null ? containerWidth < 640 : (typeof window !== 'undefined' && window.innerWidth < 640);
   const minWidth = isMobile ? 100 : 120;
   const minHeight = isMobile ? 36 : cellRect.height;
 

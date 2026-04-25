@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,6 +21,8 @@ import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useSocket } from '@/hooks/useSocket';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -62,6 +64,7 @@ interface SearchResult {
 export default function ConnectionsPage() {
   const { } = useAuth();
   const router = useRouter();
+  const socket = useSocket();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -82,6 +85,22 @@ export default function ConnectionsPage() {
 
   const acceptedConnections = acceptedData?.connections || [];
   const pendingConnections = pendingData?.connections || [];
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNotification = (notification: { type: string }) => {
+      if (notification.type === 'CONNECTION_ACCEPTED') {
+        mutate('/api/connections?status=PENDING');
+        mutate('/api/connections?status=ACCEPTED');
+      } else if (notification.type === 'CONNECTION_REJECTED' || notification.type === 'CONNECTION_REQUEST') {
+        mutate('/api/connections?status=PENDING');
+      }
+    };
+
+    socket.on('notification:new', handleNotification);
+    return () => { socket.off('notification:new', handleNotification); };
+  }, [socket]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -140,6 +159,28 @@ export default function ConnectionsPage() {
       } else {
         await patch(`/api/connections/${connectionId}`, { action });
         toast.success(`Connection ${action}ed`);
+
+        // Optimistically mark the matching CONNECTION_REQUEST notification as actioned
+        const { notifications: storeNotifications, updateNotification } =
+          useNotificationStore.getState();
+        const stale = storeNotifications.find(
+          (n) =>
+            n.type === 'CONNECTION_REQUEST' &&
+            n.metadata &&
+            typeof n.metadata === 'object' &&
+            'connectionId' in n.metadata &&
+            n.metadata.connectionId === connectionId,
+        );
+        if (stale) {
+          updateNotification(stale.id, {
+            isRead: true,
+            metadata: {
+              ...(stale.metadata as Record<string, unknown>),
+              actioned: true,
+              actionedStatus: action === 'accept' ? 'accepted' : 'rejected',
+            },
+          });
+        }
       }
 
       // Refresh data

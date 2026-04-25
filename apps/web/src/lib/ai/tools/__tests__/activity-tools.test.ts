@@ -6,7 +6,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     isUserDriveMember: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/content', () => ({
+vi.mock('@pagespace/lib/content/activity-diff-utils', () => ({
     groupActivitiesForDiff: vi.fn(),
     generateStackedDiff: vi.fn(),
     truncateDiffsToTokenBudget: vi.fn(),

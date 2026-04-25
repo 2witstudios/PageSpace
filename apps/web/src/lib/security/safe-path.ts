@@ -2,7 +2,7 @@
  * Safe Path Resolution Utilities
  * Prevents path traversal attacks by ensuring resolved paths stay within allowed directories
  *
- * Uses the shared path validator from @pagespace/lib/security for core validation.
+ * Uses the shared path validator from @pagespace/lib/security/path-validator for core validation.
  */
 
 import { resolve, sep, basename, extname } from 'path';

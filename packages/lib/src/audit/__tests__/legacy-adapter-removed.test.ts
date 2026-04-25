@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import * as auditModule from '../index';
+import * as auditModule from '../audit-log';
 
 describe('legacy audit adapter removal', () => {
   it('does not export auditAuthEvent from the audit module', () => {

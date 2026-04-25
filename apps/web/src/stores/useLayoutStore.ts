@@ -7,6 +7,8 @@ interface LayoutState {
   // UI panels state (PERSISTED)
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
+  leftSidebarSize: number;
+  rightSidebarSize: number;
   taskListViewMode: TaskListViewMode;
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
@@ -23,6 +25,8 @@ interface LayoutState {
 
   // Methods
   setRehydrated: () => void;
+  setLeftSidebarSize: (size: number) => void;
+  setRightSidebarSize: (size: number) => void;
   toggleLeftSidebar: () => void;
   toggleRightSidebar: () => void;
   setLeftSidebarOpen: (open: boolean) => void;
@@ -43,6 +47,8 @@ export const useLayoutStore = create<LayoutState>()(
       // Initial state
       leftSidebarOpen: true,
       rightSidebarOpen: false,
+      leftSidebarSize: 18,
+      rightSidebarSize: 18,
       taskListViewMode: 'table',
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
@@ -58,6 +64,9 @@ export const useLayoutStore = create<LayoutState>()(
       setRehydrated: () => {
         set({ rehydrated: true });
       },
+
+      setLeftSidebarSize: (size) => set({ leftSidebarSize: size }),
+      setRightSidebarSize: (size) => set({ rightSidebarSize: size }),
 
       setTaskListViewMode: (mode: TaskListViewMode) => {
         set({ taskListViewMode: mode });
@@ -112,6 +121,8 @@ export const useLayoutStore = create<LayoutState>()(
       partialize: (state) => ({
         leftSidebarOpen: state.leftSidebarOpen,
         rightSidebarOpen: state.rightSidebarOpen,
+        leftSidebarSize: state.leftSidebarSize,
+        rightSidebarSize: state.rightSidebarSize,
         taskListViewMode: state.taskListViewMode,
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,

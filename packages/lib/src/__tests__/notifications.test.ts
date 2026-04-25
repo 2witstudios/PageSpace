@@ -6,7 +6,7 @@ import {
   markAllNotificationsAsRead,
   deleteNotification,
   getUnreadCount
-} from '../notifications'
+} from '../notifications/notifications'
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';

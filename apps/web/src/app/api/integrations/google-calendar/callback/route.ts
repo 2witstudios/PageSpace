@@ -4,7 +4,7 @@ import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
-import { encrypt } from '@pagespace/lib/encryption';
+import { encrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';

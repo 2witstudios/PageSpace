@@ -9,7 +9,7 @@ export async function register() {
   // Only run on the server (Node.js runtime)
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     // Validate environment variables early to catch misconfig at startup
-    const { validateEnv } = await import('@pagespace/lib/server');
+    const { validateEnv } = await import('@pagespace/lib/config/env-validation');
     validateEnv();
     console.log('[Instrumentation] Environment validation passed');
 
@@ -30,7 +30,7 @@ export async function register() {
       process.env.AUDIT_WEBHOOK_URL &&
       process.env.AUDIT_WEBHOOK_SECRET
     ) {
-      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib/logging');
+      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib/logging/siem-error-hook');
       setSiemErrorHook(buildWebhookSiemErrorHook(
         process.env.AUDIT_WEBHOOK_URL,
         process.env.AUDIT_WEBHOOK_SECRET,

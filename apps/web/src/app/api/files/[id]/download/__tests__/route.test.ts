@@ -40,7 +40,7 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
     createDriveServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
 }));
 
-vi.mock('@pagespace/lib/permissions', () => ({
+vi.mock('@pagespace/lib/permissions/file-access', () => ({
     canUserAccessFile: vi.fn().mockResolvedValue(true),
 }));
 
