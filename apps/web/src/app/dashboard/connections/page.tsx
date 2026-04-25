@@ -22,6 +22,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from '@/hooks/useSocket';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -158,6 +159,28 @@ export default function ConnectionsPage() {
       } else {
         await patch(`/api/connections/${connectionId}`, { action });
         toast.success(`Connection ${action}ed`);
+
+        // Optimistically mark the matching CONNECTION_REQUEST notification as actioned
+        const { notifications: storeNotifications, updateNotification } =
+          useNotificationStore.getState();
+        const stale = storeNotifications.find(
+          (n) =>
+            n.type === 'CONNECTION_REQUEST' &&
+            n.metadata &&
+            typeof n.metadata === 'object' &&
+            'connectionId' in n.metadata &&
+            n.metadata.connectionId === connectionId,
+        );
+        if (stale) {
+          updateNotification(stale.id, {
+            isRead: true,
+            metadata: {
+              ...(stale.metadata as Record<string, unknown>),
+              actioned: true,
+              actionedStatus: action === 'accept' ? 'accepted' : 'rejected',
+            },
+          });
+        }
       }
 
       // Refresh data

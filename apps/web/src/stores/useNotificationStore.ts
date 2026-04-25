@@ -24,6 +24,7 @@ interface NotificationStore {
   markAsRead: (notificationId: string) => void;
   markAllAsRead: () => void;
   removeNotification: (notificationId: string) => void;
+  updateNotification: (id: string, updates: Partial<Notification>) => void;
   
   fetchNotifications: () => Promise<void>;
   handleNotificationRead: (notificationId: string) => Promise<void>;
@@ -102,6 +103,10 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     unreadCount: 0,
   })),
   
+  updateNotification: (id, updates) => set((state) => ({
+    notifications: state.notifications.map((n) => (n.id === id ? { ...n, ...updates } : n)),
+  })),
+
   removeNotification: (notificationId) => set((state) => {
     const notification = state.notifications.find(n => n.id === notificationId);
     return {

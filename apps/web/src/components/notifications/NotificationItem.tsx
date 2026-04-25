@@ -44,7 +44,10 @@ export function NotificationItem({
   const triggeredByName = notification.triggeredByUser?.name ?? null;
   const driveName = variant === 'page' ? notification.drive?.name ?? null : null;
   const isInteractive = Boolean(onSelect);
-  const showConnectionActions = isConnectionRequest(notification) && onAccept && onDecline;
+  const showConnectionActions =
+    isConnectionRequest(notification) && !notification.metadata?.actioned && onAccept && onDecline;
+  const showActionedStatus =
+    isConnectionRequest(notification) && Boolean(notification.metadata?.actioned);
 
   const handleActionClick = (event: MouseEvent<HTMLButtonElement>, handler?: () => void) => {
     event.stopPropagation();
@@ -144,6 +147,13 @@ export function NotificationItem({
               Decline
             </Button>
           </div>
+        ) : null}
+        {showActionedStatus ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {notification.metadata.actionedStatus === 'accepted'
+              ? 'You accepted this request'
+              : 'You declined this request'}
+          </p>
         ) : null}
       </div>
 

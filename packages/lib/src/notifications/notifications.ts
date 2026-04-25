@@ -162,6 +162,33 @@ export async function markAllNotificationsAsRead(userId: string) {
     );
 }
 
+export async function markConnectionRequestActioned(
+  connectionId: string,
+  userId: string,
+  actionedStatus: 'accepted' | 'rejected'
+) {
+  const notification = await db.query.notifications.findFirst({
+    where: and(
+      eq(notifications.userId, userId),
+      eq(notifications.type, 'CONNECTION_REQUEST'),
+      sql`${notifications.metadata}->>'connectionId' = ${connectionId}`
+    ),
+  });
+  if (!notification) return;
+  await db
+    .update(notifications)
+    .set({
+      isRead: true,
+      readAt: new Date(),
+      metadata: {
+        ...(notification.metadata as Record<string, unknown>),
+        actioned: true,
+        actionedStatus,
+      },
+    })
+    .where(eq(notifications.id, notification.id));
+}
+
 export async function deleteNotification(notificationId: string, userId: string) {
   await db
     .delete(notifications)

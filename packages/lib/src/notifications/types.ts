@@ -37,6 +37,8 @@ export type ConnectionRequestNotification = NotificationBase & {
     connectionId: string;
     senderId: string;
     requestMessage?: string;
+    actioned?: boolean;
+    actionedStatus?: 'accepted' | 'rejected';
   };
 };
 

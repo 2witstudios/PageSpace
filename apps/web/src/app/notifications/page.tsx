@@ -39,7 +39,6 @@ export default function NotificationsPage() {
   const notifications = useNotificationStore((state) => state.notifications);
   const isLoading = useNotificationStore((state) => state.isLoading);
   const fetchNotifications = useNotificationStore((state) => state.fetchNotifications);
-  const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
   const handleMarkAllAsRead = useNotificationStore((state) => state.handleMarkAllAsRead);
   const handleDeleteNotification = useNotificationStore((state) => state.handleDeleteNotification);
   const initializeSocketListeners = useNotificationStore((state) => state.initializeSocketListeners);
@@ -128,8 +127,19 @@ export default function NotificationsPage() {
   ) => {
     try {
       await patch(`/api/connections/${connectionId}`, { action });
-      handleNotificationRead(notificationId);
-      window.location.reload();
+      const { notifications: storeNotifications, updateNotification } =
+        useNotificationStore.getState();
+      const stale = storeNotifications.find((n) => n.id === notificationId);
+      if (stale) {
+        updateNotification(notificationId, {
+          isRead: true,
+          metadata: {
+            ...(stale.metadata as Record<string, unknown>),
+            actioned: true,
+            actionedStatus: action === 'accept' ? 'accepted' : 'rejected',
+          },
+        });
+      }
     } catch (error) {
       console.error(`Error ${action}ing connection:`, error);
     }
@@ -270,7 +280,7 @@ export default function NotificationsPage() {
                                   onSelect={() => handleSelect(notification)}
                                   onDismiss={() => handleDeleteNotification(notification.id)}
                                   onAccept={
-                                    isConnectionRequest(notification)
+                                    isConnectionRequest(notification) && !notification.metadata.actioned
                                       ? () =>
                                           handleConnectionAction(
                                             notification.metadata.connectionId,
@@ -280,7 +290,7 @@ export default function NotificationsPage() {
                                       : undefined
                                   }
                                   onDecline={
-                                    isConnectionRequest(notification)
+                                    isConnectionRequest(notification) && !notification.metadata.actioned
                                       ? () =>
                                           handleConnectionAction(
                                             notification.metadata.connectionId,
