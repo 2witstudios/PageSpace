@@ -674,4 +674,3 @@ describe('markConnectionRequestActioned', () => {
     expect(db.update).not.toHaveBeenCalled();
   });
 });
-});
