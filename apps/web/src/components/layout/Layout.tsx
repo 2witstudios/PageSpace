@@ -282,7 +282,7 @@ function Layout({ children }: LayoutProps) {
                 <ResizableHandle />
               </>
             )}
-            <ResizablePanel id="main-content" minSize={30}>
+            <ResizablePanel id="main-content" defaultSize={64} minSize={30}>
               <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                 <AnimatePresence>
                   {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
