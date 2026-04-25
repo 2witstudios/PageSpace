@@ -3,9 +3,9 @@ import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
-type DriveAccessResult = Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccess>>;
-type MemberDetails = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').getDriveMemberDetails>>>;
-type MemberPermission = Awaited<ReturnType<typeof import('@pagespace/lib/server').getMemberPermissions>>[number];
+type DriveAccessResult = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-member-service').checkDriveAccess>>;
+type MemberDetails = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-member-service').getDriveMemberDetails>>>;
+type MemberPermission = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-member-service').getMemberPermissions>>[number];
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/members/[userId]
