@@ -1,7 +1,3 @@
-/**
- * @scaffold — barrel export presence check. Will be replaced by
- * behavioural tests once each module has its own dedicated suite.
- */
 import { describe, it, expect } from 'vitest';
 import * as integrationTypes from './types';
 import * as applyAuth from './auth/apply-auth';
@@ -59,7 +55,7 @@ const integrations = {
   slackProvider,
 };
 
-describe('integrations barrel export @scaffold', () => {
+describe('integrations module exports', () => {
   const expectedFunctions = [
     // auth
     'applyAuth',
