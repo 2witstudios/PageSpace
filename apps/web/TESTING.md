@@ -133,14 +133,16 @@ Example test structure:
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock external dependencies
-vi.mock('@pagespace/lib', () => ({
-  logger: {
-    child: vi.fn(() => ({
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    })),
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      child: vi.fn(() => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      })),
+    },
   },
 }));
 

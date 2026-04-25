@@ -14,8 +14,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  *     500: { error: string } - Internal error
  *
  * Dependencies mocked at service seam:
- *   - @pagespace/lib/auth: consumeExchangeCode
- *   - @pagespace/lib/server: loggers
+ *   - @pagespace/lib/auth/exchange-codes: consumeExchangeCode
+ *   - @pagespace/lib/logging/logger-config: loggers
  *   - @/lib/auth/cookie-config: createSessionCookie
  *   - zod/v4: schema validation (real implementation)
  */

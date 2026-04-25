@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
-type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccessForSearch>>>;
-type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/server').globSearchPages>>;
+type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').checkDriveAccessForSearch>>>;
+type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').globSearchPages>>;
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/search/glob

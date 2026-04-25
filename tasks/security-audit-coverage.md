@@ -25,7 +25,7 @@ Use `auditRequest(req, event)` — it automatically extracts IP/user-agent from 
 
 ```typescript
 // Import
-import { auditRequest } from '@pagespace/lib/server';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // After successful operation, before response
 auditRequest(req, {
@@ -106,7 +106,7 @@ Follow-up to commits c72a1e5a + 1d72d3a7 migrating these routes to the `auditReq
 6. **Given** magic-link/send is called for a suspended user, **should** emit `auth.login.failure` with `reason: user_suspended` (currently emits `authz.access.denied` which is the wrong taxonomy).
 7. **Given** magic-link/send successfully creates + mails a magic link, **should** emit `auth.token.created` with `details: { tokenType: 'magic_link', ... }` (currently emits synthetic `data.write` with constant `resourceId`).
 8. **Given** magic-link token creation fails with an unexpected error, **should** still emit an audit event (currently silent — only logs).
-9. **Given** magic-link/send needs to mask an email for logging, **should** import the shared `maskEmail` from `@pagespace/lib/audit` rather than duplicating it locally.
+9. **Given** magic-link/send needs to mask an email for logging, **should** import the shared `maskEmail` from `@pagespace/lib/audit/mask-email` rather than duplicating it locally.
 10. **Given** signup-passkey and magic-link/verify tests have been updated, **should** drop stale `securityAudit.log*` + `loggers.security.warn` mocks (migration-complete hygiene).
 
 ---

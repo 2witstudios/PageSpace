@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
  *
  * Note: Authentication is now handled by session service (opaque tokens).
  * Security event logging is handled by the centralized `audit()` pipeline
- * from `@pagespace/lib/server`.
+ * from `@pagespace/lib/audit/audit-log`.
  */
 
 // ============================================================================

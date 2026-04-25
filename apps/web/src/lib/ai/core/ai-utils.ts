@@ -94,7 +94,7 @@ export async function createOpenRouterSettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -166,7 +166,7 @@ export async function createGoogleSettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -276,7 +276,7 @@ export async function createOpenAISettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -367,7 +367,7 @@ export async function createAnthropicSettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -458,7 +458,7 @@ export async function createXAISettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -758,7 +758,7 @@ export async function createGLMSettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -849,7 +849,7 @@ export async function createMiniMaxSettings(
   userId: string,
   apiKey: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   // Check if settings already exist
@@ -943,7 +943,7 @@ export async function createAzureOpenAISettings(
   apiKey: string,
   baseUrl: string
 ): Promise<void> {
-  const { encrypt } = await import('@pagespace/lib/server');
+  const { encrypt } = await import('@pagespace/lib/encryption/encryption-utils');
   const encryptedApiKey = await encrypt(apiKey);
 
   const formattedUrl = baseUrl.trim().replace(/\/$/, '');

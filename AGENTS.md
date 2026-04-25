@@ -119,14 +119,15 @@ const message = {
 **Permission Logic:**
 ```typescript
 // ✅ CORRECT - Use centralized permissions
-import { getUserAccessLevel, canUserEditPage } from '@pagespace/lib/permissions';
+import { getUserAccessLevel, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 const accessLevel = await getUserAccessLevel(userId, pageId);
 ```
 
 **Database Access:**
 ```typescript
-// ✅ CORRECT - Always use Drizzle client from @pagespace/db
-import { db, pages } from '@pagespace/db';
+// ✅ CORRECT - Always use Drizzle subpath imports
+import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
 const page = await db.select().from(pages);
 ```
 
@@ -217,7 +218,7 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 1. **Adding new API routes**: Follow Next.js 15 async params pattern (see Section 2.1)
 2. **Database changes**: Update schema in `packages/db`, generate migrations with `pnpm db:generate`
 3. **New components**: Follow existing patterns in `components/` directory
-4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions`
+4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions/permissions`
 
 ### 6.2. Commit & Pull Request Guidelines
 
