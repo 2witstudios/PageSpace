@@ -64,6 +64,8 @@ COPY --from=builder /app/apps/marketing/.next/standalone .
 COPY --from=builder /app/apps/marketing/.next/static ./apps/marketing/.next/static
 COPY --from=builder /app/apps/marketing/public ./apps/marketing/public
 
+RUN mkdir -p /app/apps/marketing/.next/cache && chown -R node:node /app/apps/marketing/.next
+
 USER node
 
 EXPOSE 3004
