@@ -1950,15 +1950,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       {contextMenu.show && (
         <div
           className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
-          style={(() => {
-            const bounds = gridRef.current?.getBoundingClientRect();
-            const maxLeft = bounds ? bounds.right - 180 : window.innerWidth - 180;
-            const maxTop = bounds ? bounds.bottom - 200 : window.innerHeight - 200;
-            return {
-              left: `${Math.min(contextMenu.x, maxLeft)}px`,
-              top: `${Math.min(contextMenu.y, maxTop)}px`,
-            };
-          })()}
+          style={{
+            left: `${Math.min(contextMenu.x, (gridRef.current?.getBoundingClientRect().right ?? window.innerWidth) - 180)}px`,
+            top: `${Math.min(contextMenu.y, (gridRef.current?.getBoundingClientRect().bottom ?? window.innerHeight) - 200)}px`,
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <div
