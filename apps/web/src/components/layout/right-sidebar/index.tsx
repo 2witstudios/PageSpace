@@ -122,7 +122,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
-        className="flex h-full w-full flex-col"
+        className="flex h-full w-full flex-col @container"
       >
         <div className="border-b border-[var(--separator)]">
           <TabsList
@@ -137,7 +137,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
                 className={triggerBaseStyles}
               >
                 <MessageSquare className="h-4 w-4" />
-                <span className="hidden md:inline">Chat</span>
+                <span className="hidden @[180px]:inline">Chat</span>
                 <div
                   className={cn(
                     "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
@@ -152,7 +152,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
               className={triggerBaseStyles}
             >
               <History className="h-4 w-4" />
-              <span className="hidden md:inline">History</span>
+              <span className="hidden @[180px]:inline">History</span>
               <div
                 className={cn(
                   "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
@@ -166,7 +166,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
               className={triggerBaseStyles}
             >
               <Activity className="h-4 w-4" />
-              <span className="hidden md:inline">Activity</span>
+              <span className="hidden @[180px]:inline">Activity</span>
               <div
                 className={cn(
                   "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
