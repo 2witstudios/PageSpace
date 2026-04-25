@@ -68,7 +68,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     .where(eq(directMessages.id, messageId));
 
   auditRequest(req, {
-    eventType: 'data.update',
+    eventType: 'data.write',
     userId,
     resourceType: 'direct_message',
     resourceId: messageId,
