@@ -9,7 +9,6 @@ export default defineConfig({
       // Integration tests that require a running PostgreSQL database
       'src/__tests__/cross-tenant-escalation.test.ts',
       'src/__tests__/device-auth-utils.test.ts',
-      'src/__tests__/file-processor.test.ts',
       'src/__tests__/notifications.test.ts',
       'src/__tests__/permissions.test.ts',
       'src/__tests__/sheet-new-functions.test.ts',
@@ -51,7 +50,6 @@ export default defineConfig({
         // as "0% covered" pulls the aggregate down artificially.
         'src/__tests__/cross-tenant-escalation.test.ts',
         'src/__tests__/device-auth-utils.test.ts',
-        'src/__tests__/file-processor.test.ts',
         'src/__tests__/notifications.test.ts',
         'src/__tests__/permissions.test.ts',
         'src/__tests__/sheet-new-functions.test.ts',

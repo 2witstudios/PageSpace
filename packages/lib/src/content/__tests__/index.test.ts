@@ -1,7 +1,3 @@
-/**
- * @scaffold — barrel export presence check. Will be replaced by
- * behavioural tests once each module has its own dedicated suite.
- */
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock @pagespace/db since version-resolver imports it
@@ -40,7 +36,7 @@ const content = {
   ...diffGenerator,
 };
 
-describe('content/index barrel export @scaffold', () => {
+describe('content module exports', () => {
   const expectedExports = [
     // tree-utils
     'buildTree',

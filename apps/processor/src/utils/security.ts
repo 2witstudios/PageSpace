@@ -29,7 +29,7 @@ export function sanitizeExtension(
 
 /**
  * Resolve a path within a base directory, preventing traversal attacks.
- * Uses the centralized path validator from @pagespace/lib/security.
+ * Uses the centralized path validator from @pagespace/lib/security/path-validator.
  *
  * Security features:
  * - Blocks directory traversal (../)
@@ -39,7 +39,7 @@ export function sanitizeExtension(
  * - Blocks absolute paths
  *
  * NOTE: For async operations with symlink escape detection,
- * use resolvePathWithin from @pagespace/lib/security directly.
+ * use resolvePathWithin from @pagespace/lib/security/path-validator directly.
  *
  * @param baseDir - The base directory that paths must stay within
  * @param segments - Path segments to resolve

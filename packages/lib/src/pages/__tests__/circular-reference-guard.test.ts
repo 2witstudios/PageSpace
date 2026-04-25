@@ -38,7 +38,7 @@ function setupPageTree(tree: Record<string, string | null>) {
     const opts = args as { where: unknown; columns: unknown };
     // Extract the pageId from the eq call - we need to trace which id was queried.
     // Since eq is mocked as a no-op string, we use call arguments
-    const eqMock = vi.mocked(require('@pagespace/db').eq);
+    const eqMock = vi.mocked(require('@pagespace/db/operators').eq);
     const calls = eqMock.mock.calls;
     if (calls.length === 0) return undefined;
     const lastCall = calls[calls.length - 1];
