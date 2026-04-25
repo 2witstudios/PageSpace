@@ -12,7 +12,9 @@ import { ChannelInput, type ChannelInputRef, type FileAttachment } from './Chann
 import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, FileIcon, FileText, Download } from 'lucide-react';
-import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Pencil, Trash2, Check, X } from 'lucide-react';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import {
@@ -45,6 +47,7 @@ interface MessageWithReactions extends MessageWithUser {
   attachmentMeta?: AttachmentMeta | null;
   file?: FileRelation | null;
   aiMeta?: AiMeta | null;
+  editedAt?: string | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -66,6 +69,8 @@ function ChannelView({ page }: ChannelViewProps) {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const skipAutoScrollRef = useRef(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -358,6 +363,53 @@ function ChannelView({ page }: ChannelViewProps) {
     };
   }, [socket, connectionStatus]);
 
+  // Handle real-time edit/delete events
+  useEffect(() => {
+    if (!socket || connectionStatus !== 'connected') return;
+
+    const handleMessageEdited = (data: { messageId: string; content: string; editedAt: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId ? { ...m, content: data.content, editedAt: data.editedAt } : m
+        )
+      );
+    };
+
+    const handleMessageDeleted = (data: { messageId: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
+    };
+
+    socket.on('message_edited', handleMessageEdited);
+    socket.on('message_deleted', handleMessageDeleted);
+
+    return () => {
+      socket.off('message_edited', handleMessageEdited);
+      socket.off('message_deleted', handleMessageDeleted);
+    };
+  }, [socket, connectionStatus]);
+
+  const handleEditMessage = useCallback(async (messageId: string, content: string) => {
+    const editedAt = new Date().toISOString();
+    setMessages((prev) =>
+      prev.map((m) => m.id === messageId ? { ...m, content, editedAt } : m)
+    );
+    setEditingMessageId(null);
+    try {
+      await patch(`/api/channels/${page.id}/messages/${messageId}`, { content });
+    } catch {
+      toast.error('Failed to edit message');
+    }
+  }, [page.id]);
+
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    try {
+      await del(`/api/channels/${page.id}/messages/${messageId}`, {});
+    } catch {
+      toast.error('Failed to delete message');
+    }
+  }, [page.id]);
+
   return (
     <div className="flex flex-col h-full">
         <div className="flex-grow overflow-hidden">
@@ -386,6 +438,7 @@ function ChannelView({ page }: ChannelViewProps) {
                         const avatarFallback = isAi
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]
                           : m.user?.name?.[0];
+                        const isOwnMessage = !isAi && m.userId === user?.id;
                         return (
                         <div key={m.id} className="group flex items-start gap-4">
                             <Avatar className="shrink-0">
@@ -403,15 +456,80 @@ function ChannelView({ page }: ChannelViewProps) {
                                     <span className="text-xs text-muted-foreground">
                                         {new Date(m.createdAt).toLocaleTimeString()}
                                     </span>
+                                    {m.editedAt && (
+                                      <span className="text-xs text-muted-foreground italic">(Edited)</span>
+                                    )}
+                                    {isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id && (
+                                      <div className="flex items-center gap-1 ml-1">
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <button
+                                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                              type="button"
+                                            >
+                                              <Pencil size={12} />
+                                            </button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="top">Edit</TooltipContent>
+                                        </Tooltip>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <button
+                                              onClick={() => handleDeleteMessage(m.id)}
+                                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors"
+                                              type="button"
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="top">Delete</TooltipContent>
+                                        </Tooltip>
+                                      </div>
+                                    )}
                                 </div>
-                                {m.content && (
+                                {editingMessageId === m.id ? (
+                                  <div className="mt-1 flex flex-col gap-2">
+                                    <textarea
+                                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                                      rows={3}
+                                      value={editContent}
+                                      onChange={(e) => setEditContent(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                          e.preventDefault();
+                                          if (editContent.trim()) handleEditMessage(m.id, editContent.trim());
+                                        }
+                                        if (e.key === 'Escape') setEditingMessageId(null);
+                                      }}
+                                      autoFocus
+                                    />
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <button
+                                        onClick={() => { if (editContent.trim()) handleEditMessage(m.id, editContent.trim()); }}
+                                        className="flex items-center gap-1 px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                        type="button"
+                                      >
+                                        <Check size={12} /> Save
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingMessageId(null)}
+                                        className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors"
+                                        type="button"
+                                      >
+                                        <X size={12} /> Cancel
+                                      </button>
+                                      <span className="opacity-60">Enter to save · Esc to cancel</span>
+                                    </div>
+                                  </div>
+                                ) : m.content ? (
                                   <div className="prose prose-sm dark:prose-invert max-w-none">
                                     <StreamingMarkdown
                                       content={m.content}
                                       isStreaming={false}
                                     />
                                   </div>
-                                )}
+                                ) : null}
                                 {/* File attachment */}
                                 {hasAttachment(m) && (
                                   <div className="mt-2">

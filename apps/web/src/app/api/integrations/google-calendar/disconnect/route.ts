@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { decrypt } from '@pagespace/lib/encryption';
+import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';

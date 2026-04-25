@@ -36,7 +36,7 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 vi.mock('@pagespace/lib/deployment-mode', () => ({
   isOnPrem: vi.fn().mockReturnValue(false),
 }));
-vi.mock('@pagespace/lib/encryption', () => ({
+vi.mock('@pagespace/lib/encryption/encryption-utils', () => ({
   encrypt: vi.fn().mockResolvedValue('encrypted'),
 }));
 vi.mock('@pagespace/lib/auth/secure-compare', () => ({

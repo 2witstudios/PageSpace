@@ -214,6 +214,7 @@ export interface ChannelMessageSummary {
   content: string;
   createdAt: string;
   isActive: boolean;
+  editedAt?: string | null;
 }
 
 export interface ChatMessageSummary {

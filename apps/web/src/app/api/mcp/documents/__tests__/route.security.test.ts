@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/utils/enums', () => ({
   PageType: {},
 }));
-vi.mock('@pagespace/lib/sheets', () => ({
+vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: vi.fn(() => false),
   parseSheetContent: vi.fn(),
   serializeSheetContent: vi.fn(),

@@ -3,7 +3,7 @@ import { and, eq, or, isNull, isNotNull, gt, inArray } from '@pagespace/db/opera
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
-import { parseUserId, parsePageId } from '../validators';
+import { parseUserId, parsePageId } from '../validators/id-validators';
 
 /**
  * Permission level for a single page.

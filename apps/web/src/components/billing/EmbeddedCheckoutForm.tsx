@@ -199,6 +199,10 @@ export function EmbeddedCheckoutForm({
         <PaymentElement
           options={{
             layout: 'tabs',
+            wallets: {
+              googlePay: 'never',
+              applePay: 'never',
+            },
           }}
         />
       </div>

@@ -19,7 +19,7 @@ import {
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
-} from '@pagespace/lib/sheets';
+} from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';

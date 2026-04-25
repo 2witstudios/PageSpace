@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -10,7 +10,9 @@ import { renderMessageParts, convertToMessageParts } from '@/components/messages
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
-import { post, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Pencil, Trash2, Check, X } from 'lucide-react';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -53,6 +55,8 @@ export default function InboxDMPage() {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
@@ -113,6 +117,28 @@ export default function InboxDMPage() {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
   }, [messages]);
+
+  const handleEditMessage = useCallback(async (messageId: string, content: string) => {
+    const editedAt = new Date().toISOString();
+    setMessages((prev) =>
+      prev.map((m) => m.id === messageId ? { ...m, content, isEdited: true, editedAt } : m)
+    );
+    setEditingMessageId(null);
+    try {
+      await patch(`/api/messages/${conversationId}/${messageId}`, { content });
+    } catch {
+      toast.error('Failed to edit message');
+    }
+  }, [conversationId]);
+
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    try {
+      await del(`/api/messages/${conversationId}/${messageId}`, {});
+    } catch {
+      toast.error('Failed to delete message');
+    }
+  }, [conversationId]);
 
   const handleSendMessage = async () => {
     if (!user || !conversationId || !inputValue.trim()) return;
@@ -200,17 +226,81 @@ export default function InboxDMPage() {
                       {message.isRead && isOwnMessage && (
                         <span className="text-xs text-muted-foreground">Read</span>
                       )}
+                      {isOwnMessage && editingMessageId !== message.id && (
+                        <div className="flex items-center gap-1 ml-1">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                type="button"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Edit</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={() => handleDeleteMessage(message.id)}
+                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors"
+                                type="button"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Delete</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      )}
                     </div>
 
-                    <div className={`p-3 rounded-lg max-w-full ${
-                      isOwnMessage
-                        ? 'bg-primary/5 dark:bg-primary/10 ml-8'
-                        : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
-                    }`}>
-                      <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
-                        {renderMessageParts(convertToMessageParts(message.content))}
+                    {editingMessageId === message.id ? (
+                      <div className="mt-1 flex flex-col gap-2">
+                        <textarea
+                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                          rows={3}
+                          value={editContent}
+                          onChange={(e) => setEditContent(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              if (editContent.trim()) handleEditMessage(message.id, editContent.trim());
+                            }
+                            if (e.key === 'Escape') setEditingMessageId(null);
+                          }}
+                          autoFocus
+                        />
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <button
+                            onClick={() => { if (editContent.trim()) handleEditMessage(message.id, editContent.trim()); }}
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                            type="button"
+                          >
+                            <Check size={12} /> Save
+                          </button>
+                          <button
+                            onClick={() => setEditingMessageId(null)}
+                            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors"
+                            type="button"
+                          >
+                            <X size={12} /> Cancel
+                          </button>
+                          <span className="opacity-60">Enter to save · Esc to cancel</span>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className={`p-3 rounded-lg max-w-full ${
+                        isOwnMessage
+                          ? 'bg-primary/5 dark:bg-primary/10 ml-8'
+                          : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
+                      }`}>
+                        <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
+                          {renderMessageParts(convertToMessageParts(message.content))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

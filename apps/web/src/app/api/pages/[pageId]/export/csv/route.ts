@@ -8,7 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets';
+import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 

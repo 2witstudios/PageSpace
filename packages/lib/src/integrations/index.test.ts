@@ -3,7 +3,61 @@
  * behavioural tests once each module has its own dedicated suite.
  */
 import { describe, it, expect } from 'vitest';
-import * as integrations from './index';
+import * as integrationTypes from './types';
+import * as applyAuth from './auth/apply-auth';
+import * as isToolAllowed from './validation/is-tool-allowed';
+import * as visibility from './validation/visibility';
+import * as buildRequest from './execution/build-request';
+import * as transformOutput from './execution/transform-output';
+import * as calculateLimit from './rate-limit/calculate-limit';
+import * as encryptCredentials from './credentials/encrypt-credentials';
+import * as integrationRateLimiter from './rate-limit/integration-rate-limiter';
+import * as httpExecutor from './execution/http-executor';
+import * as executeToolSaga from './saga/execute-tool';
+import * as aiSdk from './converter/ai-sdk';
+import * as openapi from './converter/openapi';
+import * as resolveAgentIntegrations from './resolution/resolve-agent-integrations';
+import * as oauthHandler from './oauth/oauth-handler';
+import * as oauthState from './oauth/oauth-state';
+import * as providerRepository from './repositories/provider-repository';
+import * as configRepository from './repositories/config-repository';
+import * as connectionRepository from './repositories/connection-repository';
+import * as grantRepository from './repositories/grant-repository';
+import * as auditRepository from './repositories/audit-repository';
+import * as builtinProviders from './providers/builtin-providers';
+import { genericWebhookProvider } from './providers/generic-webhook';
+import { githubProvider } from './providers/github';
+import { notionProvider } from './providers/notion';
+import { slackProvider } from './providers/slack';
+
+const integrations = {
+  ...integrationTypes,
+  ...applyAuth,
+  ...isToolAllowed,
+  ...visibility,
+  ...buildRequest,
+  ...transformOutput,
+  ...calculateLimit,
+  ...encryptCredentials,
+  ...integrationRateLimiter,
+  ...httpExecutor,
+  ...executeToolSaga,
+  ...aiSdk,
+  ...openapi,
+  ...resolveAgentIntegrations,
+  ...oauthHandler,
+  ...oauthState,
+  ...providerRepository,
+  ...configRepository,
+  ...connectionRepository,
+  ...grantRepository,
+  ...auditRepository,
+  ...builtinProviders,
+  genericWebhookProvider,
+  githubProvider,
+  notionProvider,
+  slackProvider,
+};
 
 describe('integrations barrel export @scaffold', () => {
   const expectedFunctions = [
