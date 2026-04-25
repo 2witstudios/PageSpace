@@ -71,7 +71,9 @@ function Layout({ children }: LayoutProps) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "pagespace-layout",
     panelIds: ["left-sidebar", "main-content", "right-sidebar"],
-    storage: window.localStorage,
+    storage: typeof window !== "undefined"
+      ? window.localStorage
+      : { getItem: () => null, setItem: () => {} },
   });
 
   useResponsivePanels();

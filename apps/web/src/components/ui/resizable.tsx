@@ -1,8 +1,6 @@
 "use client"
 
 import * as ResizablePrimitive from "react-resizable-panels"
-export { useDefaultLayout } from "react-resizable-panels"
-
 import { cn } from "@/lib/utils/index"
 
 function ResizablePanelGroup({
@@ -42,9 +40,10 @@ function ResizableHandle({
       )}
       {...props}
     >
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-data-[resize-handle-state=drag]:opacity-100 group-data-[resize-handle-state=drag]:bg-primary" />
+      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary" />
     </ResizablePrimitive.Separator>
   )
 }
 
 export { ResizableHandle, ResizablePanel, ResizablePanelGroup }
+export { useDefaultLayout } from "react-resizable-panels"
