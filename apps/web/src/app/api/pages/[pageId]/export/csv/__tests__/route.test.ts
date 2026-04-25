@@ -44,7 +44,7 @@ vi.mock('@pagespace/lib/content/export-utils', () => ({
     sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
 }));
 
-vi.mock('@pagespace/lib/sheets', () => ({
+vi.mock('@pagespace/lib/sheets/sheet', () => ({
   parseSheetContent: vi.fn(),
   sanitizeSheetData: vi.fn((data: unknown) => data),
   evaluateSheet: vi.fn(),
@@ -64,7 +64,7 @@ import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib/content/export-utils';
-import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets';
+import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Helper to create mock SessionAuthResult

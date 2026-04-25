@@ -29,7 +29,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/integrations', () => ({
+vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getOrCreateConfig: mockGetOrCreateConfig,
   updateConfig: mockUpdateConfig,
 }));

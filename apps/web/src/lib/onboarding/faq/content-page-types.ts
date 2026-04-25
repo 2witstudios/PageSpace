@@ -1,5 +1,5 @@
 import { createEmptySheet } from '@pagespace/lib/sheets/io'
-import { serializeSheetContent } from '@pagespace/lib/sheets';
+import { serializeSheetContent } from '@pagespace/lib/sheets/sheet';
 
 export const FOLDERS_GUIDE = `
 # Folders (Guide)

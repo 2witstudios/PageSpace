@@ -18,7 +18,27 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn(),
 }));
 
-import * as content from '../index';
+import * as activityDiffUtils from '../activity-diff-utils';
+import * as diffUtils from '../diff-utils';
+import * as exportUtils from '../export-utils';
+import * as pageContentFormat from '../page-content-format';
+import * as pageTypeValidators from '../page-type-validators';
+import * as pageTypesConfig from '../page-types.config';
+import * as treeUtils from '../tree-utils';
+import * as versionResolver from '../version-resolver';
+import * as diffGenerator from '../diff-generator';
+
+const content = {
+  ...activityDiffUtils,
+  ...diffUtils,
+  ...exportUtils,
+  ...pageContentFormat,
+  ...pageTypeValidators,
+  ...pageTypesConfig,
+  ...treeUtils,
+  ...versionResolver,
+  ...diffGenerator,
+};
 
 describe('content/index barrel export @scaffold', () => {
   const expectedExports = [

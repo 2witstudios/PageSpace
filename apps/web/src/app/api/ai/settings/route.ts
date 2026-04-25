@@ -253,7 +253,7 @@ export async function POST(request: Request) {
 
     // SECURITY: Validate base URL for providers that accept URLs to prevent SSRF
     if (URL_PROVIDERS.has(provider)) {
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
       const urlValidation = await validateLocalProviderURL(sanitizedBaseUrl);
       if (!urlValidation.valid) {
         return NextResponse.json(

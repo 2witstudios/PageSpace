@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { userAiSettings } from '@pagespace/db/schema/ai';
-import { decrypt } from '@pagespace/lib/encryption';
+import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';

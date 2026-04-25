@@ -11,11 +11,6 @@
     "lint": "eslint src"
   },
   "exports": {
-    "./content": {
-      "types": "./dist/content/index.d.ts",
-      "import": "./dist/content/index.js",
-      "require": "./dist/content/index.js"
-    },
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",
@@ -56,6 +51,11 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./logging/siem-error-hook": {
+      "types": "./dist/logging/siem-error-hook.d.ts",
+      "import": "./dist/logging/siem-error-hook.js",
+      "require": "./dist/logging/siem-error-hook.js"
+    },
     "./logging/monitoring-purge": {
       "types": "./dist/logging/monitoring-purge.d.ts",
       "import": "./dist/logging/monitoring-purge.js",
@@ -85,6 +85,11 @@
       "types": "./dist/monitoring/hash-chain-verifier.d.ts",
       "import": "./dist/monitoring/hash-chain-verifier.js",
       "require": "./dist/monitoring/hash-chain-verifier.js"
+    },
+    "./encryption/encryption-utils": {
+      "types": "./dist/encryption/encryption-utils.d.ts",
+      "import": "./dist/encryption/encryption-utils.js",
+      "require": "./dist/encryption/encryption-utils.js"
     },
     "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
@@ -201,20 +206,10 @@
       "import": "./dist/sheets/io.js",
       "require": "./dist/sheets/io.js"
     },
-    "./permissions": {
-      "types": "./dist/permissions/index.d.ts",
-      "import": "./dist/permissions/index.js",
-      "require": "./dist/permissions/index.js"
-    },
-    "./integrations": {
-      "types": "./dist/integrations/index.d.ts",
-      "import": "./dist/integrations/index.js",
-      "require": "./dist/integrations/index.js"
-    },
-    "./monitoring": {
-      "types": "./dist/monitoring/index.d.ts",
-      "import": "./dist/monitoring/index.js",
-      "require": "./dist/monitoring/index.js"
+    "./sheets/sheet": {
+      "types": "./dist/sheets/sheet.d.ts",
+      "import": "./dist/sheets/sheet.js",
+      "require": "./dist/sheets/sheet.js"
     },
     "./utils/environment": {
       "types": "./dist/utils/environment.d.ts",
@@ -271,35 +266,10 @@
       "import": "./dist/auth/secure-compare.js",
       "require": "./dist/auth/secure-compare.js"
     },
-    "./audit": {
-      "types": "./dist/audit/index.d.ts",
-      "import": "./dist/audit/index.js",
-      "require": "./dist/audit/index.js"
-    },
-    "./security": {
-      "types": "./dist/security/index.d.ts",
-      "import": "./dist/security/index.js",
-      "require": "./dist/security/index.js"
-    },
-    "./auth": {
-      "types": "./dist/auth/index.d.ts",
-      "import": "./dist/auth/index.js",
-      "require": "./dist/auth/index.js"
-    },
     "./auth/magic-link-service": {
       "types": "./dist/auth/magic-link-service.d.ts",
       "import": "./dist/auth/magic-link-service.js",
       "require": "./dist/auth/magic-link-service.js"
-    },
-    "./notifications": {
-      "types": "./dist/notifications/index.d.ts",
-      "import": "./dist/notifications/index.js",
-      "require": "./dist/notifications/index.js"
-    },
-    "./validators": {
-      "types": "./dist/validators/index.d.ts",
-      "import": "./dist/validators/index.js",
-      "require": "./dist/validators/index.js"
     },
     "./types": {
       "types": "./dist/types.d.ts",
@@ -320,31 +290,6 @@
       "types": "./dist/utils/enums.d.ts",
       "import": "./dist/utils/enums.js",
       "require": "./dist/utils/enums.js"
-    },
-    "./encryption": {
-      "types": "./dist/encryption/index.d.ts",
-      "import": "./dist/encryption/index.js",
-      "require": "./dist/encryption/index.js"
-    },
-    "./file-processing": {
-      "types": "./dist/file-processing/index.d.ts",
-      "import": "./dist/file-processing/index.js",
-      "require": "./dist/file-processing/index.js"
-    },
-    "./sheets": {
-      "types": "./dist/sheets/index.d.ts",
-      "import": "./dist/sheets/index.js",
-      "require": "./dist/sheets/index.js"
-    },
-    "./repositories": {
-      "types": "./dist/repositories/index.d.ts",
-      "import": "./dist/repositories/index.js",
-      "require": "./dist/repositories/index.js"
-    },
-    "./logging": {
-      "types": "./dist/logging/index.d.ts",
-      "import": "./dist/logging/index.js",
-      "require": "./dist/logging/index.js"
     },
     "./config/env-validation": {
       "types": "./dist/config/env-validation.d.ts",
@@ -526,10 +471,10 @@
       "import": "./dist/integrations/oauth/oauth-handler.js",
       "require": "./dist/integrations/oauth/oauth-handler.js"
     },
-    "./integrations/providers": {
-      "types": "./dist/integrations/providers/index.d.ts",
-      "import": "./dist/integrations/providers/index.js",
-      "require": "./dist/integrations/providers/index.js"
+    "./integrations/providers/builtin-providers": {
+      "types": "./dist/integrations/providers/builtin-providers.d.ts",
+      "import": "./dist/integrations/providers/builtin-providers.js",
+      "require": "./dist/integrations/providers/builtin-providers.js"
     },
     "./integrations/converter/openapi": {
       "types": "./dist/integrations/converter/openapi.d.ts",
@@ -707,9 +652,6 @@
       "server": [
         "./dist/server.d.ts"
       ],
-      "content": [
-        "./dist/content/index.d.ts"
-      ],
       "client": [
         "./dist/client.d.ts"
       ],
@@ -731,6 +673,9 @@
       "logging/ai-usage-purge": [
         "./dist/logging/ai-usage-purge.d.ts"
       ],
+      "logging/siem-error-hook": [
+        "./dist/logging/siem-error-hook.d.ts"
+      ],
       "logging/monitoring-purge": [
         "./dist/logging/monitoring-purge.d.ts"
       ],
@@ -748,6 +693,9 @@
       ],
       "monitoring/hash-chain-verifier": [
         "./dist/monitoring/hash-chain-verifier.d.ts"
+      ],
+      "encryption/encryption-utils": [
+        "./dist/encryption/encryption-utils.d.ts"
       ],
       "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"
@@ -800,14 +748,8 @@
       "sheets/io": [
         "./dist/sheets/io.d.ts"
       ],
-      "permissions": [
-        "./dist/permissions/index.d.ts"
-      ],
-      "integrations": [
-        "./dist/integrations/index.d.ts"
-      ],
-      "monitoring": [
-        "./dist/monitoring/index.d.ts"
+      "sheets/sheet": [
+        "./dist/sheets/sheet.d.ts"
       ],
       "utils/environment": [
         "./dist/utils/environment.d.ts"
@@ -842,23 +784,8 @@
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"
       ],
-      "audit": [
-        "./dist/audit/index.d.ts"
-      ],
-      "security": [
-        "./dist/security/index.d.ts"
-      ],
-      "auth": [
-        "./dist/auth/index.d.ts"
-      ],
       "auth/magic-link-service": [
         "./dist/auth/magic-link-service.d.ts"
-      ],
-      "notifications": [
-        "./dist/notifications/index.d.ts"
-      ],
-      "validators": [
-        "./dist/validators/index.d.ts"
       ],
       "types": [
         "./dist/types.d.ts"
@@ -871,21 +798,6 @@
       ],
       "utils/enums": [
         "./dist/utils/enums.d.ts"
-      ],
-      "encryption": [
-        "./dist/encryption/index.d.ts"
-      ],
-      "file-processing": [
-        "./dist/file-processing/index.d.ts"
-      ],
-      "sheets": [
-        "./dist/sheets/index.d.ts"
-      ],
-      "repositories": [
-        "./dist/repositories/index.d.ts"
-      ],
-      "logging": [
-        "./dist/logging/index.d.ts"
       ],
       "config/env-validation": [
         "./dist/config/env-validation.d.ts"
@@ -995,8 +907,8 @@
       "integrations/oauth/oauth-handler": [
         "./dist/integrations/oauth/oauth-handler.d.ts"
       ],
-      "integrations/providers": [
-        "./dist/integrations/providers/index.d.ts"
+      "integrations/providers/builtin-providers": [
+        "./dist/integrations/providers/builtin-providers.d.ts"
       ],
       "integrations/converter/openapi": [
         "./dist/integrations/converter/openapi.d.ts"

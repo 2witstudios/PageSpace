@@ -42,7 +42,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-vi.mock('../../validators', () => ({
+vi.mock('../../validators/id-validators', () => ({
   parseUserId: vi.fn(),
   parsePageId: vi.fn(),
 }));
@@ -65,7 +65,7 @@ import {
   getUserDriveAccess,
 } from '../permissions';
 import { db } from '@pagespace/db/db';
-import { parseUserId, parsePageId } from '../../validators';
+import { parseUserId, parsePageId } from '../../validators/id-validators';
 import { loggers } from '../../logging/logger-config';
 
 // ---------------------------------------------------------------------------

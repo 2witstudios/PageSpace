@@ -30,7 +30,7 @@ export async function register() {
       process.env.AUDIT_WEBHOOK_URL &&
       process.env.AUDIT_WEBHOOK_SECRET
     ) {
-      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib/logging');
+      const { setSiemErrorHook, buildWebhookSiemErrorHook } = await import('@pagespace/lib/logging/siem-error-hook');
       setSiemErrorHook(buildWebhookSiemErrorHook(
         process.env.AUDIT_WEBHOOK_URL,
         process.env.AUDIT_WEBHOOK_SECRET,

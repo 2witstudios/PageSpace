@@ -4,7 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets';
+import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
