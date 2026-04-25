@@ -150,7 +150,7 @@ export function NotificationItem({
         ) : null}
         {showActionedStatus ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            {notification.metadata.actionedStatus === 'accepted'
+            {notification.metadata?.actionedStatus === 'accepted'
               ? 'You accepted this request'
               : 'You declined this request'}
           </p>

@@ -281,7 +281,7 @@ export default function NotificationsPage() {
                                   onSelect={() => handleSelect(notification)}
                                   onDismiss={() => handleDeleteNotification(notification.id)}
                                   onAccept={
-                                    isConnectionRequest(notification) && !notification.metadata.actioned
+                                    isConnectionRequest(notification) && !notification.metadata?.actioned
                                       ? () =>
                                           handleConnectionAction(
                                             notification.metadata.connectionId,
@@ -291,7 +291,7 @@ export default function NotificationsPage() {
                                       : undefined
                                   }
                                   onDecline={
-                                    isConnectionRequest(notification) && !notification.metadata.actioned
+                                    isConnectionRequest(notification) && !notification.metadata?.actioned
                                       ? () =>
                                           handleConnectionAction(
                                             notification.metadata.connectionId,
