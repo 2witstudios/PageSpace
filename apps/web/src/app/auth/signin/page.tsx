@@ -147,32 +147,38 @@ function SignInForm() {
         </p>
       </motion.div>
 
-      {/* OAuth buttons */}
-      {isWaitingForExternalAuth ? (
-        <ExternalAuthWaiting provider={waitingProvider} onCancel={cancelExternalAuth} />
-      ) : (
-        <OAuthButtons
-          onGoogleClick={handleGoogleSignIn}
-          onAppleClick={handleAppleSignIn}
-          disabled={isGoogleLoading || isAppleLoading}
-          isGoogleLoading={isGoogleLoading}
-          isAppleLoading={isAppleLoading}
-        />
-      )}
-
-      <AuthDivider delay={0.3} />
-
       {/* Passkey login */}
       {csrfToken && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35, duration: 0.3 }}
+          transition={{ delay: 0.2, duration: 0.3 }}
         >
           <PasskeyLoginButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             variant="outline"
+          />
+        </motion.div>
+      )}
+
+      <AuthDivider delay={0.3} />
+
+      {/* OAuth buttons */}
+      {isWaitingForExternalAuth ? (
+        <ExternalAuthWaiting provider={waitingProvider} onCancel={cancelExternalAuth} />
+      ) : (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+        >
+          <OAuthButtons
+            onGoogleClick={handleGoogleSignIn}
+            onAppleClick={handleAppleSignIn}
+            disabled={isGoogleLoading || isAppleLoading}
+            isGoogleLoading={isGoogleLoading}
+            isAppleLoading={isAppleLoading}
           />
         </motion.div>
       )}
