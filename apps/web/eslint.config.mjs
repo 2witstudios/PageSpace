@@ -55,11 +55,6 @@ const eslintConfig = [
                 "Use the specific leaf subpath: @pagespace/lib/encryption/encryption-utils",
             },
             {
-              name: "@pagespace/lib/file-processing",
-              message:
-                "Use the specific leaf subpath: @pagespace/lib/file-processing/file-processor",
-            },
-            {
               name: "@pagespace/lib/integrations",
               message:
                 "Use the specific leaf subpath (e.g. @pagespace/lib/integrations/types, not @pagespace/lib/integrations)",
