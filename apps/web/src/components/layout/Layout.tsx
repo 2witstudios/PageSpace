@@ -279,14 +279,17 @@ function Layout({ children }: LayoutProps) {
                   minSize={String(sidebarMinSize)}
                   maxSize={String(leftSidebarMaxSize)}
                   onResize={(s) => setLeftSidebarSize(s.asPercentage)}
-                  className="pt-4 overflow-hidden @container"
+                  className="pt-4 overflow-hidden"
                 >
-                  <MemoizedSidebar className="h-full w-full" />
+                  <div className="h-full w-full @container">
+                    <MemoizedSidebar className="h-full w-full" />
+                  </div>
                 </ResizablePanel>
                 <ResizableHandle />
               </>
             )}
-            <ResizablePanel id="main-content" defaultSize={mainDefaultSize} minSize="30" className="@container">
+            <ResizablePanel id="main-content" defaultSize={mainDefaultSize} minSize="30">
+              <div className="h-full w-full @container">
               <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                 <AnimatePresence>
                   {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
@@ -364,6 +367,7 @@ function Layout({ children }: LayoutProps) {
                   )}
                 </AnimatePresence>
               </main>
+              </div>
             </ResizablePanel>
             {rightPanelVisible && (
               <>
@@ -374,9 +378,11 @@ function Layout({ children }: LayoutProps) {
                   minSize={String(sidebarMinSize)}
                   maxSize={String(rightSidebarMaxSize)}
                   onResize={(s) => setRightSidebarSize(s.asPercentage)}
-                  className="pt-4 overflow-hidden @container"
+                  className="pt-4 overflow-hidden"
                 >
-                  <RightPanel className="h-full w-full" />
+                  <div className="h-full w-full @container">
+                    <RightPanel className="h-full w-full" />
+                  </div>
                 </ResizablePanel>
               </>
             )}
