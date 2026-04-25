@@ -170,11 +170,11 @@ export default function DocxViewer({ page }: DocxViewerProps) {
           <div 
             ref={previewContainerRef}
             className="bg-white rounded overflow-auto shadow-lg"
-            style={{ 
+            style={{
               minHeight: '600px',
               width: 'fit-content',
               maxWidth: '100%',
-              height: 'calc(100vh - 200px)',
+              height: '100%',
               display: 'block',
               position: 'relative'
             }}

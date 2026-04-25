@@ -34,7 +34,10 @@ import {
 } from "@/components/ui/sheet";
 import { VoiceModeBorder } from "@/components/ai/voice";
 
-const noopStorage = { getItem: () => null, setItem: () => {} };
+const noopStorage = {
+  getItem: (_key: string): string | null => null,
+  setItem: (_key: string, _value: string): void => {},
+} satisfies Pick<Storage, 'getItem' | 'setItem'>;
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -70,8 +73,12 @@ function Layout({ children }: LayoutProps) {
   const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
   const shouldOverlayRightSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
 
+  const leftPanelVisible = !shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen;
+  const rightPanelVisible = !shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen;
+  const panelCount = 1 + (leftPanelVisible ? 1 : 0) + (rightPanelVisible ? 1 : 0);
+
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "pagespace-layout",
+    id: `pagespace-layout-${panelCount}`,
     storage: typeof window !== "undefined" ? window.localStorage : noopStorage,
   });
 
@@ -118,7 +125,6 @@ function Layout({ children }: LayoutProps) {
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
     if (hasHydrated && !isLoading && !isAuthenticated) {
-      console.log('[LAYOUT] Redirecting to signin - hasHydrated:', hasHydrated, 'isLoading:', isLoading, 'isAuthenticated:', isAuthenticated);
       router.push('/auth/signin');
     }
   }, [hasHydrated, isLoading, isAuthenticated, router]);
@@ -268,13 +274,13 @@ function Layout({ children }: LayoutProps) {
             onLayoutChanged={onLayoutChanged}
             className="relative flex-1 min-h-0 overflow-hidden"
           >
-            {!shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
+            {leftPanelVisible && (
               <>
                 <ResizablePanel
                   id="left-sidebar"
-                  defaultSize={18}
-                  minSize={13}
-                  maxSize={32}
+                  defaultSize="18"
+                  minSize="13"
+                  maxSize="32"
                   className="pt-4 overflow-hidden"
                 >
                   <MemoizedSidebar className="h-full w-full" />
@@ -282,7 +288,7 @@ function Layout({ children }: LayoutProps) {
                 <ResizableHandle />
               </>
             )}
-            <ResizablePanel id="main-content" defaultSize={64} minSize={30}>
+            <ResizablePanel id="main-content" defaultSize="64" minSize="30">
               <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                 <AnimatePresence>
                   {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
@@ -361,14 +367,14 @@ function Layout({ children }: LayoutProps) {
                 </AnimatePresence>
               </main>
             </ResizablePanel>
-            {!shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
+            {rightPanelVisible && (
               <>
                 <ResizableHandle />
                 <ResizablePanel
                   id="right-sidebar"
-                  defaultSize={18}
-                  minSize={13}
-                  maxSize={32}
+                  defaultSize="18"
+                  minSize="13"
+                  maxSize="32"
                   className="pt-4 overflow-hidden"
                 >
                   <RightPanel className="h-full w-full" />
