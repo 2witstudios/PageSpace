@@ -122,7 +122,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
-        className="flex h-full w-full flex-col @container"
+        className="flex h-full w-full flex-col"
       >
         <div className="border-b border-[var(--separator)]">
           <TabsList

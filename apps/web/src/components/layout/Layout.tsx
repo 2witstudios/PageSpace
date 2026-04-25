@@ -279,14 +279,14 @@ function Layout({ children }: LayoutProps) {
                   minSize={String(sidebarMinSize)}
                   maxSize={String(leftSidebarMaxSize)}
                   onResize={(s) => setLeftSidebarSize(s.asPercentage)}
-                  className="pt-4 overflow-hidden"
+                  className="pt-4 overflow-hidden @container"
                 >
                   <MemoizedSidebar className="h-full w-full" />
                 </ResizablePanel>
                 <ResizableHandle />
               </>
             )}
-            <ResizablePanel id="main-content" defaultSize={mainDefaultSize} minSize="30">
+            <ResizablePanel id="main-content" defaultSize={mainDefaultSize} minSize="30" className="@container">
               <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                 <AnimatePresence>
                   {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
@@ -374,7 +374,7 @@ function Layout({ children }: LayoutProps) {
                   minSize={String(sidebarMinSize)}
                   maxSize={String(rightSidebarMaxSize)}
                   onResize={(s) => setRightSidebarSize(s.asPercentage)}
-                  className="pt-4 overflow-hidden"
+                  className="pt-4 overflow-hidden @container"
                 >
                   <RightPanel className="h-full w-full" />
                 </ResizablePanel>

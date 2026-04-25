@@ -107,7 +107,7 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   }, [page, pageIsFile]);
 
   return (
-    <div className="@container flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
+    <div className="flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
       <Breadcrumbs pageId={pageId} />
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0 flex-1">
