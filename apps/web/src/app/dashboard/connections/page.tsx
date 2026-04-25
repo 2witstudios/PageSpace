@@ -89,9 +89,11 @@ export default function ConnectionsPage() {
     if (!socket) return;
 
     const handleNotification = (notification: { type: string }) => {
-      if (notification.type === 'CONNECTION_ACCEPTED' || notification.type === 'CONNECTION_REJECTED') {
+      if (notification.type === 'CONNECTION_ACCEPTED') {
         mutate('/api/connections?status=PENDING');
         mutate('/api/connections?status=ACCEPTED');
+      } else if (notification.type === 'CONNECTION_REJECTED' || notification.type === 'CONNECTION_REQUEST') {
+        mutate('/api/connections?status=PENDING');
       }
     };
 
