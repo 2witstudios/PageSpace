@@ -34,6 +34,7 @@ function AddPaymentMethodFormContent({
   const elements = useElements();
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [elementReady, setElementReady] = useState(false);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -83,6 +84,7 @@ function AddPaymentMethodFormContent({
             applePay: 'never',
           },
         }}
+        onReady={() => setElementReady(true)}
       />
 
       {error && (
@@ -102,7 +104,7 @@ function AddPaymentMethodFormContent({
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={!stripe || processing} className="flex-1">
+        <Button type="submit" disabled={!stripe || processing || !elementReady} className="flex-1">
           {processing ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
