@@ -78,6 +78,10 @@ function AddPaymentMethodFormContent({
       <PaymentElement
         options={{
           layout: 'tabs',
+          wallets: {
+            googlePay: 'never',
+            applePay: 'never',
+          },
         }}
       />
 
