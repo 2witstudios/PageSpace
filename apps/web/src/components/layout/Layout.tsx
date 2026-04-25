@@ -20,7 +20,6 @@ import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
-import { cn } from "@/lib/utils";
 import { useTabSync } from "@/hooks/useTabSync";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle, useDefaultLayout } from "@/components/ui/resizable";
 import { useEditingStore } from "@/stores/useEditingStore";
