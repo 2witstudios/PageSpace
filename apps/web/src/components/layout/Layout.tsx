@@ -21,7 +21,7 @@ import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
 import { useTabSync } from "@/hooks/useTabSync";
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle, useDefaultLayout } from "@/components/ui/resizable";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
@@ -34,12 +34,6 @@ import {
 } from "@/components/ui/sheet";
 import { VoiceModeBorder } from "@/components/ai/voice";
 
-const noopStorage = {
-  getItem: (_key: string): string | null => null,
-  setItem: (_key: string, _value: string): void => {},
-} satisfies Pick<Storage, 'getItem' | 'setItem'>;
-
-const sidebarDefaultSize = 18; // % of panel group width
 const sidebarMinSize = 13;
 const sidebarMaxSize = 32;
 
@@ -77,15 +71,14 @@ function Layout({ children }: LayoutProps) {
   const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
   const shouldOverlayRightSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
 
+  const leftSidebarSize = useLayoutStore(state => state.leftSidebarSize);
+  const rightSidebarSize = useLayoutStore(state => state.rightSidebarSize);
+  const setLeftSidebarSize = useLayoutStore(state => state.setLeftSidebarSize);
+  const setRightSidebarSize = useLayoutStore(state => state.setRightSidebarSize);
+
   const leftPanelVisible = !shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen;
   const rightPanelVisible = !shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen;
-  const panelCount = 1 + (leftPanelVisible ? 1 : 0) + (rightPanelVisible ? 1 : 0);
-  const mainDefaultSize = (100 - (leftPanelVisible ? sidebarDefaultSize : 0) - (rightPanelVisible ? sidebarDefaultSize : 0)).toString();
-
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: `pagespace-layout-${panelCount}`,
-    storage: typeof window !== "undefined" ? window.localStorage : noopStorage,
-  });
+  const mainDefaultSize = (100 - (leftPanelVisible ? leftSidebarSize : 0) - (rightPanelVisible ? rightSidebarSize : 0)).toString();
 
   useResponsivePanels();
 
@@ -275,17 +268,16 @@ function Layout({ children }: LayoutProps) {
           <TabBar />
 
           <ResizablePanelGroup
-            defaultLayout={defaultLayout}
-            onLayoutChanged={onLayoutChanged}
             className="relative flex-1 min-h-0 overflow-hidden"
           >
             {leftPanelVisible && (
               <>
                 <ResizablePanel
                   id="left-sidebar"
-                  defaultSize={String(sidebarDefaultSize)}
+                  defaultSize={String(leftSidebarSize)}
                   minSize={String(sidebarMinSize)}
                   maxSize={String(sidebarMaxSize)}
+                  onResize={(s) => setLeftSidebarSize(s.asPercentage)}
                   className="pt-4 overflow-hidden"
                 >
                   <MemoizedSidebar className="h-full w-full" />
@@ -377,9 +369,10 @@ function Layout({ children }: LayoutProps) {
                 <ResizableHandle />
                 <ResizablePanel
                   id="right-sidebar"
-                  defaultSize={String(sidebarDefaultSize)}
+                  defaultSize={String(rightSidebarSize)}
                   minSize={String(sidebarMinSize)}
                   maxSize={String(sidebarMaxSize)}
+                  onResize={(s) => setRightSidebarSize(s.asPercentage)}
                   className="pt-4 overflow-hidden"
                 >
                   <RightPanel className="h-full w-full" />
