@@ -39,6 +39,7 @@ export default function NotificationsPage() {
   const notifications = useNotificationStore((state) => state.notifications);
   const isLoading = useNotificationStore((state) => state.isLoading);
   const fetchNotifications = useNotificationStore((state) => state.fetchNotifications);
+  const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
   const handleMarkAllAsRead = useNotificationStore((state) => state.handleMarkAllAsRead);
   const handleDeleteNotification = useNotificationStore((state) => state.handleDeleteNotification);
   const initializeSocketListeners = useNotificationStore((state) => state.initializeSocketListeners);
