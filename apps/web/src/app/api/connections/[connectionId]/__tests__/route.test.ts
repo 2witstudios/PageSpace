@@ -63,6 +63,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/lib/notifications/notifications', () => ({
   createNotification: vi.fn(),
+  markConnectionRequestActioned: vi.fn(),
 }));
 
 import { PATCH, DELETE } from '../route';

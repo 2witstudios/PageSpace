@@ -73,6 +73,7 @@ import {
   createMentionNotification,
   createTaskAssignedNotification,
   broadcastTosPrivacyUpdate,
+  markConnectionRequestActioned,
 } from '../notifications';
 import { db } from '@pagespace/db/db';
 import { sendPushNotification } from '../push-notifications';
@@ -620,4 +621,57 @@ describe('broadcastTosPrivacyUpdate', () => {
 
     await expect(broadcastTosPrivacyUpdate('tos')).rejects.toThrow('DB error');
   });
+});
+
+// ---------------------------------------------------------------------------
+// markConnectionRequestActioned
+// ---------------------------------------------------------------------------
+describe('markConnectionRequestActioned', () => {
+  const existingNotification = {
+    id: 'notif-1',
+    userId: 'user-1',
+    type: 'CONNECTION_REQUEST',
+    isRead: false,
+    readAt: null,
+    metadata: { connectionId: 'conn-1', senderId: 'user-2' },
+  };
+
+  beforeEach(() => {
+    vi.mocked(db.query.notifications.findFirst).mockResolvedValue(existingNotification as never);
+    setupUpdateChain([{ ...existingNotification, isRead: true, metadata: { connectionId: 'conn-1', senderId: 'user-2', actioned: true, actionedStatus: 'accepted' } }]);
+  });
+
+  it('updates the notification with actioned=true and actionedStatus when found', async () => {
+    await markConnectionRequestActioned('conn-1', 'user-1', 'accepted');
+    expect(db.query.notifications.findFirst).toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalled();
+  });
+
+  it('sets isRead:true and the actioned metadata fields', async () => {
+    const { setFn } = setupUpdateChain([existingNotification]);
+    await markConnectionRequestActioned('conn-1', 'user-1', 'rejected');
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isRead: true,
+        metadata: expect.objectContaining({ actioned: true, actionedStatus: 'rejected' }),
+      }),
+    );
+  });
+
+  it('preserves existing metadata fields when updating', async () => {
+    const { setFn } = setupUpdateChain([existingNotification]);
+    await markConnectionRequestActioned('conn-1', 'user-1', 'accepted');
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ connectionId: 'conn-1', senderId: 'user-2' }),
+      }),
+    );
+  });
+
+  it('returns early without updating when no notification is found', async () => {
+    vi.mocked(db.query.notifications.findFirst).mockResolvedValue(undefined as never);
+    await markConnectionRequestActioned('conn-1', 'user-1', 'accepted');
+    expect(db.update).not.toHaveBeenCalled();
+  });
+});
 });
