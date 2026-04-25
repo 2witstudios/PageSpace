@@ -124,5 +124,5 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     details: { conversationId },
   });
 
-  return new NextResponse(null, { status: 204 });
+  return NextResponse.json({ success: true });
 }

@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -14,7 +14,7 @@ type RouteParams = { params: Promise<{ pageId: string; messageId: string }> };
 
 /**
  * PATCH /api/channels/[pageId]/messages/[messageId]
- * Edit a channel message (own messages only)
+ * Edit a channel message (own messages only, requires edit permission)
  */
 export async function PATCH(req: Request, { params }: RouteParams) {
   const { pageId, messageId } = await params;
@@ -23,9 +23,9 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canView = await canUserViewPage(userId, pageId);
-  if (!canView) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const canEdit = await canUserEditPage(userId, pageId);
+  if (!canEdit) {
+    return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
 
   const message = await db.query.channelMessages.findFirst({
@@ -84,7 +84,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
 
 /**
  * DELETE /api/channels/[pageId]/messages/[messageId]
- * Soft-delete a channel message (own messages only)
+ * Soft-delete a channel message (own messages only, requires edit permission)
  */
 export async function DELETE(req: Request, { params }: RouteParams) {
   const { pageId, messageId } = await params;
@@ -93,9 +93,9 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canView = await canUserViewPage(userId, pageId);
-  if (!canView) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const canEdit = await canUserEditPage(userId, pageId);
+  if (!canEdit) {
+    return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
 
   const message = await db.query.channelMessages.findFirst({
@@ -139,5 +139,5 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     }
   }
 
-  return new NextResponse(null, { status: 204 });
+  return NextResponse.json({ success: true });
 }
