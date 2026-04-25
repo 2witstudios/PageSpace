@@ -76,6 +76,7 @@ function Layout({ children }: LayoutProps) {
   const leftPanelVisible = !shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen;
   const rightPanelVisible = !shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen;
   const panelCount = 1 + (leftPanelVisible ? 1 : 0) + (rightPanelVisible ? 1 : 0);
+  const mainDefaultSize = (100 - (leftPanelVisible ? 18 : 0) - (rightPanelVisible ? 18 : 0)).toString();
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: `pagespace-layout-${panelCount}`,
@@ -288,7 +289,7 @@ function Layout({ children }: LayoutProps) {
                 <ResizableHandle />
               </>
             )}
-            <ResizablePanel id="main-content" defaultSize="64" minSize="30">
+            <ResizablePanel id="main-content" defaultSize={mainDefaultSize} minSize="30">
               <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                 <AnimatePresence>
                   {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (

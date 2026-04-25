@@ -1951,10 +1951,16 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         <div
           className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
           style={(() => {
+            const MENU_W = 180; // min-w-[160px] + padding
+            const MENU_H = 200; // approximate rendered height
             const b = gridRef.current?.getBoundingClientRect();
+            const minLeft = b ? b.left : 0;
+            const minTop = b ? b.top : 0;
+            const maxLeft = (b ? b.right : window.innerWidth) - MENU_W;
+            const maxTop = (b ? b.bottom : window.innerHeight) - MENU_H;
             return {
-              left: `${Math.min(contextMenu.x, (b?.right ?? window.innerWidth) - 180)}px`,
-              top: `${Math.min(contextMenu.y, (b?.bottom ?? window.innerHeight) - 200)}px`,
+              left: `${Math.max(minLeft, Math.min(contextMenu.x, Math.max(minLeft, maxLeft)))}px`,
+              top: `${Math.max(minTop, Math.min(contextMenu.y, Math.max(minTop, maxTop)))}px`,
             };
           })()}
           onClick={(e) => e.stopPropagation()}
