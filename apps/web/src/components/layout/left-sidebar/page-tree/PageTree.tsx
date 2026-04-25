@@ -386,7 +386,7 @@ export default function PageTree({
           {isUploading && (
             <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
               <p className="text-sm font-medium mb-2">Uploading files...</p>
-              <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
+              <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}

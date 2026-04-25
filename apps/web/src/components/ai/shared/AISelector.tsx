@@ -61,7 +61,7 @@ export function AISelector({
             className
           )}
         >
-          <span className={selectedAgent ? "truncate max-w-[200px]" : ""}>
+          <span className={selectedAgent ? "truncate min-w-0" : ""}>
             {selectedAgent ? selectedAgent.title : 'Global Assistant'}
           </span>
           <ChevronDown className="h-4 w-4 opacity-50" />
