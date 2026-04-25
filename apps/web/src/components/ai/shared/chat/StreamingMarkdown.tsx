@@ -12,6 +12,7 @@
 'use client';
 
 import { memo, useMemo, useState, useRef, useEffect, useCallback, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode, MouseEvent } from 'react';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Streamdown, defaultRemarkPlugins } from 'streamdown';
 import { useRouter } from 'next/navigation';
 import { isInternalUrl, openExternalUrl } from '@/lib/navigation/app-navigation';
@@ -127,20 +128,25 @@ function CodeCopyButton({ code, className }: { code: string; className?: string 
   const Icon = isCopied ? CheckIcon : CopyIcon;
 
   return (
-    <button
-      onClick={handleCopy}
-      className={cn(
-        'absolute top-2 right-2 p-1.5 rounded-md',
-        'bg-background/80 hover:bg-muted border border-border/50',
-        'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity',
-        'focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring',
-        className
-      )}
-      aria-label={isCopied ? 'Copied' : 'Copy code'}
-      type="button"
-    >
-      <Icon size={14} className={isCopied ? 'text-green-500' : 'text-muted-foreground'} />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={handleCopy}
+          className={cn(
+            'absolute top-2 right-2 p-1.5 rounded-md',
+            'bg-background/80 hover:bg-muted border border-border/50',
+            'opacity-100 transition-opacity',
+            'focus:outline-none focus:ring-2 focus:ring-ring',
+            className
+          )}
+          aria-label={isCopied ? 'Copied' : 'Copy code'}
+          type="button"
+        >
+          <Icon size={14} className={isCopied ? 'text-green-500' : 'text-muted-foreground'} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="left">{isCopied ? 'Copied!' : 'Copy code'}</TooltipContent>
+    </Tooltip>
   );
 }
 
