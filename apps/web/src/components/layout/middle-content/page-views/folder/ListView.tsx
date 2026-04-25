@@ -35,6 +35,7 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
   );
 
   return (
+    <div className="overflow-x-auto">
     <Table>
       <TableHeader>
         <TableRow>
@@ -77,5 +78,6 @@ export function ListView({ items, sortKey, sortDirection, onSort }: ListViewProp
         ))}
       </TableBody>
     </Table>
+    </div>
   );
 }

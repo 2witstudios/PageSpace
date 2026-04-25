@@ -862,6 +862,7 @@ function TaskListView({ page }: TaskListViewProps) {
               collisionDetection={closestCenter}
               onDragEnd={handleDragEnd}
             >
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1061,6 +1062,7 @@ function TaskListView({ page }: TaskListViewProps) {
                   </TableBody>
                 )}
               </Table>
+              </div>
             </DndContext>
 
             {filteredTasks.length === 0 && !canEdit && (

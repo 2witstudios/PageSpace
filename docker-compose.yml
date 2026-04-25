@@ -76,6 +76,7 @@ services:
       - FILE_STORAGE_PATH=/app/storage
       - PROCESSOR_URL=http://processor:3003
       - PORT=3000
+      - HOSTNAME=0.0.0.0
       - NODE_OPTIONS=--max-old-space-size=640
     deploy:
       resources:
@@ -171,7 +172,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - PORT=${REALTIME_PORT}
-      - CORS_ORIGIN=${WEB_APP_URL}
+      - CORS_ORIGIN=http://localhost:3000
     deploy:
       resources:
         limits:
@@ -200,6 +201,31 @@ services:
     restart: unless-stopped
     networks:
       - internal
+
+  marketing:
+    build:
+      context: .
+      dockerfile: apps/marketing/Dockerfile
+      args:
+        - NEXT_PUBLIC_MARKETING_URL=http://localhost:3004
+        - NEXT_PUBLIC_APP_URL=http://localhost:3000
+        - NEXT_PUBLIC_COOKIE_DOMAIN=localhost
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - NEXT_PUBLIC_MARKETING_URL=http://localhost:3004
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      - NEXT_PUBLIC_COOKIE_DOMAIN=localhost
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@pagespace.ai}
+      - NODE_ENV=production
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - frontend
 
   # Test service for running unit tests with database access
   test:

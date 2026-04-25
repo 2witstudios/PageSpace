@@ -102,6 +102,7 @@
     "react-hook-form": "^7.62.0",
     "react-image-crop": "^11.0.10",
     "react-pdf": "^10.1.0",
+    "react-resizable-panels": "^4.6.4",
     "recharts": "^3.1.2",
     "shiki": "^3.22.0",
     "socket.io-client": "^4.8.1",
