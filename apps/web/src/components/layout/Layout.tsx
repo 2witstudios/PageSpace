@@ -35,7 +35,8 @@ import {
 import { VoiceModeBorder } from "@/components/ai/voice";
 
 const sidebarMinSize = 13;
-const sidebarMaxSize = 32;
+const leftSidebarMaxSize = 32;
+const rightSidebarMaxSize = 50;
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -276,7 +277,7 @@ function Layout({ children }: LayoutProps) {
                   id="left-sidebar"
                   defaultSize={String(leftSidebarSize)}
                   minSize={String(sidebarMinSize)}
-                  maxSize={String(sidebarMaxSize)}
+                  maxSize={String(leftSidebarMaxSize)}
                   onResize={(s) => setLeftSidebarSize(s.asPercentage)}
                   className="pt-4 overflow-hidden"
                 >
@@ -371,7 +372,7 @@ function Layout({ children }: LayoutProps) {
                   id="right-sidebar"
                   defaultSize={String(rightSidebarSize)}
                   minSize={String(sidebarMinSize)}
-                  maxSize={String(sidebarMaxSize)}
+                  maxSize={String(rightSidebarMaxSize)}
                   onResize={(s) => setRightSidebarSize(s.asPercentage)}
                   className="pt-4 overflow-hidden"
                 >
