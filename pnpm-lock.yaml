@@ -822,6 +822,9 @@ importers:
       react-pdf:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.1.13)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
+      react-resizable-panels:
+        specifier: ^4.6.4
+        version: 4.6.4(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       recharts:
         specifier: ^3.1.2
         version: 3.2.1(@types/react@19.1.13)(react-dom@19.2.1(react@19.2.1))(react-is@18.3.1)(react@19.2.1)(redux@5.0.1)

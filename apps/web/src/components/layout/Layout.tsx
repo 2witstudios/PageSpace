@@ -22,6 +22,7 @@ import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
 import { cn } from "@/lib/utils";
 import { useTabSync } from "@/hooks/useTabSync";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle, useDefaultLayout } from "@/components/ui/resizable";
 import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
@@ -67,6 +68,12 @@ function Layout({ children }: LayoutProps) {
   // while keeping all other views mobile-optimized (handled by useMobile() returning true for tablets).
   const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
   const shouldOverlayRightSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
+
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "pagespace-layout",
+    panelIds: ["left-sidebar", "main-content", "right-sidebar"],
+    storage: window.localStorage,
+  });
 
   useResponsivePanels();
 
@@ -256,110 +263,138 @@ function Layout({ children }: LayoutProps) {
           {/* TabBar: auto-hides when <=1 tab, accordion from TopBar */}
           <TabBar />
 
-        <div className="relative flex flex-1 min-h-0 overflow-hidden">
-          {!shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
-            <div className={cn(
-              "relative flex-shrink-0 pt-4 overflow-hidden",
-              isTablet
-                ? "flex w-[18rem]"
-                : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
-            )}>
-              <MemoizedSidebar className="h-full w-full" />
-            </div>
-          )}
+        {!shouldOverlayLeftSidebar && !isSheetBreakpoint ? (
+          <ResizablePanelGroup
+            orientation="horizontal"
+            defaultLayout={defaultLayout}
+            onLayoutChanged={onLayoutChanged}
+            className="relative flex-1 min-h-0 overflow-hidden"
+          >
+            {leftSidebarOpen && (
+              <>
+                <ResizablePanel
+                  id="left-sidebar"
+                  defaultSize={18}
+                  minSize={13}
+                  maxSize={32}
+                  className="pt-4 overflow-hidden"
+                >
+                  <MemoizedSidebar className="h-full w-full" />
+                </ResizablePanel>
+                <ResizableHandle />
+              </>
+            )}
+            <ResizablePanel id="main-content" minSize={30}>
+              <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
+                {children ? (
+                  <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+                    {children}
+                  </div>
+                ) : (
+                  <CenterPanel />
+                )}
+                <VoiceModeBorder />
+              </main>
+            </ResizablePanel>
+            {rightSidebarOpen && (
+              <>
+                <ResizableHandle />
+                <ResizablePanel
+                  id="right-sidebar"
+                  defaultSize={18}
+                  minSize={13}
+                  maxSize={32}
+                  className="pt-4 overflow-hidden"
+                >
+                  <RightPanel className="h-full w-full" />
+                </ResizablePanel>
+              </>
+            )}
+          </ResizablePanelGroup>
+        ) : (
+          <div className="relative flex flex-1 min-h-0 overflow-hidden">
+            <AnimatePresence>
+              {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
+                <motion.div
+                  key="left-sidebar"
+                  initial={{ x: -320, opacity: 0, scale: 0.98 }}
+                  animate={{ x: 0, opacity: 1, scale: 1 }}
+                  exit={{ x: -320, opacity: 0, scale: 0.98 }}
+                  transition={{
+                    type: "spring",
+                    stiffness: 300,
+                    damping: 30,
+                    mass: 0.8
+                  }}
+                  className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
+                >
+                  <div className="h-full w-[min(22rem,90vw)] max-w-sm">
+                    <MemoizedSidebar variant="overlay" className="h-full w-full" />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-          <AnimatePresence>
-            {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
-              <motion.div
-                key="left-sidebar"
-                initial={{ x: -320, opacity: 0, scale: 0.98 }}
-                animate={{ x: 0, opacity: 1, scale: 1 }}
-                exit={{ x: -320, opacity: 0, scale: 0.98 }}
-                transition={{
-                  type: "spring",
-                  stiffness: 300,
-                  damping: 30,
-                  mass: 0.8
-                }}
-                className="absolute inset-y-0 left-0 z-40 flex h-full max-w-full"
-              >
-                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
-                  <MemoizedSidebar variant="overlay" className="h-full w-full" />
+            <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              {children ? (
+                <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+                  {children}
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              ) : (
+                <CenterPanel />
+              )}
+              <VoiceModeBorder />
+            </main>
 
-          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {children ? (
-              <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-                {children}
-              </div>
-            ) : (
-              <CenterPanel />
-            )}
-            <VoiceModeBorder />
-          </main>
+            <AnimatePresence>
+              {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
+                <motion.div
+                  key="right-sidebar"
+                  initial={{ x: 320, opacity: 0, scale: 0.98 }}
+                  animate={{ x: 0, opacity: 1, scale: 1 }}
+                  exit={{ x: 320, opacity: 0, scale: 0.98 }}
+                  transition={{
+                    type: "spring",
+                    stiffness: 300,
+                    damping: 30,
+                    mass: 0.8
+                  }}
+                  className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
+                >
+                  <div className="h-full w-[min(22rem,90vw)] max-w-sm">
+                    <RightPanel variant="overlay" className="h-full w-full" />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-          {!shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
-            <div className={cn(
-              "relative flex-shrink-0 pt-4 overflow-hidden",
-              isTablet
-                ? "flex w-[18rem]"
-                : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
-            )}>
-              <RightPanel className="h-full w-full" />
-            </div>
-          )}
-
-          <AnimatePresence>
-            {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
-              <motion.div
-                key="right-sidebar"
-                initial={{ x: 320, opacity: 0, scale: 0.98 }}
-                animate={{ x: 0, opacity: 1, scale: 1 }}
-                exit={{ x: 320, opacity: 0, scale: 0.98 }}
-                transition={{
-                  type: "spring",
-                  stiffness: 300,
-                  damping: 30,
-                  mass: 0.8
-                }}
-                className="absolute inset-y-0 right-0 z-40 flex h-full max-w-full"
-              >
-                <div className="h-full w-[min(22rem,90vw)] max-w-sm">
-                  <RightPanel variant="overlay" className="h-full w-full" />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {!isSheetBreakpoint && (
-              (shouldOverlayLeftSidebar && leftSidebarOpen) ||
-              (shouldOverlayRightSidebar && rightSidebarOpen)
-            ) && (
-              <motion.button
-                key="panel-overlay"
-                type="button"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
-                aria-label="Close side panels"
-                onClick={() => {
-                  if (shouldOverlayLeftSidebar && leftSidebarOpen) {
-                    setLeftSidebarOpen(false);
-                  }
-                  if (shouldOverlayRightSidebar && rightSidebarOpen) {
-                    setRightSidebarOpen(false);
-                  }
-                }}
-              />
-            )}
-          </AnimatePresence>
-        </div>
+            <AnimatePresence>
+              {!isSheetBreakpoint && (
+                (shouldOverlayLeftSidebar && leftSidebarOpen) ||
+                (shouldOverlayRightSidebar && rightSidebarOpen)
+              ) && (
+                <motion.button
+                  key="panel-overlay"
+                  type="button"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
+                  aria-label="Close side panels"
+                  onClick={() => {
+                    if (shouldOverlayLeftSidebar && leftSidebarOpen) {
+                      setLeftSidebarOpen(false);
+                    }
+                    if (shouldOverlayRightSidebar && rightSidebarOpen) {
+                      setRightSidebarOpen(false);
+                    }
+                  }}
+                />
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
           <DebugPanel />
         </div>
