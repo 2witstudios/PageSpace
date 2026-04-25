@@ -137,7 +137,7 @@ export default function DriveSwitcher() {
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className="flex items-center gap-2 px-2 h-9 max-w-[170px]"
+            className="flex items-center gap-2 px-2 h-9 min-w-0 max-w-full"
           >
             <Folder className="h-4 w-4 shrink-0" />
             <span className="truncate font-medium">
