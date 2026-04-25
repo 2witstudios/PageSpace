@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useSocket } from '@/hooks/useSocket';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -62,6 +63,7 @@ interface SearchResult {
 export default function ConnectionsPage() {
   const { } = useAuth();
   const router = useRouter();
+  const socket = useSocket();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -82,6 +84,20 @@ export default function ConnectionsPage() {
 
   const acceptedConnections = acceptedData?.connections || [];
   const pendingConnections = pendingData?.connections || [];
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNotification = (notification: { type: string }) => {
+      if (notification.type === 'CONNECTION_ACCEPTED' || notification.type === 'CONNECTION_REJECTED') {
+        mutate('/api/connections?status=PENDING');
+        mutate('/api/connections?status=ACCEPTED');
+      }
+    };
+
+    socket.on('notification:new', handleNotification);
+    return () => { socket.off('notification:new', handleNotification); };
+  }, [socket]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
