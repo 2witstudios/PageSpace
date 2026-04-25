@@ -370,6 +370,49 @@ describe('useNotificationStore', () => {
     });
   });
 
+  describe('updateNotification', () => {
+    it('given an id and updates, should merge updates into the matching notification', () => {
+      const notif = createMockNotification({ id: 'upd-1', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 1 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-1', { isRead: true });
+
+      const updated = useNotificationStore.getState().notifications.find(n => n.id === 'upd-1');
+      expect(updated?.isRead).toBe(true);
+    });
+
+    it('given isRead:true transition on unread notification, should decrement unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-2', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 1 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-2', { isRead: true });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(0);
+    });
+
+    it('given isRead:true on already-read notification, should not change unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-3', isRead: true });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 0 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-3', { isRead: true });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(0);
+    });
+
+    it('given metadata update without isRead change, should not affect unreadCount', () => {
+      const notif = createMockNotification({ id: 'upd-4', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 2 });
+
+      const { updateNotification } = useNotificationStore.getState();
+      updateNotification('upd-4', { metadata: { actioned: true, actionedStatus: 'accepted' } });
+
+      expect(useNotificationStore.getState().unreadCount).toBe(2);
+    });
+  });
+
   describe('handleDeleteNotification', () => {
     it('given successful API call, should remove notification locally', async () => {
       const notif = createMockNotification({ id: 'notif-to-delete' });
