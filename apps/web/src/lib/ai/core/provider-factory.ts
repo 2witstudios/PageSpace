@@ -302,7 +302,7 @@ export async function createAIProvider(
 
       if (!useOllamaDesktopBridge) {
         // Direct HTTP: full SSRF validation on server
-        const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
         const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
         if (!ollamaUrlValidation.valid) {
           return {
@@ -350,7 +350,7 @@ export async function createAIProvider(
 
       if (!useLmstudioDesktopBridge) {
         // Direct HTTP: full SSRF validation on server
-        const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+        const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
         const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
         if (!lmstudioUrlValidation.valid) {
           return {
@@ -383,7 +383,7 @@ export async function createAIProvider(
       }
 
       // SECURITY: Validate Azure OpenAI URL to prevent SSRF
-      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
       const azureUrlValidation = await validateLocalProviderURL(azureSettings.baseUrl);
       if (!azureUrlValidation.valid) {
         return {

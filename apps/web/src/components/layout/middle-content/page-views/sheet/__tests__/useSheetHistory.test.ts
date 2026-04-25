@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useSheetHistory } from '../useSheetHistory';
-import type { SheetData } from '@pagespace/lib/sheets';
+import type { SheetData } from '@pagespace/lib/sheets/sheet';
 
 const createTestSheet = (cells: Record<string, string> = {}): SheetData => ({
   version: 1,

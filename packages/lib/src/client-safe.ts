@@ -20,7 +20,7 @@ export * from './content/page-types.config';
 export * from './content/page-type-validators';
 
 // Sheet utilities (safe - pure JavaScript functions)
-export * from './sheets';
+export * from './sheets/sheet';
 
 // Browser-safe format bytes utility
 export function formatBytes(bytes: number): string {

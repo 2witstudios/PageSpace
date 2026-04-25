@@ -6,7 +6,7 @@ vi.mock('@pagespace/lib/deployment-mode', () => ({
   isOnPrem: mockIsOnPrem,
 }));
 
-vi.mock('@pagespace/lib/encryption', () => ({
+vi.mock('@pagespace/lib/encryption/encryption-utils', () => ({
   encrypt: vi.fn(),
   decrypt: vi.fn(),
 }));
@@ -30,9 +30,11 @@ vi.mock('@pagespace/lib/audit/mask-email', () => ({
   maskEmail: (e: string) => e,
 }));
 
-vi.mock('@pagespace/lib/security', () => ({
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
   DISTRIBUTED_RATE_LIMITS: { LOGIN: {} },
+}));
+vi.mock('@pagespace/lib/security/url-validator', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 

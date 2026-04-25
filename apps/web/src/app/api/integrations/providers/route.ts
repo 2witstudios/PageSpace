@@ -5,7 +5,7 @@ import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders } from '@pagespace/lib/integrations/repositories/provider-repository';
-import { builtinProviderList } from '@pagespace/lib/integrations/providers';
+import { builtinProviderList } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
