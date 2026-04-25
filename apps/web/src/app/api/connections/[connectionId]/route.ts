@@ -7,7 +7,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createNotification } from '@pagespace/lib/notifications/notifications';
+import { createNotification, markConnectionRequestActioned } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -125,6 +125,8 @@ export async function PATCH(
           triggeredByUserId: userId,
         });
 
+        await markConnectionRequestActioned(connectionId, userId, 'rejected');
+
         auditRequest(request, { eventType: 'data.write', userId, resourceType: 'connection', resourceId: connectionId, details: { action: 'reject' } });
 
         return NextResponse.json({ success: true });
@@ -164,6 +166,11 @@ export async function PATCH(
       .set(updateData)
       .where(eq(connections.id, connectionId))
       .returning();
+
+    // Mark the CONNECTION_REQUEST notification as actioned for the accepting user
+    if (action === 'accept') {
+      await markConnectionRequestActioned(connectionId, userId, 'accepted');
+    }
 
     // Send notification if needed
     if (notificationType && notifyUserId) {

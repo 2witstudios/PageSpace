@@ -177,7 +177,7 @@ export default function NotificationDropdown() {
                       onSelect={() => handleSelect(notification)}
                       onDismiss={() => handleDeleteNotification(notification.id)}
                       onAccept={
-                        isConnectionRequest(notification)
+                        isConnectionRequest(notification) && !notification.metadata?.actioned
                           ? () =>
                               handleConnectionAction(
                                 notification.metadata.connectionId,
@@ -187,7 +187,7 @@ export default function NotificationDropdown() {
                           : undefined
                       }
                       onDecline={
-                        isConnectionRequest(notification)
+                        isConnectionRequest(notification) && !notification.metadata?.actioned
                           ? () =>
                               handleConnectionAction(
                                 notification.metadata.connectionId,
