@@ -11,9 +11,8 @@ import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, FileIcon, FileText, Download } from 'lucide-react';
+import { Lock, FileIcon, FileText, Download, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -469,10 +468,11 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
                                           <button
+                                            aria-label="Message actions"
                                             className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                                             type="button"
                                           >
-                                            <MoreHorizontal size={14} />
+                                            <MoreHorizontal size={14} aria-hidden />
                                           </button>
                                         </DropdownMenuTrigger>
                                         <DropdownMenuContent align="end">
