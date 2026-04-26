@@ -188,15 +188,15 @@ export default function BillingPage() {
     setPortalLoading(true);
     setPortalError(null);
     try {
-      const result = await post<{ url?: string; error?: string }>('/api/stripe/portal', {});
-      if (result.url) {
-        window.location.href = result.url;
-      } else {
-        setPortalError(result.error || 'Failed to open billing portal');
-        setPortalLoading(false);
-      }
-    } catch {
-      setPortalError('Failed to open billing portal. Please try again.');
+      const result = await post<{ url: string }>('/api/stripe/portal', {});
+      window.location.href = result.url;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      setPortalError(
+        message === 'No Stripe customer found'
+          ? 'No payment methods on file. Subscribe to a paid plan to add payment methods.'
+          : 'Failed to open billing portal. Please try again.'
+      );
       setPortalLoading(false);
     }
   };
@@ -364,25 +364,19 @@ export default function BillingPage() {
               <AlertDescription>{portalError}</AlertDescription>
             </Alert>
           )}
-          {isPaid ? (
-            <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
-              {portalLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Opening...
-                </>
-              ) : (
-                <>
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  Manage Payment Methods
-                </>
-              )}
-            </Button>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No payment methods on file. Payment methods are added when you subscribe to a paid plan.
-            </p>
-          )}
+          <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
+            {portalLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Opening...
+              </>
+            ) : (
+              <>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Manage Payment Methods
+              </>
+            )}
+          </Button>
         </CardContent>
       </Card>
 
