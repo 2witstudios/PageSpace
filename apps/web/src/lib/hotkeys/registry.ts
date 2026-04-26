@@ -68,6 +68,13 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     defaultBinding: 'Meta+W',
   },
   {
+    id: 'tabs.new',
+    label: 'New Tab',
+    description: 'Open a new tab',
+    category: 'tabs',
+    defaultBinding: 'Alt+T',
+  },
+  {
     id: 'tabs.go-to-1',
     label: 'Go to Tab 1',
     description: 'Switch to the first tab',
