@@ -192,6 +192,9 @@ export default function BillingPage() {
       window.location.href = result.url;
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
+      if (message !== 'No Stripe customer found') {
+        console.error('Failed to open Stripe billing portal', err);
+      }
       setPortalError(
         message === 'No Stripe customer found'
           ? 'No payment methods on file. Subscribe to a paid plan to add payment methods.'
