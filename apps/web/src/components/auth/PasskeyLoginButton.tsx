@@ -31,7 +31,7 @@ export function PasskeyLoginButton({
   email,
   onSuccess,
   className,
-  variant = 'outline',
+  variant = 'default',
 }: PasskeyLoginButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isAuthenticating, setIsAuthenticating] = useState(false);

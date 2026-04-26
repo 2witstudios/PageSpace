@@ -116,7 +116,6 @@ function SignInForm() {
             <PasskeyLoginButton
               csrfToken={csrfToken}
               refreshToken={refreshToken}
-              variant="outline"
             />
           </motion.div>
         )}
@@ -157,7 +156,6 @@ function SignInForm() {
           <PasskeyLoginButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
-            variant="outline"
           />
         </motion.div>
       )}
