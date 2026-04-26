@@ -11,8 +11,14 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Pencil, Trash2, Check, X } from 'lucide-react';
+import { Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -227,32 +233,31 @@ export default function InboxDMPage() {
                         <span className="text-xs text-muted-foreground">Read</span>
                       )}
                       {isOwnMessage && editingMessageId !== message.id && (
-                        <div className="flex items-center gap-1 ml-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                type="button"
-                              >
-                                <Pencil size={12} />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">Edit</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                onClick={() => handleDeleteMessage(message.id)}
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors"
-                                type="button"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">Delete</TooltipContent>
-                          </Tooltip>
-                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              aria-label="Message actions"
+                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                              type="button"
+                            >
+                              <MoreHorizontal size={14} aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => handleDeleteMessage(message.id)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
                     </div>
 
