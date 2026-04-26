@@ -73,7 +73,6 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     description: 'Open a new tab',
     category: 'tabs',
     defaultBinding: 'Alt+T',
-    allowInInputs: true,
   },
   {
     id: 'tabs.go-to-1',

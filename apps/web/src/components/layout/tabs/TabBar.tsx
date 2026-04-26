@@ -116,7 +116,10 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cycle tabs
+      const target = e.target as HTMLElement;
+      const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      // Cycle tabs - work in editable fields (Ctrl+Tab doesn't produce characters)
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-next'), e)) {
         e.preventDefault();
         cycleTab('next');
@@ -141,13 +144,14 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         return;
       }
 
-      if (matchesKeyEvent(getEffectiveBinding('tabs.new'), e)) {
+      // New tab - skip in editable fields (Alt+T produces "†" on macOS)
+      if (!isInEditable && matchesKeyEvent(getEffectiveBinding('tabs.new'), e)) {
         e.preventDefault();
         handleNewTab();
         return;
       }
 
-      // Tab number shortcuts (1-9)
+      // Tab number shortcuts (1-9) - Meta+1-9 don't produce characters
       for (let num = 1; num <= 9; num++) {
         if (matchesKeyEvent(getEffectiveBinding(`tabs.go-to-${num}`), e)) {
           e.preventDefault();
@@ -161,9 +165,6 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       }
 
       // Close tab - skip in editable inputs
-      const target = e.target as HTMLElement;
-      const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-
       if (!isInEditable && matchesKeyEvent(getEffectiveBinding('tabs.close'), e)) {
         if (activeTabId) {
           e.preventDefault();
