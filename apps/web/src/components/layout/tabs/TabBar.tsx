@@ -141,6 +141,12 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         return;
       }
 
+      if (matchesKeyEvent(getEffectiveBinding('tabs.new'), e)) {
+        e.preventDefault();
+        handleNewTab();
+        return;
+      }
+
       // Tab number shortcuts (1-9)
       for (let num = 1; num <= 9; num++) {
         if (matchesKeyEvent(getEffectiveBinding(`tabs.go-to-${num}`), e)) {
@@ -169,7 +175,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tabs, activeTabId, handleActivate, handleClose, cycleTab, router]);
+  }, [tabs, activeTabId, handleActivate, handleClose, handleNewTab, cycleTab, router]);
 
   // Scroll active tab into view
   useEffect(() => {
