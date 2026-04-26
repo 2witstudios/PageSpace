@@ -48,8 +48,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create SetupIntent — use automatic_payment_methods (required by PaymentElement
-    // in Stripe API >=2025; allow_redirects:'never' keeps the flow on-page/card-only)
+    // Create SetupIntent — automatic_payment_methods is required by PaymentElement on
+    // modern Stripe API versions. allow_redirects:'never' restricts to on-page methods
+    // (no off-site redirects). Displayed payment methods are controlled by the Stripe
+    // Dashboard; wallet methods are further filtered on the client via PaymentElement options.
     const setupIntent = await stripe.setupIntents.create({
       customer: customerId,
       automatic_payment_methods: {

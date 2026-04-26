@@ -180,7 +180,7 @@ describe('Setup Intent API', () => {
       expect(mockStripeCustomersCreate).not.toHaveBeenCalled();
       expect(mockStripeSetupIntentsCreate).toHaveBeenCalledWith({
         customer: 'cus_123',
-        payment_method_types: ['card'],
+        automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
         metadata: { userId: 'user_123' },
       });
     });
@@ -204,7 +204,7 @@ describe('Setup Intent API', () => {
       });
       expect(mockStripeSetupIntentsCreate).toHaveBeenCalledWith({
         customer: 'cus_new',
-        payment_method_types: ['card'],
+        automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
         metadata: { userId: 'user_123' },
       });
     });
