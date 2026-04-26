@@ -468,7 +468,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
                                           <button
-                                            aria-label="Message actions"
+                                            aria-label="Message options"
                                             className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                                             type="button"
                                           >
