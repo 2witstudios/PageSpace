@@ -18,10 +18,9 @@ import {
   Sparkles,
   Clock,
   AlertTriangle,
+  ExternalLink,
 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { PaymentMethodsList, type PaymentMethod } from '@/components/billing/PaymentMethodsList';
-import { AddPaymentMethodForm } from '@/components/billing/AddPaymentMethodForm';
 import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
@@ -62,9 +61,9 @@ export default function BillingPage() {
   // Subscription
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
 
-  // Payment Methods
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
-  const [addPaymentMethodOpen, setAddPaymentMethodOpen] = useState(false);
+  // Portal
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
 
   // Invoices
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -82,7 +81,6 @@ export default function BillingPage() {
   const [cancellingSchedule, setCancellingSchedule] = useState(false);
 
   // URL params
-  const pmAdded = searchParams.get('pm_added');
   const success = searchParams.get('success');
 
   const fetchAllData = useCallback(async () => {
@@ -92,7 +90,6 @@ export default function BillingPage() {
     try {
       await Promise.all([
         fetchSubscription(),
-        fetchPaymentMethods(),
         fetchInvoices(),
         fetchUpcomingInvoice(),
         fetchBillingAddress(),
@@ -110,27 +107,19 @@ export default function BillingPage() {
 
   // Clear URL params after showing alerts
   useEffect(() => {
-    if (pmAdded || success) {
+    if (success) {
       const timer = setTimeout(() => {
         router.replace('/settings/billing');
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [pmAdded, success, router]);
+  }, [success, router]);
 
   const fetchSubscription = async () => {
     const res = await fetchWithAuth('/api/subscriptions/status');
     if (res.ok) {
       const data = await res.json();
       setSubscriptionData(data);
-    }
-  };
-
-  const fetchPaymentMethods = async () => {
-    const res = await fetchWithAuth('/api/stripe/payment-methods');
-    if (res.ok) {
-      const data = await res.json();
-      setPaymentMethods(data.paymentMethods || []);
     }
   };
 
@@ -195,6 +184,26 @@ export default function BillingPage() {
     }
   };
 
+  const handleManagePaymentMethods = async () => {
+    setPortalLoading(true);
+    setPortalError(null);
+    try {
+      const result = await post<{ url: string }>('/api/stripe/portal', {});
+      window.location.href = result.url;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (message !== 'No Stripe customer found') {
+        console.error('Failed to open Stripe billing portal', err);
+      }
+      setPortalError(
+        message === 'No Stripe customer found'
+          ? 'No payment methods on file. Subscribe to a paid plan to add payment methods.'
+          : 'Failed to open billing portal. Please try again.'
+      );
+      setPortalLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="container mx-auto p-6">
@@ -237,16 +246,7 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* Success Alerts */}
-      {pmAdded && (
-        <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
-          <CheckCircle className="h-4 w-4 text-green-600" />
-          <AlertDescription className="text-green-800 dark:text-green-200">
-            Payment method added successfully!
-          </AlertDescription>
-        </Alert>
-      )}
-
+      {/* Success Alert */}
       {success && (
         <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
@@ -357,15 +357,29 @@ export default function BillingPage() {
             Payment Methods
           </CardTitle>
           <CardDescription>
-            Manage your saved payment methods for subscriptions and purchases
+            Add, remove, or update your payment methods securely through Stripe.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <PaymentMethodsList
-            paymentMethods={paymentMethods}
-            onRefresh={fetchPaymentMethods}
-            onAddNew={() => setAddPaymentMethodOpen(true)}
-          />
+          {portalError && (
+            <Alert variant="destructive" className="mb-4">
+              <XCircle className="h-4 w-4" />
+              <AlertDescription>{portalError}</AlertDescription>
+            </Alert>
+          )}
+          <Button onClick={handleManagePaymentMethods} disabled={portalLoading}>
+            {portalLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Opening...
+              </>
+            ) : (
+              <>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Manage Payment Methods
+              </>
+            )}
+          </Button>
         </CardContent>
       </Card>
 
@@ -427,15 +441,6 @@ export default function BillingPage() {
           />
         </CardContent>
       </Card>
-
-      {/* Add Payment Method Dialog */}
-      <AddPaymentMethodForm
-        open={addPaymentMethodOpen}
-        onOpenChange={setAddPaymentMethodOpen}
-        onSuccess={() => {
-          fetchPaymentMethods();
-        }}
-      />
     </div>
     </BillingGuard>
   );
