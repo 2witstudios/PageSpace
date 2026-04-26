@@ -134,7 +134,7 @@ export function MessageReactions({
   }
 
   return (
-    <div className={cn('group flex flex-wrap items-center gap-1 mt-1', className)}>
+    <div className={cn('flex flex-wrap items-center gap-1 mt-1', className)}>
       {/* Reaction chips */}
       {groupedReactions.map((group) => (
         <Tooltip key={group.emoji}>
@@ -178,9 +178,6 @@ export function MessageReactions({
               'h-6 w-6 p-0 rounded-full',
               'text-muted-foreground hover:text-foreground',
               'hover:bg-muted/50',
-              'opacity-0 group-hover:opacity-100 transition-opacity',
-              // Always show if there are reactions
-              groupedReactions.length > 0 && 'opacity-100'
             )}
           >
             <Plus className="h-3.5 w-3.5" />
