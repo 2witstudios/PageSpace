@@ -445,7 +445,7 @@ function ChannelView({ page }: ChannelViewProps) {
                           : m.user?.name?.[0];
                         const isOwnMessage = !isAi && m.userId === user?.id;
                         return (
-                        <div key={m.id} className="group flex items-start gap-4">
+                        <div key={m.id} className="flex items-start gap-4">
                             <Avatar className="shrink-0">
                                 {!isAi && <AvatarImage src={m.user?.image || ''} />}
                                 <AvatarFallback>{avatarFallback}</AvatarFallback>
