@@ -85,6 +85,9 @@ function AddPaymentMethodFormContent({
           },
         }}
         onReady={() => setElementReady(true)}
+        onLoadError={(event) => {
+          setError(event.error?.message || 'Failed to load payment form. Please try again.');
+        }}
       />
 
       {error && (
