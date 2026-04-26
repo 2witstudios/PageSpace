@@ -13,8 +13,14 @@ import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, FileIcon, FileText, Download } from 'lucide-react';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Pencil, Trash2, Check, X } from 'lucide-react';
+import { Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import {
@@ -460,32 +466,30 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                     )}
                                     {isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id && (
-                                      <div className="flex items-center gap-1 ml-1">
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <button
-                                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                              type="button"
-                                            >
-                                              <Pencil size={12} />
-                                            </button>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="top">Edit</TooltipContent>
-                                        </Tooltip>
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <button
-                                              onClick={() => handleDeleteMessage(m.id)}
-                                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors"
-                                              type="button"
-                                            >
-                                              <Trash2 size={12} />
-                                            </button>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="top">Delete</TooltipContent>
-                                        </Tooltip>
-                                      </div>
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <button
+                                            className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                            type="button"
+                                          >
+                                            <MoreHorizontal size={14} />
+                                          </button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem
+                                            onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                          >
+                                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            onClick={() => handleDeleteMessage(m.id)}
+                                            className="text-destructive focus:text-destructive"
+                                          >
+                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
                                     )}
                                 </div>
                                 {editingMessageId === m.id ? (
