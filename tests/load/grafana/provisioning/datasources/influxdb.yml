@@ -9,4 +9,4 @@ datasources:
       organization: pagespace
       defaultBucket: k6
     secureJsonData:
-      token: pagespace-local-token
+      token: "${INFLUXDB_TOKEN}"
