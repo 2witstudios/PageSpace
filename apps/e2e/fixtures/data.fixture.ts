@@ -8,6 +8,9 @@ interface SeededPage {
 
 async function seedPage(request: APIRequestContext): Promise<SeededPage> {
   const csrfResponse = await request.get('/api/auth/csrf');
+  if (!csrfResponse.ok()) {
+    throw new Error(`seedPage: CSRF fetch failed ${csrfResponse.status()} ${await csrfResponse.text()}`);
+  }
   const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
   const title = `E2E Page ${Date.now()}`;
@@ -20,6 +23,9 @@ async function seedPage(request: APIRequestContext): Promise<SeededPage> {
       parentId: null,
     },
   });
+  if (!response.ok()) {
+    throw new Error(`seedPage: POST /api/pages failed ${response.status()} ${await response.text()}`);
+  }
 
   const page = (await response.json()) as { id: string };
   return { pageId: page.id, title };

@@ -3,12 +3,14 @@ import { test, expect } from '../fixtures/auth.fixture';
 test('content typed in editor is persisted after navigating away and back', async ({ page, driveId }) => {
   // Create a page via API
   const csrfResponse = await page.request.get('/api/auth/csrf');
+  if (!csrfResponse.ok()) throw new Error(`CSRF fetch failed: ${csrfResponse.status()}`);
   const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
   const createResponse = await page.request.post('/api/pages', {
     headers: { 'X-CSRF-Token': csrfToken },
     data: { title: `Persist Test ${Date.now()}`, type: 'DOCUMENT', driveId, parentId: null },
   });
+  if (!createResponse.ok()) throw new Error(`POST /api/pages failed: ${createResponse.status()}`);
   const { id: pageId } = (await createResponse.json()) as { id: string };
 
   // Navigate to the page
