@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
 const mockExecute = vi.hoisted(() => vi.fn());
+const mockGetPoolStats = vi.hoisted(() => vi.fn());
 const mockGetMonitoringIngestStatus = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     execute: mockExecute,
   },
+  getPoolStats: mockGetPoolStats,
 }));
 vi.mock('@pagespace/db/operators', () => ({
   sql: (strings: TemplateStringsArray) => strings.join(''),
@@ -32,6 +34,7 @@ describe('GET /api/health', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetMonitoringIngestStatus.mockReturnValue('active');
+    mockGetPoolStats.mockReturnValue({ total: 0, idle: 0, waiting: 0 });
   });
 
   describe('healthy system', () => {
@@ -91,6 +94,20 @@ describe('GET /api/health', () => {
       expect(body.memory).toBeDefined();
       expect(typeof body.memory.heapUsed).toBe('number');
       expect(typeof body.memory.heapTotal).toBe('number');
+    });
+
+    it('given healthy state, should include pool stats', async () => {
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
+      mockGetPoolStats.mockReturnValue({ total: 5, idle: 3, waiting: 1 });
+
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(body.pool).toBeDefined();
+      expect(body.pool.total).toBe(5);
+      expect(body.pool.idle).toBe(3);
+      expect(body.pool.waiting).toBe(1);
     });
   });
 
