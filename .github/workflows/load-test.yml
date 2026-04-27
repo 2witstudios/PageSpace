@@ -83,11 +83,10 @@ jobs:
           done
           echo "Server is ready!"
 
-      - name: Create load-test auth fixture
+      - name: Seed load-test user
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        # Run via @pagespace/db context so that `pg` is resolvable from its node_modules
-        run: pnpm --filter @pagespace/db exec node "$GITHUB_WORKSPACE/tests/load/scripts/create-k6-auth.mjs"
+        run: npx tsx tests/load/scripts/seed-load-user.ts
 
       - name: Run k6 load test
         env:
@@ -112,3 +111,9 @@ jobs:
           name: load-test-results-${{ github.run_id }}
           path: tests/load/results/
           retention-days: 30
+
+      - name: Cleanup load-test user
+        if: always()
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: npx tsx tests/load/scripts/cleanup-load-user.ts
