@@ -832,17 +832,8 @@ MENTION PROCESSING:
     // This ensures server-side processing continues even if the client disconnects
     const stream = createUIMessageStream({
       originalMessages: processedMessages,
+      generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
-        // Send the server-generated message ID to the client at stream start
-        try {
-          writer.write({
-            type: 'start',
-            messageId: serverAssistantMessageId,
-          });
-        } catch {
-          // Client disconnected before first write - continue processing
-        }
-
         const aiResult = streamText({
           model,
           system: finalSystemPrompt,
@@ -883,6 +874,11 @@ MENTION PROCESSING:
         // Stream all chunks to client, continuing server-side even if client disconnects
         for await (const chunk of aiResult.toUIMessageStream()) {
           try {
+            if (chunk.type === 'start') {
+              // Strip inner messageId so the outer idInjectedStream uses serverAssistantMessageId
+              writer.write({ type: 'start' });
+              continue;
+            }
             writer.write(chunk);
           } catch {
             // Client disconnected - continue processing to ensure onFinish fires
