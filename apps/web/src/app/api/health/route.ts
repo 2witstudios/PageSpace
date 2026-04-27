@@ -1,4 +1,4 @@
-import { db } from '@pagespace/db/db'
+import { db, getPoolStats } from '@pagespace/db/db'
 import { sql } from '@pagespace/db/operators';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getMonitoringIngestStatus } from '@/middleware/monitoring';
@@ -16,6 +16,11 @@ interface HealthResponse {
     heapUsed: number;
     heapTotal: number;
     rss: number;
+  };
+  pool: {
+    total: number;
+    idle: number;
+    waiting: number;
   };
   warnings?: string[];
   error?: string;
@@ -62,6 +67,7 @@ export async function GET(_request: Request): Promise<Response> {
         heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
         rss: Math.round(memoryUsage.rss / 1024 / 1024),
       },
+      pool: getPoolStats(),
     };
 
     if (warnings.length > 0) {
@@ -106,6 +112,7 @@ export async function GET(_request: Request): Promise<Response> {
         heapTotal: 0,
         rss: 0,
       },
+      pool: getPoolStats(),
       error: 'Health check failed unexpectedly',
     };
 
