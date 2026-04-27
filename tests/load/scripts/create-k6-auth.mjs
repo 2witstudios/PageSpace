@@ -60,26 +60,25 @@ async function main() {
     const user = upsertUser.rows[0];
     console.log(`User: ${TEST_USER_EMAIL} (id=${user.id})`);
 
-    // 2. Upsert personal drive
-    const driveId = createCuid();
-    const upsertDrive = await client.query(
-      `INSERT INTO drives (id, name, slug, "ownerId", "isTrashed", "updatedAt")
-       VALUES ($1, 'Personal', 'personal', $2, false, NOW())
-       ON CONFLICT DO NOTHING
-       RETURNING id`,
-      [driveId, user.id]
+    // 2. Get or create a drive for the test user
+    // drives table has no unique constraint on (ownerId, slug), so we check first
+    const existingDrive = await client.query(
+      `SELECT id FROM drives WHERE "ownerId" = $1 AND "isTrashed" = false ORDER BY "createdAt" ASC LIMIT 1`,
+      [user.id]
     );
 
     let resolvedDriveId;
-    if (upsertDrive.rows.length > 0) {
-      resolvedDriveId = upsertDrive.rows[0].id;
+    if (existingDrive.rows.length > 0) {
+      resolvedDriveId = existingDrive.rows[0].id;
     } else {
-      // Drive already exists — find it
-      const existing = await client.query(
-        `SELECT id FROM drives WHERE "ownerId" = $1 ORDER BY "updatedAt" ASC LIMIT 1`,
-        [user.id]
+      const driveId = createCuid();
+      const newDrive = await client.query(
+        `INSERT INTO drives (id, name, slug, "ownerId", "isTrashed", "updatedAt")
+         VALUES ($1, 'Personal', 'personal', $2, false, NOW())
+         RETURNING id`,
+        [driveId, user.id]
       );
-      resolvedDriveId = existing.rows[0]?.id ?? null;
+      resolvedDriveId = newDrive.rows[0].id;
     }
     console.log(`Drive: ${resolvedDriveId}`);
 
