@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: postgres
+    static_configs:
+      - targets: ['postgres_exporter:9187']
+
+  - job_name: pagespace_health
+    metrics_path: /api/health
+    static_configs:
+      - targets: ['host.docker.internal:3000']
