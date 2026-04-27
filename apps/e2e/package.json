@@ -6,11 +6,10 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@pagespace/db": "workspace:*",
     "@playwright/test": "^1.52.0",
     "@types/node": "^24.0.0",
-    "@types/pg": "^8.15.4",
     "dotenv": "^16.0.0",
-    "pg": "^8.16.3",
     "typescript": "^5.0.0"
   }
 }
