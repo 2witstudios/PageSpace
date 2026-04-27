@@ -98,6 +98,7 @@ jobs:
           mkdir -p tests/load/results
           docker run --rm \
             --network host \
+            --workdir /scripts \
             -v "$PWD":/scripts \
             -e K6_VUS \
             -e K6_DURATION \
