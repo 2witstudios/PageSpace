@@ -186,3 +186,6 @@ playground.xcworkspace
 .claude/*.local.md
 .claude/scheduled_tasks.lock
 skills-lock.json
+
+# MCP server config (contains auth tokens)
+.mcp.json
