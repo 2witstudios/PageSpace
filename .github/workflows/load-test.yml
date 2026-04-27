@@ -83,6 +83,11 @@ jobs:
           done
           echo "Server is ready!"
 
+      - name: Seed load-test user
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: npx tsx tests/load/scripts/seed-load-user.ts
+
       - name: Run k6 load test
         env:
           K6_VUS: ${{ github.event.inputs.vus || '50' }}
@@ -92,6 +97,7 @@ jobs:
           mkdir -p tests/load/results
           docker run --rm \
             --network host \
+            --workdir /scripts \
             -v "$PWD":/scripts \
             -e K6_VUS \
             -e K6_DURATION \
@@ -105,3 +111,9 @@ jobs:
           name: load-test-results-${{ github.run_id }}
           path: tests/load/results/
           retention-days: 30
+
+      - name: Cleanup load-test user
+        if: always()
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: npx tsx tests/load/scripts/cleanup-load-user.ts
