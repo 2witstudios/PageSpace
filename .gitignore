@@ -139,6 +139,13 @@ test-results/
 tests/load/results/*.json
 tests/load/results/*.html
 
+## k6 auth seed file (contains live session token)
+.k6-auth.json
+
+## Playwright e2e seed state and storage state (contains live session token)
+apps/e2e/.seed-state.json
+apps/e2e/storageState.json
+
 ## Code coverage
 coverage/
 *.gcda
