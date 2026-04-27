@@ -14,10 +14,15 @@ export const options = {
   },
 };
 
-const authRaw = open('../.k6-auth.json');
-const auth = JSON.parse(authRaw);
-if (!auth.sessionToken) {
-  throw new Error('.k6-auth.json is present but missing sessionToken field');
+let auth;
+if (__ENV.K6_SESSION_TOKEN) {
+  auth = { sessionToken: __ENV.K6_SESSION_TOKEN, driveId: __ENV.K6_DRIVE_ID || null };
+} else {
+  const authRaw = open('../.k6-auth.json');
+  auth = JSON.parse(authRaw);
+  if (!auth.sessionToken) {
+    throw new Error('.k6-auth.json is present but missing sessionToken field');
+  }
 }
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
@@ -51,7 +56,7 @@ export default function () {
   );
   check(searchRes, {
     'search status 200': (r) => r.status === 200,
-    'search has results': (r) => r.json('results') !== null,
+    'search has results': (r) => Array.isArray(r.json('results')),
   });
 
   sleep(1);

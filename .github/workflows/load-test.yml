@@ -83,6 +83,12 @@ jobs:
           done
           echo "Server is ready!"
 
+      - name: Create load-test auth fixture
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        # Run via @pagespace/db context so that `pg` is resolvable from its node_modules
+        run: pnpm --filter @pagespace/db exec node "$GITHUB_WORKSPACE/tests/load/scripts/create-k6-auth.mjs"
+
       - name: Run k6 load test
         env:
           K6_VUS: ${{ github.event.inputs.vus || '50' }}

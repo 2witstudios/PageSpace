@@ -135,6 +135,9 @@ fastlane/test_output/
 playwright-report/
 test-results/
 
+## Load test credentials (contains real session tokens — never commit)
+tests/load/.k6-auth.json
+
 ## Load test results (k6 JSON output)
 tests/load/results/*.json
 tests/load/results/*.html
