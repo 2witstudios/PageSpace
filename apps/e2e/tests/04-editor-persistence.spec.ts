@@ -15,11 +15,10 @@ test('content typed in editor is persisted after navigating away and back', asyn
   await page.goto(`/dashboard/${driveId}/${pageId}`);
   await expect(page.locator('[contenteditable="true"]')).toBeVisible();
 
-  // Type content into the TipTap editor; register autosave listener before typing
-  // to avoid a race between the debounced PATCH and the waitForResponse setup
+  // Promise.all registers waitForResponse before typing so the debounced PATCH isn't missed
   const content = `persisted-${Date.now()}`;
   await page.locator('[contenteditable="true"]').click();
-  const [_autosave] = await Promise.all([
+  await Promise.all([
     page.waitForResponse(`**/api/pages/${pageId}**`),
     page.keyboard.type(content),
   ]);
