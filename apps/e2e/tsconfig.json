@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@pagespace/db": ["../../packages/db/src/db"],
+      "@pagespace/db/*": ["../../packages/db/src/*"],
+      "@pagespace/lib": ["../../packages/lib/src/client-safe"],
+      "@pagespace/lib/*": ["../../packages/lib/src/*"]
+    }
+  },
+  "include": ["**/*.ts"]
+}
