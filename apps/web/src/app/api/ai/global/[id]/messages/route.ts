@@ -55,6 +55,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
@@ -871,19 +872,7 @@ MENTION PROCESSING:
             return undefined;
           });
 
-        // Stream all chunks to client, continuing server-side even if client disconnects
-        for await (const chunk of aiResult.toUIMessageStream()) {
-          try {
-            if (chunk.type === 'start') {
-              // Strip inner messageId so the outer idInjectedStream uses serverAssistantMessageId
-              writer.write({ type: 'start' });
-              continue;
-            }
-            writer.write(chunk);
-          } catch {
-            // Client disconnected - continue processing to ensure onFinish fires
-          }
-        }
+        await pipeUIMessageStreamStrippingStart(aiResult, writer);
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry

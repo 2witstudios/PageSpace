@@ -41,6 +41,9 @@ export * from './complete-request-builder';
 // Stream Abort (server-side registry)
 export * from './stream-abort-registry';
 
+// Stream Pipe Utilities
+export * from './stream-pipe-utils';
+
 // NOTE: Client-side stream-abort functions are NOT exported here to prevent
 // accidental import in server contexts. Import from '@/lib/ai/core/client' instead.
 
