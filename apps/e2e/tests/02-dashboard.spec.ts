@@ -6,7 +6,7 @@ test('shows drive in sidebar after authenticated load', async ({ page, driveId }
     page.goto('/dashboard'),
   ]);
 
-  const { drives } = (await drivesResponse.json()) as { drives: Array<{ id: string; name: string }> };
+  const drives = (await drivesResponse.json()) as Array<{ id: string; name: string }>;
   const seededDrive = drives.find((d) => d.id === driveId);
   expect(seededDrive).toBeTruthy();
 

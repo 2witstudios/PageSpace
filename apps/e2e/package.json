@@ -1,5 +1,5 @@
 {
-  "name": "e2e",
+  "name": "@pagespace/e2e",
   "private": true,
   "scripts": {
     "test:e2e": "playwright test",
@@ -7,7 +7,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
-    "@pagespace/db": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.4",
     "dotenv": "^16.0.0",

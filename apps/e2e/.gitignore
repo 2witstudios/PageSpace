@@ -1,0 +1,4 @@
+storageState.json
+.seed-state.json
+playwright-report/
+test-results/

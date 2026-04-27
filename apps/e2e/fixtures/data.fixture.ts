@@ -1,15 +1,10 @@
 import { test as base, APIRequestContext } from '@playwright/test';
-import path from 'path';
-import fs from 'fs';
+import { seedState } from './seed-state';
 
 interface SeededPage {
   pageId: string;
   title: string;
 }
-
-const seedState = JSON.parse(
-  fs.readFileSync(path.resolve(__dirname, '../.seed-state.json'), 'utf-8'),
-) as { userId: string; driveId: string };
 
 async function seedPage(request: APIRequestContext): Promise<SeededPage> {
   const csrfResponse = await request.get('/api/auth/csrf');

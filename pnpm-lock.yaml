@@ -257,9 +257,6 @@ importers:
 
   apps/e2e:
     devDependencies:
-      '@pagespace/db':
-        specifier: workspace:*
-        version: link:../../packages/db
       '@playwright/test':
         specifier: ^1.52.0
         version: 1.55.1

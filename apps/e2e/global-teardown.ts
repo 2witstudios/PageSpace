@@ -23,4 +23,8 @@ export default async function globalTeardown() {
     client.release();
     await pool.end();
   }
+
+  for (const file of [seedStatePath, path.resolve(__dirname, 'storageState.json')]) {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  }
 }
