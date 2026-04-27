@@ -1,10 +1,9 @@
 import { test, expect } from '../fixtures/auth.fixture';
 
 test('creating a Document page navigates to an empty editor', async ({ page, driveId }) => {
+  const drivesLoaded = page.waitForResponse('**/api/drives**');
   await page.goto(`/dashboard/${driveId}`);
-
-  // Wait for the sidebar to render (drives API response)
-  await page.waitForResponse('**/api/drives**');
+  await drivesLoaded;
 
   // Open quick-create palette (Alt+N)
   await page.keyboard.press('Alt+n');
