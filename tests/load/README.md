@@ -17,13 +17,14 @@ This creates `tests/load/.k6-auth.json` (gitignored). It is idempotent — runni
 
 ```bash
 # Baseline smoke test (5 VUs, 30 s)
-docker run --rm --network host \
+# --workdir /scripts is required so handleSummary writes results to the correct path
+docker run --rm --network host --workdir /scripts \
   -v "$PWD":/scripts \
   -e BASE_URL=http://localhost:3000 \
   grafana/k6 run /scripts/tests/load/auth-baseline.k6.js
 
 # Drive-list focused scenario (20 VUs, 60 s)
-docker run --rm --network host \
+docker run --rm --network host --workdir /scripts \
   -v "$PWD":/scripts \
   -e BASE_URL=http://localhost:3000 \
   grafana/k6 run /scripts/tests/load/scenarios/drive-list.k6.js
