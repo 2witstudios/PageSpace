@@ -279,6 +279,19 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
     });
 
+    it('given already-aborted signal, should close the stream eagerly without leaking the subscriber', async () => {
+      const abortController = new AbortController();
+      abortController.abort(); // aborted BEFORE GET is called
+      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+
+      const response = await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
+
+      // start() detects signal.aborted immediately, calls unsubscribe() + controller.close()
+      // so response.text() resolves to empty body without needing a finish() call
+      const body = await response.text();
+      expect(body).toBe('');
+    });
+
     it('given stream completes then client disconnects, should not attempt to double-close the controller', async () => {
       const abortController = new AbortController();
       testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });

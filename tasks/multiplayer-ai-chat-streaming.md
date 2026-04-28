@@ -30,13 +30,13 @@ SSE endpoint at `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`.
 - GET endpoint that subscribes to an in-progress stream via `StreamMulticastRegistry`
 - Auth: session tokens via `authenticateRequestWithOptions`
 - Permissions: `canUserViewPage` check against `meta.pageId`
-- SSE format: `data: {"text":"..."}\n\n` per chunk, `data: [DONE]\n\n` on complete
+- SSE format: `data: {"text":"..."}\n\n` per chunk, `data: {"done":true,"aborted":bool}\n\n` on complete
 - Proxy-friendly headers: `X-Accel-Buffering: no`
 - Client disconnect: abort signal → `unsubscribe()` + `controller.close()`
 - Race safety: subscribe called before ReadableStream created; buffer replay flushed in `start()`
 - Returns 401/403/404 before streaming begins
 - Audit logging on auth/permission denials
-- 11 tests, all passing
+- 17 tests, all passing
 
 #### Review fixes:
 - Given stream is aborted, should emit `{"done":true,"aborted":true}` done sentinel to subscribers

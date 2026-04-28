@@ -98,11 +98,18 @@ export async function GET(
         controller.close();
         return;
       }
-      request.signal.addEventListener('abort', () => {
-        if (streamClosed) return;
+      if (request.signal.aborted) {
+        streamClosed = true;
         unsubscribe();
         controller.close();
-      });
+        return;
+      }
+      request.signal.addEventListener('abort', () => {
+        if (streamClosed) return;
+        streamClosed = true;
+        unsubscribe();
+        controller.close();
+      }, { once: true });
     },
   });
 
