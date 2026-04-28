@@ -443,6 +443,34 @@ describe('POST /api/ai/chat — stream socket events', () => {
 
       expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', true);
     });
+
+    it('given stream abort, should broadcast chat:stream_complete with aborted=true', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'test-message-id',
+          pageId: 'page-1',
+          aborted: true,
+        })
+      );
+    });
+
+    it('given stream abort followed by onFinish, should broadcast complete only once with aborted=true', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ aborted: true })
+      );
+    });
   });
 
   describe('error finally path', () => {

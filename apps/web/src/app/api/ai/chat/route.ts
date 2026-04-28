@@ -898,8 +898,9 @@ export async function POST(request: Request) {
                 model: currentModel,
                 provider: currentProvider,
               });
-              // Flush the registry early so stream-join subscribers get the done sentinel promptly
-              try { streamMulticastRegistry.finish(serverAssistantMessageId!, true); } catch {}
+              // Route through finishMulticast so multicastFinished is set and chat:stream_complete
+              // is broadcast with aborted=true — prevents onFinish from double-broadcasting with aborted=false
+              finishMulticast(true);
             },
           });
 
