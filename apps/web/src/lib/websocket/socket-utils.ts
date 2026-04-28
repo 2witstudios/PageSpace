@@ -520,7 +520,7 @@ export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Pro
 
   try {
     const requestBody = JSON.stringify({
-      channelId: `page:${payload.pageId}`,
+      channelId: payload.pageId,
       event: 'chat:stream_start',
       payload,
     });
@@ -537,7 +537,7 @@ export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Pro
       error instanceof Error ? error : undefined,
       {
         event: 'ai_stream_start',
-        channel: `page:${maskIdentifier(payload.pageId)}`,
+        channel: maskIdentifier(payload.pageId),
       }
     );
   }
@@ -554,7 +554,7 @@ export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload
 
   try {
     const requestBody = JSON.stringify({
-      channelId: `page:${payload.pageId}`,
+      channelId: payload.pageId,
       event: 'chat:stream_complete',
       payload,
     });
@@ -571,7 +571,7 @@ export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload
       error instanceof Error ? error : undefined,
       {
         event: 'ai_stream_complete',
-        channel: `page:${maskIdentifier(payload.pageId)}`,
+        channel: maskIdentifier(payload.pageId),
       }
     );
   }

@@ -348,7 +348,7 @@ describe('socket-utils', () => {
   });
 
   describe('broadcastAiStreamStart', () => {
-    it('given valid payload, should route to page:{pageId} channel with chat:stream_start event', async () => {
+    it('given valid payload, should route to {pageId} channel with chat:stream_start event', async () => {
       const payload: AiStreamStartPayload = {
         messageId: 'msg-1',
         pageId: 'page-1',
@@ -361,7 +361,7 @@ describe('socket-utils', () => {
       const fetchCall = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1].body);
 
-      expect(requestBody.channelId).toBe('page:page-1');
+      expect(requestBody.channelId).toBe('page-1');
       expect(requestBody.event).toBe('chat:stream_start');
       expect(requestBody.payload).toEqual(payload);
     });
@@ -392,7 +392,7 @@ describe('socket-utils', () => {
   });
 
   describe('broadcastAiStreamComplete', () => {
-    it('given completed stream, should route to page:{pageId} with chat:stream_complete and aborted=false', async () => {
+    it('given completed stream, should route to {pageId} with chat:stream_complete and aborted=false', async () => {
       const payload: AiStreamCompletePayload = {
         messageId: 'msg-1',
         pageId: 'page-1',
@@ -404,7 +404,7 @@ describe('socket-utils', () => {
       const fetchCall = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1].body);
 
-      expect(requestBody.channelId).toBe('page:page-1');
+      expect(requestBody.channelId).toBe('page-1');
       expect(requestBody.event).toBe('chat:stream_complete');
       expect(requestBody.payload).toEqual(payload);
     });
