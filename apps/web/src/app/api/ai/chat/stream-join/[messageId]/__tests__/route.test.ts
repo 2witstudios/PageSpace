@@ -34,6 +34,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockPageId = 'page-test-123';
 const mockUserId = 'user-test-456';
@@ -141,6 +142,23 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(response.headers.get('X-Accel-Buffering')).toBe('no');
     });
 
+    it('given a successful stream join, should emit an authz.access.granted audit event', async () => {
+      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'authz.access.granted',
+          resourceType: 'ai_stream',
+          resourceId: mockMessageId,
+          details: expect.objectContaining({ pageId: mockPageId }),
+        }),
+      );
+    });
+
     it('given buffered chunks, should stream them as SSE data events', async () => {
       testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
       testRegistry.push(mockMessageId, 'hello');
@@ -163,7 +181,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: [DONE]\n\n');
+      expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
     });
 
     it('given live chunks pushed after subscribe, should stream them in order', async () => {
@@ -179,7 +197,7 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(body).toContain('data: {"text":"buffered"}\n\n');
       expect(body).toContain('data: {"text":"live"}\n\n');
-      expect(body).toContain('data: [DONE]\n\n');
+      expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
     });
 
     it('given a race where subscribe returns null, should return 404', async () => {
@@ -222,6 +240,22 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       // Registry finish should not error even though route subscriber was removed
       expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
+    });
+
+    it('given stream completes then client disconnects, should not attempt to double-close the controller', async () => {
+      const abortController = new AbortController();
+      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+
+      const response = await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
+      expect(response.status).toBe(200);
+
+      // Complete the stream first
+      testRegistry.finish(mockMessageId);
+
+      // Then abort — should be a no-op, not throw
+      expect(() => abortController.abort()).not.toThrow();
+      await Promise.resolve();
+      // No error thrown from double-close
     });
   });
 });

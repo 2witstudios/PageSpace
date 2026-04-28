@@ -62,15 +62,15 @@ export async function GET(
         preBuffer.push(chunk);
       }
     },
-    (_aborted) => {
-      const done = encoder.encode('data: [DONE]\n\n');
+    (aborted) => {
+      const done = encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
       } else {
         preBuffer.push(done);
-        streamClosed = true;
       }
+      streamClosed = true;
     },
   );
 
@@ -79,6 +79,14 @@ export async function GET(
   if (unsubscribe === null) {
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
+
+  auditRequest(request, {
+    eventType: 'authz.access.granted',
+    resourceType: 'ai_stream',
+    resourceId: messageId,
+    details: { pageId: meta.pageId },
+    riskScore: 0,
+  });
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -91,6 +99,7 @@ export async function GET(
         return;
       }
       request.signal.addEventListener('abort', () => {
+        if (streamClosed) return;
         unsubscribe();
         controller.close();
       });
