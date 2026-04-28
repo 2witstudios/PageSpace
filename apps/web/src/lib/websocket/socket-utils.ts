@@ -493,6 +493,91 @@ export async function broadcastInboxEvent(userId: string, payload: InboxEventPay
 }
 
 // ============================================================================
+// AI Stream Events
+// ============================================================================
+
+export interface AiStreamStartPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string };
+}
+
+export interface AiStreamCompletePayload {
+  messageId: string;
+  pageId: string;
+  aborted?: boolean;
+}
+
+export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping AI stream start broadcast', {
+      event: 'ai_stream_start',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: `page:${payload.pageId}`,
+      event: 'chat:stream_start',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast AI stream start',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'ai_stream_start',
+        channel: `page:${maskIdentifier(payload.pageId)}`,
+      }
+    );
+  }
+}
+
+export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping AI stream complete broadcast', {
+      event: 'ai_stream_complete',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: `page:${payload.pageId}`,
+      event: 'chat:stream_complete',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast AI stream complete',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'ai_stream_complete',
+        channel: `page:${maskIdentifier(payload.pageId)}`,
+      }
+    );
+  }
+}
+
+// ============================================================================
 // Activity Events (with debouncing)
 // ============================================================================
 
