@@ -22,10 +22,8 @@ export class StreamMulticastRegistry {
   private entries = new Map<string, StreamEntry>();
 
   register(messageId: string, meta: StreamMeta): void {
-    const existing = this.entries.get(messageId);
-    if (existing?.cleanupTimeoutId != null) {
-      clearTimeout(existing.cleanupTimeoutId);
-    }
+    // Notify and evict any existing entry so its subscribers aren't silently dropped.
+    this.finish(messageId, true);
 
     const cleanupTimeoutId = setTimeout(() => {
       this.finish(messageId, true);
@@ -101,4 +99,5 @@ export class StreamMulticastRegistry {
   }
 }
 
+// Single-process only — streams registered on one Node.js instance are not visible to others.
 export const streamMulticastRegistry = new StreamMulticastRegistry();
