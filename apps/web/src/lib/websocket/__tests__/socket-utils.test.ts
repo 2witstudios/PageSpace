@@ -40,6 +40,8 @@ import {
   broadcastDriveMemberEvent,
   broadcastTaskEvent,
   broadcastUsageEvent,
+  broadcastAiStreamStart,
+  broadcastAiStreamComplete,
   createPageEventPayload,
   createDriveEventPayload,
   createDriveMemberEventPayload,
@@ -48,6 +50,8 @@ import {
   type DriveMemberEventPayload,
   type TaskEventPayload,
   type UsageEventPayload,
+  type AiStreamStartPayload,
+  type AiStreamCompletePayload,
 } from '../socket-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
@@ -340,6 +344,98 @@ describe('socket-utils', () => {
         role: 'ADMIN',
         driveName: 'My Drive',
       });
+    });
+  });
+
+  describe('broadcastAiStreamStart', () => {
+    it('given valid payload, should route to page:{pageId} channel with chat:stream_start event', async () => {
+      const payload: AiStreamStartPayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice' },
+      };
+
+      await broadcastAiStreamStart(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page:page-1');
+      expect(requestBody.event).toBe('chat:stream_start');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiStreamStart({
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice' },
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiStreamStart({
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        triggeredBy: { userId: 'user-1', displayName: 'Alice' },
+      })).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiStreamComplete', () => {
+    it('given completed stream, should route to page:{pageId} with chat:stream_complete and aborted=false', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        aborted: false,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page:page-1');
+      expect(requestBody.event).toBe('chat:stream_complete');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given aborted stream, should include aborted=true in payload', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        aborted: true,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.payload.aborted).toBe(true);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiStreamComplete({ messageId: 'msg-1', pageId: 'page-1' });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(
+        broadcastAiStreamComplete({ messageId: 'msg-1', pageId: 'page-1' })
+      ).resolves.not.toThrow();
     });
   });
 

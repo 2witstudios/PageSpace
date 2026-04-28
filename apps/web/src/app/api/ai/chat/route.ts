@@ -16,7 +16,8 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket';
+import { broadcastUsageEvent, broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
+import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -63,6 +64,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
+import { userProfiles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -99,8 +101,21 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+  let serverAssistantMessageId: string | undefined;
+  let multicastFinished = false;
   const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
+
+  const finishMulticast = (aborted: boolean): void => {
+    if (multicastFinished || !serverAssistantMessageId) return;
+    multicastFinished = true;
+    try { streamMulticastRegistry.finish(serverAssistantMessageId, aborted); } catch {}
+    broadcastAiStreamComplete({
+      messageId: serverAssistantMessageId,
+      pageId: chatId!,
+      aborted,
+    }).catch(() => {});
+  };
 
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
@@ -804,16 +819,41 @@ export async function POST(request: Request) {
     // Generate server-side message ID for the AI response
     // This ensures client and server use the same ID, fixing the undo-after-streaming issue
     // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
-    const serverAssistantMessageId = createId();
+    serverAssistantMessageId = createId();
 
     // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
     // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
 
+    // Register in multicast registry so other viewers can join via stream-join endpoint
+    try { streamMulticastRegistry.register(serverAssistantMessageId, { pageId: chatId, userId: userId! }); } catch {}
+
+    // Resolve display name for stream_start payload (fall back through user.name → 'Someone')
+    // Wrapped in try/catch so a DB hiccup here never aborts the stream
+    let displayName = user?.name ?? 'Someone';
+    try {
+      const [userProfile] = await db
+        .select({ displayName: userProfiles.displayName })
+        .from(userProfiles)
+        .where(eq(userProfiles.userId, userId!))
+        .limit(1);
+      displayName = userProfile?.displayName ?? displayName;
+    } catch {
+      // non-critical — fall back to user.name already set above
+    }
+
+    // Notify all page viewers that an AI stream is starting
+    broadcastAiStreamStart({
+      messageId: serverAssistantMessageId,
+      pageId: chatId,
+      conversationId: conversationId!,
+      triggeredBy: { userId: userId!, displayName },
+    }).catch(() => {});
+
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
-        generateId: () => serverAssistantMessageId,
+        generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
           // Start the AI response
           const aiResult = streamText({
@@ -851,6 +891,11 @@ export async function POST(request: Request) {
               },
             }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+            onChunk: ({ chunk }) => {
+              if (chunk.type === 'text-delta') {
+                try { streamMulticastRegistry.push(serverAssistantMessageId!, chunk.text); } catch {}
+              }
+            },
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId!),
@@ -859,6 +904,9 @@ export async function POST(request: Request) {
                 model: currentModel,
                 provider: currentProvider,
               });
+              // Route through finishMulticast so multicastFinished is set and chat:stream_complete
+              // is broadcast with aborted=true — prevents onFinish from double-broadcasting with aborted=false
+              finishMulticast(true);
             },
           });
 
@@ -905,7 +953,7 @@ export async function POST(request: Request) {
             try {
               // Use the server-generated ID that was sent to the client at stream start
               // This ensures the saved message ID matches what the client has
-              const messageId = serverAssistantMessageId;
+              const messageId = serverAssistantMessageId!;
               const messageContent = extractMessageContent(responseMessage);
               
               // Extract tool calls and results from the response
@@ -1074,6 +1122,8 @@ export async function POST(request: Request) {
           } else {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
+
+          finishMulticast(false);
         },
       });
 
@@ -1086,6 +1136,7 @@ export async function POST(request: Request) {
     } catch (streamError) {
       // Clean up the registry entry since onFinish won't be called
       removeStream({ streamId });
+      finishMulticast(true);
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
         stack: streamError instanceof Error ? streamError.stack : undefined
@@ -1099,6 +1150,7 @@ export async function POST(request: Request) {
     return result.toUIMessageStreamResponse();
 
   } catch (error) {
+    finishMulticast(true);
     loggers.ai.error('AI Chat API Error', error as Error, {
       userId,
       chatId,
