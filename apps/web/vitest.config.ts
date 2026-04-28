@@ -35,6 +35,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@pagespace/lib': path.resolve(__dirname, '../../packages/lib/src'),
+      '@pagespace/db': path.resolve(__dirname, '../../packages/db/src'),
     },
   },
 })
