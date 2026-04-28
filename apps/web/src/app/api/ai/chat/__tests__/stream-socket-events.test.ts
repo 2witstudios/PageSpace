@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Tests for Task 3: stream socket events wired into the AI chat route.
  *
@@ -28,9 +27,19 @@ const {
 }));
 
 // Captured AI SDK callbacks
+interface MockUIStreamOptions {
+  execute?: (ctx: Record<string, unknown>) => Promise<void> | void;
+  onFinish?: (result: { responseMessage: unknown }) => Promise<void> | void;
+  originalMessages?: unknown[];
+  generateId?: () => string;
+}
+interface MockStreamTextOptions {
+  onChunk?: (ctx: { chunk: Record<string, unknown> }) => void;
+  onAbort?: () => void;
+}
 const captured = vi.hoisted(() => ({
-  createUIMessageStreamOptions: null as any,
-  streamTextOptions: null as any,
+  createUIMessageStreamOptions: {} as MockUIStreamOptions,
+  streamTextOptions: {} as MockStreamTextOptions,
 }));
 
 // ============================================================================
@@ -56,7 +65,7 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result: any) => 'error' in result),
+  isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
@@ -87,7 +96,10 @@ vi.mock('@pagespace/db/db', () => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
           // supports direct await (pages, users), .orderBy() (chatMessages), and .limit() (userProfiles, drives)
-          then: (resolve: any, reject: any) => Promise.resolve([mockDbRow]).then(resolve, reject),
+          then: <T>(
+            resolve?: ((value: (typeof mockDbRow)[]) => T | PromiseLike<T>) | null,
+            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+          ) => Promise.resolve([mockDbRow]).then(resolve, reject),
           orderBy: vi.fn().mockResolvedValue([]),
           limit: vi.fn().mockResolvedValue([{ displayName: 'Test User', drivePrompt: null }]),
         })),
@@ -155,12 +167,12 @@ vi.mock('@/lib/ai/core', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
-  sanitizeToolNamesForProvider: vi.fn((t: any) => t),
+  sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('ai', () => ({
-  streamText: vi.fn().mockImplementation((options: any) => {
+  streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
     captured.streamTextOptions = options;
     return {
       toUIMessageStream: () => (async function* () {})(),
@@ -171,7 +183,7 @@ vi.mock('ai', () => ({
   stepCountIs: vi.fn(),
   hasToolCall: vi.fn(() => () => false),
   tool: vi.fn((config: any) => config),
-  createUIMessageStream: vi.fn().mockImplementation((options: any) => {
+  createUIMessageStream: vi.fn().mockImplementation((options: MockUIStreamOptions) => {
     captured.createUIMessageStreamOptions = options;
     return {};
   }),
@@ -220,7 +232,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({
-  mergeToolSets: vi.fn((a: any, b: any) => ({ ...a, ...b })),
+  mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
 }));
 
 vi.mock('@/lib/ai/tools/finish-tool', () => ({
@@ -304,8 +316,8 @@ const mockResponseMessage = {
 describe('POST /api/ai/chat — stream socket events', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    captured.createUIMessageStreamOptions = null;
-    captured.streamTextOptions = null;
+    captured.createUIMessageStreamOptions = {};
+    captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
   });
 

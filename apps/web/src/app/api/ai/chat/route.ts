@@ -829,12 +829,18 @@ export async function POST(request: Request) {
     try { streamMulticastRegistry.register(serverAssistantMessageId, { pageId: chatId, userId: userId! }); } catch {}
 
     // Resolve display name for stream_start payload (fall back through user.name → 'Someone')
-    const [userProfile] = await db
-      .select({ displayName: userProfiles.displayName })
-      .from(userProfiles)
-      .where(eq(userProfiles.userId, userId!))
-      .limit(1);
-    const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
+    // Wrapped in try/catch so a DB hiccup here never aborts the stream
+    let displayName = user?.name ?? 'Someone';
+    try {
+      const [userProfile] = await db
+        .select({ displayName: userProfiles.displayName })
+        .from(userProfiles)
+        .where(eq(userProfiles.userId, userId!))
+        .limit(1);
+      displayName = userProfile?.displayName ?? displayName;
+    } catch {
+      // non-critical — fall back to user.name already set above
+    }
 
     // Notify all page viewers that an AI stream is starting
     broadcastAiStreamStart({
