@@ -320,27 +320,9 @@ describe('usePageTree', () => {
       consoleLog.mockRestore();
     });
 
-    it('given active AI streaming session, should skip invalidation', () => {
+    it('given any active state (AI streaming or pending send), should skip invalidation', () => {
       mockSWRState.data = [createMockTreePage()];
       mockIsAnyActive.mockReturnValue(true);
-      mockIsAnyEditing.mockReturnValue(false);
-      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
-
-      const { result } = renderHook(() => usePageTree('drive-123'));
-
-      act(() => {
-        result.current.invalidateTree();
-      });
-
-      expect(mockMutate).not.toHaveBeenCalled();
-      expect(mockCacheDelete).not.toHaveBeenCalled();
-      consoleLog.mockRestore();
-    });
-
-    it('given pending send in progress, should skip invalidation', () => {
-      mockSWRState.data = [createMockTreePage()];
-      mockIsAnyActive.mockReturnValue(true);
-      mockIsAnyEditing.mockReturnValue(false);
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
 
       const { result } = renderHook(() => usePageTree('drive-123'));

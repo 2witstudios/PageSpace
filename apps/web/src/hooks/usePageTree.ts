@@ -126,7 +126,8 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   const invalidateTree = useCallback(() => {
     if (swrKey) {
       // Guard: skip revalidation during any active state (document editing, AI streaming,
-      // or pending send) to prevent editor remounting and stream abort.
+      // or pending send) to prevent editor remounting and stream abort. Tradeoff: tree
+      // may show stale data until all sessions end, but correctness beats interruption.
       const isActive = useEditingStore.getState().isAnyActive();
       if (isActive) {
         console.log('⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress');
