@@ -43,8 +43,8 @@ SSE endpoint at `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`.
 - Given unauthenticated request, should emit `authz.access.denied` audit event
 - Given request from user without view permission, should emit `authz.access.denied` audit event
 
-### Task 3: Stream Socket Events
-**Status:** Pending
+### Task 3: Stream Socket Events ✅ COMPLETED
+**PR:** https://github.com/2witstudios/PageSpace/pull/1144
 
 Wire `chat:stream_start` and `chat:stream_complete` socket broadcasts into the AI chat route alongside the multicast registry.
 
