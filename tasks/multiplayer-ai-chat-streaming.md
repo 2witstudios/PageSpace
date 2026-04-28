@@ -23,7 +23,7 @@ Pure in-process pub/sub registry at `apps/web/src/lib/ai/core/stream-multicast-r
 - `StreamMeta` interface must be exported for downstream tasks to type `getMeta` results
 
 ### Task 2: Stream Join Endpoint ✅ COMPLETED
-**PR:** Pending merge
+**PR:** https://github.com/2witstudios/PageSpace/pull/1142 (recovery of #1141)
 
 SSE endpoint at `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`.
 
