@@ -218,6 +218,18 @@ describe('StreamMulticastRegistry', () => {
       expect(completedValues).toEqual([false]);
     });
 
+    it('given register is called with an existing messageId that has subscribers, should notify those subscribers with aborted=true', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+
+      const completed: boolean[] = [];
+      registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
+
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+
+      expect(completed).toEqual([true]);
+    });
+
     it('given register is called twice for the same messageId, should call onComplete only once after 10 minutes', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();

@@ -22,22 +22,56 @@ Pure in-process pub/sub registry at `apps/web/src/lib/ai/core/stream-multicast-r
 - Given a subscriber's `onChunk` callback throws during `push`, should not interrupt fanout to remaining subscribers
 - `StreamMeta` interface must be exported for downstream tasks to type `getMeta` results
 
-### Task 2: Wire registry into AI stream route
+### Task 2: Stream Join Endpoint ✅ COMPLETED
+**PR:** https://github.com/2witstudios/PageSpace/pull/1142 (recovery of #1141)
+
+SSE endpoint at `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`.
+
+- GET endpoint that subscribes to an in-progress stream via `StreamMulticastRegistry`
+- Auth: session tokens via `authenticateRequestWithOptions`
+- Permissions: `canUserViewPage` check against `meta.pageId`
+- SSE format: `data: {"text":"..."}\n\n` per chunk, `data: {"done":true,"aborted":bool}\n\n` on complete
+- Proxy-friendly headers: `X-Accel-Buffering: no`
+- Client disconnect: abort signal → `unsubscribe()` + `controller.close()`
+- Race safety: subscribe called before ReadableStream created; buffer replay flushed in `start()`
+- Returns 401/403/404 before streaming begins
+- Audit logging on auth/permission denials
+- 17 tests, all passing
+
+#### Review fixes:
+- Given stream is aborted, should emit `{"done":true,"aborted":true}` done sentinel to subscribers
+- Given unauthenticated request, should emit `authz.access.denied` audit event
+- Given request from user without view permission, should emit `authz.access.denied` audit event
+
+### Task 3: Stream Socket Events
 **Status:** Pending
 
-In the AI chat stream API route, call `register` before streaming, `push` on each chunk, `finish` on completion/abort.
+Wire `chat:stream_start` and `chat:stream_complete` socket broadcasts into the AI chat route alongside the multicast registry.
 
-### Task 3: Socket.IO multicast event
+- Given a new AI stream, should register the messageId in the multicast registry before emitting `chat:stream_start`
+- Given `chat:stream_start`, should include messageId, pageId, conversationId, and triggeredBy in the payload
+- Given stream completion or abort, should flush the registry and emit `chat:stream_complete` with an aborted flag
+- Given a broadcast or registry call that throws, should not interrupt the AI response stream
+- Given a route error that skips `onFinish`, should still emit `chat:stream_complete` via a finally path
+
+### Task 4: AI Stream Client State
 **Status:** Pending
 
-When `push` is called on the registry, emit a Socket.IO event to all clients subscribed to the page room.
+Implement a Zustand store and socket hook that tracks in-progress remote streams and accumulates ghost text.
 
-### Task 4: Client-side subscription
+- Given `chat:stream_start` from another user, should register a pending stream and open a stream-join fetch connection
+- Given `chat:stream_start` from the local user, should mark the stream as local and skip the SSE join
+- Given incoming SSE chunks for a non-local stream, should accumulate text in the store keyed by messageId
+- Given `chat:stream_complete`, should remove the stream and call the completion callback
+- Given page unmount, should abort all in-flight join connections and clear all page streams from the store
+
+### Task 5: Multiplayer Chat UI
 **Status:** Pending
 
-Hook AI chat page into the Socket.IO multicast events so non-requesting viewers see chunks arrive in real time.
+Thread `pendingStreamsContent` through `ChatLayout` → `ChatMessagesArea` and render indicators and ghost text in `AiChatView`.
 
-### Task 5: Late-join HTTP replay endpoint
-**Status:** Pending
-
-Expose a GET endpoint that streams buffered chunks to a client that loads the page mid-stream.
+- Given a remote pending stream, should render a spinner with "X is waiting for AI response…" text
+- Given accumulated ghost text from a remote stream, should render it in a muted style below the indicator
+- Given multiple concurrent remote streams, should render a separate indicator for each
+- Given `chat:stream_complete` for a remote stream, should remove its indicator and trigger SWR revalidation
+- Given only a local stream in progress, should render no remote indicators
