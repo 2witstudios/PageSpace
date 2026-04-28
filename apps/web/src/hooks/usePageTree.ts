@@ -125,12 +125,11 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
-      // Guard: skip revalidation during document/form editing to prevent editor remounting.
-      // AI streaming is intentionally NOT blocked — without cache.delete, revalidation
-      // fetches fresh data in the background (stale-while-revalidate) without causing unmounts.
-      const isEditing = useEditingStore.getState().isAnyEditing();
-      if (isEditing) {
-        console.log('⏸️ Skipping tree revalidation - document editing in progress');
+      // Guard: skip revalidation during any active state (document editing, AI streaming,
+      // or pending send) to prevent editor remounting and stream abort.
+      const isActive = useEditingStore.getState().isAnyActive();
+      if (isActive) {
+        console.log('⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress');
         return;
       }
 

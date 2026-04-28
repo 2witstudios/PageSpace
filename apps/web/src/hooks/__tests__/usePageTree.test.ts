@@ -13,6 +13,7 @@ const {
   mockCacheDelete,
   mockSWRState,
   mockIsAnyEditing,
+  mockIsAnyActive,
 } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockMutate: vi.fn(),
@@ -22,6 +23,7 @@ const {
     error: undefined as unknown,
   },
   mockIsAnyEditing: vi.fn(() => false),
+  mockIsAnyActive: vi.fn(() => false),
 }));
 
 // Mock dependencies with hoisted mocks
@@ -33,9 +35,10 @@ vi.mock('@/stores/useEditingStore', () => ({
   useEditingStore: {
     getState: () => ({
       isAnyEditing: mockIsAnyEditing,
+      isAnyActive: mockIsAnyActive,
     }),
   },
-  isEditingActive: () => mockIsAnyEditing(),
+  isEditingActive: () => mockIsAnyActive(),
 }));
 
 vi.mock('@/lib/tree/tree-utils', () => ({
@@ -92,6 +95,7 @@ describe('usePageTree', () => {
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
     mockIsAnyEditing.mockReturnValue(false);
+    mockIsAnyActive.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -283,9 +287,9 @@ describe('usePageTree', () => {
   });
 
   describe('invalidateTree', () => {
-    it('given no active editing, should mutate without deleting cache', () => {
+    it('given no active state, should mutate without deleting cache', () => {
       mockSWRState.data = [createMockTreePage()];
-      mockIsAnyEditing.mockReturnValue(false);
+      mockIsAnyActive.mockReturnValue(false);
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -297,9 +301,9 @@ describe('usePageTree', () => {
       expect(mockMutate).toHaveBeenCalled();
     });
 
-    it('given active editing, should skip invalidation', () => {
+    it('given active document editing, should skip invalidation', () => {
       mockSWRState.data = [createMockTreePage()];
-      mockIsAnyEditing.mockReturnValue(true);
+      mockIsAnyActive.mockReturnValue(true);
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
 
       const { result } = renderHook(() => usePageTree('drive-123'));
@@ -308,10 +312,45 @@ describe('usePageTree', () => {
         result.current.invalidateTree();
       });
 
+      expect(mockMutate).not.toHaveBeenCalled();
       expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(consoleLog).toHaveBeenCalledWith(
-        '⏸️ Skipping tree revalidation - document editing in progress'
+        '⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress'
       );
+      consoleLog.mockRestore();
+    });
+
+    it('given active AI streaming session, should skip invalidation', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(true);
+      mockIsAnyEditing.mockReturnValue(false);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      act(() => {
+        result.current.invalidateTree();
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(mockCacheDelete).not.toHaveBeenCalled();
+      consoleLog.mockRestore();
+    });
+
+    it('given pending send in progress, should skip invalidation', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(true);
+      mockIsAnyEditing.mockReturnValue(false);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      act(() => {
+        result.current.invalidateTree();
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(mockCacheDelete).not.toHaveBeenCalled();
       consoleLog.mockRestore();
     });
   });
