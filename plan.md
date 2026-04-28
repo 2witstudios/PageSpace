@@ -2,10 +2,12 @@
 
 ## Active Epics
 
-- [Files Empty-State CTA](tasks/files-empty-state-cta.md) — discoverable Upload + Create actions for empty Files view; addresses Eric Elliott feedback #4.
-- [Settings Menu Contrast](tasks/settings-menu-contrast.md) — bring Personal settings rows up to WCAG AA in dark mode.
-- [Deployment Mode Isolation Gaps](tasks/deployment-mode-isolation-gaps.md) — close Resend, Google Calendar, and AI provider leaks in onprem/tenant modes; closes #944 #960 #964.
+- [Multiplayer AI Chat Streaming](tasks/multiplayer-ai-chat-streaming.md) — Socket-notified, HTTP-joined AI stream sharing: all page viewers see live ghost text and "X is waiting for AI response…" indicators in real-time.
+- [E2E and Load Testing](tasks/e2e-and-load-testing.md) — Playwright e2e for core user journeys + k6 load scenarios with Grafana dashboard for API latency and Postgres pool monitoring.
 
 ## Recently Completed
 
+- [Deployment Mode Isolation Gaps](tasks/archive/2026-04-17-deployment-mode-isolation-gaps.md) — ✅ 2026-04-17 — Resend, Google Calendar, and AI provider guards for onprem mode; closes #944 #960 #964.
+- [Files Empty-State CTA](tasks/archive/2026-04-17-files-empty-state-cta.md) — ✅ 2026-04-17 — discoverable Upload + Create actions for empty Files view with drag-and-drop and permission gating.
+- [Settings Menu Contrast](tasks/archive/2026-04-17-settings-menu-contrast.md) — ✅ 2026-04-17 — WCAG AA dark-mode contrast fix for Personal settings rows via muted-foreground token bump + group hover pattern.
 - [Notification Item Redesign](tasks/notification-item-redesign.md) — ✅ 2026-04-17 — shared `NotificationItem` grid layout + token-only theming + per-type compile-time coverage.
