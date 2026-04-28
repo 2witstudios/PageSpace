@@ -108,7 +108,8 @@ describe('StreamMulticastRegistry', () => {
       registry.subscribe('msg-1', (text) => received2.push(text), () => {});
 
       registry.push('msg-1', 'chunk1');
-      unsubscribe1!();
+      expect(unsubscribe1).not.toBeNull();
+      (unsubscribe1 as () => void)();
       registry.push('msg-1', 'chunk2');
 
       expect(received1).toEqual(['chunk1']);
@@ -125,7 +126,8 @@ describe('StreamMulticastRegistry', () => {
       const unsubscribe1 = registry.subscribe('msg-1', () => {}, (aborted) => completed1.push(aborted));
       registry.subscribe('msg-1', () => {}, (aborted) => completed2.push(aborted));
 
-      unsubscribe1!();
+      expect(unsubscribe1).not.toBeNull();
+      (unsubscribe1 as () => void)();
       registry.finish('msg-1');
 
       expect(completed1).toEqual([]);
@@ -178,7 +180,7 @@ describe('StreamMulticastRegistry', () => {
       registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
 
       registry.finish('msg-1');
-      registry.finish('msg-1'); // second call should be a no-op
+      registry.finish('msg-1');
 
       expect(completed).toEqual([false]);
     });
@@ -213,8 +215,48 @@ describe('StreamMulticastRegistry', () => {
 
       vi.advanceTimersByTime(10 * 60 * 1000);
 
-      // Only one completion, not two
       expect(completedValues).toEqual([false]);
+    });
+
+    it('given register is called twice for the same messageId, should call onComplete only once after 10 minutes', () => {
+      vi.useFakeTimers();
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+
+      const completed: boolean[] = [];
+      registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
+
+      vi.advanceTimersByTime(10 * 60 * 1000);
+
+      expect(completed).toHaveLength(1);
+    });
+  });
+
+  describe('resilience', () => {
+    it('given a subscriber whose onChunk throws, should not interrupt fanout to remaining subscribers', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+
+      const received: string[] = [];
+      registry.subscribe('msg-1', () => { throw new Error('bad subscriber'); }, () => {});
+      registry.subscribe('msg-1', (text) => received.push(text), () => {});
+
+      expect(() => registry.push('msg-1', 'chunk1')).not.toThrow();
+      expect(received).toEqual(['chunk1']);
+    });
+
+    it('given a subscriber whose onComplete throws, should still remove the entry and notify remaining subscribers', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+
+      const completed: boolean[] = [];
+      registry.subscribe('msg-1', () => {}, () => { throw new Error('bad subscriber'); });
+      registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
+
+      expect(() => registry.finish('msg-1')).not.toThrow();
+      expect(registry.getMeta('msg-1')).toBeUndefined();
+      expect(completed).toEqual([false]);
     });
   });
 });

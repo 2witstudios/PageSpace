@@ -1,6 +1,6 @@
 const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
 
-interface StreamMeta {
+export interface StreamMeta {
   pageId: string;
   userId: string;
 }
@@ -22,6 +22,11 @@ export class StreamMulticastRegistry {
   private entries = new Map<string, StreamEntry>();
 
   register(messageId: string, meta: StreamMeta): void {
+    const existing = this.entries.get(messageId);
+    if (existing?.cleanupTimeoutId !== null && existing?.cleanupTimeoutId !== undefined) {
+      clearTimeout(existing.cleanupTimeoutId);
+    }
+
     const cleanupTimeoutId = setTimeout(() => {
       this.finish(messageId, true);
     }, MAX_STREAM_AGE_MS);
@@ -41,7 +46,11 @@ export class StreamMulticastRegistry {
 
     entry.buffer.push(text);
     for (const subscriber of entry.subscribers.values()) {
-      subscriber.onChunk(text);
+      try {
+        subscriber.onChunk(text);
+      } catch {
+        // one bad subscriber must not break fanout to others
+      }
     }
   }
 
@@ -76,11 +85,15 @@ export class StreamMulticastRegistry {
       entry.cleanupTimeoutId = null;
     }
 
-    for (const subscriber of entry.subscribers.values()) {
-      subscriber.onComplete(aborted);
-    }
-
     this.entries.delete(messageId);
+
+    for (const subscriber of entry.subscribers.values()) {
+      try {
+        subscriber.onComplete(aborted);
+      } catch {
+        // one bad subscriber must not prevent others from being notified
+      }
+    }
   }
 
   getMeta(messageId: string): StreamMeta | undefined {

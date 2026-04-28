@@ -16,6 +16,12 @@ Pure in-process pub/sub registry at `apps/web/src/lib/ai/core/stream-multicast-r
 - Exported singleton `streamMulticastRegistry` + class for testing
 - 18 tests, all passing
 
+#### Review fixes (post-merge):
+- Given `register` is called twice for the same `messageId`, should clear the first timer so `onComplete` fires only once
+- Given a subscriber's `onComplete` callback throws, should still delete the entry and notify remaining subscribers
+- Given a subscriber's `onChunk` callback throws during `push`, should not interrupt fanout to remaining subscribers
+- `StreamMeta` interface must be exported for downstream tasks to type `getMeta` results
+
 ### Task 2: Wire registry into AI stream route
 **Status:** Pending
 
