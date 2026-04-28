@@ -182,7 +182,7 @@ vi.mock('ai', () => ({
   convertToModelMessages: vi.fn().mockReturnValue([]),
   stepCountIs: vi.fn(),
   hasToolCall: vi.fn(() => () => false),
-  tool: vi.fn((config: any) => config),
+  tool: vi.fn((config: unknown) => config),
   createUIMessageStream: vi.fn().mockImplementation((options: MockUIStreamOptions) => {
     captured.createUIMessageStreamOptions = options;
     return {};
