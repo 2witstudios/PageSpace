@@ -13,6 +13,8 @@ const {
   mockCacheDelete,
   mockSWRState,
   mockIsAnyEditing,
+  mockIsAnyActive,
+  mockSubscribe,
 } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockMutate: vi.fn(),
@@ -22,6 +24,8 @@ const {
     error: undefined as unknown,
   },
   mockIsAnyEditing: vi.fn(() => false),
+  mockIsAnyActive: vi.fn(() => false),
+  mockSubscribe: vi.fn((_cb: (state: { isAnyActive: () => boolean }) => void): (() => void) => vi.fn()),
 }));
 
 // Mock dependencies with hoisted mocks
@@ -33,9 +37,11 @@ vi.mock('@/stores/useEditingStore', () => ({
   useEditingStore: {
     getState: () => ({
       isAnyEditing: mockIsAnyEditing,
+      isAnyActive: mockIsAnyActive,
     }),
+    subscribe: (cb: (state: { isAnyActive: () => boolean }) => void) => mockSubscribe(cb),
   },
-  isEditingActive: () => mockIsAnyEditing(),
+  isEditingActive: () => mockIsAnyActive(),
 }));
 
 vi.mock('@/lib/tree/tree-utils', () => ({
@@ -92,6 +98,8 @@ describe('usePageTree', () => {
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
     mockIsAnyEditing.mockReturnValue(false);
+    mockIsAnyActive.mockReturnValue(false);
+    mockSubscribe.mockImplementation(() => vi.fn()); // noop unsubscribe
   });
 
   afterEach(() => {
@@ -283,9 +291,9 @@ describe('usePageTree', () => {
   });
 
   describe('invalidateTree', () => {
-    it('given no active editing, should mutate without deleting cache', () => {
+    it('given no active state, should mutate without deleting cache', () => {
       mockSWRState.data = [createMockTreePage()];
-      mockIsAnyEditing.mockReturnValue(false);
+      mockIsAnyActive.mockReturnValue(false);
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -297,9 +305,9 @@ describe('usePageTree', () => {
       expect(mockMutate).toHaveBeenCalled();
     });
 
-    it('given active editing, should skip invalidation', () => {
+    it('given active document editing, should skip invalidation', () => {
       mockSWRState.data = [createMockTreePage()];
-      mockIsAnyEditing.mockReturnValue(true);
+      mockIsAnyActive.mockReturnValue(true);
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
 
       const { result } = renderHook(() => usePageTree('drive-123'));
@@ -308,11 +316,112 @@ describe('usePageTree', () => {
         result.current.invalidateTree();
       });
 
+      expect(mockMutate).not.toHaveBeenCalled();
       expect(mockCacheDelete).not.toHaveBeenCalled();
       expect(consoleLog).toHaveBeenCalledWith(
-        '⏸️ Skipping tree revalidation - document editing in progress'
+        '⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress'
       );
       consoleLog.mockRestore();
+    });
+
+    it('given any active state (AI streaming or pending send), should skip invalidation', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(true);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      act(() => {
+        result.current.invalidateTree();
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(mockCacheDelete).not.toHaveBeenCalled();
+      consoleLog.mockRestore();
+    });
+
+    it('given skipped invalidation, should flush mutate once active state clears', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(true);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      // Capture the subscriber registered by the hook
+      let capturedSubscriber: ((state: { isAnyActive: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyActive: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn(); // unsubscribe noop
+      });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      // Invalidate during active state — deferred, not fired immediately
+      act(() => {
+        result.current.invalidateTree();
+      });
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(capturedSubscriber).not.toBeNull();
+
+      // Simulate store transitioning to inactive
+      mockIsAnyActive.mockReturnValue(false);
+      act(() => {
+        capturedSubscriber!({ isAnyActive: () => false });
+      });
+
+      // Pending invalidation should now be flushed
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      consoleLog.mockRestore();
+    });
+
+    it('given multiple skipped invalidations, should flush mutate only once', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(true);
+      const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => { });
+
+      let capturedSubscriber: ((state: { isAnyActive: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyActive: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn();
+      });
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      // Multiple invalidations during active state — all coalesced
+      act(() => {
+        result.current.invalidateTree();
+        result.current.invalidateTree();
+        result.current.invalidateTree();
+      });
+      expect(mockMutate).not.toHaveBeenCalled();
+
+      // Store goes inactive
+      mockIsAnyActive.mockReturnValue(false);
+      act(() => {
+        capturedSubscriber!({ isAnyActive: () => false });
+      });
+
+      // Only one mutate despite three invalidateTree calls
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      consoleLog.mockRestore();
+    });
+
+    it('given no skipped invalidation, should not flush when state clears', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyActive.mockReturnValue(false);
+
+      let capturedSubscriber: ((state: { isAnyActive: () => boolean }) => void) | null = null;
+      mockSubscribe.mockImplementation((cb: (state: { isAnyActive: () => boolean }) => void) => {
+        capturedSubscriber = cb;
+        return vi.fn();
+      });
+
+      renderHook(() => usePageTree('drive-123'));
+
+      // No invalidateTree called — subscriber fires but nothing pending
+      act(() => {
+        capturedSubscriber!({ isAnyActive: () => false });
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
     });
   });
 

@@ -80,6 +80,7 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   const { cache } = useSWRConfig();
   const hasTreeSnapshotRef = useRef(!!data);
   hasTreeSnapshotRef.current = !!data;
+  const pendingInvalidateRef = useRef(false);
 
   // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
   // On desktop/Capacitor, async token retrieval in fetchWithAuth can cause SWR to lose track
@@ -125,17 +126,30 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
-      // Guard: skip revalidation during document/form editing to prevent editor remounting.
-      // AI streaming is intentionally NOT blocked — without cache.delete, revalidation
-      // fetches fresh data in the background (stale-while-revalidate) without causing unmounts.
-      const isEditing = useEditingStore.getState().isAnyEditing();
-      if (isEditing) {
-        console.log('⏸️ Skipping tree revalidation - document editing in progress');
+      // Guard: defer revalidation during any active state (document editing, AI streaming,
+      // or pending send) to prevent editor remounting and stream abort. The deferred flag
+      // is flushed by the store subscriber below once all sessions end.
+      const isActive = useEditingStore.getState().isAnyActive();
+      if (isActive) {
+        pendingInvalidateRef.current = true;
+        console.log('⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress');
         return;
       }
 
+      pendingInvalidateRef.current = false;
       mutate();
     }
+  }, [swrKey, mutate]);
+
+  // Flush any deferred invalidation once all active sessions end.
+  useEffect(() => {
+    const unsubscribe = useEditingStore.subscribe((state) => {
+      if (!swrKey || !pendingInvalidateRef.current) return;
+      if (state.isAnyActive()) return;
+      pendingInvalidateRef.current = false;
+      mutate();
+    });
+    return unsubscribe;
   }, [swrKey, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {

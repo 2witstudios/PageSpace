@@ -60,6 +60,7 @@ interface AiChatViewProps {
 }
 
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
+const EMPTY_MESSAGES: UIMessage[] = [];
 
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
@@ -72,7 +73,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // LOCAL STATE
   // ============================================
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('chat');
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
@@ -167,17 +167,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
 
+  const handleChatError = useCallback((error: Error) => {
+    console.error('AiChatView: Chat error:', error);
+  }, []);
+
   const chatConfig = useMemo(
     () => !transport ? null : ({
       id: page.id,
-      messages: initialMessages,
+      messages: EMPTY_MESSAGES,
       transport,
       experimental_throttle: 100,
-      onError: (error: Error) => {
-        console.error('AiChatView: Chat error:', error);
-      },
+      onError: handleChatError,
     }),
-    [page.id, transport, initialMessages]
+    [page.id, transport, handleChatError]
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
@@ -254,24 +256,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         if (newConvResponse.ok) {
           const newConvData = await newConvResponse.json();
           setCurrentConversationId(newConvData.conversationId);
-          setInitialMessages([]);
           setMessages([]);
         } else {
-          setInitialMessages([]);
           setMessages([]);
         }
 
         setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize chat:', error);
-        setInitialMessages([]);
         setMessages([]);
         setIsInitialized(true);
       }
     };
 
     setIsInitialized(false);
-    setInitialMessages([]);
     setCurrentConversationId(null);
     initializeChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
