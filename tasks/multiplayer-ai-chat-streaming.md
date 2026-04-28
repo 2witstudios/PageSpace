@@ -38,6 +38,11 @@ SSE endpoint at `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`.
 - Audit logging on auth/permission denials
 - 11 tests, all passing
 
+#### Review fixes:
+- Given stream is aborted, should emit `{"done":true,"aborted":true}` done sentinel to subscribers
+- Given unauthenticated request, should emit `authz.access.denied` audit event
+- Given request from user without view permission, should emit `authz.access.denied` audit event
+
 ### Task 3: Stream Socket Events
 **Status:** Pending
 

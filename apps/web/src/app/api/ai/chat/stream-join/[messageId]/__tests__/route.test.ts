@@ -81,6 +81,22 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(response.status).toBe(401);
     });
+
+    it('given unauthenticated request, should emit authz.access.denied audit event', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthFailure(401));
+      vi.mocked(isAuthError).mockReturnValue(true);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          details: expect.objectContaining({ reason: 'auth_failed' }),
+        }),
+      );
+    });
   });
 
   describe('stream lookup', () => {
@@ -112,17 +128,27 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(response.status).toBe(403);
     });
 
-    it('should check permission against the pageId from stream metadata', async () => {
+    it('given a user without view access, should emit authz.access.denied audit event', async () => {
       testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
-      testRegistry.finish(mockMessageId); // Make subscribe return null (404 before perm check)
-      // Actually: getMeta returns undefined after finish — so we never reach perm check
-      // Let's use a live stream
-      testRegistry = new StreamMulticastRegistry();
-      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       await GET(makeRequest(), makeContext(mockMessageId));
 
-      // Finish to unblock any lingering streams
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          resourceId: mockMessageId,
+          details: expect.objectContaining({ reason: 'insufficient_permissions', pageId: mockPageId }),
+        }),
+      );
+    });
+
+    it('should check permission against the pageId from stream metadata', async () => {
+      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+
+      await GET(makeRequest(), makeContext(mockMessageId));
       testRegistry.finish(mockMessageId);
 
       expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
@@ -182,6 +208,17 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       const body = await readSSEBody(response);
 
       expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
+    });
+
+    it('given stream aborted, should send done sentinel with aborted=true', async () => {
+      testRegistry.register(mockMessageId, { pageId: mockPageId, userId: mockUserId });
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId, true);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
     });
 
     it('given live chunks pushed after subscribe, should stream them in order', async () => {
