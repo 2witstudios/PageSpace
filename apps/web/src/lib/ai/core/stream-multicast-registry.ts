@@ -23,7 +23,7 @@ export class StreamMulticastRegistry {
 
   register(messageId: string, meta: StreamMeta): void {
     const existing = this.entries.get(messageId);
-    if (existing?.cleanupTimeoutId !== null && existing?.cleanupTimeoutId !== undefined) {
+    if (existing?.cleanupTimeoutId != null) {
       clearTimeout(existing.cleanupTimeoutId);
     }
 
