@@ -893,7 +893,7 @@ export async function POST(request: Request) {
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onChunk: ({ chunk }) => {
               if (chunk.type === 'text-delta') {
-                try { streamMulticastRegistry.push(serverAssistantMessageId!, chunk.delta); } catch {}
+                try { streamMulticastRegistry.push(serverAssistantMessageId!, chunk.text); } catch {}
               }
             },
             onAbort: () => {
