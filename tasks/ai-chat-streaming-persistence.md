@@ -15,7 +15,7 @@ Add `packages/db/src/schema/ai-streams.ts` with a new `aiStreamSessions` pgTable
 
 **Requirements**:
 - Given a new schema file is added, should export `aiStreamSessions` from `packages/db/src/schema.ts`
-- Given `channelId` field, should accept pageId for page chats and `global:${userId}` for global chat
+- Given `channelId` field, should accept pageId for page chats and `user:${userId}:global` for global chat
 - Given `status` field, should only allow values: 'streaming', 'complete', or 'aborted'
 - Given (channelId, status) index, should enable fast queries for active streams per channel
 - Given schema change, should run `pnpm db:generate` to produce migration files (never hand-edit SQL)
@@ -66,10 +66,10 @@ Upgrade the page AI chat route to persist stream sessions to DB, thread tabId th
 Bring the global chat route to feature parity with the page chat route: multicast registry, DB persistence, socket events, and abort key registration.
 
 **Requirements**:
-- Given global chat stream starts, should register with multicast registry using `global:${userId}` as channelId
-- Given global chat stream starts, should INSERT into `aiStreamSessions` with `channelId = \`global:${userId}\``
+- Given global chat stream starts, should register with multicast registry using `user:${userId}:global` as channelId
+- Given global chat stream starts, should INSERT into `aiStreamSessions` with `channelId = \`user:${userId}:global\``
 - Given `text-delta` events, should push chunks to multicast registry
-- Given stream completes, should emit `broadcastAiStreamComplete` to the `global:${userId}` socket room
+- Given stream completes, should emit `broadcastAiStreamComplete` to the `user:${userId}:global` socket room
 - Given stream is aborted, should UPDATE `aiStreamSessions` status to 'aborted'
 - Given `finishMulticast` guard, should prevent double-broadcast if called more than once
 
@@ -119,7 +119,7 @@ Fix own-stream detection to use tabId, support global channel IDs, and bootstrap
 
 **Requirements**:
 - Given two tabs open by the same user, should mark only the originating tab's stream as own
-- Given `channelId` is a `global:${userId}` string, should pass it through to the active-streams endpoint correctly
+- Given `channelId` is a `user:${userId}:global` string, should pass it through to the active-streams endpoint correctly
 - Given active streams exist in DB at mount time, should bootstrap the store before any socket events arrive
 - Given a bootstrapped stream completes via SSE, should call the same completion handler as live socket events
 - Given the component unmounts, should abort all bootstrapped SSE connections
@@ -141,10 +141,10 @@ Show a stop button and wire abort-by-messageId for streams the current tab initi
 
 ## Global chat socket room — realtime server
 
-Auto-join each authenticated user to their `global:${userId}` socket room for global chat stream routing.
+Auto-join each authenticated user to their `user:${userId}:global` socket room for global chat stream routing.
 
 **Requirements**:
-- Given a user authenticates with the realtime server, should automatically join the `global:${user.id}` socket room
+- Given a user authenticates with the realtime server, should automatically join the `user:${user.id}:global` socket room
 - Given the user is already authenticated (prior checks pass), should not require an additional permission check
 - Given the join follows the existing auto-join pattern for other rooms, should be placed in the same block for consistency
 
