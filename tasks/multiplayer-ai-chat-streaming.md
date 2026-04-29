@@ -70,6 +70,20 @@ Implement a Zustand store and socket hook that tracks in-progress remote streams
 - Given SSE done sentinel resolves and `chat:stream_complete` also fires, should call `onStreamComplete` exactly once
 - Given the socket reconnects while the hook is mounted, should re-emit `join_channel` to rejoin the page room
 
+### Task 6: Shared Conversation Init (review fixes)
+**Status:** In progress
+**PR:** https://github.com/2witstudios/PageSpace/pull/1152
+
+Fix `initializeChat` so all openers of an AI chat page land in the same conversation.
+
+#### Acceptance criteria
+- Given an existing conversation, should load it on page load without creating a new one via POST
+- Given no conversations exist, should NOT POST a new server-side conversation (avoids race between concurrent openers)
+- Given no conversations exist, should use a page-scoped deterministic conversation ID so concurrent openers share the same ID before either sends a message
+- Given the conversations list fetch fails (non-ok or throws), should fall back to the page-scoped deterministic ID
+- Given loaded conversation messages, should apply the fetched messages to chat state (not empty array)
+- Given user clicks New Chat, should call `createConversation` from `useConversations` (existing behavior unchanged)
+
 ### Task 5: Multiplayer Chat UI
 **Status:** Pending
 

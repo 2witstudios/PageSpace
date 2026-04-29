@@ -2,17 +2,12 @@ import { describe, test, vi, beforeEach } from 'vitest';
 import { render, waitFor, screen, fireEvent } from '@testing-library/react';
 import { assert } from './riteway';
 
-// ============================================================
-// Hoisted mock instances (accessible inside vi.mock factories)
-// ============================================================
+// Hoisted mock instances accessible inside vi.mock factories
 const { mockFetchWithAuth, mockSetMessages } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
 }));
 
-// ============================================================
-// Module mocks — must be declared before any import of the module
-// ============================================================
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: mockFetchWithAuth,
 }));
@@ -59,10 +54,8 @@ vi.mock('@/stores/useAssistantSettingsStore', () => ({
 
 vi.mock('@/stores/useVoiceModeStore', () => ({
   useVoiceModeStore: vi.fn(
-    (selector: (state: { isEnabled: boolean; owner: null; enable: () => void; disable: () => void }) => unknown) => {
-      const state = { isEnabled: false, owner: null, enable: vi.fn(), disable: vi.fn() };
-      return selector(state);
-    }
+    (selector: (state: { isEnabled: boolean; owner: null; enable: () => void; disable: () => void }) => unknown) =>
+      selector({ isEnabled: false, owner: null, enable: vi.fn(), disable: vi.fn() })
   ),
 }));
 
@@ -71,38 +64,26 @@ vi.mock('@/stores/useEditingStore', () => ({
   isEditingActive: vi.fn(() => false),
 }));
 
-vi.mock('@/stores/usePendingStreamsStore', () => {
-  const mockStore = Object.assign(vi.fn(() => []), {
+vi.mock('@/stores/usePendingStreamsStore', () => ({
+  usePendingStreamsStore: Object.assign(vi.fn(() => []), {
     getState: vi.fn(() => ({ streams: new Map() })),
-  });
-  return { usePendingStreamsStore: mockStore };
-});
-
-vi.mock('@/hooks/usePageSocketRoom', () => ({
-  usePageSocketRoom: vi.fn(),
+  }),
 }));
 
-vi.mock('@/hooks/useChatStreamSocket', () => ({
-  useChatStreamSocket: vi.fn(),
-}));
-
-vi.mock('@/hooks/useAppStateRecovery', () => ({
-  useAppStateRecovery: vi.fn(),
-}));
+vi.mock('@/hooks/usePageSocketRoom', () => ({ usePageSocketRoom: vi.fn() }));
+vi.mock('@/hooks/useChatStreamSocket', () => ({ useChatStreamSocket: vi.fn() }));
+vi.mock('@/hooks/useAppStateRecovery', () => ({ useAppStateRecovery: vi.fn() }));
 
 vi.mock('@/hooks/useDisplayPreferences', () => ({
   useDisplayPreferences: vi.fn(() => ({ preferences: { showTokenCounts: false } })),
 }));
 
-vi.mock('@/lib/ai/core/client', () => ({
-  clearActiveStreamId: vi.fn(),
-}));
+vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 
-vi.mock('@/lib/ai/core/vision-models', () => ({
-  hasVisionCapability: vi.fn(() => false),
+const { mockCreateConversation } = vi.hoisted(() => ({
+  mockCreateConversation: vi.fn(),
 }));
-
-const mockCreateConversation = vi.fn();
 
 vi.mock('@/lib/ai/shared', () => ({
   useMCPTools: vi.fn(() => ({
@@ -156,68 +137,36 @@ vi.mock('@/lib/ai/shared/hooks/useImageAttachments', () => ({
   })),
 }));
 
-vi.mock('@/lib/tree/tree-utils', () => ({
-  buildPagePath: vi.fn(() => null),
-}));
-
+vi.mock('@/lib/tree/tree-utils', () => ({ buildPagePath: vi.fn(() => null) }));
 vi.mock('@/components/ai/page-agents', () => ({
   PageAgentSettingsTab: vi.fn(() => null),
   PageAgentHistoryTab: vi.fn(() => null),
 }));
-
 vi.mock('@/components/ai/page-agents/AgentIntegrationsPanel', () => ({
   AgentIntegrationsPanel: vi.fn(() => null),
 }));
-
-vi.mock('@/components/ai/voice/VoiceCallPanel', () => ({
-  VoiceCallPanel: vi.fn(() => null),
-}));
-
-vi.mock('@/components/ai/shared/chat', () => ({
-  ProviderSetupCard: vi.fn(() => null),
-}));
-
+vi.mock('@/components/ai/voice/VoiceCallPanel', () => ({ VoiceCallPanel: vi.fn(() => null) }));
+vi.mock('@/components/ai/shared/chat', () => ({ ProviderSetupCard: vi.fn(() => null) }));
 vi.mock('@/components/ai/shared', () => ({
   AiUsageMonitor: vi.fn(() => null),
   TasksDropdown: vi.fn(() => null),
 }));
+vi.mock('@/components/ai/chat/layouts', () => ({ ChatLayout: vi.fn(() => null) }));
+vi.mock('@/components/ai/chat/input', () => ({ ChatInput: vi.fn(() => null) }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('zustand/react/shallow', () => ({ useShallow: vi.fn((fn: unknown) => fn) }));
 
-vi.mock('@/components/ai/chat/layouts', () => ({
-  ChatLayout: vi.fn(() => null),
-}));
-
-vi.mock('@/components/ai/chat/input', () => ({
-  ChatInput: vi.fn(() => null),
-}));
-
-vi.mock('sonner', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-}));
-
-vi.mock('zustand/react/shallow', () => ({
-  useShallow: vi.fn((fn: unknown) => fn),
-}));
-
-// ============================================================
-// Import component after mocks
-// ============================================================
 import AiChatView from '../AiChatView';
 import { PageType } from '@pagespace/lib/utils/enums';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-// ============================================================
-// Test constants
-// ============================================================
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
-const NEW_CONV_ID = 'conv-new-xyz';
 const CONVERSATIONS_URL = `/api/ai/page-agents/${PAGE_ID}/conversations`;
 const MESSAGES_URL = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_ID}/messages`;
 const AGENT_CONFIG_URL = `/api/pages/${PAGE_ID}/agent-config`;
 const PERMISSIONS_URL = `/api/pages/${PAGE_ID}/permissions/check`;
 
-// ============================================================
-// Test helpers
-// ============================================================
 const makeOkResponse = (data: unknown) => ({
   ok: true as const,
   json: vi.fn().mockResolvedValue(data),
@@ -257,22 +206,15 @@ const existingConversation = {
 };
 
 const wasGetCalled = (url: string) =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mockFetchWithAuth.mock.calls.some((args: any[]) => {
-    const [callUrl, opts] = args;
-    return callUrl === url && (!opts?.method || opts.method === 'GET');
-  });
+  (mockFetchWithAuth.mock.calls as Parameters<typeof fetchWithAuth>[]).some(([callUrl, opts]) =>
+    callUrl === url && (!opts?.method || opts.method === 'GET')
+  );
 
 const wasPostCalled = (url: string) =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mockFetchWithAuth.mock.calls.some((args: any[]) => {
-    const [callUrl, opts] = args;
-    return callUrl === url && opts?.method === 'POST';
-  });
+  (mockFetchWithAuth.mock.calls as Parameters<typeof fetchWithAuth>[]).some(([callUrl, opts]) =>
+    callUrl === url && opts?.method === 'POST'
+  );
 
-// ============================================================
-// Tests
-// ============================================================
 describe('AiChatView initializeChat', () => {
   const page = makePage();
 
@@ -281,6 +223,8 @@ describe('AiChatView initializeChat', () => {
   });
 
   test('given a page with existing conversations, loads the most recent conversation without creating a new one', async () => {
+    const testMessages = [{ id: 'msg-1', role: 'user', content: 'hello', parts: [{ type: 'text', text: 'hello' }] }];
+
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
       if (url === AGENT_CONFIG_URL) return makeOkResponse({});
@@ -288,9 +232,7 @@ describe('AiChatView initializeChat', () => {
         return makeOkResponse({ conversations: [existingConversation] });
       }
       if (url === MESSAGES_URL && !opts?.method) {
-        return makeOkResponse({
-          messages: [{ id: 'msg-1', role: 'user', content: 'hello', parts: [{ type: 'text', text: 'hello' }] }],
-        });
+        return makeOkResponse({ messages: testMessages });
       }
       return makeErrorResponse();
     });
@@ -312,17 +254,23 @@ describe('AiChatView initializeChat', () => {
       actual: wasPostCalled(CONVERSATIONS_URL),
       expected: false,
     });
+
+    assert({
+      given: 'a page with existing conversations',
+      should: 'apply the fetched messages to chat state',
+      actual: mockSetMessages.mock.calls.some(
+        (args) => JSON.stringify(args[0]) === JSON.stringify(testMessages)
+      ),
+      expected: true,
+    });
   });
 
-  test('given a page with no conversations, creates a new conversation after checking for existing ones', async () => {
+  test('given a page with no conversations, uses a page-scoped deterministic ID without POSTing', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
       if (url === AGENT_CONFIG_URL) return makeOkResponse({});
       if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
         return makeOkResponse({ conversations: [] });
-      }
-      if (url === CONVERSATIONS_URL && opts?.method === 'POST') {
-        return makeOkResponse({ conversationId: NEW_CONV_ID });
       }
       return makeErrorResponse();
     });
@@ -331,7 +279,7 @@ describe('AiChatView initializeChat', () => {
 
     await waitFor(() => {
       assert({
-        given: 'a page with no conversations',
+        given: 'a brand-new page with no conversations',
         should: 'GET conversations list first',
         actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
         expected: true,
@@ -339,22 +287,19 @@ describe('AiChatView initializeChat', () => {
     });
 
     assert({
-      given: 'a page with no conversations',
-      should: 'create a new conversation via POST after finding none',
+      given: 'a brand-new page with no conversations',
+      should: 'NOT POST a server-side conversation (avoids race between concurrent openers)',
       actual: wasPostCalled(CONVERSATIONS_URL),
-      expected: true,
+      expected: false,
     });
   });
 
-  test('given conversations fetch fails with non-ok response, falls back to creating a new conversation', async () => {
+  test('given conversations fetch fails with non-ok response, falls back to page-scoped deterministic ID without POSTing', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
       if (url === AGENT_CONFIG_URL) return makeOkResponse({});
       if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
         return makeErrorResponse();
-      }
-      if (url === CONVERSATIONS_URL && opts?.method === 'POST') {
-        return makeOkResponse({ conversationId: NEW_CONV_ID });
       }
       return makeErrorResponse();
     });
@@ -372,9 +317,9 @@ describe('AiChatView initializeChat', () => {
 
     assert({
       given: 'conversations GET returns non-ok',
-      should: 'fall back to creating a new conversation via POST',
+      should: 'NOT POST — fall back to page-scoped deterministic ID',
       actual: wasPostCalled(CONVERSATIONS_URL),
-      expected: true,
+      expected: false,
     });
   });
 
@@ -396,7 +341,7 @@ describe('AiChatView initializeChat', () => {
     await waitFor(() => {
       assert({
         given: 'a second user opening the same page',
-        should: 'load messages from the shared existing conversation (not create a new one)',
+        should: 'load messages from the shared existing conversation',
         actual: wasGetCalled(MESSAGES_URL),
         expected: true,
       });
@@ -425,21 +370,8 @@ describe('AiChatView initializeChat', () => {
 
     render(<AiChatView page={page} />);
 
-    await waitFor(() => {
-      assert({
-        given: 'component initialized',
-        should: 'render the New Chat button',
-        actual: screen.getAllByRole('button').some(
-          (b) => b.textContent?.includes('New Chat') || b.getAttribute('aria-label')?.includes('New Chat')
-        ),
-        expected: true,
-      });
-    });
-
-    const newChatButton = screen.getAllByRole('button').find(
-      (b) => b.textContent?.includes('New Chat') || b.getAttribute('aria-label')?.includes('New Chat')
-    );
-    if (newChatButton) fireEvent.click(newChatButton);
+    const newChatButton = await screen.findByRole('button', { name: /new chat/i });
+    fireEvent.click(newChatButton);
 
     assert({
       given: 'user clicks the New Chat button',

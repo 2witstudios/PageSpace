@@ -239,10 +239,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Initialize chat
   useEffect(() => {
+    const controller = new AbortController();
+
     const initializeChat = async () => {
       try {
         // Load agent config
-        const agentConfigResponse = await fetchWithAuth(`/api/pages/${page.id}/agent-config`);
+        const agentConfigResponse = await fetchWithAuth(`/api/pages/${page.id}/agent-config`, {
+          signal: controller.signal,
+        });
         if (agentConfigResponse.ok) {
           const config = await agentConfigResponse.json();
           setAgentConfig(config);
@@ -250,47 +254,39 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           if (config.aiModel) setSelectedModel(config.aiModel);
         }
 
-        // Load most recent conversation, or create one if none exists
-        let conversationLoaded = false;
+        // Try to load the most recent existing conversation
         try {
           const listResponse = await fetchWithAuth(
-            `/api/ai/page-agents/${page.id}/conversations?pageSize=1`
+            `/api/ai/page-agents/${page.id}/conversations?pageSize=1`,
+            { signal: controller.signal }
           );
           if (listResponse.ok) {
-            const listData = await listResponse.json();
-            if (listData.conversations?.length > 0) {
-              const conv = listData.conversations[0];
+            const { conversations: list } = await listResponse.json();
+            if (list?.length > 0) {
+              const conv = list[0];
               const msgResponse = await fetchWithAuth(
-                `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`
+                `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
+                { signal: controller.signal }
               );
-              if (msgResponse.ok) {
-                const msgData = await msgResponse.json();
-                setCurrentConversationId(conv.id);
-                setMessages(msgData.messages);
-              } else {
-                setCurrentConversationId(conv.id);
-                setMessages([]);
-              }
-              conversationLoaded = true;
+              const { messages: loaded } = msgResponse.ok
+                ? await msgResponse.json()
+                : { messages: [] };
+              setCurrentConversationId(conv.id);
+              setMessages(loaded ?? []);
+              setIsInitialized(true);
+              return;
             }
           }
-        } catch {
-          // GET failed — fall through to create a new conversation
+        } catch (err) {
+          // GET failed — fall through to page-scoped default below
+          console.warn('Failed to load conversations on init, using page-scoped default:', err);
         }
 
-        if (!conversationLoaded) {
-          const newConvResponse = await fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
-          });
-          if (newConvResponse.ok) {
-            const newConvData = await newConvResponse.json();
-            setCurrentConversationId(newConvData.conversationId);
-          }
-          setMessages([]);
-        }
-
+        // No persisted conversations exist yet. Derive a stable ID from the page so
+        // concurrent openers share the same conversation before either sends a message.
+        // The conversation is anchored in the DB once the first message is saved.
+        setCurrentConversationId(`${page.id}-default`);
+        setMessages([]);
         setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize chat:', error);
@@ -302,6 +298,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setIsInitialized(false);
     setCurrentConversationId(null);
     initializeChat();
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
 
