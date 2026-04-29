@@ -73,6 +73,10 @@ vi.mock('../agent-tools', () => ({
   agentTools: { update_agent_config: { name: 'update_agent_config' } },
 }));
 
+vi.mock('../../core/integration-tool-resolver', () => ({
+  resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
+}));
+
 // Mock core AI modules
 vi.mock('../../core', () => ({
   sanitizeMessagesForModel: vi.fn((msgs) => msgs),
@@ -91,6 +95,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';
+import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
@@ -637,6 +642,89 @@ describe('agent-communication-tools', () => {
           sourceAgentId: null,
           role: 'user',
         });
+      });
+    });
+
+    describe('integration tool resolution', () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+        mockCanUserViewPage.mockResolvedValue(true);
+        vi.mocked(mockDb.select).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        } as never);
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        } as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(generateText).mockResolvedValue({
+          text: 'Agent response',
+          steps: [],
+        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      });
+
+      it('merges integration tools into the generateText tools call', async () => {
+        const githubTool = { description: 'List GitHub repos', parameters: {}, execute: vi.fn() };
+        vi.mocked(resolvePageAgentIntegrationTools).mockResolvedValue({
+          github_list_repos: githubTool,
+        } as never);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'List my repos' },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tools: expect.objectContaining({ github_list_repos: githubTool }),
+          })
+        );
+      });
+
+      it('falls back to built-in tools only when integration resolver throws', async () => {
+        vi.mocked(resolvePageAgentIntegrationTools).mockRejectedValue(
+          new Error('DB connection failed')
+        );
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        // Should not throw — error is caught and logged
+        await expect(
+          agentCommunicationTools.ask_agent!.execute!(
+            { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Test' },
+            context
+          )
+        ).resolves.not.toThrow();
+
+        // generateText still called (with built-in tools only, no integration tools)
+        expect(generateText).toHaveBeenCalled();
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown>;
+        expect(toolsArg).not.toHaveProperty('github_list_repos');
       });
     });
   });
