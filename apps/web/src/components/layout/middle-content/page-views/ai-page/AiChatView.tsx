@@ -332,6 +332,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           parts: [{ type: 'text' as const, text: stream.text }],
         },
       ]);
+    } else if (stream?.text && currentConversationId === `${page.id}-default`) {
+      const { text, conversationId: streamConvId } = stream;
+      fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
+        .then(async (res) => {
+          if (!res.ok) return;
+          const data = (await res.json()) as ConversationListResponse;
+          const persisted = data.conversations?.[0];
+          if (!persisted || persisted.id !== streamConvId) return;
+          setCurrentConversationId(persisted.id);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: messageId,
+              role: 'assistant' as const,
+              content: text,
+              parts: [{ type: 'text' as const, text }],
+            },
+          ]);
+        })
+        .catch(() => {});
     }
   });
 
