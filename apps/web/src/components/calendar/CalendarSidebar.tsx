@@ -108,7 +108,9 @@ export function CalendarSidebar({
         </div>
 
         <div
-          role="button"
+          role="checkbox"
+          aria-checked={userEventsVisible}
+          aria-label="Toggle user events"
           tabIndex={0}
           onClick={onToggleUserEvents}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleUserEvents(); } }}
@@ -119,9 +121,7 @@ export function CalendarSidebar({
           )}
         >
           <span
-            role="checkbox"
-            aria-checked={userEventsVisible}
-            aria-label="Toggle user events"
+            aria-hidden="true"
             className={cn(
               'size-3.5 shrink-0 rounded-sm border transition-colors flex items-center justify-center',
               userEventsVisible
@@ -147,7 +147,9 @@ export function CalendarSidebar({
         </div>
 
         <div
-          role="button"
+          role="checkbox"
+          aria-checked={agentEventsVisible}
+          aria-label="Toggle agent events"
           tabIndex={0}
           onClick={onToggleAgentEvents}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleAgentEvents(); } }}
@@ -158,9 +160,7 @@ export function CalendarSidebar({
           )}
         >
           <span
-            role="checkbox"
-            aria-checked={agentEventsVisible}
-            aria-label="Toggle agent events"
+            aria-hidden="true"
             className={cn(
               'size-3.5 shrink-0 rounded-sm border transition-colors flex items-center justify-center',
               agentEventsVisible

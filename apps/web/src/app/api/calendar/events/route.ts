@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, not, isNull, asc } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { pages } from '@pagespace/db/schema/core'
@@ -10,7 +10,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -58,7 +58,7 @@ const createEventSchema = z.object({
 });
 
 /**
- * Returns the set of calendarEventIds that have a non-cancelled agent trigger.
+ * Returns the set of calendarEventIds that have an active (non-cancelled, non-failed) agent trigger.
  */
 async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
   if (eventIds.length === 0) return new Set();
@@ -68,6 +68,7 @@ async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
     .where(
       and(
         inArray(calendarTriggers.calendarEventId, eventIds),
+        not(inArray(calendarTriggers.status, ['cancelled', 'failed'])),
       )
     );
   return new Set(rows.map(r => r.calendarEventId).filter((id): id is string => id !== null));
@@ -471,6 +472,13 @@ export async function POST(request: Request) {
           )
         );
       if (!agentPage) {
+        return NextResponse.json(
+          { error: 'Agent not found in this drive' },
+          { status: 400 }
+        );
+      }
+      const canViewAgent = await canUserViewPage(userId, agentPage.id);
+      if (!canViewAgent) {
         return NextResponse.json(
           { error: 'Agent not found in this drive' },
           { status: 400 }

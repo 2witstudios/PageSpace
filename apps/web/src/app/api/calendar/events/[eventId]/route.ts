@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -239,6 +240,19 @@ export async function PATCH(
       })
       .where(eq(calendarEvents.id, eventId))
       .returning();
+
+    // Sync pending trigger's fire time if the event start changed
+    if (adjustedStartAt) {
+      await db
+        .update(calendarTriggers)
+        .set({ triggerAt: adjustedStartAt })
+        .where(
+          and(
+            eq(calendarTriggers.calendarEventId, eventId),
+            eq(calendarTriggers.status, 'pending'),
+          )
+        );
+    }
 
     // Fetch complete event with relations
     const completeEvent = await db.query.calendarEvents.findFirst({

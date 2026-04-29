@@ -8,9 +8,9 @@ interface CalendarFilterState {
   hideAll: (keys: string[]) => void;
   isVisible: (key: string) => boolean;
 
-  hiddenEventTypes: string[];
-  toggleEventType: (type: string) => void;
-  isEventTypeVisible: (type: string) => boolean;
+  hiddenEventTypes: Array<'agent' | 'user'>;
+  toggleEventType: (type: 'agent' | 'user') => void;
+  isEventTypeVisible: (type: 'agent' | 'user') => boolean;
 }
 
 export const useCalendarFilterStore = create<CalendarFilterState>()(
@@ -35,7 +35,7 @@ export const useCalendarFilterStore = create<CalendarFilterState>()(
 
       hiddenEventTypes: [],
 
-      toggleEventType: (type: string) => {
+      toggleEventType: (type: 'agent' | 'user') => {
         const { hiddenEventTypes } = get();
         if (hiddenEventTypes.includes(type)) {
           set({ hiddenEventTypes: hiddenEventTypes.filter((t) => t !== type) });
@@ -44,7 +44,7 @@ export const useCalendarFilterStore = create<CalendarFilterState>()(
         }
       },
 
-      isEventTypeVisible: (type: string) => !get().hiddenEventTypes.includes(type),
+      isEventTypeVisible: (type: 'agent' | 'user') => !get().hiddenEventTypes.includes(type),
     }),
     {
       name: 'calendar-filter-storage',

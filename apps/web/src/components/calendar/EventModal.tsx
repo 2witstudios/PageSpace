@@ -185,7 +185,7 @@ export function EventModal({
       return;
     }
 
-    if (scheduleAgent && (!selectedAgentId || !agentPrompt.trim())) {
+    if (scheduleAgent && (!selectedAgentId || selectedAgentId === '__none' || !agentPrompt.trim())) {
       toast.error('Please select an agent and enter a prompt');
       return;
     }
