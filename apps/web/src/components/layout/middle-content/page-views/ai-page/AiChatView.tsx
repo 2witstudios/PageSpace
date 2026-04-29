@@ -63,6 +63,9 @@ interface AiChatViewProps {
   page: TreePage;
 }
 
+type ConversationListResponse = { conversations?: Array<{ id: string }> };
+type ConversationMessagesResponse = { messages: UIMessage[] };
+
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
 const EMPTY_MESSAGES: UIMessage[] = [];
 
@@ -261,16 +264,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             { signal: controller.signal }
           );
           if (listResponse.ok) {
-            const { conversations: list } = await listResponse.json();
-            if (list?.length > 0) {
+            const { conversations: list } = (await listResponse.json()) as ConversationListResponse;
+            if (list && list.length > 0) {
               const conv = list[0];
               const msgResponse = await fetchWithAuth(
                 `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
                 { signal: controller.signal }
               );
               const { messages: loaded } = msgResponse.ok
-                ? await msgResponse.json()
-                : { messages: [] };
+                ? ((await msgResponse.json()) as ConversationMessagesResponse)
+                : { messages: [] as UIMessage[] };
               setCurrentConversationId(conv.id);
               setMessages(loaded ?? []);
               setIsInitialized(true);
