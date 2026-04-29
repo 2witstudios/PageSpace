@@ -40,6 +40,7 @@ export function useChatStreamSocket(
         pageId: payload.pageId,
         conversationId: payload.conversationId,
         triggeredBy: payload.triggeredBy,
+        isOwn: false,
       });
 
       const controller = new AbortController();

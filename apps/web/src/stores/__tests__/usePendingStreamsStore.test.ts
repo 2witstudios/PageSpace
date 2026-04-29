@@ -6,6 +6,7 @@ const BASE_STREAM = {
   pageId: 'page-a',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'user-2', displayName: 'Alice' },
+  isOwn: false,
 };
 
 describe('usePendingStreamsStore', () => {
@@ -119,6 +120,38 @@ describe('usePendingStreamsStore', () => {
 
       const [stream] = getRemotePageStreams('page-a');
       expect(stream.text).toBe('chunk-achunk-b');
+    });
+  });
+
+  describe('getOwnStreams', () => {
+    it('given a stream with isOwn true, should include it', () => {
+      const { addStream, getOwnStreams } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, isOwn: true });
+
+      expect(getOwnStreams('page-a')).toHaveLength(1);
+    });
+
+    it('given a stream with isOwn false, should exclude it', () => {
+      const { addStream, getOwnStreams } = usePendingStreamsStore.getState();
+      addStream(BASE_STREAM); // isOwn: false
+
+      expect(getOwnStreams('page-a')).toHaveLength(0);
+    });
+
+    it('given mixed own and remote streams, should return only own streams for the channel', () => {
+      const { addStream, getOwnStreams } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, messageId: 'msg-own', isOwn: true });
+      addStream({ ...BASE_STREAM, messageId: 'msg-remote', isOwn: false });
+      addStream({ ...BASE_STREAM, messageId: 'msg-other-page', pageId: 'page-b', isOwn: true });
+
+      const streams = getOwnStreams('page-a');
+      expect(streams).toHaveLength(1);
+      expect(streams[0].messageId).toBe('msg-own');
+    });
+
+    it('given no streams for the channel, should return empty array', () => {
+      const { getOwnStreams } = usePendingStreamsStore.getState();
+      expect(getOwnStreams('page-empty')).toEqual([]);
     });
   });
 });
