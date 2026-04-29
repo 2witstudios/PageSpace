@@ -26,7 +26,10 @@ const {
     }),
     emit: vi.fn(),
     _trigger: (event: string, payload: unknown) => {
-      handlers[event]?.forEach((h) => h(payload));
+      handlers[event]?.slice().forEach((h) => h(payload));
+    },
+    _reset: () => {
+      Object.keys(handlers).forEach((k) => { handlers[k] = []; });
     },
   };
 
@@ -83,6 +86,7 @@ const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
 describe('useChatStreamSocket', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSocket._reset();
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
   });
 
@@ -157,6 +161,32 @@ describe('useChatStreamSocket', () => {
     });
   });
 
+  // A1 — pageId guard
+  describe('pageId guard', () => {
+    it('given chat:stream_start with a different pageId, should ignore the event', () => {
+      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', { ...START_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+    });
+
+    it('given chat:stream_complete with a different pageId, should ignore the event', () => {
+      const onStreamComplete = vi.fn();
+      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(mockRemoveStream).not.toHaveBeenCalled();
+      expect(onStreamComplete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('chat:stream_complete', () => {
     it('should call removeStream and onStreamComplete', () => {
       const onStreamComplete = vi.fn();
@@ -185,6 +215,82 @@ describe('useChatStreamSocket', () => {
     });
   });
 
+  // A2 — double onStreamComplete prevention
+  describe('onStreamComplete deduplication', () => {
+    it('given SSE done sentinel resolves and chat:stream_complete also fires, should call onStreamComplete exactly once', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // SSE done resolves first
+      await act(async () => { resolveJoin(); });
+
+      // Then socket stream_complete also fires
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      expect(onStreamComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it('given chat:stream_complete fires before SSE resolves, should call onStreamComplete exactly once', async () => {
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves naturally
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // stream_complete fires (aborts the SSE join)
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      // Give any pending promise chains a tick to settle
+      await act(async () => { await Promise.resolve(); });
+
+      expect(onStreamComplete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // A3 — callback ref: onStreamComplete change should not re-register handlers
+  describe('onStreamComplete stability', () => {
+    it('given onStreamComplete reference changes between renders, should not re-register socket handlers', () => {
+      let callback = vi.fn();
+      const { rerender } = renderHook(() => useChatStreamSocket('page-a', 'user-1', callback));
+
+      const onCallCount = mockSocket.on.mock.calls.length;
+
+      callback = vi.fn(); // new reference
+      rerender();
+
+      expect(mockSocket.on.mock.calls.length).toBe(onCallCount);
+    });
+
+    it('given onStreamComplete reference changes between renders, should invoke the latest callback', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+
+      const firstCallback = vi.fn();
+      let callback = firstCallback;
+      const { rerender } = renderHook(() => useChatStreamSocket('page-a', 'user-1', callback));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // Swap callback before stream resolves
+      const secondCallback = vi.fn();
+      callback = secondCallback;
+      rerender();
+
+      await act(async () => { resolveJoin(); });
+
+      expect(firstCallback).not.toHaveBeenCalled();
+      expect(secondCallback).toHaveBeenCalledWith('msg-1');
+    });
+  });
+
   describe('cleanup on unmount', () => {
     it('should remove socket listeners, abort controllers, and clearPageStreams', () => {
       const { unmount } = renderHook(() => useChatStreamSocket('page-a', 'user-1'));
@@ -192,7 +298,6 @@ describe('useChatStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       let capturedSignal!: AbortSignal;
-      // Re-check: consumeStreamJoin was called, signal captured from last call
       const lastCall = mockConsumeStreamJoin.mock.calls.at(-1);
       if (lastCall) capturedSignal = lastCall[1] as AbortSignal;
 

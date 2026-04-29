@@ -5,7 +5,7 @@ export async function consumeStreamJoin(
 ): Promise<{ aborted: boolean }> {
   let response: Response;
   try {
-    response = await fetch(`/api/ai/chat/stream-join/${messageId}`, {
+    response = await fetch(`/api/ai/chat/stream-join/${encodeURIComponent(messageId)}`, {
       credentials: 'include',
       signal,
     });
@@ -20,7 +20,10 @@ export async function consumeStreamJoin(
     throw new Error(`Stream join failed with status ${response.status}`);
   }
 
-  const reader = response.body!.getReader();
+  if (!response.body) {
+    throw new Error(`Stream join response has no body (status ${response.status})`);
+  }
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
 

@@ -11,6 +11,12 @@ export function useChatStreamSocket(
 ): void {
   const socket = useSocket();
   const controllersRef = useRef<Map<string, AbortController>>(new Map());
+  // Tracks which messageIds have had onStreamComplete called to prevent double-firing
+  // when both the SSE done sentinel and the chat:stream_complete socket event arrive.
+  const processedRef = useRef<Set<string>>(new Set());
+  // Stable ref so onStreamComplete changes never cause handler re-registration.
+  const onStreamCompleteRef = useRef(onStreamComplete);
+  onStreamCompleteRef.current = onStreamComplete;
 
   useEffect(() => {
     if (!socket || !pageId) return;
@@ -18,7 +24,15 @@ export function useChatStreamSocket(
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
+    const fireComplete = (messageId: string) => {
+      if (processedRef.current.has(messageId)) return;
+      processedRef.current.add(messageId);
+      onStreamCompleteRef.current?.(messageId);
+    };
+
     const handleStreamStart = (payload: AiStreamStartPayload) => {
+      // A1: ignore events for other pages (stale-room guard)
+      if (payload.pageId !== pageId) return;
       if (payload.triggeredBy.userId === currentUserId) return;
 
       addStream({
@@ -37,21 +51,26 @@ export function useChatStreamSocket(
         .then(() => {
           controllersRef.current.delete(payload.messageId);
           removeStream(payload.messageId);
-          onStreamComplete?.(payload.messageId);
+          fireComplete(payload.messageId);
         })
-        .catch(() => {
+        .catch((err) => {
           controllersRef.current.delete(payload.messageId);
+          if (!controller.signal.aborted) {
+            console.error('[useChatStreamSocket] SSE join error:', err);
+          }
         });
     };
 
     const handleStreamComplete = (payload: AiStreamCompletePayload) => {
+      // A1: ignore events for other pages (stale-room guard)
+      if (payload.pageId !== pageId) return;
       const controller = controllersRef.current.get(payload.messageId);
       if (controller) {
         controller.abort();
         controllersRef.current.delete(payload.messageId);
       }
       removeStream(payload.messageId);
-      onStreamComplete?.(payload.messageId);
+      fireComplete(payload.messageId);
     };
 
     socket.on('chat:stream_start', handleStreamStart);
@@ -64,7 +83,8 @@ export function useChatStreamSocket(
         controller.abort();
       }
       controllersRef.current.clear();
+      processedRef.current.clear();
       clearPageStreams(pageId);
     };
-  }, [socket, pageId, currentUserId, onStreamComplete]);
+  }, [socket, pageId, currentUserId]); // A3: onStreamComplete intentionally excluded — use ref
 }

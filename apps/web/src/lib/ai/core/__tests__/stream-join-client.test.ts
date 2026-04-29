@@ -122,4 +122,59 @@ describe('consumeStreamJoin', () => {
       expect.objectContaining({ credentials: 'include' }),
     );
   });
+
+  // C1 — encodeURIComponent
+  it('given messageId with special characters, should URL-encode it in the request', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: encodeLines(['data: {"done":true,"aborted":false}\n\n']),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    await consumeStreamJoin('msg/with spaces', AbortSignal.timeout(5000), vi.fn());
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/ai/chat/stream-join/msg%2Fwith%20spaces',
+      expect.any(Object),
+    );
+  });
+
+  // C2 — null body guard
+  it('given a 2xx response with a null body, should throw', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, body: null }),
+    );
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+
+    await expect(
+      consumeStreamJoin('msg-null', AbortSignal.timeout(5000), vi.fn()),
+    ).rejects.toThrow();
+  });
+
+  // C5 — partial-chunk buffer
+  it('given SSE line split across two read chunks, should buffer and parse correctly', async () => {
+    const encoder = new TextEncoder();
+    // 'data: {"text":"hello"}\n\n' split mid-JSON across two enqueues
+    const halfA = 'data: {"text"';
+    const halfB = ':"hello"}\n\ndata: {"done":true,"aborted":false}\n\n';
+
+    stubFetch(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(halfA));
+        controller.enqueue(encoder.encode(halfB));
+        controller.close();
+      },
+    }));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    const result = await consumeStreamJoin('msg-split', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledWith('hello');
+    expect(result).toEqual({ aborted: false });
+  });
 });

@@ -47,13 +47,9 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
   },
 
   clearPageStreams: (pageId) => {
-    set((state) => {
-      const next = new Map(state.streams);
-      for (const [id, stream] of next) {
-        if (stream.pageId === pageId) next.delete(id);
-      }
-      return { streams: next };
-    });
+    set((state) => ({
+      streams: new Map([...state.streams].filter(([, s]) => s.pageId !== pageId)),
+    }));
   },
 
   getRemotePageStreams: (pageId) => {

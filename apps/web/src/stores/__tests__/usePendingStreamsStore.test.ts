@@ -14,27 +14,29 @@ describe('usePendingStreamsStore', () => {
   });
 
   describe('initial state', () => {
-    it('given store is created, should have no streams', () => {
-      const { streams } = usePendingStreamsStore.getState();
-      expect(streams.size).toBe(0);
+    it('given store is created, should have no streams for any page', () => {
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      expect(getRemotePageStreams('page-a')).toEqual([]);
     });
   });
 
   describe('addStream', () => {
     it('given a new stream, should add it with empty text', () => {
-      const { addStream, streams } = usePendingStreamsStore.getState();
+      const { addStream } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);
 
-      const stream = usePendingStreamsStore.getState().streams.get('msg-1');
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
       expect(stream).toEqual({ ...BASE_STREAM, text: '' });
     });
 
-    it('given two streams for different messages, should store both', () => {
+    it('given two streams for the same page, should store both', () => {
       const { addStream } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);
       addStream({ ...BASE_STREAM, messageId: 'msg-2' });
 
-      expect(usePendingStreamsStore.getState().streams.size).toBe(2);
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      expect(getRemotePageStreams('page-a')).toHaveLength(2);
     });
   });
 
@@ -45,8 +47,9 @@ describe('usePendingStreamsStore', () => {
       appendText('msg-1', 'hello');
       appendText('msg-1', ' world');
 
-      const stream = usePendingStreamsStore.getState().streams.get('msg-1');
-      expect(stream?.text).toBe('hello world');
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.text).toBe('hello world');
     });
 
     it('given unknown messageId, should not throw', () => {
@@ -61,7 +64,8 @@ describe('usePendingStreamsStore', () => {
       addStream(BASE_STREAM);
       removeStream('msg-1');
 
-      expect(usePendingStreamsStore.getState().streams.size).toBe(0);
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      expect(getRemotePageStreams('page-a')).toHaveLength(0);
     });
 
     it('given unknown messageId, should not throw', () => {
@@ -71,7 +75,7 @@ describe('usePendingStreamsStore', () => {
   });
 
   describe('clearPageStreams', () => {
-    it('given streams for a page, should remove only that page\'s streams', () => {
+    it("given streams for a page, should remove only that page's streams", () => {
       const { addStream, clearPageStreams } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);
       addStream({ ...BASE_STREAM, messageId: 'msg-2' });
@@ -79,9 +83,9 @@ describe('usePendingStreamsStore', () => {
 
       clearPageStreams('page-a');
 
-      const remaining = usePendingStreamsStore.getState().streams;
-      expect(remaining.size).toBe(1);
-      expect(remaining.has('msg-3')).toBe(true);
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      expect(getRemotePageStreams('page-a')).toHaveLength(0);
+      expect(getRemotePageStreams('page-b')).toHaveLength(1);
     });
 
     it('given no streams for the page, should not throw', () => {
@@ -91,7 +95,7 @@ describe('usePendingStreamsStore', () => {
   });
 
   describe('getRemotePageStreams', () => {
-    it('given streams for multiple pages, should return only the requested page\'s streams', () => {
+    it("given streams for multiple pages, should return only the requested page's streams", () => {
       const { addStream, getRemotePageStreams } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);
       addStream({ ...BASE_STREAM, messageId: 'msg-2' });
@@ -99,7 +103,7 @@ describe('usePendingStreamsStore', () => {
 
       const streams = getRemotePageStreams('page-a');
       expect(streams).toHaveLength(2);
-      expect(streams.every(s => s.pageId === 'page-a')).toBe(true);
+      expect(streams.every((s) => s.pageId === 'page-a')).toBe(true);
     });
 
     it('given no streams for the page, should return empty array', () => {
