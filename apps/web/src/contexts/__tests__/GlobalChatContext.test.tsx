@@ -121,14 +121,14 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     // First connect
     setStatus('connected', rerender);
 
-    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-
-    expect(mockFetchWithAuth.mock.calls.length).toBe(callsBefore);
+    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBe(callsBefore));
   });
 
   // NOTE: React testing-library's act() collapses isInitialized false→true into one render,
-  // masking the production loop. This test validates the invariant in the test environment;
-  // the fix (isInitializedRef) prevents the loop in production where renders are unbatched.
+  // masking the production loop in isolation. This test validates the no-cascade invariant.
+  // Two fixes in GlobalChatContext guard against the loop: prevConnectionStatusRef (prevents
+  // the effect re-firing when status hasn't changed) and isInitializedRef (prevents isInitialized
+  // from being a reactive dep that re-triggers the effect after each refresh).
   it('given refresh completes after reconnect (isInitialized cycles true→false→true), should NOT trigger a second refresh', async () => {
     const { result, rerender } = renderProvider();
 
@@ -157,13 +157,50 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
       ([url]) => (url as string).includes('/messages')
     ).length;
 
-    // Allow any cascade effects to fire (isInitialized cycling back to true)
-    await act(async () => { await new Promise(r => setTimeout(r, 100)); });
+    // Allow any cascade effects to settle
+    await waitFor(() =>
+      expect(
+        mockFetchWithAuth.mock.calls.filter(([url]) => (url as string).includes('/messages')).length
+      ).toBe(countAfterFirstRefresh)
+    );
 
     // No second refresh should have fired
     expect(
       mockFetchWithAuth.mock.calls.filter(([url]) => (url as string).includes('/messages')).length
     ).toBe(countAfterFirstRefresh);
+  });
+
+  it('given socket is already connected when currentConversationId changes (conversation switch), should NOT trigger a spurious refresh', async () => {
+    const { result, rerender } = renderProvider();
+
+    await waitFor(() => expect(result.current.isInitialized).toBe(true));
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    // Initial connect — sets hasInitialConnectRef, no refresh
+    setStatus('connected', rerender);
+
+    const CONV_ID_2 = 'conv-2';
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === `/api/ai/global/${CONV_ID_2}/messages?limit=50`) return okResponse([]);
+      return defaultFetch(url);
+    });
+
+    const callsBefore = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => (url as string).includes('/messages')
+    ).length;
+
+    // Switch conversation while connected — should NOT trigger reconnect refresh
+    act(() => { result.current.loadConversation(CONV_ID_2); });
+
+    // Wait for the load to complete
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID_2));
+
+    const callsAfter = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => (url as string).includes('/messages')
+    ).length;
+
+    // Only the explicit loadConversation fetch, no extra reconnect refresh
+    expect(callsAfter).toBe(callsBefore + 1);
   });
 
   it('given isInitialized=false when reconnect fires, should NOT call refreshConversation', async () => {
@@ -180,9 +217,6 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     // Second connect — isInitialized still false, should not refresh
     setStatus('connected', rerender);
 
-    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-
-    // Only the one hanging init call, no refresh calls
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(1));
   });
 });

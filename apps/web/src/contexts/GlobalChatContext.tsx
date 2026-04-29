@@ -209,20 +209,28 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const connectionStatus = useSocketStore((s) => s.connectionStatus);
   const hasInitialConnectRef = useRef(false);
+  // Track previous status to detect transitions INTO 'connected' rather than reacting
+  // to the static value. Without this, dep changes (e.g. currentConversationId on
+  // conversation switch) would re-fire the effect while already connected and trigger
+  // a spurious double-fetch.
+  const prevConnectionStatusRef = useRef<typeof connectionStatus | null>(null);
   // Ref keeps isInitialized readable inside the effect without making it a dep.
-  // If isInitialized were a dep, loadConversation's false→true cycle would re-trigger
-  // the effect on every refresh, causing an infinite refresh loop in production.
+  // If isInitialized were a dep, loadConversation's false→true cycle could re-trigger
+  // the effect after a refresh completes, causing an infinite refresh loop in production.
   const isInitializedRef = useRef(false);
   isInitializedRef.current = isInitialized;
 
   useEffect(() => {
-    if (connectionStatus === 'connected') {
+    const didTransitionToConnected =
+      prevConnectionStatusRef.current !== 'connected' && connectionStatus === 'connected';
+    prevConnectionStatusRef.current = connectionStatus;
+
+    if (didTransitionToConnected) {
       if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
         refreshConversation();
       }
       hasInitialConnectRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionStatus, currentConversationId, refreshConversation]);
 
   // Track the previous conversation ID to detect conversation switches
