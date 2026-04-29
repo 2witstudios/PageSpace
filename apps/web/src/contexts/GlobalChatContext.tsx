@@ -6,6 +6,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport } from '@/lib/ai/shared';
+import { useSocketStore } from '@/stores/useSocketStore';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -205,6 +206,18 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     initializeGlobalChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
+
+  const connectionStatus = useSocketStore((s) => s.connectionStatus);
+  const hasInitialConnectRef = useRef(false);
+
+  useEffect(() => {
+    if (connectionStatus === 'connected') {
+      if (hasInitialConnectRef.current && isInitialized && currentConversationId) {
+        refreshConversation();
+      }
+      hasInitialConnectRef.current = true;
+    }
+  }, [connectionStatus, isInitialized, currentConversationId, refreshConversation]);
 
   // Track the previous conversation ID to detect conversation switches
   const prevConversationIdRef = useRef<string | null>(null);
