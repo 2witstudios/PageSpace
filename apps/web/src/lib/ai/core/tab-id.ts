@@ -1,11 +1,10 @@
 const TAB_ID_KEY = 'ps-tab-id';
 
-export function getTabId(): string {
+export const getTabId = (): string => {
   if (typeof sessionStorage === 'undefined') return 'ssr';
-  let id = sessionStorage.getItem(TAB_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    sessionStorage.setItem(TAB_ID_KEY, id);
-  }
+  const stored = sessionStorage.getItem(TAB_ID_KEY);
+  if (stored) return stored;
+  const id = crypto.randomUUID();
+  sessionStorage.setItem(TAB_ID_KEY, id);
   return id;
-}
+};
