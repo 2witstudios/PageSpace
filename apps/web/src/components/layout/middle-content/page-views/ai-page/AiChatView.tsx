@@ -274,6 +274,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               const { messages: loaded } = msgResponse.ok
                 ? ((await msgResponse.json()) as ConversationMessagesResponse)
                 : { messages: [] as UIMessage[] };
+              if (controller.signal.aborted) return;
               setCurrentConversationId(conv.id);
               setMessages(loaded ?? []);
               setIsInitialized(true);
@@ -281,10 +282,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             }
           }
         } catch (err) {
-          // GET failed — fall through to page-scoped default below
+          if (controller.signal.aborted) return;
           console.warn('Failed to load conversations on init, using page-scoped default:', err);
         }
 
+        if (controller.signal.aborted) return;
         // No persisted conversations exist yet. Derive a stable ID from the page so
         // concurrent openers share the same conversation before either sends a message.
         // The conversation is anchored in the DB once the first message is saved.
@@ -292,6 +294,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         setMessages([]);
         setIsInitialized(true);
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error('Failed to initialize chat:', error);
         setMessages([]);
         setIsInitialized(true);

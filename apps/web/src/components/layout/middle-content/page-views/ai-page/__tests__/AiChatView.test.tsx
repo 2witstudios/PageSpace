@@ -323,6 +323,37 @@ describe('AiChatView initializeChat', () => {
     });
   });
 
+  test('given conversations GET throws a network error, falls back to page-scoped deterministic ID without POSTing', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        throw new Error('network error');
+      }
+      return makeErrorResponse();
+    });
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'conversations GET throws',
+        should: 'attempt to GET conversations first',
+        actual: (mockFetchWithAuth.mock.calls as Parameters<typeof fetchWithAuth>[]).some(
+          ([callUrl]) => callUrl === `${CONVERSATIONS_URL}?pageSize=1`
+        ),
+        expected: true,
+      });
+    });
+
+    assert({
+      given: 'conversations GET throws',
+      should: 'NOT POST — fall back to page-scoped deterministic ID',
+      actual: wasPostCalled(CONVERSATIONS_URL),
+      expected: false,
+    });
+  });
+
   test('given two users opening the same page, both load the same existing conversation by fetching its messages', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
