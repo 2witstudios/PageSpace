@@ -21,6 +21,7 @@ interface StreamEntry {
 }
 
 const registry = new Map<string, StreamEntry>();
+const messageIdIndex = new Map<string, string>(); // messageId → streamId
 
 // Cleanup streams older than 10 minutes (safety net for orphaned entries)
 const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
@@ -61,9 +62,11 @@ export const stopCleanupInterval = (): void => {
 export const createStreamAbortController = ({
   userId,
   streamId = createId(),
+  messageId,
 }: {
   userId: string;
   streamId?: string;
+  messageId?: string;
 }): {
   streamId: string;
   signal: AbortSignal;
@@ -77,6 +80,10 @@ export const createStreamAbortController = ({
     createdAt: Date.now(),
     userId,
   });
+
+  if (messageId) {
+    messageIdIndex.set(messageId, streamId);
+  }
 
   return {
     streamId,
@@ -112,6 +119,12 @@ export const abortStream = ({
 
   entry.controller.abort();
   registry.delete(streamId);
+  for (const [msgId, sid] of messageIdIndex.entries()) {
+    if (sid === streamId) {
+      messageIdIndex.delete(msgId);
+      break;
+    }
+  }
 
   return { aborted: true, reason: 'Stream aborted by user request' };
 };
@@ -121,6 +134,26 @@ export const abortStream = ({
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
   registry.delete(streamId);
+  for (const [msgId, sid] of messageIdIndex.entries()) {
+    if (sid === streamId) {
+      messageIdIndex.delete(msgId);
+      break;
+    }
+  }
+};
+
+export const abortStreamByMessageId = ({
+  messageId,
+  userId,
+}: {
+  messageId: string;
+  userId: string;
+}): { aborted: boolean; reason: string } => {
+  const streamId = messageIdIndex.get(messageId);
+  if (!streamId) {
+    return { aborted: false, reason: 'Stream not found or already completed' };
+  }
+  return abortStream({ streamId, userId });
 };
 
 /**

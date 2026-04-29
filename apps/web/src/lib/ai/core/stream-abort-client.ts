@@ -94,6 +94,23 @@ export const abortActiveStream = async ({
   }
 };
 
+export const abortActiveStreamByMessageId = async ({
+  messageId,
+}: {
+  messageId: string;
+}): Promise<{ aborted: boolean; reason: string }> => {
+  try {
+    const response = await fetchWithAuth('/api/ai/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId }),
+    });
+    return await response.json();
+  } catch {
+    return { aborted: false, reason: 'Failed to call abort endpoint' };
+  }
+};
+
 /**
  * Create a fetch wrapper that tracks streamId from response headers
  * Use this with DefaultChatTransport
