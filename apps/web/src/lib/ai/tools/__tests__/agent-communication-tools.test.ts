@@ -721,10 +721,11 @@ describe('agent-communication-tools', () => {
           )
         ).resolves.not.toThrow();
 
-        // generateText still called (with built-in tools only, no integration tools)
+        // generateText still called; no integration tools in any tools argument
         expect(generateText).toHaveBeenCalled();
-        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown>;
-        expect(toolsArg).not.toHaveProperty('github_list_repos');
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
+        // When built-in tool set is empty, generateText is called with no tools at all
+        expect(toolsArg?.github_list_repos).toBeUndefined();
       });
     });
   });
