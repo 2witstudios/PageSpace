@@ -50,8 +50,8 @@ export function useChatStreamSocket(
       })
         .then(() => {
           controllersRef.current.delete(payload.messageId);
-          removeStream(payload.messageId);
           fireComplete(payload.messageId);
+          removeStream(payload.messageId);
         })
         .catch((err) => {
           controllersRef.current.delete(payload.messageId);
@@ -70,8 +70,8 @@ export function useChatStreamSocket(
         controller.abort();
         controllersRef.current.delete(payload.messageId);
       }
-      removeStream(payload.messageId);
       fireComplete(payload.messageId);
+      removeStream(payload.messageId);
     };
 
     socket.on('chat:stream_start', handleStreamStart);
