@@ -96,7 +96,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     setStatus('connected', rerender);
 
     const messagesCallsAfterFirstConnect = mockFetchWithAuth.mock.calls.filter(
-      ([url]: [string]) => url.includes('/messages')
+      ([url]) => (url as string).includes('/messages')
     ).length;
 
     // Disconnect then reconnect
@@ -105,7 +105,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
 
     await waitFor(() => {
       const messageCalls = mockFetchWithAuth.mock.calls.filter(
-        ([url]: [string]) => url.includes('/messages')
+        ([url]) => (url as string).includes('/messages')
       );
       expect(messageCalls.length).toBe(messagesCallsAfterFirstConnect + 1);
     });
