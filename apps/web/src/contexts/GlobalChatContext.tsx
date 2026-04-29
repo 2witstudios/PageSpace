@@ -6,6 +6,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport } from '@/lib/ai/shared';
+import { useSocketStore } from '@/stores/useSocketStore';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -205,6 +206,32 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     initializeGlobalChat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
+
+  const connectionStatus = useSocketStore((s) => s.connectionStatus);
+  const hasInitialConnectRef = useRef(false);
+  // Track previous status to detect transitions INTO 'connected' rather than reacting
+  // to the static value. Without this, dep changes (e.g. currentConversationId on
+  // conversation switch) would re-fire the effect while already connected and trigger
+  // a spurious double-fetch.
+  const prevConnectionStatusRef = useRef<typeof connectionStatus | null>(null);
+  // Ref keeps isInitialized readable inside the effect without making it a dep.
+  // If isInitialized were a dep, loadConversation's false→true cycle could re-trigger
+  // the effect after a refresh completes, causing an infinite refresh loop in production.
+  const isInitializedRef = useRef(false);
+  isInitializedRef.current = isInitialized;
+
+  useEffect(() => {
+    const didTransitionToConnected =
+      prevConnectionStatusRef.current !== 'connected' && connectionStatus === 'connected';
+    prevConnectionStatusRef.current = connectionStatus;
+
+    if (didTransitionToConnected) {
+      if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
+        refreshConversation();
+      }
+      hasInitialConnectRef.current = true;
+    }
+  }, [connectionStatus, currentConversationId, refreshConversation]);
 
   // Track the previous conversation ID to detect conversation switches
   const prevConversationIdRef = useRef<string | null>(null);
