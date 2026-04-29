@@ -172,6 +172,25 @@ describe('agent-communication-tools', () => {
   });
 
   describe('ask_agent', () => {
+    beforeEach(() => {
+      mockCanUserViewPage.mockResolvedValue(true);
+      vi.mocked(mockDb.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      } as never);
+      vi.mocked(createAIProvider).mockResolvedValue({
+        model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+      } as Awaited<ReturnType<typeof createAIProvider>>);
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Agent response',
+        steps: [],
+      } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+      vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+    });
+
     it('has correct tool definition', () => {
       expect(agentCommunicationTools.ask_agent).toBeDefined();
       expect(agentCommunicationTools.ask_agent.description).toContain('Consult');
@@ -290,22 +309,6 @@ describe('agent-communication-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
-        mockCanUserViewPage.mockResolvedValue(true);
-        vi.mocked(mockDb.select).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        } as never);
-        vi.mocked(createAIProvider).mockResolvedValue({
-          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
-        } as Awaited<ReturnType<typeof createAIProvider>>);
-        vi.mocked(generateText).mockResolvedValue({
-          text: 'Agent response',
-          steps: [],
-        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
-        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
       });
 
       it('should set parentAgentId from calling agent location context', async () => {
@@ -529,22 +532,6 @@ describe('agent-communication-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
-        mockCanUserViewPage.mockResolvedValue(true);
-        vi.mocked(mockDb.select).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        } as never);
-        vi.mocked(createAIProvider).mockResolvedValue({
-          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
-        } as Awaited<ReturnType<typeof createAIProvider>>);
-        vi.mocked(generateText).mockResolvedValue({
-          text: 'Agent response',
-          steps: [],
-        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
-        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
       });
 
       it('should pass sourceAgentId when called from an AI_CHAT page', async () => {
@@ -660,22 +647,6 @@ describe('agent-communication-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
-        mockCanUserViewPage.mockResolvedValue(true);
-        vi.mocked(mockDb.select).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        } as never);
-        vi.mocked(createAIProvider).mockResolvedValue({
-          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
-        } as Awaited<ReturnType<typeof createAIProvider>>);
-        vi.mocked(generateText).mockResolvedValue({
-          text: 'Agent response',
-          steps: [],
-        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
-        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
       });
 
       it('merges integration tools into the generateText tools call', async () => {
