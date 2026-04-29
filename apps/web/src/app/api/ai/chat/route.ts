@@ -823,7 +823,7 @@ export async function POST(request: Request) {
 
     // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
     // This is separate from request.signal which fires on any client disconnect
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
     // Register in multicast registry so other viewers can join via stream-join endpoint
     try { streamMulticastRegistry.register(serverAssistantMessageId, { pageId: chatId, userId: userId! }); } catch {}

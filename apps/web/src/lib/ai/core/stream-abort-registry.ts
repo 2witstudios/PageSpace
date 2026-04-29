@@ -23,6 +23,15 @@ interface StreamEntry {
 const registry = new Map<string, StreamEntry>();
 const messageIdIndex = new Map<string, string>(); // messageId → streamId
 
+const removeMessageIdEntry = (streamId: string): void => {
+  for (const [msgId, sid] of messageIdIndex.entries()) {
+    if (sid === streamId) {
+      messageIdIndex.delete(msgId);
+      break;
+    }
+  }
+};
+
 // Cleanup streams older than 10 minutes (safety net for orphaned entries)
 const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -37,6 +46,7 @@ const startCleanupInterval = () => {
     for (const [streamId, entry] of registry.entries()) {
       if (now - entry.createdAt > MAX_STREAM_AGE_MS) {
         registry.delete(streamId);
+        removeMessageIdEntry(streamId);
       }
     }
   }, CLEANUP_INTERVAL_MS);
@@ -119,12 +129,7 @@ export const abortStream = ({
 
   entry.controller.abort();
   registry.delete(streamId);
-  for (const [msgId, sid] of messageIdIndex.entries()) {
-    if (sid === streamId) {
-      messageIdIndex.delete(msgId);
-      break;
-    }
-  }
+  removeMessageIdEntry(streamId);
 
   return { aborted: true, reason: 'Stream aborted by user request' };
 };
@@ -134,12 +139,7 @@ export const abortStream = ({
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
   registry.delete(streamId);
-  for (const [msgId, sid] of messageIdIndex.entries()) {
-    if (sid === streamId) {
-      messageIdIndex.delete(msgId);
-      break;
-    }
-  }
+  removeMessageIdEntry(streamId);
 };
 
 export const abortStreamByMessageId = ({

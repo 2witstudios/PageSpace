@@ -818,13 +818,13 @@ MENTION PROCESSING:
       wasTruncated: contextCalculation.wasTruncated,
     });
 
-    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
-    // This is separate from request.signal which fires on any client disconnect
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
-
     // Generate server-side message ID for the AI response
     // This ensures client and server use the same ID, fixing the undo-after-streaming issue
     const serverAssistantMessageId = createId();
+
+    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
+    // This is separate from request.signal which fires on any client disconnect
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
     // Track usage promise for token counting
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
