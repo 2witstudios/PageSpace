@@ -13,13 +13,19 @@ vi.mock('motion/react', () => ({
   useReducedMotion: () => false,
 }));
 
-vi.mock('@/components/ai/shared/chat', () => ({
+vi.mock('@/components/ai/shared/chat/ChatMessagesArea', () => ({
   ChatMessagesArea: () => <div data-testid="chat-messages-area" />,
+}));
+
+vi.mock('@/components/ai/shared/chat/StreamingIndicator', () => ({
   StreamingIndicator: ({ message }: { message?: string }) => <>{message}</>,
 }));
 
-vi.mock('@/components/ui/floating-input', () => ({
+vi.mock('@/components/ui/floating-input/InputPositioner', () => ({
   InputPositioner: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('@/components/ui/floating-input/InputCard', () => ({
   InputCard: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 

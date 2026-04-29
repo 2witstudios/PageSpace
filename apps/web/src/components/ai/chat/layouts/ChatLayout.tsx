@@ -3,13 +3,10 @@
 import React, { useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
-import { InputPositioner, type InputPosition } from '@/components/ui/floating-input';
-import { InputCard } from '@/components/ui/floating-input';
-import {
-  ChatMessagesArea,
-  ChatMessagesAreaRef,
-} from '@/components/ai/shared/chat';
-import { StreamingIndicator } from '@/components/ai/shared/chat';
+import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
+import { InputCard } from '@/components/ui/floating-input/InputCard';
+import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
+import { StreamingIndicator } from '@/components/ai/shared/chat/StreamingIndicator';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 
