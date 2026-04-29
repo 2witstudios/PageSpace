@@ -529,9 +529,7 @@ export const agentCommunicationTools = {
         // 9. Filter tools for agent
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
 
-        // Resolve integration/adapter tools (GitHub, Calendar, etc.) via grants.
-        // Wrapped in try/catch so transient DB or provider errors degrade gracefully
-        // rather than turning the entire ask_agent call into a hard failure.
+        // try/catch: resolver failures degrade to built-in tools only rather than hard-failing the call
         let allAgentTools = { ...agentTools };
         try {
           const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
