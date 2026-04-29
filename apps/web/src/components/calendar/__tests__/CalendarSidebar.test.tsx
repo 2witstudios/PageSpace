@@ -34,6 +34,10 @@ describe('CalendarSidebar', () => {
         onToggle={() => {}}
         onShowAll={() => {}}
         onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
       />
     );
 
@@ -67,6 +71,10 @@ describe('CalendarSidebar', () => {
         onToggle={onToggle}
         onShowAll={() => {}}
         onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
       />
     );
 
@@ -89,6 +97,10 @@ describe('CalendarSidebar', () => {
         onToggle={() => {}}
         onShowAll={() => {}}
         onHideAll={onHideAll}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
       />
     );
 
@@ -110,6 +122,10 @@ describe('CalendarSidebar', () => {
         onToggle={() => {}}
         onShowAll={onShowAll}
         onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
       />
     );
 
@@ -130,6 +146,10 @@ describe('CalendarSidebar', () => {
         onToggle={() => {}}
         onShowAll={() => {}}
         onHideAll={() => {}}
+        agentEventsVisible={true}
+        userEventsVisible={true}
+        onToggleAgentEvents={() => {}}
+        onToggleUserEvents={() => {}}
       />
     );
 
