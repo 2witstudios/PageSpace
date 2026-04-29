@@ -144,6 +144,23 @@ describe('useChatStreamSocket', () => {
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
       expect(onStreamComplete).toHaveBeenCalledWith('msg-1');
     });
+
+    it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const callOrder: string[] = [];
+      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
+      const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      await act(async () => { resolveJoin(); });
+
+      expect(callOrder).toEqual(['onStreamComplete', 'removeStream']);
+    });
   });
 
   describe('SSE join error', () => {
@@ -209,6 +226,18 @@ describe('useChatStreamSocket', () => {
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
       expect(onStreamComplete).toHaveBeenCalledWith('msg-1');
+    });
+
+    it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', () => {
+      const callOrder: string[] = [];
+      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
+      const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      expect(callOrder).toEqual(['onStreamComplete', 'removeStream']);
     });
 
     it('should abort the in-flight controller if one exists', async () => {

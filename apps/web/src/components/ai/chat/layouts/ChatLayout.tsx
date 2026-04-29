@@ -3,12 +3,10 @@
 import React, { useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
-import { InputPositioner, type InputPosition } from '@/components/ui/floating-input';
-import { InputCard } from '@/components/ui/floating-input';
-import {
-  ChatMessagesArea,
-  ChatMessagesAreaRef,
-} from '@/components/ai/shared/chat';
+import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
+import { InputCard } from '@/components/ui/floating-input/InputCard';
+import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
+import { StreamingIndicator } from '@/components/ai/shared/chat/StreamingIndicator';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 
@@ -103,6 +101,8 @@ export interface ChatLayoutProps {
   onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether to show MCP toggle (desktop only) */
   showMcp?: boolean;
+  /** Remote in-progress streams from other users */
+  remoteStreams?: Array<{ messageId: string; triggeredBy: { displayName: string }; text: string }>;
 }
 
 export interface ChatLayoutRef {
@@ -153,6 +153,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       isMcpServerEnabled,
       onMcpServerToggle,
       showMcp = false,
+      remoteStreams = [],
     },
     ref
   ) => {
@@ -167,7 +168,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
 
     // Determine position based on message state
     const hasMessages = messages.length > 0;
-    const inputPosition: InputPosition = hasMessages || isLoading ? 'docked' : 'centered';
+    const hasRemoteStreams = remoteStreams.length > 0;
+    const inputPosition: InputPosition = hasMessages || isLoading || hasRemoteStreams ? 'docked' : 'centered';
     const isCentered = inputPosition === 'centered';
 
     // Default input renderer (placeholder - will be replaced with ChatInput in Phase 3)
@@ -234,7 +236,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       <div className="relative flex flex-col h-full overflow-hidden">
         {/* Messages area - only visible when there are messages */}
         <AnimatePresence>
-          {(hasMessages || isLoading) && (
+          {(hasMessages || isLoading || hasRemoteStreams) && (
             <motion.div
               key="messages"
               initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
@@ -257,6 +259,16 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
               />
+              {remoteStreams.map((stream) => (
+                <div key={stream.messageId} className="px-4 pb-2">
+                  <StreamingIndicator message={`${stream.triggeredBy.displayName} is waiting for AI response…`} />
+                  {stream.text && (
+                    <p className="mt-1 ml-6 text-sm text-muted-foreground whitespace-pre-wrap">
+                      {stream.text}
+                    </p>
+                  )}
+                </div>
+              ))}
             </motion.div>
           )}
         </AnimatePresence>

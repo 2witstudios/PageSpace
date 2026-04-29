@@ -80,3 +80,4 @@ Thread `pendingStreamsContent` through `ChatLayout` → `ChatMessagesArea` and r
 - Given multiple concurrent remote streams, should render a separate indicator for each
 - Given `chat:stream_complete` for a remote stream, should remove its indicator and trigger SWR revalidation
 - Given only a local stream in progress, should render no remote indicators
+- Given the remote stream store has not changed, should keep the AI chat view render stable without triggering repeated updates

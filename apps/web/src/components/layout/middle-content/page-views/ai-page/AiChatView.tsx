@@ -31,6 +31,8 @@ import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
 import {
@@ -284,8 +286,25 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     { pageId: page.id, componentName: 'AiChatView' }
   );
 
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) => state.getRemotePageStreams(page.id))
+  );
+
   usePageSocketRoom(page.id);
-  useChatStreamSocket(page.id, user?.id);
+  useChatStreamSocket(page.id, user?.id, (messageId) => {
+    const stream = usePendingStreamsStore.getState().streams.get(messageId);
+    if (stream?.text && stream.conversationId === currentConversationId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: messageId,
+          role: 'assistant' as const,
+          content: stream.text,
+          parts: [{ type: 'text' as const, text: stream.text }],
+        },
+      ]);
+    }
+  });
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -654,6 +673,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             isMcpServerEnabled={isServerEnabled}
             onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
+            remoteStreams={remoteStreams}
             renderInput={(props) => (
               <>
                 {isVoiceModeActive && (
