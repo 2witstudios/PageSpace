@@ -106,8 +106,9 @@ export const createStreamTrackingFetch = ({
 }): typeof fetch => {
   return async (url, options) => {
     const urlString = url instanceof Request ? url.url : url.toString();
-    const headers = new Headers(options?.headers);
-    headers.set('X-Tab-Id', getTabId());
+    const merged = new Headers(options?.headers);
+    merged.set('X-Tab-Id', getTabId());
+    const headers = Object.fromEntries(merged.entries());
     const response = await fetchWithAuth(urlString, { ...options, headers });
 
     // Extract streamId from response headers (for global assistant route)
