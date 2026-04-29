@@ -1,5 +1,5 @@
 import { describe, test, vi, beforeEach, type Mock } from 'vitest';
-import { render, waitFor, screen, fireEvent } from '@testing-library/react';
+import { render, act, waitFor, screen, fireEvent } from '@testing-library/react';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
@@ -644,5 +644,75 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     warnSpy.mockRestore();
+  });
+
+  test('given the component navigates to a different page while the sync fetch is in-flight, should NOT apply stale page-A state to page B', async () => {
+    const PAGE_B_ID = 'page-b-456';
+    let capturedPageACallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((pageId, _userId, cb) => {
+      if (pageId === PAGE_ID) capturedPageACallback = cb;
+    });
+
+    let resolveSyncFetch!: () => void;
+    const syncFetchReady = new Promise<void>((resolve) => { resolveSyncFetch = resolve; });
+
+    let pageAConvCallCount = 0;
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === `/api/pages/${PAGE_B_ID}/permissions/check`) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `/api/pages/${PAGE_B_ID}/agent-config`) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) {
+        pageAConvCallCount++;
+        if (pageAConvCallCount === 1) return makeOkResponse({ conversations: [] }); // init
+        await syncFetchReady;
+        return makeOkResponse({ conversations: [{ id: REAL_CONV_ID }] }); // sync (deferred)
+      }
+      if (url === `/api/ai/page-agents/${PAGE_B_ID}/conversations?pageSize=1`) {
+        return makeOkResponse({ conversations: [] }); // page B init
+      }
+      return makeErrorResponse();
+    });
+
+    const pageBObj = { ...makePage(), id: PAGE_B_ID };
+    const { rerender } = render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'page A init',
+        should: 'have fetched conversations',
+        actual: pageAConvCallCount >= 1,
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI from page A', conversationId: REAL_CONV_ID }]]),
+    });
+
+    // Trigger the late-joiner sync (starts the deferred fetch)
+    capturedPageACallback?.(MESSAGE_ID);
+
+    // Navigate to page B — this should update pageIdRef.current
+    rerender(<AiChatView page={pageBObj} />);
+
+    const callsBefore = mockSetMessages.mock.calls.length;
+
+    // Resolve the deferred fetch (page A's conversation data arrives after navigation)
+    await act(async () => { resolveSyncFetch(); });
+
+    // The stale late-joiner sync would use a functional update: setMessages((prev) => [...prev, msg])
+    // Page B's legitimate init uses a direct array: setMessages([])
+    // So we check that no functional-update calls were added after callsBefore
+    const functionalCallsAfterNav = mockSetMessages.mock.calls
+      .slice(callsBefore)
+      .filter((args) => typeof args[0] === 'function');
+
+    assert({
+      given: 'page A sync fetch resolves after navigating to page B',
+      should: 'NOT make any functional setMessages calls (stale page-A append)',
+      actual: functionalCallsAfterNav.length,
+      expected: 0,
+    });
   });
 });

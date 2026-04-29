@@ -108,6 +108,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const inputRef = useRef<ChatInputRef>(null);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
   const prevConversationIdRef = useRef<string | null>(null);
+  // Always reflects the current page.id so async callbacks can detect stale pages
+  const pageIdRef = useRef(page.id);
+  useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
 
   // ============================================
   // SHARED HOOKS
@@ -336,6 +339,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       const { text, conversationId: streamConvId } = stream;
       fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
         .then(async (res) => {
+          if (pageIdRef.current !== page.id) return;
           if (!res.ok) return;
           const data = (await res.json()) as ConversationListResponse;
           const persisted = data.conversations?.[0];
