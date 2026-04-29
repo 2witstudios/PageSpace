@@ -35,6 +35,7 @@ import { MobileWeekStrip } from './MobileWeekStrip';
 import { MobileDayAgenda } from './MobileDayAgenda';
 import { MobileMonthPicker } from './MobileMonthPicker';
 import { CalendarSidebar } from './CalendarSidebar';
+import { useCalendarFilterStore } from '@/stores/useCalendarFilterStore';
 import {
   CalendarEvent,
   CalendarHandlers,
@@ -89,6 +90,7 @@ export function MobileCalendarView({
   onShowAllCalendars,
   onHideAllCalendars,
 }: MobileCalendarViewProps) {
+  const { isEventTypeVisible, toggleEventType } = useCalendarFilterStore();
   const [selectedDate, setSelectedDate] = useState(() => parentDate ?? new Date());
   const [currentWeekStart, setCurrentWeekStart] = useState(() =>
     startOfWeek(parentDate ?? new Date())
@@ -251,6 +253,10 @@ export function MobileCalendarView({
                     onToggle={onToggleCalendar}
                     onShowAll={onShowAllCalendars}
                     onHideAll={onHideAllCalendars}
+                    agentEventsVisible={isEventTypeVisible('agent')}
+                    userEventsVisible={isEventTypeVisible('user')}
+                    onToggleAgentEvents={() => toggleEventType('agent')}
+                    onToggleUserEvents={() => toggleEventType('user')}
                   />
                 </div>
               </SheetContent>

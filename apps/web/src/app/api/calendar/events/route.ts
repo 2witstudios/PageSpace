@@ -1,14 +1,16 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, not, isNull, asc } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
+import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -49,7 +51,28 @@ const createEventSchema = z.object({
   visibility: z.enum(['DRIVE', 'ATTENDEES_ONLY', 'PRIVATE']).default('DRIVE'),
   color: z.string().default('default'),
   attendeeIds: z.array(z.string()).optional(),
+  agentTrigger: z.object({
+    agentPageId: z.string(),
+    prompt: z.string().trim().min(1).max(10000),
+  }).optional(),
 });
+
+/**
+ * Returns the set of calendarEventIds that have an active (non-cancelled, non-failed) agent trigger.
+ */
+async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
+  if (eventIds.length === 0) return new Set();
+  const rows = await db
+    .select({ calendarEventId: calendarTriggers.calendarEventId })
+    .from(calendarTriggers)
+    .where(
+      and(
+        inArray(calendarTriggers.calendarEventId, eventIds),
+        not(inArray(calendarTriggers.status, ['cancelled', 'failed'])),
+      )
+    );
+  return new Set(rows.map(r => r.calendarEventId).filter((id): id is string => id !== null));
+}
 
 /**
  * Expand workflow schedules into virtual calendar events within a date range.
@@ -262,10 +285,14 @@ export async function GET(request: Request) {
         orderBy: [asc(calendarEvents.startAt)],
       });
 
+      // Annotate events with agent trigger presence
+      const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
+      const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+
       // Append workflow virtual events
       const workflowEvents = await getWorkflowVirtualEvents([params.driveId], params.startDate, params.endDate);
 
-      return NextResponse.json({ events, workflowEvents });
+      return NextResponse.json({ events: annotatedEvents, workflowEvents });
     }
 
     // User context: aggregate events from all sources
@@ -342,10 +369,14 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
+    // Annotate events with agent trigger presence
+    const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
+    const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+
     // Append workflow virtual events
     const workflowEvents = await getWorkflowVirtualEvents(driveIds, params.startDate, params.endDate);
 
-    return NextResponse.json({ events, workflowEvents });
+    return NextResponse.json({ events: annotatedEvents, workflowEvents });
   } catch (error) {
     loggers.api.error('Error fetching calendar events:', error as Error);
     return NextResponse.json(
@@ -414,6 +445,48 @@ export async function POST(request: Request) {
       );
     }
 
+    // Validate agent trigger before any DB writes
+    let agentPageId: string | undefined;
+    if (data.agentTrigger) {
+      if (!data.driveId) {
+        return NextResponse.json(
+          { error: 'Agent triggers require a drive event' },
+          { status: 400 }
+        );
+      }
+      if (data.recurrenceRule) {
+        return NextResponse.json(
+          { error: 'Agent triggers are not supported for recurring events' },
+          { status: 400 }
+        );
+      }
+      const [agentPage] = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(
+          and(
+            eq(pages.id, data.agentTrigger.agentPageId),
+            eq(pages.type, 'AI_CHAT'),
+            eq(pages.isTrashed, false),
+            eq(pages.driveId, data.driveId)
+          )
+        );
+      if (!agentPage) {
+        return NextResponse.json(
+          { error: 'Agent not found in this drive' },
+          { status: 400 }
+        );
+      }
+      const canViewAgent = await canUserViewPage(userId, agentPage.id);
+      if (!canViewAgent) {
+        return NextResponse.json(
+          { error: 'Agent not found in this drive' },
+          { status: 400 }
+        );
+      }
+      agentPageId = agentPage.id;
+    }
+
     // Validate attendees constraints
     const otherAttendees = (data.attendeeIds ?? []).filter(id => id !== userId);
     if (otherAttendees.length > 0) {
@@ -440,52 +513,66 @@ export async function POST(request: Request) {
       }
     }
 
-    // Create the event
-    const [event] = await db
-      .insert(calendarEvents)
-      .values({
-        driveId: data.driveId ?? null,
-        createdById: userId,
-        pageId: data.pageId ?? null,
-        title: data.title,
-        description: data.description ?? null,
-        location: data.location ?? null,
-        startAt,
-        endAt,
-        allDay: data.allDay,
-        timezone: data.timezone,
-        recurrenceRule: data.recurrenceRule ?? null,
-        visibility: data.visibility,
-        color: data.color,
-        updatedAt: new Date(),
-      })
-      .returning();
+    // Create event, attendees, and optional agent trigger atomically
+    const event = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(calendarEvents)
+        .values({
+          driveId: data.driveId ?? null,
+          createdById: userId,
+          pageId: data.pageId ?? null,
+          title: data.title,
+          description: data.description ?? null,
+          location: data.location ?? null,
+          startAt,
+          endAt,
+          allDay: data.allDay,
+          timezone: data.timezone,
+          recurrenceRule: data.recurrenceRule ?? null,
+          visibility: data.visibility,
+          color: data.color,
+          updatedAt: new Date(),
+        })
+        .returning();
 
-    // Add creator as organizer attendee
-    await db.insert(eventAttendees).values({
-      eventId: event.id,
-      userId: userId,
-      status: 'ACCEPTED',
-      isOrganizer: true,
-      respondedAt: new Date(),
+      await tx.insert(eventAttendees).values({
+        eventId: created.id,
+        userId: userId,
+        status: 'ACCEPTED',
+        isOrganizer: true,
+        respondedAt: new Date(),
+      });
+
+      if (data.attendeeIds && data.attendeeIds.length > 0) {
+        const others = data.attendeeIds.filter(id => id !== userId);
+        if (others.length > 0) {
+          await tx.insert(eventAttendees).values(
+            others.map(attendeeId => ({
+              eventId: created.id,
+              userId: attendeeId,
+              status: 'PENDING' as const,
+              isOrganizer: false,
+            }))
+          );
+        }
+      }
+
+      if (data.agentTrigger && agentPageId && data.driveId) {
+        await tx.insert(calendarTriggers).values({
+          calendarEventId: created.id,
+          agentPageId,
+          driveId: data.driveId,
+          scheduledById: userId,
+          prompt: data.agentTrigger.prompt,
+          triggerAt: startAt,
+          contextPageIds: [],
+        });
+      }
+
+      return created;
     });
 
-    // Add other attendees if provided
-    if (data.attendeeIds && data.attendeeIds.length > 0) {
-      const otherAttendees = data.attendeeIds.filter(id => id !== userId);
-      if (otherAttendees.length > 0) {
-        await db.insert(eventAttendees).values(
-          otherAttendees.map(attendeeId => ({
-            eventId: event.id,
-            userId: attendeeId,
-            status: 'PENDING' as const,
-            isOrganizer: false,
-          }))
-        );
-      }
-    }
-
-    // Fetch the complete event with relations
+    // Fetch the complete event with relations (read after committed transaction)
     const completeEvent = await db.query.calendarEvents.findFirst({
       where: eq(calendarEvents.id, event.id),
       with: {

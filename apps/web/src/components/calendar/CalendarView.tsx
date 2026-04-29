@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
@@ -90,7 +90,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
-  const { hiddenCalendars, toggleCalendar, showAll, hideAll } =
+  const { hiddenCalendars, toggleCalendar, showAll, hideAll, hiddenEventTypes, toggleEventType, isEventTypeVisible } =
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -136,9 +136,17 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
   // Filter events and tasks by visibility
   const filteredEvents = useMemo(() => {
-    if (!isUserContext) return events;
-    return events.filter((e) => !hiddenCalendars.includes(e.driveId ?? 'personal'));
-  }, [isUserContext, events, hiddenCalendars]);
+    let result = isUserContext
+      ? events.filter((e) => !hiddenCalendars.includes(e.driveId ?? 'personal'))
+      : events;
+    if (hiddenEventTypes.length > 0) {
+      result = result.filter((e) => {
+        const type = e.hasAgentTrigger ? 'agent' : 'user';
+        return isEventTypeVisible(type);
+      });
+    }
+    return result;
+  }, [isUserContext, events, hiddenCalendars, hiddenEventTypes, isEventTypeVisible]);
 
   const filteredTasks = useMemo(() => {
     if (!isUserContext) return tasks;
@@ -237,6 +245,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     allDay: boolean;
     color?: string;
     attendeeIds?: string[];
+    agentTrigger?: { agentPageId: string; prompt: string };
   }) => {
     if (selectedEvent) {
       await updateEvent(selectedEvent.id, eventData);
@@ -410,6 +419,34 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
             </SelectContent>
           </Select>
 
+          {/* Event type filters (drive context — in user context these live in the sidebar) */}
+          {!isUserContext && (
+            <div className="flex items-center gap-1">
+              <Toggle
+                pressed={isEventTypeVisible('user')}
+                onPressedChange={() => toggleEventType('user')}
+                size="sm"
+                aria-label="Show user events"
+                title="User events"
+                className="data-[state=on]:bg-primary/10 gap-1"
+              >
+                <User className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Events</span>
+              </Toggle>
+              <Toggle
+                pressed={isEventTypeVisible('agent')}
+                onPressedChange={() => toggleEventType('agent')}
+                size="sm"
+                aria-label="Show agent events"
+                title="Agent events"
+                className="data-[state=on]:bg-primary/10 gap-1"
+              >
+                <Bot className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Agents</span>
+              </Toggle>
+            </div>
+          )}
+
           {/* Tasks toggle */}
           <Toggle
             pressed={showTasks}
@@ -458,6 +495,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
               onToggle={toggleCalendar}
               onShowAll={showAll}
               onHideAll={() => hideAll(allCalendarKeys)}
+              agentEventsVisible={isEventTypeVisible('agent')}
+              userEventsVisible={isEventTypeVisible('user')}
+              onToggleAgentEvents={() => toggleEventType('agent')}
+              onToggleUserEvents={() => toggleEventType('user')}
             />
           </aside>
         )}

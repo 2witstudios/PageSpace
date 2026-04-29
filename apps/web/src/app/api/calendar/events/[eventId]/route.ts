@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -220,25 +221,41 @@ export async function PATCH(
       );
     }
 
-    // Update the event
-    const [updatedEvent] = await db
-      .update(calendarEvents)
-      .set({
-        title: data.title,
-        description: data.description,
-        location: data.location,
-        startAt: adjustedStartAt,
-        endAt: adjustedEndAt,
-        allDay: data.allDay,
-        timezone: data.timezone,
-        recurrenceRule: data.recurrenceRule,
-        visibility: data.visibility,
-        color: data.color,
-        pageId: data.pageId,
-        updatedAt: new Date(),
-      })
-      .where(eq(calendarEvents.id, eventId))
-      .returning();
+    // Update the event and sync pending trigger time atomically
+    const [updatedEvent] = await db.transaction(async (tx) => {
+      const result = await tx
+        .update(calendarEvents)
+        .set({
+          title: data.title,
+          description: data.description,
+          location: data.location,
+          startAt: adjustedStartAt,
+          endAt: adjustedEndAt,
+          allDay: data.allDay,
+          timezone: data.timezone,
+          recurrenceRule: data.recurrenceRule,
+          visibility: data.visibility,
+          color: data.color,
+          pageId: data.pageId,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEvents.id, eventId))
+        .returning();
+
+      if (adjustedStartAt) {
+        await tx
+          .update(calendarTriggers)
+          .set({ triggerAt: adjustedStartAt })
+          .where(
+            and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              eq(calendarTriggers.status, 'pending'),
+            )
+          );
+      }
+
+      return result;
+    });
 
     // Fetch complete event with relations
     const completeEvent = await db.query.calendarEvents.findFirst({

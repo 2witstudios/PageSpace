@@ -124,6 +124,7 @@ export function useCalendarData({
       color?: string;
       attendeeIds?: string[];
       pageId?: string;
+      agentTrigger?: { agentPageId: string; prompt: string };
     }) => {
       const result = await post<CalendarEvent>('/api/calendar/events', {
         driveId: context === 'drive' ? driveId : null,

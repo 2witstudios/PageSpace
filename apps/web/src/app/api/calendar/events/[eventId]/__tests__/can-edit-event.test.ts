@@ -17,8 +17,8 @@ vi.mock('next/server', async () => {
   };
 });
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const db = {
     query: {
       calendarEvents: { findFirst: vi.fn() },
       eventAttendees: { findFirst: vi.fn() },
@@ -35,8 +35,10 @@ vi.mock('@pagespace/db/db', () => ({
         where: vi.fn().mockResolvedValue([]),
       })),
     })),
-  },
-}));
+    transaction: vi.fn(async (cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args: unknown[]) => args),
@@ -53,6 +55,18 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
     eventId: 'eventId',
     userId: 'userId',
   },
+}));
+
+vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
+  calendarTriggers: {
+    calendarEventId: 'calendarEventId',
+    status: 'status',
+  },
+}));
+
+vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({
+  isNaiveISODatetime: vi.fn(() => false),
+  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -169,11 +183,12 @@ function createContext(): { params: Promise<{ eventId: string }> } {
 
 /**
  * Helper to set up db mocks for a PATCH request flow.
- * The PATCH handler calls:
+ * The PATCH handler:
  *   1. db.query.calendarEvents.findFirst (get existing event)
- *   2. db.update().set().where().returning() (update the event)
+ *   2. db.transaction(cb) — wraps update + optional trigger sync
  *   3. db.query.calendarEvents.findFirst (fetch complete event with relations)
  *   4. db.select().from().where() (get attendee IDs)
+ * The transaction mock passes `db` itself as `tx` so update/set/where chains work.
  */
 function setupDbMocksForPatch(event: ReturnType<typeof createMockEvent>) {
   const findFirstMock = vi.fn()
@@ -186,6 +201,9 @@ function setupDbMocksForPatch(event: ReturnType<typeof createMockEvent>) {
   const whereMock = vi.fn(() => ({ returning: returningMock }));
   const setMock = vi.fn(() => ({ where: whereMock }));
   (db.update as Mock).mockReturnValue({ set: setMock });
+
+  // transaction passes db itself as the tx object
+  (db.transaction as Mock).mockImplementation(async (cb: (tx: typeof db) => unknown) => cb(db));
 
   const selectWhereMock = vi.fn().mockResolvedValue([]);
   const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));

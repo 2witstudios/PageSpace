@@ -59,6 +59,7 @@ export interface CalendarEvent {
     name: string;
     slug: string;
   } | null;
+  hasAgentTrigger?: boolean;
 }
 
 export interface RecurrenceRule {
