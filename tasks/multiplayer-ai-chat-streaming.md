@@ -55,7 +55,8 @@ Wire `chat:stream_start` and `chat:stream_complete` socket broadcasts into the A
 - Given a route error that skips `onFinish`, should still emit `chat:stream_complete` via a finally path
 
 ### Task 4: AI Stream Client State
-**Status:** Pending
+**Status:** ✅ COMPLETED
+**PR:** https://github.com/2witstudios/PageSpace/pull/1149
 
 Implement a Zustand store and socket hook that tracks in-progress remote streams and accumulates ghost text.
 
