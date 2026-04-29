@@ -1,4 +1,4 @@
-import { describe, test, vi, beforeEach } from 'vitest';
+import { describe, test, vi, beforeEach, type Mock } from 'vitest';
 import { render, waitFor, screen, fireEvent } from '@testing-library/react';
 import { assert } from './riteway';
 
@@ -159,6 +159,8 @@ vi.mock('zustand/react/shallow', () => ({ useShallow: vi.fn((fn: unknown) => fn)
 import AiChatView from '../AiChatView';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
@@ -409,6 +411,108 @@ describe('AiChatView initializeChat', () => {
       should: 'call createConversation from useConversations (no change to existing behavior)',
       actual: mockCreateConversation.mock.calls.length,
       expected: 1,
+    });
+  });
+});
+
+describe('AiChatView late-joiner conversation sync', () => {
+  const page = makePage();
+  const MESSAGE_ID = 'msg-late-joiner';
+  const REAL_CONV_ID = 'real-conv-id';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const setupNoConversationsInit = () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) return makeOkResponse({ conversations: [] });
+      return makeErrorResponse();
+    });
+  };
+
+  test('given fireComplete fires with stream.conversationId matching the persisted conversation while currentConversationId is the page-scoped default, should sync ID and append the message', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+      capturedCallback = cb;
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) {
+        return makeOkResponse({ conversations: [{ id: REAL_CONV_ID }] });
+      }
+      return makeErrorResponse();
+    });
+
+    capturedCallback?.(MESSAGE_ID);
+
+    await waitFor(() => {
+      assert({
+        given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
+        should: 'append the completed AI message',
+        actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+        expected: true,
+      });
+    });
+  });
+
+  test('given fireComplete fires with stream.conversationId that does NOT match the persisted conversation, should NOT append the message', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+      capturedCallback = cb;
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) {
+        return makeOkResponse({ conversations: [{ id: 'different-conv-id' }] });
+      }
+      return makeErrorResponse();
+    });
+
+    const setMessagesCallsBefore = mockSetMessages.mock.calls.length;
+    capturedCallback?.(MESSAGE_ID);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert({
+      given: 'GET returns a different conversation id than stream.conversationId',
+      should: 'NOT append any message',
+      actual: mockSetMessages.mock.calls.length,
+      expected: setMessagesCallsBefore,
     });
   });
 });
