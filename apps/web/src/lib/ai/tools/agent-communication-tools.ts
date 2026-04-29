@@ -529,14 +529,21 @@ export const agentCommunicationTools = {
         // 9. Filter tools for agent
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
 
-        // Resolve integration/adapter tools (GitHub, Calendar, etc.) via grants
-        const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-        const integrationTools = await resolvePageAgentIntegrationTools({
-          agentId,
-          userId,
-          driveId: targetAgent.driveId,
-        });
-        const allAgentTools = { ...agentTools, ...integrationTools };
+        // Resolve integration/adapter tools (GitHub, Calendar, etc.) via grants.
+        // Wrapped in try/catch so transient DB or provider errors degrade gracefully
+        // rather than turning the entire ask_agent call into a hard failure.
+        let allAgentTools = { ...agentTools };
+        try {
+          const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+          const integrationTools = await resolvePageAgentIntegrationTools({
+            agentId,
+            userId,
+            driveId: targetAgent.driveId,
+          });
+          allAgentTools = { ...agentTools, ...integrationTools };
+        } catch (error) {
+          loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
+        }
 
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in
