@@ -12,6 +12,7 @@
  */
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { getTabId } from './tab-id';
 
 // Track active streams by chat/conversation ID
 const activeStreams = new Map<string, string>();
@@ -105,7 +106,9 @@ export const createStreamTrackingFetch = ({
 }): typeof fetch => {
   return async (url, options) => {
     const urlString = url instanceof Request ? url.url : url.toString();
-    const response = await fetchWithAuth(urlString, options);
+    const headers = new Headers(options?.headers);
+    headers.set('X-Tab-Id', getTabId());
+    const response = await fetchWithAuth(urlString, { ...options, headers });
 
     // Extract streamId from response headers (for global assistant route)
     const streamId = response.headers.get(STREAM_ID_HEADER);
