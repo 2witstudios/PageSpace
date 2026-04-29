@@ -29,6 +29,8 @@ import { useSWRConfig } from 'swr';
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
+import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
 
 // Shared hooks and components
 import {
@@ -281,6 +283,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isStreaming,
     { pageId: page.id, componentName: 'AiChatView' }
   );
+
+  usePageSocketRoom(page.id);
+  useChatStreamSocket(page.id, user?.id);
 
   // Reset error visibility when new error occurs
   useEffect(() => {

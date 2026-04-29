@@ -55,7 +55,8 @@ Wire `chat:stream_start` and `chat:stream_complete` socket broadcasts into the A
 - Given a route error that skips `onFinish`, should still emit `chat:stream_complete` via a finally path
 
 ### Task 4: AI Stream Client State
-**Status:** Pending
+**Status:** ✅ COMPLETED
+**PR:** https://github.com/2witstudios/PageSpace/pull/1149
 
 Implement a Zustand store and socket hook that tracks in-progress remote streams and accumulates ghost text.
 
@@ -64,6 +65,10 @@ Implement a Zustand store and socket hook that tracks in-progress remote streams
 - Given incoming SSE chunks for a non-local stream, should accumulate text in the store keyed by messageId
 - Given `chat:stream_complete`, should remove the stream and call the completion callback
 - Given page unmount, should abort all in-flight join connections and clear all page streams from the store
+- Given `chat:stream_start` with a different pageId than the active page, should ignore the event (stale-room guard)
+- Given `chat:stream_complete` with a different pageId than the active page, should ignore the event
+- Given SSE done sentinel resolves and `chat:stream_complete` also fires, should call `onStreamComplete` exactly once
+- Given the socket reconnects while the hook is mounted, should re-emit `join_channel` to rejoin the page room
 
 ### Task 5: Multiplayer Chat UI
 **Status:** Pending
