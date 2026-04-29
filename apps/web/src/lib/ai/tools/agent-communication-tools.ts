@@ -528,7 +528,16 @@ export const agentCommunicationTools = {
         
         // 9. Filter tools for agent
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
-        
+
+        // Resolve integration/adapter tools (GitHub, Calendar, etc.) via grants
+        const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+        const integrationTools = await resolvePageAgentIntegrationTools({
+          agentId,
+          userId,
+          driveId: targetAgent.driveId,
+        });
+        const allAgentTools = { ...agentTools, ...integrationTools };
+
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in
         // Include chain tracking for activity logging (Tier 1)
@@ -548,12 +557,12 @@ export const agentCommunicationTools = {
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
         
         // 11. Process with target agent's configuration (ephemeral - no persistence)
-        const response = Object.keys(agentTools).length > 0
+        const response = Object.keys(allAgentTools).length > 0
           ? await generateText({
               model,
               system: systemPrompt,
               messages: convertToModelMessages(sanitizedMessages),
-              tools: { ...agentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
+              tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
               maxRetries: 3,
