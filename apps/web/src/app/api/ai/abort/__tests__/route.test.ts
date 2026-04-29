@@ -232,6 +232,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
+      expect(data.aborted).toBe(true);
       expect(abortStreamByMessageId).toHaveBeenCalledWith({
         messageId: mockMessageId,
         userId: mockUserId,
