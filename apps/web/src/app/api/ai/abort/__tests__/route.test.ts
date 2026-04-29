@@ -19,6 +19,7 @@ vi.mock('@/lib/auth', () => ({
 // Mock stream abort registry (boundary)
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
   abortStream: vi.fn(),
+  abortStreamByMessageId: vi.fn(),
 }));
 
 // Mock logger (boundary)
@@ -42,13 +43,14 @@ vi.mock('@pagespace/lib/auth/rate-limit-utils', () => ({
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { abortStream } from '@/lib/ai/core/stream-abort-registry';
+import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
 
 // Test fixtures
 const mockUserId = 'user-123';
 const mockStreamId = 'stream-456';
+const mockMessageId = 'msg-789';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -95,7 +97,7 @@ describe('POST /api/ai/abort', () => {
   });
 
   describe('Input Validation', () => {
-    it('returns 400 without streamId', async () => {
+    it('returns 400 when neither streamId nor messageId provided', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
 
@@ -104,11 +106,12 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId is required');
+      expect(data.error).toBe('streamId or messageId is required');
       expect(abortStream).not.toHaveBeenCalled();
+      expect(abortStreamByMessageId).not.toHaveBeenCalled();
     });
 
-    it('returns 400 when streamId is not a string', async () => {
+    it('returns 400 when streamId is not a string and no messageId', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
 
@@ -117,10 +120,10 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId is required');
+      expect(data.error).toBe('streamId or messageId is required');
     });
 
-    it('returns 400 when streamId is empty string', async () => {
+    it('returns 400 when streamId is empty string and no messageId', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
 
@@ -129,10 +132,10 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId is required');
+      expect(data.error).toBe('streamId or messageId is required');
     });
 
-    it('returns 400 when streamId is whitespace only', async () => {
+    it('returns 400 when streamId is whitespace only and no messageId', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
 
@@ -141,7 +144,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId is required');
+      expect(data.error).toBe('streamId or messageId is required');
       expect(abortStream).not.toHaveBeenCalled();
     });
   });
@@ -185,11 +188,67 @@ describe('POST /api/ai/abort', () => {
         'AI stream abort requested',
         {
           streamId: mockStreamId,
+          messageId: undefined,
           userId: mockUserId,
           aborted: true,
           reason: 'Stream aborted by user request',
         }
       );
+    });
+  });
+
+  describe('Abort by messageId', () => {
+    it('calls abortStreamByMessageId when messageId is provided', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+      vi.mocked(abortStreamByMessageId).mockReturnValueOnce({
+        aborted: true,
+        reason: 'Stream aborted by user request',
+      });
+
+      const request = createRequest({ messageId: mockMessageId });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.aborted).toBe(true);
+      expect(abortStreamByMessageId).toHaveBeenCalledWith({
+        messageId: mockMessageId,
+        userId: mockUserId,
+      });
+      expect(abortStream).not.toHaveBeenCalled();
+    });
+
+    it('prefers messageId over streamId when both are provided', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+      vi.mocked(abortStreamByMessageId).mockReturnValueOnce({
+        aborted: true,
+        reason: 'Stream aborted by user request',
+      });
+
+      const request = createRequest({ streamId: mockStreamId, messageId: mockMessageId });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(abortStreamByMessageId).toHaveBeenCalledWith({
+        messageId: mockMessageId,
+        userId: mockUserId,
+      });
+      expect(abortStream).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when messageId is empty string and no streamId', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+
+      const request = createRequest({ messageId: '' });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.error).toBe('streamId or messageId is required');
     });
   });
 
