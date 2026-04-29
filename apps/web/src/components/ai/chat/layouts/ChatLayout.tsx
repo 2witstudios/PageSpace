@@ -9,7 +9,7 @@ import {
   ChatMessagesArea,
   ChatMessagesAreaRef,
 } from '@/components/ai/shared/chat';
-import { StreamingIndicator } from '@/components/ai/shared/chat/StreamingIndicator';
+import { StreamingIndicator } from '@/components/ai/shared/chat';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 

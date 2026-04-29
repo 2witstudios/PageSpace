@@ -26,7 +26,7 @@ vi.mock('@/hooks/useEnterToSend', () => ({
   useEnterToSend: () => true,
 }));
 
-vi.mock('./WelcomeContent', () => ({
+vi.mock('../WelcomeContent', () => ({
   WelcomeContent: () => <div data-testid="welcome-content" />,
 }));
 

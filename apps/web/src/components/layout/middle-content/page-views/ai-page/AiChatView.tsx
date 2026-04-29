@@ -32,6 +32,7 @@ import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
 import {
@@ -286,7 +287,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   );
 
   const remoteStreams = usePendingStreamsStore(
-    (state) => state.getRemotePageStreams(page.id)
+    useShallow((state) => state.getRemotePageStreams(page.id))
   );
 
   usePageSocketRoom(page.id);
