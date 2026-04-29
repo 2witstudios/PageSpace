@@ -16,7 +16,7 @@ interface PendingStreamsState {
   removeStream: (messageId: string) => void;
   clearPageStreams: (pageId: string) => void;
   getRemotePageStreams: (pageId: string) => PendingStream[];
-  getOwnStreams: (channelId: string) => PendingStream[];
+  getOwnStreams: (pageId: string) => PendingStream[];
 }
 
 export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => ({
@@ -58,9 +58,9 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
     return Array.from(get().streams.values()).filter((s) => s.pageId === pageId);
   },
 
-  getOwnStreams: (channelId) => {
+  getOwnStreams: (pageId) => {
     return Array.from(get().streams.values()).filter(
-      (s) => s.pageId === channelId && s.isOwn === true,
+      (s) => s.pageId === pageId && s.isOwn,
     );
   },
 }));
