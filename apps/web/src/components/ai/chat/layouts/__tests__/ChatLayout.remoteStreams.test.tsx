@@ -15,6 +15,7 @@ vi.mock('motion/react', () => ({
 
 vi.mock('@/components/ai/shared/chat', () => ({
   ChatMessagesArea: () => <div data-testid="chat-messages-area" />,
+  StreamingIndicator: ({ message }: { message?: string }) => <>{message}</>,
 }));
 
 vi.mock('@/components/ui/floating-input', () => ({
