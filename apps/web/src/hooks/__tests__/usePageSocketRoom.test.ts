@@ -5,6 +5,7 @@ const { mockSocket } = vi.hoisted(() => {
   const handlers: Record<string, (() => void)[]> = {};
 
   const mockSocket = {
+    connected: true,
     on: vi.fn((event: string, handler: () => void) => {
       if (!handlers[event]) handlers[event] = [];
       handlers[event].push(handler);
@@ -20,6 +21,7 @@ const { mockSocket } = vi.hoisted(() => {
     },
     _reset: () => {
       Object.keys(handlers).forEach((k) => { handlers[k] = []; });
+      mockSocket.connected = true;
     },
   };
 
@@ -49,6 +51,12 @@ describe('usePageSocketRoom', () => {
 
   it('given pageId is undefined, should not emit join_channel', () => {
     renderHook(() => usePageSocketRoom(undefined));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+  });
+
+  it('given socket is not yet connected at mount, should not emit join_channel', () => {
+    mockSocket.connected = false;
+    renderHook(() => usePageSocketRoom('page-a'));
     expect(mockSocket.emit).not.toHaveBeenCalled();
   });
 

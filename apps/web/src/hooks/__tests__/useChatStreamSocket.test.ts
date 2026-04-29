@@ -146,6 +146,19 @@ describe('useChatStreamSocket', () => {
     });
   });
 
+  describe('SSE join error', () => {
+    it('given consumeStreamJoin rejects, should call removeStream to prevent stale store entry', async () => {
+      mockConsumeStreamJoin.mockRejectedValue(new Error('network error'));
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
+    });
+  });
+
   describe('chat:stream_start from local user', () => {
     it('should skip addStream and consumeStreamJoin when triggeredBy.userId matches currentUserId', () => {
       const localPayload: AiStreamStartPayload = {

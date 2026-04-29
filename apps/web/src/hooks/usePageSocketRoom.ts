@@ -6,7 +6,10 @@ export function usePageSocketRoom(pageId: string | undefined): void {
 
   useEffect(() => {
     if (!socket || !pageId) return;
-    const join = () => socket.emit('join_channel', pageId);
+    const join = () => {
+      if (!socket.connected) return;
+      socket.emit('join_channel', pageId);
+    };
     join();
     socket.on('connect', join);
     return () => { socket.off('connect', join); };

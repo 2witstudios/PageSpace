@@ -55,6 +55,7 @@ export function useChatStreamSocket(
         })
         .catch((err) => {
           controllersRef.current.delete(payload.messageId);
+          removeStream(payload.messageId);
           if (!controller.signal.aborted) {
             console.error('[useChatStreamSocket] SSE join error:', err);
           }
