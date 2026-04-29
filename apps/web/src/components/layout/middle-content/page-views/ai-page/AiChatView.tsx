@@ -63,6 +63,9 @@ interface AiChatViewProps {
   page: TreePage;
 }
 
+type ConversationListResponse = { conversations?: Array<{ id: string }> };
+type ConversationMessagesResponse = { messages: UIMessage[] };
+
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
 const EMPTY_MESSAGES: UIMessage[] = [];
 
@@ -239,10 +242,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Initialize chat
   useEffect(() => {
+    const controller = new AbortController();
+
     const initializeChat = async () => {
       try {
         // Load agent config
-        const agentConfigResponse = await fetchWithAuth(`/api/pages/${page.id}/agent-config`);
+        const agentConfigResponse = await fetchWithAuth(`/api/pages/${page.id}/agent-config`, {
+          signal: controller.signal,
+        });
         if (agentConfigResponse.ok) {
           const config = await agentConfigResponse.json();
           setAgentConfig(config);
@@ -250,23 +257,44 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           if (config.aiModel) setSelectedModel(config.aiModel);
         }
 
-        // Create new conversation (fresh start on page load)
-        const newConvResponse = await fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-
-        if (newConvResponse.ok) {
-          const newConvData = await newConvResponse.json();
-          setCurrentConversationId(newConvData.conversationId);
-          setMessages([]);
-        } else {
-          setMessages([]);
+        // Try to load the most recent existing conversation
+        try {
+          const listResponse = await fetchWithAuth(
+            `/api/ai/page-agents/${page.id}/conversations?pageSize=1`,
+            { signal: controller.signal }
+          );
+          if (listResponse.ok) {
+            const { conversations: list } = (await listResponse.json()) as ConversationListResponse;
+            if (list && list.length > 0) {
+              const conv = list[0];
+              const msgResponse = await fetchWithAuth(
+                `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
+                { signal: controller.signal }
+              );
+              const { messages: loaded } = msgResponse.ok
+                ? ((await msgResponse.json()) as ConversationMessagesResponse)
+                : { messages: [] as UIMessage[] };
+              if (controller.signal.aborted) return;
+              setCurrentConversationId(conv.id);
+              setMessages(loaded ?? []);
+              setIsInitialized(true);
+              return;
+            }
+          }
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          console.warn('Failed to load conversations on init, using page-scoped default:', err);
         }
 
+        if (controller.signal.aborted) return;
+        // No persisted conversations exist yet. Derive a stable ID from the page so
+        // concurrent openers share the same conversation before either sends a message.
+        // The conversation is anchored in the DB once the first message is saved.
+        setCurrentConversationId(`${page.id}-default`);
+        setMessages([]);
         setIsInitialized(true);
       } catch (error) {
+        if (controller.signal.aborted) return;
         console.error('Failed to initialize chat:', error);
         setMessages([]);
         setIsInitialized(true);
@@ -276,6 +304,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setIsInitialized(false);
     setCurrentConversationId(null);
     initializeChat();
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
 

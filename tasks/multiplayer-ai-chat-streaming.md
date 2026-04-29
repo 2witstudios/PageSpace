@@ -70,6 +70,21 @@ Implement a Zustand store and socket hook that tracks in-progress remote streams
 - Given SSE done sentinel resolves and `chat:stream_complete` also fires, should call `onStreamComplete` exactly once
 - Given the socket reconnects while the hook is mounted, should re-emit `join_channel` to rejoin the page room
 
+### Task 6: Fix conversation init so the stream completion guard works
+**Status:** In progress
+**PR:** https://github.com/2witstudios/PageSpace/pull/1152
+
+Each conversation is a session that multiple users can join. The stream completion guard in `AiChatView` — `stream.conversationId === currentConversationId` — only appends a remote AI response to your view if you're in the same conversation as the sender. The bug: `initializeChat` always POSTed a new conversation on every page load, so each user got a different `conversationId` and the guard never matched.
+
+Fix: load the most recent existing conversation on open (GET instead of POST). Fall back to a deterministic `${page.id}-default` ID when no conversations exist yet — the server accepts any string as a conversation ID, so this becomes a real conversation once the first message is saved.
+
+#### Acceptance criteria
+- Given an existing conversation, should load it on page load without creating a new one via POST
+- Given no conversations exist, should derive a stable ID from the page so the guard can match before either user sends a message
+- Given the conversations list fetch fails (non-ok or throws), should fall back to the page-scoped ID
+- Given loaded conversation messages, should apply them to chat state
+- Given user clicks New Chat, should call `createConversation` from `useConversations` (existing behavior unchanged)
+
 ### Task 5: Multiplayer Chat UI
 **Status:** Pending
 
