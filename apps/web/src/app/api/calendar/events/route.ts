@@ -53,7 +53,7 @@ const createEventSchema = z.object({
   attendeeIds: z.array(z.string()).optional(),
   agentTrigger: z.object({
     agentPageId: z.string(),
-    prompt: z.string().min(1).max(10000),
+    prompt: z.string().trim().min(1).max(10000),
   }).optional(),
 });
 
@@ -513,52 +513,66 @@ export async function POST(request: Request) {
       }
     }
 
-    // Create the event
-    const [event] = await db
-      .insert(calendarEvents)
-      .values({
-        driveId: data.driveId ?? null,
-        createdById: userId,
-        pageId: data.pageId ?? null,
-        title: data.title,
-        description: data.description ?? null,
-        location: data.location ?? null,
-        startAt,
-        endAt,
-        allDay: data.allDay,
-        timezone: data.timezone,
-        recurrenceRule: data.recurrenceRule ?? null,
-        visibility: data.visibility,
-        color: data.color,
-        updatedAt: new Date(),
-      })
-      .returning();
+    // Create event, attendees, and optional agent trigger atomically
+    const event = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(calendarEvents)
+        .values({
+          driveId: data.driveId ?? null,
+          createdById: userId,
+          pageId: data.pageId ?? null,
+          title: data.title,
+          description: data.description ?? null,
+          location: data.location ?? null,
+          startAt,
+          endAt,
+          allDay: data.allDay,
+          timezone: data.timezone,
+          recurrenceRule: data.recurrenceRule ?? null,
+          visibility: data.visibility,
+          color: data.color,
+          updatedAt: new Date(),
+        })
+        .returning();
 
-    // Add creator as organizer attendee
-    await db.insert(eventAttendees).values({
-      eventId: event.id,
-      userId: userId,
-      status: 'ACCEPTED',
-      isOrganizer: true,
-      respondedAt: new Date(),
+      await tx.insert(eventAttendees).values({
+        eventId: created.id,
+        userId: userId,
+        status: 'ACCEPTED',
+        isOrganizer: true,
+        respondedAt: new Date(),
+      });
+
+      if (data.attendeeIds && data.attendeeIds.length > 0) {
+        const others = data.attendeeIds.filter(id => id !== userId);
+        if (others.length > 0) {
+          await tx.insert(eventAttendees).values(
+            others.map(attendeeId => ({
+              eventId: created.id,
+              userId: attendeeId,
+              status: 'PENDING' as const,
+              isOrganizer: false,
+            }))
+          );
+        }
+      }
+
+      if (data.agentTrigger && agentPageId && data.driveId) {
+        await tx.insert(calendarTriggers).values({
+          calendarEventId: created.id,
+          agentPageId,
+          driveId: data.driveId,
+          scheduledById: userId,
+          prompt: data.agentTrigger.prompt,
+          triggerAt: startAt,
+          contextPageIds: [],
+        });
+      }
+
+      return created;
     });
 
-    // Add other attendees if provided
-    if (data.attendeeIds && data.attendeeIds.length > 0) {
-      const otherAttendees = data.attendeeIds.filter(id => id !== userId);
-      if (otherAttendees.length > 0) {
-        await db.insert(eventAttendees).values(
-          otherAttendees.map(attendeeId => ({
-            eventId: event.id,
-            userId: attendeeId,
-            status: 'PENDING' as const,
-            isOrganizer: false,
-          }))
-        );
-      }
-    }
-
-    // Fetch the complete event with relations
+    // Fetch the complete event with relations (read after committed transaction)
     const completeEvent = await db.query.calendarEvents.findFirst({
       where: eq(calendarEvents.id, event.id),
       with: {
@@ -577,19 +591,6 @@ export async function POST(request: Request) {
         },
       },
     });
-
-    // Create agent trigger if requested (validation already done above)
-    if (data.agentTrigger && agentPageId && data.driveId) {
-      await db.insert(calendarTriggers).values({
-        calendarEventId: event.id,
-        agentPageId,
-        driveId: data.driveId,
-        scheduledById: userId,
-        prompt: data.agentTrigger.prompt,
-        triggerAt: startAt,
-        contextPageIds: [],
-      });
-    }
 
     // Broadcast event creation
     await broadcastCalendarEvent({

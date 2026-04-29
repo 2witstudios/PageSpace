@@ -410,7 +410,10 @@ export function EventModal({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Bot className="h-4 w-4 text-muted-foreground" />
-                  <Label htmlFor="schedule-agent" className="cursor-pointer font-medium">
+                  <Label
+                    htmlFor="schedule-agent"
+                    className={agentsLoading || agents.length > 0 ? 'cursor-pointer font-medium' : 'font-medium text-muted-foreground'}
+                  >
                     Run agent
                   </Label>
                 </div>
@@ -418,8 +421,14 @@ export function EventModal({
                   id="schedule-agent"
                   checked={scheduleAgent}
                   onCheckedChange={setScheduleAgent}
+                  disabled={!agentsLoading && agents.length === 0}
                 />
               </div>
+              {!agentsLoading && agents.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No agents in this drive. Create an AI agent page first.
+                </p>
+              )}
 
               {scheduleAgent && (
                 <div className="space-y-3 pt-1">

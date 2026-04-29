@@ -221,38 +221,41 @@ export async function PATCH(
       );
     }
 
-    // Update the event
-    const [updatedEvent] = await db
-      .update(calendarEvents)
-      .set({
-        title: data.title,
-        description: data.description,
-        location: data.location,
-        startAt: adjustedStartAt,
-        endAt: adjustedEndAt,
-        allDay: data.allDay,
-        timezone: data.timezone,
-        recurrenceRule: data.recurrenceRule,
-        visibility: data.visibility,
-        color: data.color,
-        pageId: data.pageId,
-        updatedAt: new Date(),
-      })
-      .where(eq(calendarEvents.id, eventId))
-      .returning();
+    // Update the event and sync pending trigger time atomically
+    const [updatedEvent] = await db.transaction(async (tx) => {
+      const result = await tx
+        .update(calendarEvents)
+        .set({
+          title: data.title,
+          description: data.description,
+          location: data.location,
+          startAt: adjustedStartAt,
+          endAt: adjustedEndAt,
+          allDay: data.allDay,
+          timezone: data.timezone,
+          recurrenceRule: data.recurrenceRule,
+          visibility: data.visibility,
+          color: data.color,
+          pageId: data.pageId,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEvents.id, eventId))
+        .returning();
 
-    // Sync pending trigger's fire time if the event start changed
-    if (adjustedStartAt) {
-      await db
-        .update(calendarTriggers)
-        .set({ triggerAt: adjustedStartAt })
-        .where(
-          and(
-            eq(calendarTriggers.calendarEventId, eventId),
-            eq(calendarTriggers.status, 'pending'),
-          )
-        );
-    }
+      if (adjustedStartAt) {
+        await tx
+          .update(calendarTriggers)
+          .set({ triggerAt: adjustedStartAt })
+          .where(
+            and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              eq(calendarTriggers.status, 'pending'),
+            )
+          );
+      }
+
+      return result;
+    });
 
     // Fetch complete event with relations
     const completeEvent = await db.query.calendarEvents.findFirst({
