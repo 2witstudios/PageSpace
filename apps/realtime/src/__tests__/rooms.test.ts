@@ -86,10 +86,12 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
         const taskRoom = `user:${user.id}:tasks`;
         const calendarRoom = `user:${user.id}:calendar`;
         const userDrivesRoom = `user:${user.id}:drives`;
+        const globalRoom = `user:${user.id}:global`;
         socket.join(notificationRoom);
         socket.join(taskRoom);
         socket.join(calendarRoom);
         socket.join(userDrivesRoom);
+        socket.join(globalRoom);
       }
     },
 
@@ -433,6 +435,44 @@ describe('Room Management', () => {
 
       expect(socket.leave).toHaveBeenCalledWith(`user:${userId}:drives`);
       expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(false);
+    });
+  });
+
+  describe('user-scoped global room', () => {
+    it('given authenticated user on connect, should auto-join user:{userId}:global room', () => {
+      const userId = 'test-user-123';
+      const socket = createMockSocket(userId);
+      const handlers = createRoomHandlers(socket);
+
+      handlers.onConnect();
+
+      expect(socket.hasJoinedRoom(`user:${userId}:global`)).toBe(true);
+    });
+
+    it('given unauthenticated socket, should not join global room', () => {
+      const socket = createMockSocket(undefined);
+      const handlers = createRoomHandlers(socket);
+
+      handlers.onConnect();
+
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    it('given two users, user A should NOT be in user B global room', () => {
+      const userA = 'user-a-111';
+      const userB = 'user-b-222';
+      const socketA = createMockSocket(userA);
+      const socketB = createMockSocket(userB);
+      const handlersA = createRoomHandlers(socketA);
+      const handlersB = createRoomHandlers(socketB);
+
+      handlersA.onConnect();
+      handlersB.onConnect();
+
+      expect(socketA.hasJoinedRoom(`user:${userA}:global`)).toBe(true);
+      expect(socketB.hasJoinedRoom(`user:${userB}:global`)).toBe(true);
+      expect(socketA.hasJoinedRoom(`user:${userB}:global`)).toBe(false);
+      expect(socketB.hasJoinedRoom(`user:${userA}:global`)).toBe(false);
     });
   });
 

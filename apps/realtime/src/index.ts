@@ -484,24 +484,27 @@ io.on('connection', (socket: AuthSocket) => {
     socketRegistry.registerSocket(user.id, socket.id);
   }
 
-  // Auto-join user's notification, task, and personal calendar rooms
+  // Auto-join user's personal rooms on connection
   if (user?.id) {
     const notificationRoom = `notifications:${user.id}`;
     const taskRoom = `user:${user.id}:tasks`;
     const calendarRoom = `user:${user.id}:calendar`;
     const userDrivesRoom = `user:${user.id}:drives`;
+    const globalRoom = `user:${user.id}:global`;
     socket.join(notificationRoom);
     socket.join(taskRoom);
     socket.join(calendarRoom);
     socket.join(userDrivesRoom);
+    socket.join(globalRoom);
     // Track in registry (these are always-on rooms, not permission-gated)
     socketRegistry.trackRoomJoin(socket.id, notificationRoom);
     socketRegistry.trackRoomJoin(socket.id, taskRoom);
     socketRegistry.trackRoomJoin(socket.id, calendarRoom);
     socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
-    loggers.realtime.debug('User joined notification, task, calendar, and drives rooms', {
+    socketRegistry.trackRoomJoin(socket.id, globalRoom);
+    loggers.realtime.debug('User joined notification, task, calendar, drives, and global rooms', {
       userId: user.id,
-      rooms: [notificationRoom, taskRoom, calendarRoom, userDrivesRoom]
+      rooms: [notificationRoom, taskRoom, calendarRoom, userDrivesRoom, globalRoom]
     });
   }
 
