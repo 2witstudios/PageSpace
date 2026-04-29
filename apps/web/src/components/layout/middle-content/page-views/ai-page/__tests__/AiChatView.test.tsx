@@ -515,4 +515,134 @@ describe('AiChatView late-joiner conversation sync', () => {
       expected: setMessagesCallsBefore,
     });
   });
+
+  test('given the sync fetch returns !res.ok, should NOT append any message', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+      capturedCallback = cb;
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) return makeErrorResponse();
+      return makeErrorResponse();
+    });
+
+    const setMessagesCallsBefore = mockSetMessages.mock.calls.length;
+    capturedCallback?.(MESSAGE_ID);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert({
+      given: 'sync fetch returns !res.ok',
+      should: 'NOT append any message',
+      actual: mockSetMessages.mock.calls.length,
+      expected: setMessagesCallsBefore,
+    });
+  });
+
+  test('given the sync fetch returns an empty conversations array, should NOT append any message', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+      capturedCallback = cb;
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) return makeOkResponse({ conversations: [] });
+      return makeErrorResponse();
+    });
+
+    const setMessagesCallsBefore = mockSetMessages.mock.calls.length;
+    capturedCallback?.(MESSAGE_ID);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert({
+      given: 'sync fetch returns empty conversations array',
+      should: 'NOT append any message',
+      actual: mockSetMessages.mock.calls.length,
+      expected: setMessagesCallsBefore,
+    });
+  });
+
+  test('given the sync fetch throws a network error, should warn and NOT append any message', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+      capturedCallback = cb;
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) throw new Error('network error');
+      return makeErrorResponse();
+    });
+
+    const setMessagesCallsBefore = mockSetMessages.mock.calls.length;
+    capturedCallback?.(MESSAGE_ID);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert({
+      given: 'sync fetch throws a network error',
+      should: 'call console.warn',
+      actual: warnSpy.mock.calls.length > 0,
+      expected: true,
+    });
+
+    assert({
+      given: 'sync fetch throws a network error',
+      should: 'NOT append any message',
+      actual: mockSetMessages.mock.calls.length,
+      expected: setMessagesCallsBefore,
+    });
+
+    warnSpy.mockRestore();
+  });
 });

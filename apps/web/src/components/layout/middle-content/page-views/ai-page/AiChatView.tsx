@@ -351,7 +351,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             },
           ]);
         })
-        .catch(() => {});
+        .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
     }
   });
 
