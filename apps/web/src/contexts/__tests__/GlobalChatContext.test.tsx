@@ -126,6 +126,46 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     expect(mockFetchWithAuth.mock.calls.length).toBe(callsBefore);
   });
 
+  // NOTE: React testing-library's act() collapses isInitialized false→true into one render,
+  // masking the production loop. This test validates the invariant in the test environment;
+  // the fix (isInitializedRef) prevents the loop in production where renders are unbatched.
+  it('given refresh completes after reconnect (isInitialized cycles true→false→true), should NOT trigger a second refresh', async () => {
+    const { result, rerender } = renderProvider();
+
+    await waitFor(() => expect(result.current.isInitialized).toBe(true));
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    // First connect — sets hasInitialConnectRef, no refresh
+    setStatus('connected', rerender);
+    setStatus('disconnected', rerender);
+
+    // Capture count BEFORE the reconnect so we can detect growth
+    const countBeforeReconnect = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => (url as string).includes('/messages')
+    ).length;
+
+    // Reconnect — triggers the reconnect refresh
+    setStatus('connected', rerender);
+
+    // Wait until the reconnect refresh has fired (messages count grew by 1)
+    await waitFor(() => {
+      const calls = mockFetchWithAuth.mock.calls.filter(([url]) => (url as string).includes('/messages'));
+      expect(calls.length).toBeGreaterThan(countBeforeReconnect);
+    });
+
+    const countAfterFirstRefresh = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => (url as string).includes('/messages')
+    ).length;
+
+    // Allow any cascade effects to fire (isInitialized cycling back to true)
+    await act(async () => { await new Promise(r => setTimeout(r, 100)); });
+
+    // No second refresh should have fired
+    expect(
+      mockFetchWithAuth.mock.calls.filter(([url]) => (url as string).includes('/messages')).length
+    ).toBe(countAfterFirstRefresh);
+  });
+
   it('given isInitialized=false when reconnect fires, should NOT call refreshConversation', async () => {
     // Hang initialization so isInitialized stays false
     mockFetchWithAuth.mockImplementation(() => new Promise(() => {}));

@@ -209,15 +209,21 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const connectionStatus = useSocketStore((s) => s.connectionStatus);
   const hasInitialConnectRef = useRef(false);
+  // Ref keeps isInitialized readable inside the effect without making it a dep.
+  // If isInitialized were a dep, loadConversation's false→true cycle would re-trigger
+  // the effect on every refresh, causing an infinite refresh loop in production.
+  const isInitializedRef = useRef(false);
+  isInitializedRef.current = isInitialized;
 
   useEffect(() => {
     if (connectionStatus === 'connected') {
-      if (hasInitialConnectRef.current && isInitialized && currentConversationId) {
+      if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
         refreshConversation();
       }
       hasInitialConnectRef.current = true;
     }
-  }, [connectionStatus, isInitialized, currentConversationId, refreshConversation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionStatus, currentConversationId, refreshConversation]);
 
   // Track the previous conversation ID to detect conversation switches
   const prevConversationIdRef = useRef<string | null>(null);
