@@ -250,18 +250,44 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           if (config.aiModel) setSelectedModel(config.aiModel);
         }
 
-        // Create new conversation (fresh start on page load)
-        const newConvResponse = await fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
+        // Load most recent conversation, or create one if none exists
+        let conversationLoaded = false;
+        try {
+          const listResponse = await fetchWithAuth(
+            `/api/ai/page-agents/${page.id}/conversations?pageSize=1`
+          );
+          if (listResponse.ok) {
+            const listData = await listResponse.json();
+            if (listData.conversations?.length > 0) {
+              const conv = listData.conversations[0];
+              const msgResponse = await fetchWithAuth(
+                `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`
+              );
+              if (msgResponse.ok) {
+                const msgData = await msgResponse.json();
+                setCurrentConversationId(conv.id);
+                setMessages(msgData.messages);
+              } else {
+                setCurrentConversationId(conv.id);
+                setMessages([]);
+              }
+              conversationLoaded = true;
+            }
+          }
+        } catch {
+          // GET failed — fall through to create a new conversation
+        }
 
-        if (newConvResponse.ok) {
-          const newConvData = await newConvResponse.json();
-          setCurrentConversationId(newConvData.conversationId);
-          setMessages([]);
-        } else {
+        if (!conversationLoaded) {
+          const newConvResponse = await fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          if (newConvResponse.ok) {
+            const newConvData = await newConvResponse.json();
+            setCurrentConversationId(newConvData.conversationId);
+          }
           setMessages([]);
         }
 
