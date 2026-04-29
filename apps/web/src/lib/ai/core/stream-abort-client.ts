@@ -106,8 +106,7 @@ export const abortActiveStreamByMessageId = async ({
       body: JSON.stringify({ messageId }),
     });
     return await response.json();
-  } catch (error) {
-    console.error('Failed to abort stream by messageId:', error);
+  } catch {
     return { aborted: false, reason: 'Failed to call abort endpoint' };
   }
 };
