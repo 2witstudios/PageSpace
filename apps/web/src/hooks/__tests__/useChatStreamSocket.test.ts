@@ -230,6 +230,21 @@ describe('useChatStreamSocket', () => {
         isOwn: false,
       }));
     });
+
+    it('given triggeredBy.tabId is missing (legacy payload), should treat as remote and addStream with isOwn=false', () => {
+      const legacyPayload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-2', displayName: 'Alice' },
+      };
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      act(() => { mockSocket._trigger('chat:stream_start', legacyPayload); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-1',
+        isOwn: false,
+      }));
+    });
   });
 
   // A1 — pageId guard

@@ -12,11 +12,15 @@ interface ActiveStreamRow {
   triggeredBy: { userId: string; displayName: string; tabId: string };
 }
 
+// currentUserId is retained in the signature for caller compatibility
+// (AiChatView passes it positionally). The filter is now tabId-based,
+// so this argument is unused inside the hook.
 export function useChatStreamSocket(
   channelId: string | undefined,
   currentUserId: string | undefined,
   onStreamComplete?: (messageId: string) => void,
 ): void {
+  void currentUserId;
   const socket = useSocket();
   const controllersRef = useRef<Map<string, AbortController>>(new Map());
   // Tracks which messageIds have had onStreamComplete called to prevent double-firing
@@ -80,12 +84,13 @@ export function useChatStreamSocket(
         for (const stream of data.streams ?? []) {
           if (processedRef.current.has(stream.messageId)) continue;
           if (controllersRef.current.has(stream.messageId)) continue;
+          const streamTabId = stream.triggeredBy.tabId;
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: stream.triggeredBy.tabId === localTabId,
+            isOwn: !!streamTabId && streamTabId === localTabId,
           });
           startConsume(stream.messageId);
         }
@@ -97,7 +102,8 @@ export function useChatStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      if (payload.triggeredBy.tabId === localTabId) return;
+      const incomingTabId = payload.triggeredBy.tabId;
+      if (incomingTabId && incomingTabId === localTabId) return;
       if (controllersRef.current.has(payload.messageId)) return;
 
       addStream({
@@ -105,7 +111,7 @@ export function useChatStreamSocket(
         pageId: payload.pageId,
         conversationId: payload.conversationId,
         triggeredBy: payload.triggeredBy,
-        isOwn: payload.triggeredBy.tabId === localTabId,
+        isOwn: !!incomingTabId && incomingTabId === localTabId,
       });
 
       startConsume(payload.messageId);
