@@ -338,7 +338,11 @@ describe('useAgentChannelMultiplayer', () => {
             surfaceComponentName: 'TestSurface',
           });
         },
-        { initialProps: { status: 'disconnected' as const } },
+        {
+          initialProps: {
+            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+          },
+        },
       );
 
       const loadConversation = vi.fn();
@@ -366,7 +370,11 @@ describe('useAgentChannelMultiplayer', () => {
             surfaceComponentName: 'TestSurface',
           });
         },
-        { initialProps: { status: 'disconnected' as const } },
+        {
+          initialProps: {
+            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+          },
+        },
       );
 
       // First connect.
@@ -397,7 +405,11 @@ describe('useAgentChannelMultiplayer', () => {
             surfaceComponentName: 'TestSurface',
           });
         },
-        { initialProps: { status: 'disconnected' as const } },
+        {
+          initialProps: {
+            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+          },
+        },
       );
 
       result.rerender({ status: 'connected' });
