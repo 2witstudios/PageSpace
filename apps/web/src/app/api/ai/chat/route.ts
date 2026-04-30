@@ -98,6 +98,7 @@ export async function POST(request: Request) {
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
+  let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
   const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
@@ -818,6 +819,7 @@ export async function POST(request: Request) {
     serverAssistantMessageId = createId();
 
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
@@ -1128,6 +1130,9 @@ export async function POST(request: Request) {
     return result.toUIMessageStreamResponse();
 
   } catch (error) {
+    if (activeStreamId !== undefined) {
+      removeStream({ streamId: activeStreamId });
+    }
     lifecycle?.finish(true);
     loggers.ai.error('AI Chat API Error', error as Error, {
       userId,

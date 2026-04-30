@@ -401,5 +401,17 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const calls = mockLifecycleFinish.mock.calls.filter(([aborted]) => aborted === true);
       expect(calls.length).toBeGreaterThan(0);
     });
+
+    it('given an error throws after lifecycle creation, should call lifecycle.finish(true) from the outer catch', async () => {
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest());
+
+      const aborted = mockLifecycleFinish.mock.calls.filter(([flag]) => flag === true);
+      expect(aborted.length).toBeGreaterThan(0);
+    });
   });
 });
