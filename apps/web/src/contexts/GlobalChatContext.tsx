@@ -288,14 +288,21 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
+    const clearOwnStreamFlags = (messageId: string): boolean => {
+      if (!ownStreamIds.delete(messageId)) return false;
+      setIsStreamingRef.current(false);
+      setStopStreamingRef.current(null);
+      return true;
+    };
+
     const finalizeStream = (messageId: string) => {
+      // After unmount, controllers are aborted which resolves consumeStreamJoin
+      // and re-enters this callback — guard against post-teardown fetch/state.
+      if (cancelled) return;
       if (finalized.has(messageId)) return;
       finalized.add(messageId);
       controllers.delete(messageId);
-      if (ownStreamIds.delete(messageId)) {
-        setIsStreamingRef.current(false);
-        setStopStreamingRef.current(null);
-      }
+      clearOwnStreamFlags(messageId);
       removeStream(messageId);
       refreshConversationRef.current();
     };
@@ -311,8 +318,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           finalizeStream(messageId);
         })
         .catch((err) => {
+          if (cancelled) return;
+          if (finalized.has(messageId)) return;
+          finalized.add(messageId);
           controllers.delete(messageId);
-          ownStreamIds.delete(messageId);
+          // Treat a join error as terminal locally so the stop button is not
+          // left dangling — the stream may still finish server-side, but the
+          // socket complete handler will be a no-op (already finalized) and
+          // we have no live SSE to drive the UI forward.
+          clearOwnStreamFlags(messageId);
           removeStream(messageId);
           if (!controller.signal.aborted) {
             console.error('[GlobalChatContext] SSE join error:', err);

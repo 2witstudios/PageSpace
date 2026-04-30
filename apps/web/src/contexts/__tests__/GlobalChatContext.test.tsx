@@ -578,6 +578,130 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_complete', expect.any(Function));
   });
 
+  // Codex P1 — SSE join failure on own bootstrap stream must not strand UI
+  it('given an own bootstrap stream and consumeStreamJoin rejects, should clear context streaming flags', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-own',
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      return defaultFetch(url);
+    });
+
+    let rejectJoin!: (err: Error) => void;
+    mockConsumeStreamJoin.mockReturnValueOnce(
+      new Promise((_res, rej) => { rejectJoin = rej; }),
+    );
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = renderProvider();
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+
+    await act(async () => {
+      rejectJoin(new Error('network down'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+    expect(result.current.stopStreaming).toBeNull();
+    expect(mockRemoveStream).toHaveBeenCalledWith('msg-own');
+
+    errorSpy.mockRestore();
+  });
+
+  // Codex P1 follow-up — after a failed SSE join, a later complete event must
+  // not double-clear flags; the catch path already finalized the stream.
+  it('given own SSE rejected then chat:stream_complete fires, should not refresh twice', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-own',
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      return defaultFetch(url);
+    });
+
+    let rejectJoin!: (err: Error) => void;
+    mockConsumeStreamJoin.mockReturnValueOnce(
+      new Promise((_res, rej) => { rejectJoin = rej; }),
+    );
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = renderProvider();
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+
+    await act(async () => {
+      rejectJoin(new Error('network down'));
+      await Promise.resolve();
+    });
+
+    const messagesCallsAfterCatch = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => typeof url === 'string' && (url as string).includes('/messages'),
+    ).length;
+
+    act(() => {
+      mockSocket._trigger('chat:stream_complete', {
+        messageId: 'msg-own',
+        pageId: GLOBAL_CHANNEL_ID,
+      });
+    });
+
+    // No additional /messages refresh — finalize is a no-op on already-finalized id
+    const messagesCallsAfterComplete = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => typeof url === 'string' && (url as string).includes('/messages'),
+    ).length;
+    expect(messagesCallsAfterComplete).toBe(messagesCallsAfterCatch);
+
+    errorSpy.mockRestore();
+  });
+
+  // Codex P2 — finalize must not run after teardown
+  it('given a stream resolves after unmount via aborted SSE, should not call refreshConversation post-unmount', async () => {
+    let resolveJoin!: () => void;
+    mockConsumeStreamJoin.mockImplementationOnce(
+      (_id: string, _signal: AbortSignal) =>
+        new Promise<undefined>((res) => { resolveJoin = () => res(undefined); }),
+    );
+
+    const { unmount } = renderProvider();
+
+    await waitFor(() => expect(mockSocket._handlerCount('chat:stream_start')).toBeGreaterThan(0));
+
+    act(() => {
+      mockSocket._trigger('chat:stream_start', {
+        messageId: 'msg-live',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: 'conv-1',
+        triggeredBy: { userId: USER_ID, displayName: 'Other', browserSessionId: SESSION_ID_REMOTE },
+      });
+    });
+
+    const messagesCallsBeforeUnmount = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => typeof url === 'string' && (url as string).includes('/messages'),
+    ).length;
+
+    unmount();
+
+    // Now resolve the SSE — simulates abort-triggered resolution post-unmount
+    await act(async () => { resolveJoin(); await Promise.resolve(); });
+
+    const messagesCallsAfterUnmount = mockFetchWithAuth.mock.calls.filter(
+      ([url]) => typeof url === 'string' && (url as string).includes('/messages'),
+    ).length;
+    expect(messagesCallsAfterUnmount).toBe(messagesCallsBeforeUnmount);
+  });
+
   // AC8 — bootstrap unmount cancellation
   it('given fetch resolves after unmount, should not call addStream', async () => {
     let resolveFetch!: (value: unknown) => void;
