@@ -5,6 +5,7 @@ import { db } from '@pagespace/db/db';
 import { and, asc, eq, gte } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -12,6 +13,13 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        resourceType: 'ai_chat_stream',
+        resourceId: 'active-streams',
+        details: { reason: 'auth_failed', method: 'GET' },
+        riskScore: 0.5,
+      });
       return auth.error;
     }
     const userId = auth.userId;
@@ -26,11 +34,27 @@ export async function GET(request: Request) {
     const globalMatch = channelId.match(/^user:(.+):global$/);
     if (globalMatch) {
       if (globalMatch[1] !== userId) {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'ai_chat_stream',
+          resourceId: channelId,
+          details: { reason: 'global_channel_user_mismatch', method: 'GET' },
+          riskScore: 0.6,
+        });
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     } else {
       const allowed = await canUserViewPage(userId, channelId);
       if (!allowed) {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'ai_chat_stream',
+          resourceId: channelId,
+          details: { reason: 'page_view_denied', method: 'GET' },
+          riskScore: 0.5,
+        });
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
