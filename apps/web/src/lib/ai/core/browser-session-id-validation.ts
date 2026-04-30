@@ -1,5 +1,7 @@
 export const MAX_BROWSER_SESSION_ID_LENGTH = 64;
 
+// Matches the UUIDs the client emits via `getBrowserSessionId()`; also tolerates
+// hyphens and underscores so a future client encoding can land without a contract bump.
 const BROWSER_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export type BrowserSessionIdValidationError = 'missing' | 'too_long' | 'invalid_chars';
