@@ -1,7 +1,7 @@
 /**
  * AI Provider Factory Service
- * Centralized provider/model selection logic for all AI routes
- * Eliminates code duplication and provides consistent error handling
+ * Resolves managed provider credentials from deployment env vars and
+ * instantiates the appropriate AI SDK client. No per-user keys.
  */
 
 import { NextResponse } from 'next/server';
@@ -13,45 +13,16 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
-import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import {
-  getUserOpenRouterSettings,
-  createOpenRouterSettings,
-  getUserGoogleSettings,
-  createGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  createOpenAISettings,
-  getUserAnthropicSettings,
-  createAnthropicSettings,
-  getUserXAISettings,
-  createXAISettings,
-  getUserOllamaSettings,
-  createOllamaSettings,
-  getUserLMStudioSettings,
-  createLMStudioSettings,
-  getUserGLMSettings,
-  createGLMSettings,
-  getUserMiniMaxSettings,
-  createMiniMaxSettings,
-  getUserAzureOpenAISettings,
-} from './ai-utils';
-import { resolvePageSpaceModel } from './ai-providers-config';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { getDefaultPageSpaceSettings, getManagedProviderKey } from './ai-utils';
+import { ONPREM_ALLOWED_PROVIDERS, resolvePageSpaceModel } from './ai-providers-config';
 
 export interface ProviderRequest {
   selectedProvider?: string;
   selectedModel?: string;
-  googleApiKey?: string;
-  openRouterApiKey?: string;
-  openAIApiKey?: string;
-  anthropicApiKey?: string;
-  xaiApiKey?: string;
-  ollamaBaseUrl?: string;
-  lmstudioBaseUrl?: string;
-  glmApiKey?: string;
-  minimaxApiKey?: string;
 }
 
 export interface ProviderResult {
@@ -65,388 +36,169 @@ export interface ProviderError {
   status: number;
 }
 
-/**
- * Creates an AI provider instance with proper configuration and validation
- * Handles all provider types and their specific setup requirements
- */
+function notConfigured(provider: string): ProviderError {
+  return {
+    error: `${provider} provider is not configured on this deployment.`,
+    status: 503,
+  };
+}
+
 export async function createAIProvider(
   userId: string,
   request: ProviderRequest
 ): Promise<ProviderResult | ProviderError> {
-  const {
-    selectedProvider,
-    selectedModel,
-    googleApiKey,
-    openRouterApiKey,
-    openAIApiKey,
-    anthropicApiKey,
-    xaiApiKey,
-    ollamaBaseUrl,
-    lmstudioBaseUrl,
-    glmApiKey,
-    minimaxApiKey,
-  } = request;
+  const { selectedProvider, selectedModel } = request;
 
-  // Get user's current AI provider settings
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
   let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
 
-  // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.7')
   if (currentProvider === 'pagespace') {
     currentModel = resolvePageSpaceModel(currentModel);
+  }
+
+  if (
+    isOnPrem() &&
+    currentProvider !== 'pagespace' &&
+    !ONPREM_ALLOWED_PROVIDERS.has(currentProvider)
+  ) {
+    return {
+      error: `Provider "${currentProvider}" is not available in on-premise mode.`,
+      status: 403,
+    };
   }
 
   try {
     let model;
 
     if (currentProvider === 'pagespace') {
-      // Use default PageSpace settings (now GLM backend or Google AI fallback)
       const pageSpaceSettings = await getDefaultPageSpaceSettings();
-
       if (!pageSpaceSettings) {
-        // Fall back to user's Google settings if no default key
-        let googleSettings = await getUserGoogleSettings(userId);
+        return notConfigured('PageSpace AI');
+      }
 
-        if (!googleSettings && googleApiKey) {
-          await createGoogleSettings(userId, googleApiKey);
-          googleSettings = { apiKey: googleApiKey, isConfigured: true };
-        }
-
-        if (!googleSettings) {
-          return {
-            error: 'No default API key configured. Please provide your own Google AI API key.',
-            status: 400,
-          };
-        }
-
-        const googleProvider = createGoogleGenerativeAI({
-          apiKey: googleSettings.apiKey,
+      if (pageSpaceSettings.provider === 'google') {
+        model = createGoogleGenerativeAI({ apiKey: pageSpaceSettings.apiKey })(currentModel);
+      } else if (pageSpaceSettings.provider === 'glm') {
+        const glmProvider = createOpenAICompatible({
+          name: 'glm',
+          apiKey: pageSpaceSettings.apiKey,
+          baseURL: 'https://api.z.ai/api/coding/paas/v4',
         });
-        model = googleProvider(currentModel);
+        model = glmProvider(currentModel);
       } else {
-        // Use the appropriate provider based on the configuration
-        if (pageSpaceSettings.provider === 'google') {
-          const googleProvider = createGoogleGenerativeAI({
-            apiKey: pageSpaceSettings.apiKey,
-          });
-          model = googleProvider(currentModel);
-        } else if (pageSpaceSettings.provider === 'glm') {
-          // Use GLM provider with OpenAI-compatible endpoint
-          const glmProvider = createOpenAICompatible({
-            name: 'glm',
-            apiKey: pageSpaceSettings.apiKey,
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
-          model = glmProvider(currentModel);
-        } else {
-          return {
-            error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`,
-            status: 400,
-          };
-        }
-      }
-    } else if (currentProvider === 'openrouter') {
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
         return {
-          error: 'OpenRouter API key not configured. Please provide an API key.',
+          error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`,
           status: 400,
         };
       }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-
+    } else if (currentProvider === 'openrouter' || currentProvider === 'openrouter_free') {
+      const managed = getManagedProviderKey(currentProvider);
+      if (!managed?.apiKey) return notConfigured('OpenRouter');
+      const openrouter = createOpenRouter({ apiKey: managed.apiKey });
       model = openrouter.chat(currentModel);
-
-    } else if (currentProvider === 'openrouter_free') {
-      // Handle OpenRouter Free - uses user's OpenRouter key same as regular OpenRouter
-      let openRouterSettings = await getUserOpenRouterSettings(userId);
-
-      if (!openRouterSettings && openRouterApiKey) {
-        await createOpenRouterSettings(userId, openRouterApiKey);
-        openRouterSettings = { apiKey: openRouterApiKey, isConfigured: true };
-      }
-
-      if (!openRouterSettings) {
-        return {
-          error: 'OpenRouter API key not configured. Please provide an API key for free models.',
-          status: 400,
-        };
-      }
-
-      const openrouter = createOpenRouter({
-        apiKey: openRouterSettings.apiKey,
-      });
-
-      model = openrouter.chat(currentModel);
-
     } else if (currentProvider === 'google') {
-      let googleSettings = await getUserGoogleSettings(userId);
-
-      if (!googleSettings && googleApiKey) {
-        await createGoogleSettings(userId, googleApiKey);
-        googleSettings = { apiKey: googleApiKey, isConfigured: true };
-      }
-
-      if (!googleSettings) {
-        return {
-          error: 'Google AI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      const googleProvider = createGoogleGenerativeAI({
-        apiKey: googleSettings.apiKey,
-      });
-      model = googleProvider(currentModel);
-
+      const managed = getManagedProviderKey('google');
+      if (!managed?.apiKey) return notConfigured('Google AI');
+      model = createGoogleGenerativeAI({ apiKey: managed.apiKey })(currentModel);
     } else if (currentProvider === 'openai') {
-      // Handle OpenAI setup
-      let openAISettings = await getUserOpenAISettings(userId);
-
-      if (!openAISettings && openAIApiKey) {
-        await createOpenAISettings(userId, openAIApiKey);
-        openAISettings = { apiKey: openAIApiKey, isConfigured: true };
-      }
-
-      if (!openAISettings) {
-        return {
-          error: 'OpenAI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create OpenAI provider instance with API key
-      const openai = createOpenAI({
-        apiKey: openAISettings.apiKey,
-      });
-      model = openai(currentModel);
-
+      const managed = getManagedProviderKey('openai');
+      if (!managed?.apiKey) return notConfigured('OpenAI');
+      model = createOpenAI({ apiKey: managed.apiKey })(currentModel);
     } else if (currentProvider === 'anthropic') {
-      // Handle Anthropic setup
-      let anthropicSettings = await getUserAnthropicSettings(userId);
-
-      if (!anthropicSettings && anthropicApiKey) {
-        await createAnthropicSettings(userId, anthropicApiKey);
-        anthropicSettings = { apiKey: anthropicApiKey, isConfigured: true };
-      }
-
-      if (!anthropicSettings) {
-        return {
-          error: 'Anthropic API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create Anthropic provider instance with API key
-      const anthropic = createAnthropic({
-        apiKey: anthropicSettings.apiKey,
-      });
-      model = anthropic(currentModel);
-
+      const managed = getManagedProviderKey('anthropic');
+      if (!managed?.apiKey) return notConfigured('Anthropic');
+      model = createAnthropic({ apiKey: managed.apiKey })(currentModel);
     } else if (currentProvider === 'xai') {
-      // Handle xAI setup
-      let xaiSettings = await getUserXAISettings(userId);
-
-      if (!xaiSettings && xaiApiKey) {
-        await createXAISettings(userId, xaiApiKey);
-        xaiSettings = { apiKey: xaiApiKey, isConfigured: true };
-      }
-
-      if (!xaiSettings) {
-        return {
-          error: 'xAI API key not configured. Please provide an API key.',
-          status: 400,
-        };
-      }
-
-      // Create xAI provider instance with API key
-      const xai = createXai({
-        apiKey: xaiSettings.apiKey,
-      });
-      model = xai(currentModel);
-
+      const managed = getManagedProviderKey('xai');
+      if (!managed?.apiKey) return notConfigured('xAI');
+      model = createXai({ apiKey: managed.apiKey })(currentModel);
     } else if (currentProvider === 'ollama') {
-      // Handle Ollama setup
-      let ollamaSettings = await getUserOllamaSettings(userId);
+      const managed = getManagedProviderKey('ollama');
+      if (!managed?.baseUrl) return notConfigured('Ollama');
 
-      if (!ollamaSettings && ollamaBaseUrl) {
-        await createOllamaSettings(userId, ollamaBaseUrl);
-        ollamaSettings = { baseUrl: ollamaBaseUrl, isConfigured: true };
+      try { new URL(managed.baseUrl); } catch {
+        return { error: 'Ollama base URL is not a valid URL.', status: 500 };
       }
 
-      if (!ollamaSettings) {
-        return {
-          error: 'Ollama base URL not configured. Please provide a base URL for your local Ollama instance.',
-          status: 400,
-        };
-      }
-
-      // Check if desktop bridge is available for local AI
       const { isFetchBridgeInitialized, getFetchBridge } = await import('@/lib/fetch-bridge');
-      const useOllamaDesktopBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
+      const useBridge = isFetchBridgeInitialized() && getFetchBridge().isUserConnected(userId);
 
-      // Basic URL format validation applies to both paths
-      try { new URL(ollamaSettings.baseUrl); } catch {
-        return { error: 'Ollama base URL is not a valid URL.', status: 400 };
-      }
-
-      if (!useOllamaDesktopBridge) {
-        // Direct HTTP: full SSRF validation on server
+      if (!useBridge) {
         const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
-        const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
-        if (!ollamaUrlValidation.valid) {
-          return {
-            error: `Ollama base URL blocked: ${ollamaUrlValidation.error}`,
-            status: 400,
-          };
+        const ok = await validateLocalProviderURL(managed.baseUrl);
+        if (!ok.valid) {
+          return { error: `Ollama base URL blocked: ${ok.error}`, status: 500 };
         }
       }
 
-      // Create Ollama provider instance with base URL
-      // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
-      const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
       const ollamaProvider = createOllama({
-        baseURL: ollamaApiUrl,
-        ...(useOllamaDesktopBridge ? {
+        baseURL: `${managed.baseUrl}/api`,
+        ...(useBridge ? {
           fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getFetchBridge()),
         } : {}),
       });
       model = ollamaProvider(currentModel);
-
     } else if (currentProvider === 'lmstudio') {
-      // Handle LM Studio setup
-      let lmstudioSettings = await getUserLMStudioSettings(userId);
+      const managed = getManagedProviderKey('lmstudio');
+      if (!managed?.baseUrl) return notConfigured('LM Studio');
 
-      if (!lmstudioSettings && lmstudioBaseUrl) {
-        await createLMStudioSettings(userId, lmstudioBaseUrl);
-        lmstudioSettings = { baseUrl: lmstudioBaseUrl, isConfigured: true };
+      try { new URL(managed.baseUrl); } catch {
+        return { error: 'LM Studio base URL is not a valid URL.', status: 500 };
       }
 
-      if (!lmstudioSettings) {
-        return {
-          error: 'LM Studio base URL not configured. Please provide a base URL for your local LM Studio server.',
-          status: 400,
-        };
-      }
+      const { isFetchBridgeInitialized: isLmInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
+      const useBridge = isLmInit() && getLmBridge().isUserConnected(userId);
 
-      // Check if desktop bridge is available for local AI
-      const { isFetchBridgeInitialized: isLmBridgeInit, getFetchBridge: getLmBridge } = await import('@/lib/fetch-bridge');
-      const useLmstudioDesktopBridge = isLmBridgeInit() && getLmBridge().isUserConnected(userId);
-
-      // Basic URL format validation applies to both paths
-      try { new URL(lmstudioSettings.baseUrl); } catch {
-        return { error: 'LM Studio base URL is not a valid URL.', status: 400 };
-      }
-
-      if (!useLmstudioDesktopBridge) {
-        // Direct HTTP: full SSRF validation on server
+      if (!useBridge) {
         const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
-        const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
-        if (!lmstudioUrlValidation.valid) {
-          return {
-            error: `LM Studio base URL blocked: ${lmstudioUrlValidation.error}`,
-            status: 400,
-          };
+        const ok = await validateLocalProviderURL(managed.baseUrl);
+        if (!ok.valid) {
+          return { error: `LM Studio base URL blocked: ${ok.error}`, status: 500 };
         }
       }
 
-      // Create LM Studio provider instance with base URL
-      // LM Studio uses OpenAI-compatible API - no path suffix needed as user provides full URL
       const lmstudioProvider = createOpenAICompatible({
         name: 'lmstudio',
-        baseURL: lmstudioSettings.baseUrl,
-        ...(useLmstudioDesktopBridge ? {
+        baseURL: managed.baseUrl,
+        ...(useBridge ? {
           fetch: (await import('@/lib/fetch-bridge/ws-proxy-fetch')).createWsProxyFetch(userId, getLmBridge()),
         } : {}),
       });
       model = lmstudioProvider(currentModel);
-
     } else if (currentProvider === 'azure_openai') {
-      // Handle Azure OpenAI setup - uses OpenAI-compatible API with Azure endpoint
-      const azureSettings = await getUserAzureOpenAISettings(userId);
+      const managed = getManagedProviderKey('azure_openai');
+      if (!managed?.apiKey || !managed?.baseUrl) return notConfigured('Azure OpenAI');
 
-      if (!azureSettings) {
-        return {
-          error: 'Azure OpenAI not configured. Please provide your API key and endpoint URL in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // SECURITY: Validate Azure OpenAI URL to prevent SSRF
       const { validateLocalProviderURL } = await import('@pagespace/lib/security/url-validator');
-      const azureUrlValidation = await validateLocalProviderURL(azureSettings.baseUrl);
-      if (!azureUrlValidation.valid) {
-        return {
-          error: `Azure OpenAI endpoint URL blocked: ${azureUrlValidation.error}`,
-          status: 400,
-        };
+      const ok = await validateLocalProviderURL(managed.baseUrl);
+      if (!ok.valid) {
+        return { error: `Azure OpenAI endpoint URL blocked: ${ok.error}`, status: 500 };
       }
 
       const azureProvider = createOpenAICompatible({
         name: 'azure_openai',
-        apiKey: azureSettings.apiKey,
-        baseURL: azureSettings.baseUrl,
+        apiKey: managed.apiKey,
+        baseURL: managed.baseUrl,
       });
       model = azureProvider(currentModel);
-
     } else if (currentProvider === 'glm') {
-      // Handle GLM Coder Plan setup
-      let glmSettings = await getUserGLMSettings(userId);
-
-      if (!glmSettings && glmApiKey) {
-        await createGLMSettings(userId, glmApiKey);
-        glmSettings = { apiKey: glmApiKey, isConfigured: true };
-      }
-
-      if (!glmSettings) {
-        return {
-          error: 'GLM API key not configured. Please configure your GLM Coder Plan API key in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // Create GLM provider instance using OpenAI-compatible endpoint
+      const managed = getManagedProviderKey('glm');
+      if (!managed?.apiKey) return notConfigured('GLM Coder Plan');
       const glmProvider = createOpenAICompatible({
         name: 'glm',
-        apiKey: glmSettings.apiKey,
+        apiKey: managed.apiKey,
         baseURL: 'https://api.z.ai/api/coding/paas/v4',
       });
       model = glmProvider(currentModel);
-
     } else if (currentProvider === 'minimax') {
-      // Handle MiniMax setup - uses Anthropic-compatible API
-      let minimaxSettings = await getUserMiniMaxSettings(userId);
-
-      if (!minimaxSettings && minimaxApiKey) {
-        await createMiniMaxSettings(userId, minimaxApiKey);
-        minimaxSettings = { apiKey: minimaxApiKey, isConfigured: true };
-      }
-
-      if (!minimaxSettings) {
-        return {
-          error: 'MiniMax API key not configured. Please configure your MiniMax API key in Settings > AI.',
-          status: 400,
-        };
-      }
-
-      // Create MiniMax provider instance using Anthropic-compatible endpoint
-      // Note: @ai-sdk/anthropic appends /messages directly, so /v1 must be in baseURL
+      const managed = getManagedProviderKey('minimax');
+      if (!managed?.apiKey) return notConfigured('MiniMax');
       const minimax = createAnthropic({
-        apiKey: minimaxSettings.apiKey,
+        apiKey: managed.apiKey,
         baseURL: 'https://api.minimax.io/anthropic/v1',
       });
       model = minimax(currentModel);
-
     } else {
       return {
         error: `Unsupported AI provider: ${currentProvider}`,
@@ -459,7 +211,6 @@ export async function createAIProvider(
       provider: currentProvider,
       modelName: currentModel,
     };
-
   } catch (error) {
     console.error('Error creating AI provider:', error);
     return {
@@ -492,16 +243,10 @@ export async function updateUserProviderSettings(
   }
 }
 
-/**
- * Helper function to create a NextResponse error from ProviderError
- */
 export function createProviderErrorResponse(error: ProviderError): NextResponse {
   return NextResponse.json({ error: error.error }, { status: error.status });
 }
 
-/**
- * Type guard to check if result is an error
- */
 export function isProviderError(result: ProviderResult | ProviderError): result is ProviderError {
   return 'error' in result;
 }

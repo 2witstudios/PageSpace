@@ -11,6 +11,64 @@ const aiLogger = loggers.ai.child({ module: 'ai-utils' });
 // Note: Message persistence is now handled by ChatStorageAdapter
 // This file only contains AI provider settings management
 
+export interface ManagedProviderKey {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Resolves an AI provider's managed credentials from deployment env vars.
+ * Returns null when the deployment hasn't configured this provider.
+ */
+export function getManagedProviderKey(provider: string): ManagedProviderKey | null {
+  switch (provider) {
+    case 'anthropic': {
+      const apiKey = process.env.ANTHROPIC_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'openai': {
+      const apiKey = process.env.OPENAI_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'google': {
+      const apiKey = process.env.GOOGLE_AI_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'xai': {
+      const apiKey = process.env.XAI_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'openrouter':
+    case 'openrouter_free': {
+      const apiKey = process.env.OPENROUTER_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'glm': {
+      const apiKey = process.env.GLM_CODER_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'minimax': {
+      const apiKey = process.env.MINIMAX_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
+    case 'ollama': {
+      const baseUrl = process.env.OLLAMA_BASE_URL;
+      return baseUrl ? { baseUrl } : null;
+    }
+    case 'lmstudio': {
+      const baseUrl = process.env.LMSTUDIO_BASE_URL;
+      return baseUrl ? { baseUrl } : null;
+    }
+    case 'azure_openai': {
+      const apiKey = process.env.AZURE_OPENAI_API_KEY;
+      const baseUrl = process.env.AZURE_OPENAI_ENDPOINT;
+      return apiKey && baseUrl ? { apiKey, baseUrl } : null;
+    }
+    default:
+      return null;
+  }
+}
+
 /**
  * Gets default PageSpace API settings
  * Returns the default GLM API key configured for the app (GLM 4.5 Air/Standard)

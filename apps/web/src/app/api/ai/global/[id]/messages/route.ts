@@ -388,13 +388,6 @@ export async function POST(
     const providerRequest: ProviderRequest = {
       selectedProvider,
       selectedModel,
-      googleApiKey,
-      openRouterApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
     };
 
     const providerResult = await createAIProvider(userId, providerRequest);
