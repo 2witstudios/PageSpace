@@ -49,48 +49,10 @@ describe('getBrowserSessionId', () => {
     sessionStorage.setItem('ps-browser-session-id', 'pinned-session');
     const { getBrowserSessionId } = await import('../browser-session-id');
     assert({
-      given: 'a value already at the new key',
+      given: 'a value already at the sessionStorage key',
       should: 'return that value verbatim',
       actual: getBrowserSessionId(),
       expected: 'pinned-session',
-    });
-  });
-
-  test('migrates legacy ps-tab-id to ps-browser-session-id', async () => {
-    sessionStorage.setItem('ps-tab-id', 'legacy-uuid-value');
-    const { getBrowserSessionId } = await import('../browser-session-id');
-    const returned = getBrowserSessionId();
-    assert({
-      given: 'sessionStorage contains the legacy ps-tab-id key',
-      should: 'migrate the value to ps-browser-session-id and remove the legacy key',
-      actual: {
-        returned,
-        newKey: sessionStorage.getItem('ps-browser-session-id'),
-        legacy: sessionStorage.getItem('ps-tab-id'),
-      },
-      expected: {
-        returned: 'legacy-uuid-value',
-        newKey: 'legacy-uuid-value',
-        legacy: null,
-      },
-    });
-  });
-
-  test('legacy migration prefers the new key when both exist', async () => {
-    sessionStorage.setItem('ps-browser-session-id', 'new-value');
-    sessionStorage.setItem('ps-tab-id', 'legacy-value');
-    const { getBrowserSessionId } = await import('../browser-session-id');
-    assert({
-      given: 'both legacy and new keys are populated',
-      should: 'return the new key without touching the legacy key',
-      actual: {
-        returned: getBrowserSessionId(),
-        legacy: sessionStorage.getItem('ps-tab-id'),
-      },
-      expected: {
-        returned: 'new-value',
-        legacy: 'legacy-value',
-      },
     });
   });
 });
