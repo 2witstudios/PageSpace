@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { and, eq, gte } from '@pagespace/db/operators';
+import { and, asc, eq, gte } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -51,7 +51,8 @@ export async function GET(request: Request) {
           eq(aiStreamSessions.status, 'streaming'),
           gte(aiStreamSessions.startedAt, tenMinutesAgo),
         )
-      );
+      )
+      .orderBy(asc(aiStreamSessions.startedAt), asc(aiStreamSessions.messageId));
 
     return NextResponse.json({
       streams: streams.map((s) => ({
