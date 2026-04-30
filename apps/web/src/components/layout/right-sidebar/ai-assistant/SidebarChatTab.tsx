@@ -27,6 +27,8 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAuth } from '@/hooks/useAuth';
 import { dedupRemoteStreams } from '@/lib/ai/streams/dedupRemoteStreams';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
@@ -262,21 +264,36 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Remote Streams (multiplayer rendering)
   // ============================================
-  // GlobalChatProvider runs the bootstrap+socket subscription for the global
-  // channel above this component, so global mode here only needs to read the
-  // store and render. Agent-mode wiring + render lands in Task 4 — for now
-  // the agent branch returns [].
+  // Global mode bootstrap+socket runs in GlobalChatProvider above this
+  // component; agent mode runs via useAgentChannelMultiplayer below. Either
+  // way this selector just reads the store and the pure helper picks the
+  // right channel + applies the conversation filter.
   const { user } = useAuth();
   const globalChannelId = user?.id ? `user:${user.id}:global` : null;
   const remoteStreams = usePendingStreamsStore(
-    useShallow((state) => {
-      if (selectedAgent) return [];
-      if (!globalChannelId || !globalConversationId) return [];
-      return state
-        .getRemotePageStreams(globalChannelId)
-        .filter((s) => s.conversationId === globalConversationId);
-    }),
+    useShallow((state) =>
+      selectChannelRemoteStreams(state, {
+        selectedAgent,
+        agentConversationId,
+        globalChannelId,
+        globalConversationId,
+      }),
+    ),
   );
+
+  // Agent-mode wiring (Tasks 4 + 5 + 6 for the sidebar). No-op when
+  // selectedAgent is null. Joins the agent socket room, bootstrap-replays
+  // in-flight streams, claims the dashboard stop slot under co-mount safety,
+  // registers `ai-channel-${agent.id}` with the editing store (same key as
+  // GlobalAssistantView agent mode → natural same-channel de-dup), and
+  // re-fetches the active conversation on socket reconnect.
+  useAgentChannelMultiplayer({
+    selectedAgent,
+    agentConversationId,
+    setLocalMessages: setMessages,
+    isLocallyStreaming: isStreaming,
+    surfaceComponentName: 'SidebarChatTab',
+  });
 
   const streamingAssistantText = useMemo(() => {
     if (!displayIsStreaming) return null;
