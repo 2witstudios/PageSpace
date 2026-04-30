@@ -212,10 +212,7 @@ export async function POST(
 
     const tabIdResult = validateTabIdHeader(request.headers.get('X-Tab-Id'));
     if (!tabIdResult.ok) {
-      const message = tabIdResult.reason === 'missing'
-        ? 'X-Tab-Id header is required'
-        : 'X-Tab-Id header exceeds maximum length';
-      return NextResponse.json({ error: message }, { status: 400 });
+      return NextResponse.json({ error: tabIdResult.message }, { status: tabIdResult.status });
     }
     const tabId = tabIdResult.tabId;
 

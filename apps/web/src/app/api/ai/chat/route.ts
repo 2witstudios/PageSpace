@@ -107,10 +107,7 @@ export async function POST(request: Request) {
 
     const tabIdResult = validateTabIdHeader(request.headers.get('X-Tab-Id'));
     if (!tabIdResult.ok) {
-      const message = tabIdResult.reason === 'missing'
-        ? 'X-Tab-Id header is required'
-        : 'X-Tab-Id header exceeds maximum length';
-      return NextResponse.json({ error: message }, { status: 400 });
+      return NextResponse.json({ error: tabIdResult.message }, { status: tabIdResult.status });
     }
     const tabId = tabIdResult.tabId;
 
@@ -398,6 +395,16 @@ export async function POST(request: Request) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+
+    // Kick off the userProfiles displayName fetch early so it overlaps with downstream
+    // setup (rate-limit checks, tool resolution, conversation load) and never blocks the
+    // lifecycle handoff. Falls back to [] on failure so consumers don't have to handle rejection.
+    const userProfilePromise = db
+      .select({ displayName: userProfiles.displayName })
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, userId))
+      .limit(1)
+      .catch(() => [] as { displayName: string | null }[]);
 
     // Pro subscription check for special providers
     const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
@@ -812,17 +819,8 @@ export async function POST(request: Request) {
 
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
-    let displayName = user?.name ?? 'Someone';
-    try {
-      const [userProfile] = await db
-        .select({ displayName: userProfiles.displayName })
-        .from(userProfiles)
-        .where(eq(userProfiles.userId, userId!))
-        .limit(1);
-      displayName = userProfile?.displayName ?? displayName;
-    } catch {
-      // userProfiles is best-effort enrichment — keep the auth-user name fallback already set
-    }
+    const [userProfile] = await userProfilePromise;
+    const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,

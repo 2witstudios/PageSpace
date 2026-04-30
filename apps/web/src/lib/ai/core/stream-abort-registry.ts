@@ -24,7 +24,12 @@ const registry = new Map<string, StreamEntry>();
 const messageIdToStreamId = new Map<string, string>();
 const streamIdToMessageId = new Map<string, string>();
 
-const removeStreamIdMessageIdLink = (streamId: string): void => {
+const linkStream = (streamId: string, messageId: string): void => {
+  messageIdToStreamId.set(messageId, streamId);
+  streamIdToMessageId.set(streamId, messageId);
+};
+
+const unlinkStream = (streamId: string): void => {
   const messageId = streamIdToMessageId.get(streamId);
   if (messageId === undefined) return;
   streamIdToMessageId.delete(streamId);
@@ -45,7 +50,7 @@ const startCleanupInterval = () => {
     for (const [streamId, entry] of registry.entries()) {
       if (now - entry.createdAt > MAX_STREAM_AGE_MS) {
         registry.delete(streamId);
-        removeStreamIdMessageIdLink(streamId);
+        unlinkStream(streamId);
       }
     }
   }, CLEANUP_INTERVAL_MS);
@@ -91,8 +96,7 @@ export const createStreamAbortController = ({
   });
 
   if (messageId) {
-    messageIdToStreamId.set(messageId, streamId);
-    streamIdToMessageId.set(streamId, messageId);
+    linkStream(streamId, messageId);
   }
 
   return {
@@ -129,7 +133,7 @@ export const abortStream = ({
 
   entry.controller.abort();
   registry.delete(streamId);
-  removeStreamIdMessageIdLink(streamId);
+  unlinkStream(streamId);
 
   return { aborted: true, reason: 'Stream aborted by user request' };
 };
@@ -139,7 +143,7 @@ export const abortStream = ({
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
   registry.delete(streamId);
-  removeStreamIdMessageIdLink(streamId);
+  unlinkStream(streamId);
 };
 
 export const abortStreamByMessageId = ({
