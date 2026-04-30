@@ -65,6 +65,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { userProfiles } from '@pagespace/db/schema/members';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -110,6 +111,14 @@ export async function POST(request: Request) {
     if (multicastFinished || !serverAssistantMessageId) return;
     multicastFinished = true;
     try { streamMulticastRegistry.finish(serverAssistantMessageId, aborted); } catch {}
+    try {
+      Promise.resolve(
+        db
+          .update(aiStreamSessions)
+          .set({ status: aborted ? 'aborted' : 'complete', completedAt: new Date() })
+          .where(eq(aiStreamSessions.messageId, serverAssistantMessageId))
+      ).catch(() => {});
+    } catch {}
     broadcastAiStreamComplete({
       messageId: serverAssistantMessageId,
       pageId: chatId!,
@@ -847,6 +856,26 @@ export async function POST(request: Request) {
         conversationId: conversationId!,
         tabId,
       });
+    } catch {}
+
+    try {
+      Promise.resolve(
+        db
+          .insert(aiStreamSessions)
+          .values({
+            messageId: serverAssistantMessageId,
+            channelId: chatId,
+            conversationId: conversationId!,
+            userId: userId!,
+            displayName,
+            tabId,
+            status: 'streaming',
+          })
+          .onConflictDoUpdate({
+            target: aiStreamSessions.messageId,
+            set: { status: 'streaming', completedAt: null },
+          })
+      ).catch(() => {});
     } catch {}
 
     broadcastAiStreamStart({
