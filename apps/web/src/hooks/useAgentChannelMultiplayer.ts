@@ -23,6 +23,13 @@ export interface UseAgentChannelMultiplayerOptions {
   isLocallyStreaming: boolean;
   /** componentName for the editing-store metadata. */
   surfaceComponentName: string;
+  /**
+   * Re-fetch handler invoked on socket reconnect (after the initial connect).
+   * Surface owns this — dashboard agent mode passes the dashboard store
+   * loader, sidebar agent mode passes its own sidebar-state loader, since
+   * those two surfaces resolve to different agents/conversations.
+   */
+  loadConversation: (conversationId: string) => void | Promise<void>;
 }
 
 /**
@@ -52,6 +59,7 @@ export function useAgentChannelMultiplayer({
   setLocalMessages,
   isLocallyStreaming,
   surfaceComponentName,
+  loadConversation,
 }: UseAgentChannelMultiplayerOptions): void {
   const channelId = selectedAgent?.id;
 
@@ -66,8 +74,20 @@ export function useAgentChannelMultiplayer({
 
   // Single-writer ownership of the dashboard store's stop slot. Only this
   // surface's onOwnStreamFinalize clears the slot, and only when this surface
-  // claimed it on bootstrap.
+  // claimed it on bootstrap. The unmount cleanup below also clears it if
+  // this surface unmounts mid-stream — useChannelStreamSocket intentionally
+  // does not fire onOwnStreamFinalize on teardown, so without the cleanup
+  // a navigate-away mid-stream would leave the slot stuck.
   const ownedStopSlotRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      if (!ownedStopSlotRef.current) return;
+      ownedStopSlotRef.current = false;
+      const dashboard = usePageAgentDashboardStore.getState();
+      dashboard.setAgentStreaming(false);
+      dashboard.setAgentStopStreaming(null);
+    };
+  }, []);
 
   useChannelStreamSocket(channelId, {
     onStreamComplete: (messageId) => {
@@ -116,11 +136,15 @@ export function useAgentChannelMultiplayer({
 
   // Reconnect-refresh: re-fetch the active agent conversation when the socket
   // transitions back to connected. Skipped on the very first connect (already
-  // covered by mount-time load).
+  // covered by mount-time load). Uses the surface-provided loadConversation
+  // because the two consuming surfaces (dashboard agent mode + sidebar agent
+  // mode) resolve their agent state from different stores; one shared loader
+  // would refresh the wrong conversation in the other surface.
   const socketConnectionStatus = useSocketStore((s) => s.connectionStatus);
   const prevConnectionStatusRef = useRef<ConnectionStatus | null>(null);
   const hasInitialConnectRef = useRef(false);
-  const loadConversation = usePageAgentDashboardStore((s) => s.loadConversation);
+  const loadConversationRef = useRef(loadConversation);
+  loadConversationRef.current = loadConversation;
   useEffect(() => {
     if (!selectedAgent) return;
     const prev = prevConnectionStatusRef.current;
@@ -129,10 +153,10 @@ export function useAgentChannelMultiplayer({
       shouldRefreshOnReconnect(prev, socketConnectionStatus, hasInitialConnectRef.current)
       && agentConversationId
     ) {
-      loadConversation(agentConversationId);
+      loadConversationRef.current(agentConversationId);
     }
     if (prev !== 'connected' && socketConnectionStatus === 'connected') {
       hasInitialConnectRef.current = true;
     }
-  }, [selectedAgent, socketConnectionStatus, agentConversationId, loadConversation]);
+  }, [selectedAgent, socketConnectionStatus, agentConversationId]);
 }

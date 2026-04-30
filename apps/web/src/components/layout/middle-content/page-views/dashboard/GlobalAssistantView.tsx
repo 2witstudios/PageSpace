@@ -126,6 +126,7 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+  const loadAgentConversation = usePageAgentDashboardStore((state) => state.loadConversation);
 
   // Remote in-progress streams for the active chat — channel + filter logic
   // lives in the pure helper so both this view and the sidebar share one
@@ -619,6 +620,7 @@ const GlobalAssistantView: React.FC = () => {
     setLocalMessages: setAgentMessages,
     isLocallyStreaming: isStreaming,
     surfaceComponentName: 'GlobalAssistantView',
+    loadConversation: loadAgentConversation,
   });
 
   // Register streaming state with editing store

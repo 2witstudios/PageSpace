@@ -75,6 +75,18 @@ const seedDashboard = (overrides: Partial<{ agentStopStreaming: (() => void) | n
   });
 };
 
+const baseOptions = (
+  overrides: Partial<Parameters<typeof useAgentChannelMultiplayer>[0]>,
+): Parameters<typeof useAgentChannelMultiplayer>[0] => ({
+  selectedAgent: null,
+  agentConversationId: null,
+  setLocalMessages: vi.fn(),
+  isLocallyStreaming: false,
+  surfaceComponentName: 'TestSurface',
+  loadConversation: vi.fn(),
+  ...overrides,
+});
+
 const renderWiring = (
   options: Parameters<typeof useAgentChannelMultiplayer>[0],
 ) => renderHook(({ opts }) => useAgentChannelMultiplayer(opts), {
@@ -93,25 +105,16 @@ describe('useAgentChannelMultiplayer', () => {
 
   describe('subscription', () => {
     it('given a selected agent, the channel-stream socket should be subscribed to the agent id', () => {
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       expect(capturedChannel.channelId).toBe(AGENT.id);
     });
 
     it('given selectedAgent is null, the channel-stream socket should be subscribed to undefined (no-op)', () => {
-      renderWiring({
-        selectedAgent: null,
-        agentConversationId: null,
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      renderWiring(baseOptions({}));
 
       expect(capturedChannel.channelId).toBeUndefined();
     });
@@ -120,13 +123,10 @@ describe('useAgentChannelMultiplayer', () => {
   describe('own-stream slot ownership', () => {
     it('given onOwnStreamBootstrap fires while the dashboard stop slot is empty, the slot should be claimed', () => {
       seedDashboard({ agentStopStreaming: null });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
@@ -140,13 +140,10 @@ describe('useAgentChannelMultiplayer', () => {
     it('given onOwnStreamBootstrap fires while the slot is already populated, the existing slot should be preserved', () => {
       const existingStop = vi.fn();
       seedDashboard({ agentStopStreaming: existingStop });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
@@ -157,13 +154,10 @@ describe('useAgentChannelMultiplayer', () => {
 
     it('given onOwnStreamFinalize fires after this surface claimed the slot, the slot should be cleared', () => {
       seedDashboard({ agentStopStreaming: null });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
@@ -180,13 +174,10 @@ describe('useAgentChannelMultiplayer', () => {
     it('given onOwnStreamFinalize fires when this surface never claimed the slot, the existing stop should remain', () => {
       const otherSurfaceStop = vi.fn();
       seedDashboard({ agentStopStreaming: otherSurfaceStop });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       // Bootstrap fires but slot is occupied; this surface declines to claim.
       act(() => {
@@ -202,13 +193,10 @@ describe('useAgentChannelMultiplayer', () => {
 
     it("given the slot is claimed, calling the stop function in the slot should invoke the abort endpoint", () => {
       seedDashboard({ agentStopStreaming: null });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
@@ -238,13 +226,11 @@ describe('useAgentChannelMultiplayer', () => {
       ]);
 
       const setLocalMessages = vi.fn();
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-active',
         setLocalMessages,
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onStreamComplete?.('msg-done');
@@ -277,13 +263,11 @@ describe('useAgentChannelMultiplayer', () => {
       ]);
 
       const setLocalMessages = vi.fn();
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-active',
         setLocalMessages,
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onStreamComplete?.('msg-stale');
@@ -308,13 +292,11 @@ describe('useAgentChannelMultiplayer', () => {
       ]);
 
       const setLocalMessages = vi.fn();
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-active',
         setLocalMessages,
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       act(() => {
         capturedChannel.options?.onStreamComplete?.('msg-empty');
@@ -325,50 +307,18 @@ describe('useAgentChannelMultiplayer', () => {
   });
 
   describe('reconnect refresh', () => {
-    it('given the very first connect, the agent conversation should NOT be reloaded (mount-time load already covers it)', () => {
+    it('given the very first connect, the surface-provided loadConversation should NOT be called (mount-time load already covers it)', () => {
       seedDashboard();
-      const result = renderHook(
-        ({ status }: { status: 'disconnected' | 'connecting' | 'connected' | 'error' }) => {
-          mockSocketStatus.current = status;
-          return useAgentChannelMultiplayer({
-            selectedAgent: AGENT,
-            agentConversationId: 'conv-1',
-            setLocalMessages: vi.fn(),
-            isLocallyStreaming: false,
-            surfaceComponentName: 'TestSurface',
-          });
-        },
-        {
-          initialProps: {
-            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
-          },
-        },
-      );
-
-      const loadConversation = vi.fn();
-      usePageAgentDashboardStore.setState({ loadConversation });
-
-      // First connect.
-      result.rerender({ status: 'connected' });
-      expect(loadConversation).not.toHaveBeenCalled();
-    });
-
-    it('given a reconnect AFTER the initial connect, the active conversation should be reloaded', async () => {
-      seedDashboard();
-      const loadConversation = vi.fn();
-      usePageAgentDashboardStore.setState({ loadConversation });
-
+      const surfaceLoadConversation = vi.fn();
       mockSocketStatus.current = 'disconnected';
       const result = renderHook(
         ({ status }: { status: 'disconnected' | 'connecting' | 'connected' | 'error' }) => {
           mockSocketStatus.current = status;
-          return useAgentChannelMultiplayer({
+          return useAgentChannelMultiplayer(baseOptions({
             selectedAgent: AGENT,
             agentConversationId: 'conv-1',
-            setLocalMessages: vi.fn(),
-            isLocallyStreaming: false,
-            surfaceComponentName: 'TestSurface',
-          });
+            loadConversation: surfaceLoadConversation,
+          }));
         },
         {
           initialProps: {
@@ -379,31 +329,82 @@ describe('useAgentChannelMultiplayer', () => {
 
       // First connect.
       result.rerender({ status: 'connected' });
-      expect(loadConversation).not.toHaveBeenCalled();
+      expect(surfaceLoadConversation).not.toHaveBeenCalled();
+    });
+
+    it('given a reconnect AFTER the initial connect, the surface-provided loadConversation should be called with the active conversation id', () => {
+      seedDashboard();
+      const surfaceLoadConversation = vi.fn();
+      mockSocketStatus.current = 'disconnected';
+      const result = renderHook(
+        ({ status }: { status: 'disconnected' | 'connecting' | 'connected' | 'error' }) => {
+          mockSocketStatus.current = status;
+          return useAgentChannelMultiplayer(baseOptions({
+            selectedAgent: AGENT,
+            agentConversationId: 'conv-1',
+            loadConversation: surfaceLoadConversation,
+          }));
+        },
+        {
+          initialProps: {
+            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+          },
+        },
+      );
+
+      // First connect — primes hasInitialConnect, no refresh.
+      result.rerender({ status: 'connected' });
+      expect(surfaceLoadConversation).not.toHaveBeenCalled();
 
       // Goes offline, then reconnects.
       result.rerender({ status: 'disconnected' });
       result.rerender({ status: 'connected' });
 
-      expect(loadConversation).toHaveBeenCalledTimes(1);
-      expect(loadConversation).toHaveBeenCalledWith('conv-1');
+      expect(surfaceLoadConversation).toHaveBeenCalledTimes(1);
+      expect(surfaceLoadConversation).toHaveBeenCalledWith('conv-1');
+    });
+
+    it('given a custom loadConversation is provided, the dashboard store loadConversation should NOT be called (the surface owns the refresh path — sidebar agent state vs dashboard state)', () => {
+      seedDashboard();
+      const dashboardLoad = vi.fn();
+      usePageAgentDashboardStore.setState({ loadConversation: dashboardLoad });
+      const surfaceLoadConversation = vi.fn();
+
+      mockSocketStatus.current = 'disconnected';
+      const result = renderHook(
+        ({ status }: { status: 'disconnected' | 'connecting' | 'connected' | 'error' }) => {
+          mockSocketStatus.current = status;
+          return useAgentChannelMultiplayer(baseOptions({
+            selectedAgent: AGENT,
+            agentConversationId: 'conv-1',
+            loadConversation: surfaceLoadConversation,
+          }));
+        },
+        {
+          initialProps: {
+            status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+          },
+        },
+      );
+
+      // Initial connect, then reconnect.
+      result.rerender({ status: 'connected' });
+      result.rerender({ status: 'disconnected' });
+      result.rerender({ status: 'connected' });
+
+      expect(surfaceLoadConversation).toHaveBeenCalledWith('conv-1');
+      expect(dashboardLoad).not.toHaveBeenCalled();
     });
 
     it('given selectedAgent is null, reconnect should never trigger a refresh', () => {
       seedDashboard();
-      const loadConversation = vi.fn();
-      usePageAgentDashboardStore.setState({ loadConversation });
-
+      const surfaceLoadConversation = vi.fn();
       const result = renderHook(
         ({ status }: { status: 'disconnected' | 'connecting' | 'connected' | 'error' }) => {
           mockSocketStatus.current = status;
-          return useAgentChannelMultiplayer({
-            selectedAgent: null,
-            agentConversationId: null,
-            setLocalMessages: vi.fn(),
-            isLocallyStreaming: false,
-            surfaceComponentName: 'TestSurface',
-          });
+          return useAgentChannelMultiplayer(baseOptions({
+            loadConversation: surfaceLoadConversation,
+          }));
         },
         {
           initialProps: {
@@ -416,19 +417,61 @@ describe('useAgentChannelMultiplayer', () => {
       result.rerender({ status: 'disconnected' });
       result.rerender({ status: 'connected' });
 
-      expect(loadConversation).not.toHaveBeenCalled();
+      expect(surfaceLoadConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cleanup on unmount', () => {
+    it('given this surface claimed the dashboard stop slot then unmounts mid-stream, the slot should be cleared on cleanup', () => {
+      seedDashboard({ agentStopStreaming: null });
+      const { unmount } = renderWiring(baseOptions({
+        selectedAgent: AGENT,
+        agentConversationId: 'conv-1',
+      }));
+
+      // Bootstrap claims the slot.
+      act(() => {
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+      });
+      expect(typeof usePageAgentDashboardStore.getState().agentStopStreaming).toBe('function');
+
+      // Surface unmounts before stream finalizes (e.g. user navigates away).
+      // useChannelStreamSocket aborts the controller but does NOT fire
+      // onOwnStreamFinalize, so the hook's own cleanup must clear the slot.
+      unmount();
+
+      const state = usePageAgentDashboardStore.getState();
+      expect(state.agentStopStreaming).toBeNull();
+      expect(state.isAgentStreaming).toBe(false);
+    });
+
+    it('given this surface never claimed the slot, unmount should NOT clear another writer\'s slot', () => {
+      const otherSurfaceStop = vi.fn();
+      seedDashboard({ agentStopStreaming: otherSurfaceStop, isAgentStreaming: true });
+      const { unmount } = renderWiring(baseOptions({
+        selectedAgent: AGENT,
+        agentConversationId: 'conv-1',
+      }));
+
+      // Bootstrap fires but slot is occupied — this surface declines.
+      act(() => {
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+      });
+      // Surface unmounts. The other writer's slot must survive.
+      unmount();
+
+      expect(usePageAgentDashboardStore.getState().agentStopStreaming).toBe(otherSurfaceStop);
+      expect(usePageAgentDashboardStore.getState().isAgentStreaming).toBe(true);
     });
   });
 
   describe('editing-store registration', () => {
     it('given a selected agent, the registration key should be `ai-channel-${agent.id}`', () => {
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
         isLocallyStreaming: true,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       const lastCall = mockUseStreamingRegistration.mock.calls.at(-1);
       expect(lastCall?.[0]).toBe(`ai-channel-${AGENT.id}`);
@@ -436,13 +479,9 @@ describe('useAgentChannelMultiplayer', () => {
     });
 
     it('given selectedAgent is null, the registration should be inactive (isStreaming=false)', () => {
-      renderWiring({
-        selectedAgent: null,
-        agentConversationId: null,
-        setLocalMessages: vi.fn(),
+      renderWiring(baseOptions({
         isLocallyStreaming: true,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       const lastCall = mockUseStreamingRegistration.mock.calls.at(-1);
       expect(lastCall?.[1]).toBe(false);
@@ -450,13 +489,10 @@ describe('useAgentChannelMultiplayer', () => {
 
     it('given an agent and the dashboard store reports streaming (e.g. bootstrap-replay), the registration should be active even if the surface itself is not streaming', () => {
       seedDashboard({ isAgentStreaming: true });
-      renderWiring({
+      renderWiring(baseOptions({
         selectedAgent: AGENT,
         agentConversationId: 'conv-1',
-        setLocalMessages: vi.fn(),
-        isLocallyStreaming: false,
-        surfaceComponentName: 'TestSurface',
-      });
+      }));
 
       const lastCall = mockUseStreamingRegistration.mock.calls.at(-1);
       expect(lastCall?.[1]).toBe(true);

@@ -204,6 +204,7 @@ const SidebarChatTab: React.FC = () => {
     selectAgent,
     createNewConversation: createAgentConversation,
     refreshConversation: refreshAgentConversation,
+    loadConversation: loadSidebarAgentConversation,
   } = usePageAgentSidebarState();
 
   // ============================================
@@ -294,6 +295,7 @@ const SidebarChatTab: React.FC = () => {
     setLocalMessages: setMessages,
     isLocallyStreaming: isStreaming,
     surfaceComponentName: 'SidebarChatTab',
+    loadConversation: loadSidebarAgentConversation,
   });
 
   const streamingAssistantText = useMemo(() => {
