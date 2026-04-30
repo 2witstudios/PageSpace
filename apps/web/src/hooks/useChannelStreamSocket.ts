@@ -23,13 +23,6 @@ export function useChannelStreamSocket(
   options?: UseChannelStreamSocketOptions,
 ): void {
   const socket = useSocket();
-  const controllersRef = useRef<Map<string, AbortController>>(new Map());
-  // Tracks which messageIds have had onStreamComplete called to prevent double-firing
-  // when both the SSE done sentinel and the chat:stream_complete socket event arrive.
-  const processedRef = useRef<Set<string>>(new Set());
-  // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own" lookup
-  // and a one-shot guard for onOwnStreamFinalize.
-  const ownStreamIdsRef = useRef<Set<string>>(new Set());
   // Stable refs so callback identity changes never trigger handler re-registration.
   const onStreamCompleteRef = useRef(options?.onStreamComplete);
   const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
@@ -43,25 +36,33 @@ export function useChannelStreamSocket(
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
+    const controllers = new Map<string, AbortController>();
+    // Tracks which messageIds have had onStreamComplete called to prevent
+    // double-firing when both the SSE done sentinel and chat:stream_complete
+    // arrive, and to gate post-error stream_complete events.
+    const processed = new Set<string>();
+    // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own"
+    // lookup and a one-shot guard for onOwnStreamFinalize.
+    const ownStreamIds = new Set<string>();
 
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
     const fireComplete = (messageId: string) => {
-      if (processedRef.current.has(messageId)) return;
-      processedRef.current.add(messageId);
+      if (processed.has(messageId)) return;
+      processed.add(messageId);
       onStreamCompleteRef.current?.(messageId);
     };
 
     const fireOwnFinalize = (messageId: string) => {
-      if (!ownStreamIdsRef.current.has(messageId)) return;
-      ownStreamIdsRef.current.delete(messageId);
+      if (!ownStreamIds.has(messageId)) return;
+      ownStreamIds.delete(messageId);
       onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
     const startConsume = (messageId: string) => {
       const controller = new AbortController();
-      controllersRef.current.set(messageId, controller);
+      controllers.set(messageId, controller);
 
       consumeStreamJoin(messageId, controller.signal, (chunk) => {
         appendText(messageId, chunk);
@@ -70,7 +71,7 @@ export function useChannelStreamSocket(
           // Cleanup runs synchronously on unmount but the SSE promise resolves
           // asynchronously after controller.abort(); skip post-teardown effects.
           if (cancelled) return;
-          controllersRef.current.delete(messageId);
+          controllers.delete(messageId);
           try {
             fireComplete(messageId);
           } finally {
@@ -79,12 +80,12 @@ export function useChannelStreamSocket(
           }
         })
         .catch((err) => {
-          controllersRef.current.delete(messageId);
           if (cancelled) return;
+          controllers.delete(messageId);
           // Mark as processed so a subsequent chat:stream_complete event for
           // the same messageId is a no-op for onStreamComplete: the catch
           // path already finalized this stream locally.
-          processedRef.current.add(messageId);
+          processed.add(messageId);
           removeStream(messageId);
           fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
@@ -106,8 +107,8 @@ export function useChannelStreamSocket(
         const data = (await res.json()) as { streams?: ActiveStreamRow[] };
         if (cancelled) return;
         for (const stream of data.streams ?? []) {
-          if (processedRef.current.has(stream.messageId)) continue;
-          if (controllersRef.current.has(stream.messageId)) continue;
+          if (processed.has(stream.messageId)) continue;
+          if (controllers.has(stream.messageId)) continue;
           const isOwn = stream.triggeredBy.browserSessionId === localBrowserSessionId;
           addStream({
             messageId: stream.messageId,
@@ -117,7 +118,7 @@ export function useChannelStreamSocket(
             isOwn,
           });
           if (isOwn) {
-            ownStreamIdsRef.current.add(stream.messageId);
+            ownStreamIds.add(stream.messageId);
             onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
           }
           startConsume(stream.messageId);
@@ -131,7 +132,7 @@ export function useChannelStreamSocket(
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
       if (payload.triggeredBy.browserSessionId === localBrowserSessionId) return;
-      if (controllersRef.current.has(payload.messageId)) return;
+      if (controllers.has(payload.messageId)) return;
 
       addStream({
         messageId: payload.messageId,
@@ -146,10 +147,10 @@ export function useChannelStreamSocket(
 
     const handleStreamComplete = (payload: AiStreamCompletePayload) => {
       if (payload.pageId !== channelId) return;
-      const controller = controllersRef.current.get(payload.messageId);
+      const controller = controllers.get(payload.messageId);
       if (controller) {
         controller.abort();
-        controllersRef.current.delete(payload.messageId);
+        controllers.delete(payload.messageId);
       }
       try {
         fireComplete(payload.messageId);
@@ -166,12 +167,9 @@ export function useChannelStreamSocket(
       cancelled = true;
       socket.off('chat:stream_start', handleStreamStart);
       socket.off('chat:stream_complete', handleStreamComplete);
-      for (const controller of controllersRef.current.values()) {
+      for (const controller of controllers.values()) {
         controller.abort();
       }
-      controllersRef.current.clear();
-      processedRef.current.clear();
-      ownStreamIdsRef.current.clear();
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);
