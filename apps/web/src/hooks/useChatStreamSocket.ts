@@ -26,10 +26,6 @@ export function useChatStreamSocket(
   const onStreamCompleteRef = useRef(onStreamComplete);
   onStreamCompleteRef.current = onStreamComplete;
 
-  // currentUserId is currently unused (filter switched to tabId), retained
-  // in the signature so callers don't need to change at the page-level boundary.
-  void currentUserId;
-
   useEffect(() => {
     if (!socket || !channelId) return;
 
