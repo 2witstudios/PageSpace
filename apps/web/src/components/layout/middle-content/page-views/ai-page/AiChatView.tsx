@@ -323,22 +323,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useShallow((state) => state.getRemotePageStreams(page.id))
   );
 
-  const ownStreams = usePendingStreamsStore(
-    useShallow((state) => state.getOwnStreams(page.id))
+  // Subscribe to a primitive (messageId | undefined) so token appends to the
+  // own stream don't churn this hook's identity and re-render ChatLayout per chunk.
+  const ownStreamMessageId = usePendingStreamsStore(
+    (state) => state.getOwnStreams(page.id)[0]?.messageId
   );
 
-  const effectiveIsStreaming = isStreaming || ownStreams.length > 0;
+  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
 
   const effectiveStop = useCallback(() => {
     if (isStreaming) {
       stop();
       return;
     }
-    const own = ownStreams[0];
-    if (own) {
-      abortActiveStreamByMessageId({ messageId: own.messageId });
+    if (ownStreamMessageId) {
+      abortActiveStreamByMessageId({ messageId: ownStreamMessageId });
     }
-  }, [isStreaming, stop, ownStreams]);
+  }, [isStreaming, stop, ownStreamMessageId]);
 
   usePageSocketRoom(page.id);
   useChatStreamSocket(page.id, user?.id, (messageId) => {
