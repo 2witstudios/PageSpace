@@ -334,6 +334,44 @@ describe('useChannelStreamSocket', () => {
 
       expect(onStreamComplete).toHaveBeenCalledTimes(1);
     });
+
+    it('given SSE rejects then chat:stream_complete fires, should NOT call onStreamComplete', async () => {
+      let rejectJoin!: (err: Error) => void;
+      mockConsumeStreamJoin.mockReturnValueOnce(
+        new Promise((_res, rej) => { rejectJoin = rej; }),
+      );
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      await act(async () => { rejectJoin(new Error('network down')); await Promise.resolve(); });
+
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      expect(onStreamComplete).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('given SSE resolves after unmount via aborted controller, should NOT call onStreamComplete', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onStreamComplete = vi.fn();
+
+      const { unmount } = renderHook(() =>
+        useChannelStreamSocket('page-a', { onStreamComplete }),
+      );
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      unmount();
+
+      await act(async () => { resolveJoin(); await Promise.resolve(); });
+
+      expect(onStreamComplete).not.toHaveBeenCalled();
+    });
   });
 
   // A3 — callback ref: onStreamComplete change should not re-register handlers

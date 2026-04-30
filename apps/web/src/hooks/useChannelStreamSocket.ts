@@ -67,6 +67,9 @@ export function useChannelStreamSocket(
         appendText(messageId, chunk);
       })
         .then(() => {
+          // Cleanup runs synchronously on unmount but the SSE promise resolves
+          // asynchronously after controller.abort(); skip post-teardown effects.
+          if (cancelled) return;
           controllersRef.current.delete(messageId);
           try {
             fireComplete(messageId);
@@ -77,6 +80,11 @@ export function useChannelStreamSocket(
         })
         .catch((err) => {
           controllersRef.current.delete(messageId);
+          if (cancelled) return;
+          // Mark as processed so a subsequent chat:stream_complete event for
+          // the same messageId is a no-op for onStreamComplete: the catch
+          // path already finalized this stream locally.
+          processedRef.current.add(messageId);
           removeStream(messageId);
           fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
