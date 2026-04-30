@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
 import { pages, chatMessages } from '@pagespace/db/schema/core'
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks'
+import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
@@ -241,13 +241,47 @@ export const pageReadTools = {
             .where(eq(taskItems.taskListId, taskList.id))
             .orderBy(asc(taskItems.position));
 
-          // Calculate progress
+          // Resolve available statuses for this task list. Falls back to
+          // documented defaults when no custom configs are present so the
+          // AI always sees a concrete list.
+          const statusConfigs = await db.query.taskStatusConfigs.findMany({
+            where: eq(taskStatusConfigs.taskListId, taskList.id),
+            orderBy: [asc(taskStatusConfigs.position)],
+          });
+
+          const availableStatuses = statusConfigs.length > 0
+            ? statusConfigs.map(c => ({
+                slug: c.slug,
+                label: c.name,
+                group: c.group,
+                position: c.position,
+                color: c.color,
+              }))
+            : DEFAULT_TASK_STATUSES.map(s => ({
+                slug: s.slug,
+                label: s.name,
+                group: s.group,
+                position: s.position,
+                color: s.color,
+              }));
+
+          const slugToGroup = new Map(availableStatuses.map(s => [s.slug, s.group]));
+
+          // Dynamic progress breakdown — keyed by both group and slug so
+          // custom statuses surface alongside the standard groups.
           const totalTasks = tasks.length;
-          const completedTasks = tasks.filter(t => t.status === 'completed').length;
-          const inProgressTasks = tasks.filter(t => t.status === 'in_progress').length;
-          const pendingTasks = tasks.filter(t => t.status === 'pending').length;
-          const blockedTasks = tasks.filter(t => t.status === 'blocked').length;
-          const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+          const byGroup: Record<string, number> = { todo: 0, in_progress: 0, done: 0 };
+          const bySlug: Record<string, number> = {};
+          for (const t of tasks) {
+            bySlug[t.status] = (bySlug[t.status] || 0) + 1;
+            const group = slugToGroup.get(t.status)
+              || (t.completedAt ? 'done' : t.status === 'in_progress' || t.status === 'blocked' ? 'in_progress' : 'todo');
+            byGroup[group] = (byGroup[group] || 0) + 1;
+          }
+          const completedCount = byGroup.done || 0;
+          const progressPercentage = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
+
+          const todoCount = byGroup.todo || 0;
 
           return {
             success: true,
@@ -266,22 +300,22 @@ export const pageReadTools = {
               completedAt: t.completedAt,
               linkedPageId: t.pageId,
             })),
+            availableStatuses,
             progress: {
               total: totalTasks,
-              completed: completedTasks,
-              inProgress: inProgressTasks,
-              pending: pendingTasks,
-              blocked: blockedTasks,
               percentage: progressPercentage,
+              byGroup,
+              bySlug,
             },
             summary: totalTasks > 0
-              ? `Task list "${page.title}" is ${progressPercentage}% complete (${completedTasks}/${totalTasks} tasks done)`
+              ? `Task list "${page.title}" is ${progressPercentage}% complete (${completedCount}/${totalTasks} tasks done)`
               : `Task list "${page.title}" has no tasks yet`,
             nextSteps: totalTasks === 0 ? [
               'Use update_task with this pageId to add tasks',
-            ] : pendingTasks > 0 ? [
-              'Use update_task with taskId to update task status',
+            ] : todoCount > 0 ? [
+              'Use update_task with taskId to update task status (see availableStatuses for valid slugs)',
               'Each task has a linked document page for notes',
+              'Pass delete: true with a taskId to remove a task',
             ] : [
               'All tasks are completed or in progress',
             ],
