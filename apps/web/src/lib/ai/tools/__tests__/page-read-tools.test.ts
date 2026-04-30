@@ -14,6 +14,8 @@ vi.mock('@pagespace/db/db', () => ({
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
+      taskLists: { findFirst: vi.fn() },
+      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
       chatMessages: { findFirst: vi.fn() },
       channelMessages: { findMany: vi.fn() },
     },
@@ -47,7 +49,15 @@ vi.mock('@pagespace/db/schema/core', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { pageId: 'pageId' },
+  taskItems: { pageId: 'pageId', taskListId: 'taskListId', position: 'position' },
+  taskLists: { pageId: 'pageId' },
+  taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
+  DEFAULT_TASK_STATUSES: [
+    { slug: 'pending', name: 'To Do', color: 'bg-slate-100', group: 'todo', position: 0 },
+    { slug: 'in_progress', name: 'In Progress', color: 'bg-amber-100', group: 'in_progress', position: 1 },
+    { slug: 'blocked', name: 'Blocked', color: 'bg-red-100', group: 'in_progress', position: 2 },
+    { slug: 'completed', name: 'Done', color: 'bg-green-100', group: 'done', position: 3 },
+  ],
 }));
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: {
@@ -439,6 +449,148 @@ describe('page-read-tools', () => {
           should: 'include totalLines for context',
           actual: (result as { totalLines?: number }).totalLines,
           expected: 10,
+        });
+      });
+    });
+
+    describe('TASK_LIST page', () => {
+      const setupTaskListMocks = (opts: {
+        tasks: Array<{ id: string; status: string; completedAt?: Date | null; position?: number; title?: string }>;
+        statusConfigs?: Array<{ slug: string; name: string; color: string; group: 'todo' | 'in_progress' | 'done'; position: number }>;
+      }) => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'TASK_LIST'));
+        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+        mockDb.query.taskLists = {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'list-1',
+            pageId: 'page-1',
+            title: 'My Tasks',
+          }),
+        } as unknown as typeof mockDb.query.taskLists;
+        mockDb.query.taskStatusConfigs = {
+          findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
+        } as unknown as typeof mockDb.query.taskStatusConfigs;
+
+        // db.select().from().where().orderBy() for tasks
+        mockDb.select = vi.fn(() => ({
+          from: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          orderBy: vi.fn().mockResolvedValue(
+            opts.tasks.map((t, i) => ({
+              id: t.id,
+              title: t.title ?? `Task ${i}`,
+              description: null,
+              status: t.status,
+              priority: 'medium',
+              position: t.position ?? i,
+              assigneeId: null,
+              dueDate: null,
+              completedAt: t.completedAt ?? null,
+              pageId: `page-task-${i}`,
+            }))
+          ),
+        })) as unknown as typeof mockDb.select;
+
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      };
+
+      it('returns availableStatuses with documented defaults when no custom configs exist', async () => {
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }] });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as {
+          availableStatuses: Array<{ slug: string; group: string; label: string }>;
+        };
+
+        const slugs = result.availableStatuses.map(s => s.slug).sort();
+        assert({
+          given: 'a TASK_LIST page with no custom status configs',
+          should: 'return the four documented default statuses',
+          actual: slugs,
+          expected: ['blocked', 'completed', 'in_progress', 'pending'],
+        });
+
+        const completedGroup = result.availableStatuses.find(s => s.slug === 'completed')?.group;
+        assert({
+          given: 'default availableStatuses',
+          should: 'include the done group on the completed status',
+          actual: completedGroup,
+          expected: 'done',
+        });
+      });
+
+      it('returns availableStatuses describing every configured custom status', async () => {
+        setupTaskListMocks({
+          tasks: [],
+          statusConfigs: [
+            { slug: 'backlog', name: 'Backlog', color: 'bg-slate-100', group: 'todo', position: 0 },
+            { slug: 'shipped', name: 'Shipped', color: 'bg-green-100', group: 'done', position: 1 },
+          ],
+        });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as {
+          availableStatuses: Array<{ slug: string; group: string; label: string; color: string }>;
+        };
+
+        assert({
+          given: 'a TASK_LIST page with custom status configs',
+          should: 'surface custom slugs',
+          actual: result.availableStatuses.map(s => s.slug),
+          expected: ['backlog', 'shipped'],
+        });
+        assert({
+          given: 'a custom status config',
+          should: 'surface label, group, and color',
+          actual: result.availableStatuses.map(s => ({ label: s.label, group: s.group, color: s.color })),
+          expected: [
+            { label: 'Backlog', group: 'todo', color: 'bg-slate-100' },
+            { label: 'Shipped', group: 'done', color: 'bg-green-100' },
+          ],
+        });
+      });
+
+      it('returns dynamic progress counts keyed by every status group present', async () => {
+        setupTaskListMocks({
+          tasks: [
+            { id: 't1', status: 'backlog' },
+            { id: 't2', status: 'shipped', completedAt: new Date() },
+            { id: 't3', status: 'shipped', completedAt: new Date() },
+          ],
+          statusConfigs: [
+            { slug: 'backlog', name: 'Backlog', color: '', group: 'todo', position: 0 },
+            { slug: 'shipped', name: 'Shipped', color: '', group: 'done', position: 1 },
+          ],
+        });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as {
+          progress: { total: number; percentage: number; byGroup: Record<string, number>; bySlug: Record<string, number> };
+        };
+
+        assert({
+          given: 'tasks with custom statuses',
+          should: 'count tasks by group',
+          actual: result.progress.byGroup,
+          expected: { todo: 1, in_progress: 0, done: 2 },
+        });
+        assert({
+          given: 'tasks with custom statuses',
+          should: 'also expose per-slug counts so custom statuses surface',
+          actual: result.progress.bySlug,
+          expected: { backlog: 1, shipped: 2 },
+        });
+        assert({
+          given: 'progress',
+          should: 'compute percentage from the done group',
+          actual: result.progress.percentage,
+          expected: 67,
         });
       });
     });
