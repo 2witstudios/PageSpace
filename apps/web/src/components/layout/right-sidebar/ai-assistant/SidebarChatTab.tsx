@@ -22,6 +22,11 @@ import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeSto
 import { useGlobalChatConversation, useGlobalChatConfig, useGlobalChatStream } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { usePendingStreamsStore, type PendingStream } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
+import { useAuth } from '@/hooks/useAuth';
+import { dedupRemoteStreams } from '@/lib/ai/streams/dedupRemoteStreams';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
@@ -51,6 +56,8 @@ interface SidebarMessagesContentProps {
   lastAssistantMessageId: string | undefined;
   lastUserMessageId: string | undefined;
   displayIsStreaming: boolean;
+  /** Remote in-progress streams to render inline below the messages. */
+  remoteStreams: PendingStream[];
 }
 
 const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
@@ -64,9 +71,18 @@ const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   lastAssistantMessageId,
   lastUserMessageId,
   displayIsStreaming,
+  remoteStreams,
 }) => {
   const scrollRef = useConversationScrollRef();
   const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD;
+  // Streams whose messageId already landed in `messages` are filtered out so
+  // we don't render the same message twice during the brief window between
+  // server-confirm and store-removal.
+  const inflightRemoteStreams = useMemo(
+    () => dedupRemoteStreams(remoteStreams, messages),
+    [remoteStreams, messages],
+  );
+  const isEmpty = messages.length === 0 && inflightRemoteStreams.length === 0;
 
   // Memoized render function for virtualized list
   const renderMessage = useCallback((message: UIMessage) => (
@@ -93,7 +109,7 @@ const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
 
   return (
     <ConversationContent className="p-3 min-w-0 gap-1.5">
-      {messages.length === 0 ? (
+      {isEmpty ? (
         <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center overflow-hidden">
           <div className="max-w-full px-2">
             <p className="font-medium truncate">{assistantName}</p>
@@ -118,6 +134,14 @@ const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
         // Regular rendering for smaller conversations
         messages.map(message => renderMessage(message))
       )}
+
+      {inflightRemoteStreams.map((stream) => (
+        <CompactMessageRenderer
+          key={stream.messageId}
+          message={synthesizeAssistantMessage(stream.messageId, stream.text)}
+          isStreaming
+        />
+      ))}
 
       {displayIsStreaming && (
         <div className="mb-1">
@@ -234,6 +258,25 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
+
+  // ============================================
+  // Remote Streams (multiplayer rendering)
+  // ============================================
+  // GlobalChatProvider runs the bootstrap+socket subscription for the global
+  // channel above this component, so global mode here only needs to read the
+  // store and render. Agent-mode wiring + render lands in Task 4 — for now
+  // the agent branch returns [].
+  const { user } = useAuth();
+  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) => {
+      if (selectedAgent) return [];
+      if (!globalChannelId || !globalConversationId) return [];
+      return state
+        .getRemotePageStreams(globalChannelId)
+        .filter((s) => s.conversationId === globalConversationId);
+    }),
+  );
 
   const streamingAssistantText = useMemo(() => {
     if (!displayIsStreaming) return null;
@@ -783,6 +826,7 @@ const SidebarChatTab: React.FC = () => {
             lastAssistantMessageId={lastAssistantMessageId}
             lastUserMessageId={lastUserMessageId}
             displayIsStreaming={displayIsStreaming}
+            remoteStreams={remoteStreams}
           />
           {/* Scroll-to-bottom button - visible when user scrolls up */}
           <ConversationScrollButton className="z-10 bottom-8" />
