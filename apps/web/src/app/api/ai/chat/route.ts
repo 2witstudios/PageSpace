@@ -18,7 +18,7 @@ import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subs
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { validateTabIdHeader } from '@/lib/ai/core/tab-id-validation';
+import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -106,11 +106,11 @@ export async function POST(request: Request) {
   try {
     loggers.ai.info('AI Chat API: Starting request processing');
 
-    const tabIdResult = validateTabIdHeader(request.headers.get('X-Tab-Id'));
-    if (!tabIdResult.ok) {
-      return NextResponse.json({ error: tabIdResult.message }, { status: tabIdResult.status });
+    const browserSessionIdResult = validateBrowserSessionIdHeader(request.headers.get('X-Browser-Session-Id'));
+    if (!browserSessionIdResult.ok) {
+      return NextResponse.json({ error: browserSessionIdResult.message }, { status: browserSessionIdResult.status });
     }
-    const tabId = tabIdResult.tabId;
+    const browserSessionId = browserSessionIdResult.browserSessionId;
 
     // Authenticate the request
     const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -830,7 +830,7 @@ export async function POST(request: Request) {
       conversationId: conversationId!,
       userId: userId!,
       displayName,
-      tabId,
+      browserSessionId,
     });
 
     try {

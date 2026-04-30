@@ -4,8 +4,8 @@ import { renderHook, act } from '@testing-library/react';
 // ---------------------------------------------------------------------------
 // Hoisted mock factories
 // ---------------------------------------------------------------------------
-const TAB_ID_LOCAL = 'tab-current';
-const TAB_ID_REMOTE = 'tab-other';
+const SESSION_ID_LOCAL = 'session-current';
+const SESSION_ID_REMOTE = 'session-other';
 
 const {
   mockSocket,
@@ -15,7 +15,7 @@ const {
   mockClearPageStreams,
   mockConsumeStreamJoin,
   mockFetchWithAuth,
-  mockGetTabId,
+  mockGetBrowserSessionId,
 } = vi.hoisted(() => {
   const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
 
@@ -47,7 +47,7 @@ const {
     ok: true,
     json: async () => ({ streams: [] }),
   });
-  const mockGetTabId = vi.fn(() => 'tab-current');
+  const mockGetBrowserSessionId = vi.fn(() => 'session-current');
 
   return {
     mockSocket,
@@ -57,7 +57,7 @@ const {
     mockClearPageStreams,
     mockConsumeStreamJoin,
     mockFetchWithAuth,
-    mockGetTabId,
+    mockGetBrowserSessionId,
   };
 });
 
@@ -84,8 +84,8 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: mockFetchWithAuth,
 }));
 
-vi.mock('@/lib/ai/core/tab-id', () => ({
-  getTabId: mockGetTabId,
+vi.mock('@/lib/ai/core/browser-session-id', () => ({
+  getBrowserSessionId: mockGetBrowserSessionId,
 }));
 
 import { useChatStreamSocket } from '../useChatStreamSocket';
@@ -95,7 +95,7 @@ const START_PAYLOAD: AiStreamStartPayload = {
   messageId: 'msg-1',
   pageId: 'page-a',
   conversationId: 'conv-1',
-  triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
 };
 
 const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
@@ -108,7 +108,7 @@ describe('useChatStreamSocket', () => {
     vi.clearAllMocks();
     mockSocket._reset();
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
-    mockGetTabId.mockReturnValue(TAB_ID_LOCAL);
+    mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
     mockFetchWithAuth.mockResolvedValue({
       ok: true,
       json: async () => ({ streams: [] }),
@@ -129,7 +129,7 @@ describe('useChatStreamSocket', () => {
         messageId: 'msg-1',
         pageId: 'page-a',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+        triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
         isOwn: false,
       });
       expect(mockConsumeStreamJoin).toHaveBeenCalledWith(
@@ -202,11 +202,11 @@ describe('useChatStreamSocket', () => {
     });
   });
 
-  describe('chat:stream_start from local tab', () => {
-    it('given triggeredBy.tabId matches getTabId(), should skip addStream and consumeStreamJoin', () => {
+  describe('chat:stream_start from local browser session', () => {
+    it('given triggeredBy.browserSessionId matches getBrowserSessionId(), should skip addStream and consumeStreamJoin', () => {
       const localPayload: AiStreamStartPayload = {
         ...START_PAYLOAD,
-        triggeredBy: { userId: 'user-1', displayName: 'Me', tabId: TAB_ID_LOCAL },
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
       };
 
       renderHook(() => useChatStreamSocket('page-a'));
@@ -216,14 +216,14 @@ describe('useChatStreamSocket', () => {
       expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
 
-    it('given triggeredBy.userId matches local user but tabId differs, should still addStream (cross-tab same-user)', () => {
-      const otherTabSameUser: AiStreamStartPayload = {
+    it('given triggeredBy.userId matches local user but browserSessionId differs, should still addStream (cross-session same-user)', () => {
+      const otherSessionSameUser: AiStreamStartPayload = {
         ...START_PAYLOAD,
-        triggeredBy: { userId: 'user-1', displayName: 'Me', tabId: TAB_ID_REMOTE },
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_REMOTE },
       };
 
       renderHook(() => useChatStreamSocket('page-a'));
-      act(() => { mockSocket._trigger('chat:stream_start', otherTabSameUser); });
+      act(() => { mockSocket._trigger('chat:stream_start', otherSessionSameUser); });
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-1',
@@ -424,7 +424,7 @@ describe('useChatStreamSocket', () => {
           streams: [{
             messageId: 'msg-bootstrap',
             conversationId: 'conv-1',
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
           }],
         }),
       });
@@ -437,7 +437,7 @@ describe('useChatStreamSocket', () => {
         messageId: 'msg-bootstrap',
         pageId: 'page-a',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+        triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
         isOwn: false,
       });
       expect(mockConsumeStreamJoin).toHaveBeenCalledWith(
@@ -454,7 +454,7 @@ describe('useChatStreamSocket', () => {
           streams: [{
             messageId: 'msg-own',
             conversationId: 'conv-1',
-            triggeredBy: { userId: 'user-1', displayName: 'Me', tabId: TAB_ID_LOCAL },
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
           }],
         }),
       });
@@ -478,7 +478,7 @@ describe('useChatStreamSocket', () => {
             streams: [{
               messageId: 'msg-1',
               conversationId: 'conv-1',
-              triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+              triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
             }],
           }),
         };
@@ -530,7 +530,7 @@ describe('useChatStreamSocket', () => {
             streams: [{
               messageId: 'msg-late',
               conversationId: 'conv-1',
-              triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+              triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
             }],
           }),
         });
@@ -548,7 +548,7 @@ describe('useChatStreamSocket', () => {
           streams: [{
             messageId: 'msg-bootstrap',
             conversationId: 'conv-1',
-            triggeredBy: { userId: 'user-2', displayName: 'Alice', tabId: TAB_ID_REMOTE },
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
           }],
         }),
       });

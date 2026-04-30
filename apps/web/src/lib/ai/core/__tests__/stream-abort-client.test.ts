@@ -4,8 +4,8 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-vi.mock('../tab-id', () => ({
-  getTabId: () => 'test-tab-id',
+vi.mock('../browser-session-id', () => ({
+  getBrowserSessionId: () => 'test-browser-session-id',
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -201,11 +201,11 @@ describe('stream-abort-client', () => {
 
       expect(fetchWithAuth).toHaveBeenCalledWith(
         'https://example.com/api/ai/chat',
-        { headers: { 'x-tab-id': 'test-tab-id' } }
+        { headers: { 'x-browser-session-id': 'test-browser-session-id' } }
       );
     });
 
-    it('includes X-Tab-Id header and preserves existing headers', async () => {
+    it('includes X-Browser-Session-Id header and preserves existing headers', async () => {
       const client = await import('../stream-abort-client');
 
       const mockResponse = {
@@ -226,7 +226,7 @@ describe('stream-abort-client', () => {
           method: 'POST',
           headers: expect.objectContaining({
             'content-type': 'application/json',
-            'x-tab-id': 'test-tab-id',
+            'x-browser-session-id': 'test-browser-session-id',
           }),
         })
       );

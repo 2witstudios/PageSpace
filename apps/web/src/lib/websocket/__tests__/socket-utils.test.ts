@@ -353,7 +353,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-1', displayName: 'Alice', tabId: 'tab-1' },
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       };
 
       await broadcastAiStreamStart(payload);
@@ -373,7 +373,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-1', displayName: 'Alice', tabId: 'tab-1' },
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
 
       expect(mockFetch).not.toHaveBeenCalled();
@@ -386,7 +386,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-1', displayName: 'Alice', tabId: 'tab-1' },
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       })).resolves.not.toThrow();
     });
   });

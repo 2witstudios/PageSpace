@@ -89,7 +89,7 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
   conversationId: 'conv-1',
   userId: 'user-1',
   displayName: 'Alice',
-  tabId: 'tab-1',
+  browserSessionId: 'session-1',
   ...overrides,
 });
 
@@ -113,7 +113,7 @@ describe('createStreamLifecycle', () => {
         userId: 'user-1',
         displayName: 'Alice',
         conversationId: 'conv-1',
-        tabId: 'tab-1',
+        browserSessionId: 'session-1',
       });
     });
 
@@ -126,7 +126,7 @@ describe('createStreamLifecycle', () => {
         conversationId: 'conv-1',
         userId: 'user-1',
         displayName: 'Alice',
-        tabId: 'tab-1',
+        browserSessionId: 'session-1',
         status: 'streaming',
       });
     });
@@ -141,7 +141,7 @@ describe('createStreamLifecycle', () => {
         conversationId: 'conv-1',
         userId: 'user-1',
         displayName: 'Alice',
-        tabId: 'tab-1',
+        browserSessionId: 'session-1',
         status: 'streaming',
         completedAt: null,
       });
@@ -173,7 +173,7 @@ describe('createStreamLifecycle', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
-        triggeredBy: { userId: 'user-1', displayName: 'Alice', tabId: 'tab-1' },
+        triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
     });
 

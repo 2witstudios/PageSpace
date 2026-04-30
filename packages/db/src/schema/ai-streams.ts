@@ -6,7 +6,7 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   conversationId: text('conversation_id').notNull(),
   userId:         text('user_id').notNull(),
   displayName:    text('display_name').notNull().default('Someone'),
-  tabId:          text('tab_id').notNull().default(''),
+  browserSessionId: text('browser_session_id').notNull().default(''),
   status:         text('status', { enum: ['streaming', 'complete', 'aborted'] }).notNull().default('streaming'),
   startedAt:      timestamp('started_at', { mode: 'date' }).defaultNow().notNull(),
   completedAt:    timestamp('completed_at', { mode: 'date' }),

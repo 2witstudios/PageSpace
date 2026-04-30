@@ -14,4 +14,4 @@ export {
   clearActiveStreamId,
 } from './stream-abort-client';
 
-export { getTabId } from './tab-id';
+export { getBrowserSessionId } from './browser-session-id';

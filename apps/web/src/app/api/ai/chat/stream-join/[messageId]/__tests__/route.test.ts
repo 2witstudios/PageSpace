@@ -40,14 +40,14 @@ const mockPageId = 'page-test-123';
 const mockUserId = 'user-test-456';
 const mockMessageId = 'msg-test-789';
 const mockConversationId = 'conv-test-321';
-const mockTabId = 'tab-test-654';
+const mockBrowserSessionId = 'session-test-654';
 const mockDisplayName = 'Test User';
 const mockMeta = {
   pageId: mockPageId,
   userId: mockUserId,
   displayName: mockDisplayName,
   conversationId: mockConversationId,
-  tabId: mockTabId,
+  browserSessionId: mockBrowserSessionId,
 };
 
 const mockSessionAuth = (userId = mockUserId): SessionAuthResult => ({

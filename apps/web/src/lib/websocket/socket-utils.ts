@@ -500,7 +500,7 @@ export interface AiStreamStartPayload {
   messageId: string;
   pageId: string;
   conversationId: string;
-  triggeredBy: { userId: string; displayName: string; tabId: string };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
 export interface AiStreamCompletePayload {
