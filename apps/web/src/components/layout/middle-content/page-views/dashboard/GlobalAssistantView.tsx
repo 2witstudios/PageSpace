@@ -81,6 +81,9 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
+import { useAuth } from '@/hooks/useAuth';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
@@ -88,6 +91,7 @@ const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
   const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
+  const { user } = useAuth();
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -119,6 +123,24 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+
+  // Remote in-progress streams for the active chat. Filtered by:
+  //   1. Mode — agent mode subscribes to a per-agent channel elsewhere; here we
+  //      only render global-channel streams, so return [] when an agent is selected.
+  //   2. Conversation — the global channel may carry concurrent streams from
+  //      other global conversations; only show streams matching the current one.
+  // Note: PendingStream.pageId holds the channel id (e.g. `user:USERID:global`)
+  // for non-page channels. Renaming the field is tracked as separate tech debt;
+  // until then, the channel string is what gets passed to getRemotePageStreams.
+  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) => {
+      if (selectedAgent || !globalChannelId || !globalConversationId) return [];
+      return state
+        .getRemotePageStreams(globalChannelId)
+        .filter((s) => s.conversationId === globalConversationId);
+    })
+  );
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -874,6 +896,7 @@ const GlobalAssistantView: React.FC = () => {
         isMcpServerEnabled={isServerEnabled}
         onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
+        remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
             {isVoiceModeActive && (
