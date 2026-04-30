@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { StreamMulticastRegistry } from '../stream-multicast-registry';
+import { StreamMulticastRegistry, type StreamMeta } from '../stream-multicast-registry';
+
+const meta = (overrides: Partial<StreamMeta> = {}): StreamMeta => ({
+  pageId: 'page-1',
+  userId: 'user-1',
+  displayName: 'Test User',
+  conversationId: 'conv-1',
+  tabId: 'tab-1',
+  ...overrides,
+});
 
 describe('StreamMulticastRegistry', () => {
   afterEach(() => {
@@ -9,9 +18,9 @@ describe('StreamMulticastRegistry', () => {
   describe('register / getMeta', () => {
     it('stores stream metadata accessible via getMeta', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
-      expect(registry.getMeta('msg-1')).toEqual({ pageId: 'page-1', userId: 'user-1' });
+      expect(registry.getMeta('msg-1')).toEqual(meta());
     });
 
     it('returns undefined for unknown messageId', () => {
@@ -23,7 +32,7 @@ describe('StreamMulticastRegistry', () => {
   describe('push', () => {
     it('given a registered stream with subscribers, should push text chunks to all active subscribers', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const received1: string[] = [];
       const received2: string[] = [];
@@ -46,7 +55,7 @@ describe('StreamMulticastRegistry', () => {
   describe('subscribe', () => {
     it('given a late-joining subscriber, should replay all buffered chunks before delivering live ones', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       registry.push('msg-1', 'chunk1');
       registry.push('msg-1', 'chunk2');
@@ -59,7 +68,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('given buffered and live chunks, should deliver them in order to a late subscriber', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       registry.push('msg-1', 'chunk1');
       registry.push('msg-1', 'chunk2');
@@ -74,7 +83,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('given a finished stream, should return null', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
       registry.finish('msg-1');
 
       const result = registry.subscribe('msg-1', () => {}, () => {});
@@ -89,7 +98,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('returns an unsubscribe function for an active stream', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const unsubscribe = registry.subscribe('msg-1', () => {}, () => {});
       expect(typeof unsubscribe).toBe('function');
@@ -99,7 +108,7 @@ describe('StreamMulticastRegistry', () => {
   describe('unsubscribe', () => {
     it('given a subscriber that unsubscribes, should stop receiving chunks without affecting other subscribers', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const received1: string[] = [];
       const received2: string[] = [];
@@ -118,7 +127,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('given an unsubscribed listener, should not call its onComplete when stream finishes', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completed1: boolean[] = [];
       const completed2: boolean[] = [];
@@ -138,7 +147,7 @@ describe('StreamMulticastRegistry', () => {
   describe('finish', () => {
     it('given a finished stream, should call complete callbacks with aborted=false by default', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const abortedValues: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => abortedValues.push(aborted));
@@ -149,7 +158,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('given a finished stream with aborted=true, should call complete callbacks with the correct aborted status', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const abortedValues: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => abortedValues.push(aborted));
@@ -160,7 +169,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('removes the stream entry after finishing so getMeta returns undefined', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       registry.finish('msg-1');
 
@@ -174,7 +183,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('silently ignores a second finish call', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completed: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
@@ -190,7 +199,7 @@ describe('StreamMulticastRegistry', () => {
     it('given a stream still open after 10 minutes, should auto-cleanup to prevent memory leaks', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completedValues: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completedValues.push(aborted));
@@ -206,7 +215,7 @@ describe('StreamMulticastRegistry', () => {
     it('given a stream that finishes before 10 minutes, should not fire the auto-cleanup timer', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completedValues: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completedValues.push(aborted));
@@ -220,12 +229,12 @@ describe('StreamMulticastRegistry', () => {
 
     it('given register is called with an existing messageId that has subscribers, should notify those subscribers with aborted=true', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completed: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
 
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       expect(completed).toEqual([true]);
     });
@@ -233,8 +242,8 @@ describe('StreamMulticastRegistry', () => {
     it('given register is called twice for the same messageId, should call onComplete only once after 10 minutes', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
+      registry.register('msg-1', meta());
 
       const completed: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
@@ -248,7 +257,7 @@ describe('StreamMulticastRegistry', () => {
   describe('resilience', () => {
     it('given a subscriber whose onChunk throws, should not interrupt fanout to remaining subscribers', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const received: string[] = [];
       registry.subscribe('msg-1', () => { throw new Error('bad subscriber'); }, () => {});
@@ -260,7 +269,7 @@ describe('StreamMulticastRegistry', () => {
 
     it('given a subscriber whose onComplete throws, should still remove the entry and notify remaining subscribers', () => {
       const registry = new StreamMulticastRegistry();
-      registry.register('msg-1', { pageId: 'page-1', userId: 'user-1' });
+      registry.register('msg-1', meta());
 
       const completed: boolean[] = [];
       registry.subscribe('msg-1', () => {}, () => { throw new Error('bad subscriber'); });
