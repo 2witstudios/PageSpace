@@ -92,12 +92,6 @@ const GlobalAssistantView: React.FC = () => {
   const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
   const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
   const { user } = useAuth();
-  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
-  const remoteStreams = usePendingStreamsStore(
-    useShallow((state) =>
-      globalChannelId ? state.getRemotePageStreams(globalChannelId) : []
-    )
-  );
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -129,6 +123,21 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+
+  // Remote in-progress streams for the active chat. Filtered by:
+  //   1. Mode — agent mode subscribes to a per-agent channel elsewhere; here we
+  //      only render global-channel streams, so return [] when an agent is selected.
+  //   2. Conversation — the global channel may carry concurrent streams from
+  //      other global conversations; only show streams matching the current one.
+  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) => {
+      if (selectedAgent || !globalChannelId || !globalConversationId) return [];
+      return state
+        .getRemotePageStreams(globalChannelId)
+        .filter((s) => s.conversationId === globalConversationId);
+    })
+  );
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
