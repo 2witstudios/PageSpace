@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-// Mock fetchWithAuth
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
+}));
+
+vi.mock('../tab-id', () => ({
+  getTabId: () => 'test-tab-id',
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -196,7 +199,37 @@ describe('stream-abort-client', () => {
       const request = new Request('https://example.com/api/ai/chat');
       await trackingFetch(request, {});
 
-      expect(fetchWithAuth).toHaveBeenCalledWith('https://example.com/api/ai/chat', {});
+      expect(fetchWithAuth).toHaveBeenCalledWith(
+        'https://example.com/api/ai/chat',
+        { headers: { 'x-tab-id': 'test-tab-id' } }
+      );
+    });
+
+    it('includes X-Tab-Id header and preserves existing headers', async () => {
+      const client = await import('../stream-abort-client');
+
+      const mockResponse = {
+        headers: { get: vi.fn().mockReturnValue(null) },
+      } as unknown as Response;
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
+
+      const trackingFetch = client.createStreamTrackingFetch({ chatId: 'chat-123' });
+      await trackingFetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      expect(fetchWithAuth).toHaveBeenCalledWith(
+        '/api/ai/chat',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'content-type': 'application/json',
+            'x-tab-id': 'test-tab-id',
+          }),
+        })
+      );
     });
   });
 

@@ -13,3 +13,5 @@ export {
   getActiveStreamId,
   clearActiveStreamId,
 } from './stream-abort-client';
+
+export { getTabId } from './tab-id';
