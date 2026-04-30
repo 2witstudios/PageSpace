@@ -3,6 +3,9 @@ const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
 export interface StreamMeta {
   pageId: string;
   userId: string;
+  displayName: string;
+  conversationId: string;
+  tabId: string;
 }
 
 interface Subscriber {

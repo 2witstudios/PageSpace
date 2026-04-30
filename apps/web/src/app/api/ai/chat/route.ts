@@ -825,11 +825,8 @@ export async function POST(request: Request) {
     // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
-    // Register in multicast registry so other viewers can join via stream-join endpoint
-    try { streamMulticastRegistry.register(serverAssistantMessageId, { pageId: chatId, userId: userId! }); } catch {}
+    const tabId = request.headers.get('X-Tab-Id') ?? '';
 
-    // Resolve display name for stream_start payload (fall back through user.name → 'Someone')
-    // Wrapped in try/catch so a DB hiccup here never aborts the stream
     let displayName = user?.name ?? 'Someone';
     try {
       const [userProfile] = await db
@@ -842,12 +839,21 @@ export async function POST(request: Request) {
       // non-critical — fall back to user.name already set above
     }
 
-    // Notify all page viewers that an AI stream is starting
+    try {
+      streamMulticastRegistry.register(serverAssistantMessageId, {
+        pageId: chatId,
+        userId: userId!,
+        displayName,
+        conversationId: conversationId!,
+        tabId,
+      });
+    } catch {}
+
     broadcastAiStreamStart({
       messageId: serverAssistantMessageId,
       pageId: chatId,
       conversationId: conversationId!,
-      triggeredBy: { userId: userId!, displayName },
+      triggeredBy: { userId: userId!, displayName, tabId },
     }).catch(() => {});
 
     try {
