@@ -72,6 +72,7 @@ import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -129,13 +130,13 @@ const GlobalAssistantView: React.FC = () => {
   // Remote in-progress streams for the active chat — channel + filter logic
   // lives in the pure helper so both this view and the sidebar share one
   // tested implementation.
-  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const channelIdForGlobal = user?.id ? globalChannelId(user.id) : null;
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) =>
       selectChannelRemoteStreams(state, {
         selectedAgent,
         agentConversationId,
-        globalChannelId,
+        globalChannelId: channelIdForGlobal,
         globalConversationId,
       }),
     ),

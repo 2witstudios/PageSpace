@@ -647,6 +647,9 @@
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
+      "ai/global-channel-id": [
+        "./dist/ai/global-channel-id.d.ts"
+      ],
       "logging/logger": [
         "./dist/logging/logger.d.ts"
       ],

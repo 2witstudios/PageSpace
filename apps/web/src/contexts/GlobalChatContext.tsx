@@ -11,6 +11,7 @@ import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -261,7 +262,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // own-stream callbacks below.
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  const channelId = userId ? `user:${userId}:global` : undefined;
+  const channelId = userId ? globalChannelId(userId) : undefined;
 
   // Always-current refs so the hook's stable callbacks can call into the
   // latest setters/refresh without forcing the hook to resubscribe.

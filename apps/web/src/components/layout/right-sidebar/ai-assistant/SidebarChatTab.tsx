@@ -29,6 +29,7 @@ import { dedupRemoteStreams } from '@/lib/ai/streams/dedupRemoteStreams';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
@@ -269,13 +270,13 @@ const SidebarChatTab: React.FC = () => {
   // way this selector just reads the store and the pure helper picks the
   // right channel + applies the conversation filter.
   const { user } = useAuth();
-  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const channelIdForGlobal = user?.id ? globalChannelId(user.id) : null;
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) =>
       selectChannelRemoteStreams(state, {
         selectedAgent,
         agentConversationId,
-        globalChannelId,
+        globalChannelId: channelIdForGlobal,
         globalConversationId,
       }),
     ),
