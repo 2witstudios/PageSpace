@@ -71,6 +71,7 @@ import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
+import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -125,26 +126,19 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
-  // Remote in-progress streams for the active chat. The selector picks the
-  // right channel — agent mode reads `selectedAgent.id`; global mode reads
-  // `user:USERID:global` — and filters by the active conversation so that
-  // concurrent streams in other conversations on the same channel are hidden.
-  // PendingStream.pageId holds the channel id (the `pageId` name is legacy;
-  // it's the bus key, not necessarily a page).
+  // Remote in-progress streams for the active chat — channel + filter logic
+  // lives in the pure helper so both this view and the sidebar share one
+  // tested implementation.
   const globalChannelId = user?.id ? `user:${user.id}:global` : null;
   const remoteStreams = usePendingStreamsStore(
-    useShallow((state) => {
-      if (selectedAgent) {
-        if (!agentConversationId) return [];
-        return state
-          .getRemotePageStreams(selectedAgent.id)
-          .filter((s) => s.conversationId === agentConversationId);
-      }
-      if (!globalChannelId || !globalConversationId) return [];
-      return state
-        .getRemotePageStreams(globalChannelId)
-        .filter((s) => s.conversationId === globalConversationId);
-    })
+    useShallow((state) =>
+      selectChannelRemoteStreams(state, {
+        selectedAgent,
+        agentConversationId,
+        globalChannelId,
+        globalConversationId,
+      }),
+    ),
   );
 
   // ============================================
