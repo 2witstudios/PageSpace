@@ -121,7 +121,7 @@ describe('useChatStreamSocket', () => {
 
   describe('chat:stream_start from another user', () => {
     it('should call addStream and start consumeStreamJoin', () => {
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -148,7 +148,7 @@ describe('useChatStreamSocket', () => {
         },
       );
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       capturedOnChunk('hello');
@@ -162,7 +162,7 @@ describe('useChatStreamSocket', () => {
       );
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { resolveJoin(); });
@@ -180,7 +180,7 @@ describe('useChatStreamSocket', () => {
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { resolveJoin(); });
@@ -193,7 +193,7 @@ describe('useChatStreamSocket', () => {
     it('given consumeStreamJoin rejects, should call removeStream to prevent stale store entry', async () => {
       mockConsumeStreamJoin.mockRejectedValue(new Error('network error'));
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { await Promise.resolve(); });
@@ -209,20 +209,20 @@ describe('useChatStreamSocket', () => {
         triggeredBy: { userId: 'user-1', displayName: 'Me', tabId: TAB_ID_LOCAL },
       };
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', localPayload); });
 
       expect(mockAddStream).not.toHaveBeenCalled();
       expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
 
-    it('given triggeredBy.userId matches currentUserId but tabId differs, should still addStream (cross-tab same-user)', () => {
+    it('given triggeredBy.userId matches local user but tabId differs, should still addStream (cross-tab same-user)', () => {
       const otherTabSameUser: AiStreamStartPayload = {
         ...START_PAYLOAD,
         triggeredBy: { userId: 'user-1', displayName: 'Me', tabId: TAB_ID_REMOTE },
       };
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', otherTabSameUser); });
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
@@ -230,40 +230,12 @@ describe('useChatStreamSocket', () => {
         isOwn: false,
       }));
     });
-
-    it('given triggeredBy.tabId is missing AND userId differs (legacy remote), should addStream with isOwn=false', () => {
-      const legacyRemote: AiStreamStartPayload = {
-        ...START_PAYLOAD,
-        triggeredBy: { userId: 'user-2', displayName: 'Alice' },
-      };
-
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
-      act(() => { mockSocket._trigger('chat:stream_start', legacyRemote); });
-
-      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
-        messageId: 'msg-1',
-        isOwn: false,
-      }));
-    });
-
-    it('given triggeredBy.tabId is missing AND userId matches currentUserId (legacy self), should skip (userId fallback prevents self-duplication)', () => {
-      const legacySelf: AiStreamStartPayload = {
-        ...START_PAYLOAD,
-        triggeredBy: { userId: 'user-1', displayName: 'Me' },
-      };
-
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
-      act(() => { mockSocket._trigger('chat:stream_start', legacySelf); });
-
-      expect(mockAddStream).not.toHaveBeenCalled();
-      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
-    });
   });
 
   // A1 — pageId guard
   describe('pageId guard', () => {
     it('given chat:stream_start with a different pageId, should ignore the event', () => {
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       act(() => {
         mockSocket._trigger('chat:stream_start', { ...START_PAYLOAD, pageId: 'page-b' });
@@ -275,7 +247,7 @@ describe('useChatStreamSocket', () => {
 
     it('given chat:stream_complete with a different pageId, should ignore the event', () => {
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
 
       act(() => {
         mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, pageId: 'page-b' });
@@ -289,7 +261,7 @@ describe('useChatStreamSocket', () => {
   describe('chat:stream_complete', () => {
     it('should call removeStream and onStreamComplete', () => {
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
 
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -302,7 +274,7 @@ describe('useChatStreamSocket', () => {
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
 
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -318,7 +290,7 @@ describe('useChatStreamSocket', () => {
         },
       );
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -335,7 +307,7 @@ describe('useChatStreamSocket', () => {
       );
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       // SSE done resolves first
@@ -351,7 +323,7 @@ describe('useChatStreamSocket', () => {
       mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves naturally
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       // stream_complete fires (aborts the SSE join)
@@ -368,7 +340,7 @@ describe('useChatStreamSocket', () => {
   describe('onStreamComplete stability', () => {
     it('given onStreamComplete reference changes between renders, should not re-register socket handlers', () => {
       let callback = vi.fn();
-      const { rerender } = renderHook(() => useChatStreamSocket('page-a', 'user-1', callback));
+      const { rerender } = renderHook(() => useChatStreamSocket('page-a', callback));
 
       const onCallCount = mockSocket.on.mock.calls.length;
 
@@ -386,7 +358,7 @@ describe('useChatStreamSocket', () => {
 
       const firstCallback = vi.fn();
       let callback = firstCallback;
-      const { rerender } = renderHook(() => useChatStreamSocket('page-a', 'user-1', callback));
+      const { rerender } = renderHook(() => useChatStreamSocket('page-a', callback));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -404,7 +376,7 @@ describe('useChatStreamSocket', () => {
 
   describe('cleanup on unmount', () => {
     it('should remove socket listeners, abort controllers, and clearPageStreams', () => {
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -424,7 +396,7 @@ describe('useChatStreamSocket', () => {
   // AC5 — DB bootstrap on mount
   describe('DB bootstrap on mount', () => {
     it('given the hook mounts, should fetch active streams for the channelId', async () => {
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -435,7 +407,7 @@ describe('useChatStreamSocket', () => {
     });
 
     it('given the channelId contains characters needing encoding, should encode it in the URL', async () => {
-      renderHook(() => useChatStreamSocket('user:abc:global', 'user-1'));
+      renderHook(() => useChatStreamSocket('user:abc:global'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -457,7 +429,7 @@ describe('useChatStreamSocket', () => {
         }),
       });
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -487,7 +459,7 @@ describe('useChatStreamSocket', () => {
         }),
       });
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -513,7 +485,7 @@ describe('useChatStreamSocket', () => {
       });
 
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', 'user-1', onStreamComplete));
+      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
 
       // Fire stream_complete BEFORE the bootstrap fetch resolves —
       // this populates processedRef, so the bootstrap should skip msg-1.
@@ -528,7 +500,7 @@ describe('useChatStreamSocket', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockFetchWithAuth.mockRejectedValueOnce(new Error('network down'));
 
-      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      renderHook(() => useChatStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
@@ -548,7 +520,7 @@ describe('useChatStreamSocket', () => {
         () => new Promise((res) => { resolveFetch = res; }),
       );
 
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
       unmount();
 
       await act(async () => {
@@ -582,7 +554,7 @@ describe('useChatStreamSocket', () => {
       });
       mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves
 
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 

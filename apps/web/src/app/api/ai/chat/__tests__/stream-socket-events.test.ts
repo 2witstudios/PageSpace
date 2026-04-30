@@ -1,32 +1,24 @@
 /**
- * Tests for Task 3: stream socket events wired into the AI chat route.
+ * Verifies that the page AI chat route delegates streaming lifecycle
+ * (registry, DB persistence, socket broadcasts) to createStreamLifecycle and
+ * routes chunk/finish/abort/error events through the returned handle.
  *
- * Verifies that route.ts calls register → broadcastAiStreamStart before streaming,
- * pushes text-delta chunks to the registry, and calls finish + broadcastAiStreamComplete
- * on completion or abort. Also verifies the finally path on route error.
+ * Internal lifecycle behaviors (DB shape, conflict refresh, broadcast ordering)
+ * live in stream-lifecycle.test.ts.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// ============================================================================
-// Hoisted mocks (referenced inside vi.mock factories)
-// ============================================================================
-
 const {
-  mockRegistryRegister,
-  mockRegistryPush,
-  mockRegistryFinish,
-  mockBroadcastAiStreamStart,
-  mockBroadcastAiStreamComplete,
+  mockCreateStreamLifecycle,
+  mockLifecyclePushChunk,
+  mockLifecycleFinish,
 } = vi.hoisted(() => ({
-  mockRegistryRegister: vi.fn(),
-  mockRegistryPush: vi.fn(),
-  mockRegistryFinish: vi.fn(),
-  mockBroadcastAiStreamStart: vi.fn().mockResolvedValue(undefined),
-  mockBroadcastAiStreamComplete: vi.fn().mockResolvedValue(undefined),
+  mockCreateStreamLifecycle: vi.fn(),
+  mockLifecyclePushChunk: vi.fn(),
+  mockLifecycleFinish: vi.fn(),
 }));
 
-// Captured AI SDK callbacks
 interface MockUIStreamOptions {
   execute?: (ctx: Record<string, unknown>) => Promise<void> | void;
   onFinish?: (result: { responseMessage: unknown }) => Promise<void> | void;
@@ -42,25 +34,12 @@ const captured = vi.hoisted(() => ({
   streamTextOptions: {} as MockStreamTextOptions,
 }));
 
-// ============================================================================
-// Module mocks
-// ============================================================================
-
-vi.mock('@/lib/ai/core/stream-multicast-registry', () => ({
-  streamMulticastRegistry: {
-    register: mockRegistryRegister,
-    push: mockRegistryPush,
-    finish: mockRegistryFinish,
-    getMeta: vi.fn(),
-    subscribe: vi.fn(),
-  },
-  StreamMulticastRegistry: vi.fn(),
+vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
+  createStreamLifecycle: mockCreateStreamLifecycle,
 }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastUsageEvent: vi.fn(),
-  broadcastAiStreamStart: mockBroadcastAiStreamStart,
-  broadcastAiStreamComplete: mockBroadcastAiStreamComplete,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -95,13 +74,12 @@ vi.mock('@pagespace/db/db', () => ({
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
-          // supports direct await (pages, users), .orderBy() (chatMessages), and .limit() (userProfiles, drives)
           then: <T>(
             resolve?: ((value: (typeof mockDbRow)[]) => T | PromiseLike<T>) | null,
             reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
           ) => Promise.resolve([mockDbRow]).then(resolve, reject),
           orderBy: vi.fn().mockResolvedValue([]),
-          limit: vi.fn().mockResolvedValue([{ displayName: 'Test User', drivePrompt: null }]),
+          limit: vi.fn().mockResolvedValue([{ displayName: 'Profile User', drivePrompt: null }]),
         })),
       })),
     })),
@@ -248,17 +226,10 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
-// ============================================================================
-// Imports (after mocks)
-// ============================================================================
-
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
-
-// ============================================================================
-// Fixtures
-// ============================================================================
+import { MAX_TAB_ID_LENGTH } from '@/lib/ai/core/tab-id-validation';
 
 const mockDbRow = {
   id: 'page-1',
@@ -272,12 +243,12 @@ const mockDbRow = {
   includePageTree: false,
   pageTreeScope: null,
   revision: 0,
-  name: 'Test User',
+  name: 'Auth User',
   currentAiProvider: 'pagespace',
   currentAiModel: 'glm-4.5-air',
   subscriptionTier: 'free',
   timezone: 'UTC',
-  displayName: 'Test User',
+  displayName: 'Profile User',
   drivePrompt: null,
 };
 
@@ -290,10 +261,17 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const makeRequest = () =>
-  new Request('https://example.com/api/ai/chat', {
+const makeRequest = (overrides: { tabId?: string | null } = {}) => {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'content-length': '200',
+  };
+  if (overrides.tabId !== null) {
+    headers['X-Tab-Id'] = overrides.tabId ?? 'tab-1';
+  }
+  return new Request('https://example.com/api/ai/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'content-length': '200' },
+    headers,
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page-1',
@@ -302,6 +280,7 @@ const makeRequest = () =>
       selectedModel: 'glm-4.5-air',
     }),
   });
+};
 
 const mockResponseMessage = {
   id: 'test-message-id',
@@ -309,190 +288,98 @@ const mockResponseMessage = {
   parts: [{ type: 'text', text: 'Hello' }],
 };
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-describe('POST /api/ai/chat — stream socket events', () => {
+describe('POST /api/ai/chat — lifecycle handoff', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     captured.createUIMessageStreamOptions = {};
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    mockCreateStreamLifecycle.mockResolvedValue({
+      pushChunk: mockLifecyclePushChunk,
+      finish: mockLifecycleFinish,
+    });
   });
 
-  describe('registry registration', () => {
-    it('given a new AI stream, should register the messageId in the multicast registry before streaming', async () => {
-      await POST(makeRequest());
+  describe('X-Tab-Id contract', () => {
+    it('given a missing X-Tab-Id header, should return 400 before invoking the lifecycle', async () => {
+      const response = await POST(makeRequest({ tabId: null }));
 
-      expect(mockRegistryRegister).toHaveBeenCalledWith(
-        'test-message-id',
-        expect.objectContaining({
-          pageId: 'page-1',
-          userId: 'user-1',
-          conversationId: 'conv-1',
-          tabId: '',
-          displayName: expect.any(String),
-        })
+      expect(response.status).toBe(400);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an X-Tab-Id header longer than the cap, should return 400 before invoking the lifecycle', async () => {
+      const oversized = 'a'.repeat(MAX_TAB_ID_LENGTH + 1);
+      const response = await POST(makeRequest({ tabId: oversized }));
+
+      expect(response.status).toBe(400);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an X-Tab-Id header at exactly the cap, should accept and invoke the lifecycle', async () => {
+      const maxLength = 'a'.repeat(MAX_TAB_ID_LENGTH);
+      await POST(makeRequest({ tabId: maxLength }));
+
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ tabId: maxLength }),
       );
     });
+  });
 
-    it('given registry.register throws, should not interrupt the stream', async () => {
-      mockRegistryRegister.mockImplementationOnce(() => { throw new Error('registry error'); });
+  describe('createStreamLifecycle invocation', () => {
+    it('given a new AI stream, should construct the lifecycle with channel, conversation, user, displayName, and tabId', async () => {
+      await POST(makeRequest({ tabId: 'tab-7' }));
 
-      const response = await POST(makeRequest());
-
-      expect(response.status).toBe(200);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledTimes(1);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith({
+        messageId: 'test-message-id',
+        channelId: 'page-1',
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        displayName: 'Profile User',
+        tabId: 'tab-7',
+      });
     });
   });
 
-  describe('chat:stream_start broadcast', () => {
-    it('given a new AI stream, should broadcast chat:stream_start after registering', async () => {
-      await POST(makeRequest());
-
-      expect(mockBroadcastAiStreamStart).toHaveBeenCalled();
-
-      const callOrder = [
-        mockRegistryRegister.mock.invocationCallOrder[0],
-        mockBroadcastAiStreamStart.mock.invocationCallOrder[0],
-      ];
-      expect(callOrder[0]).toBeLessThan(callOrder[1]);
-    });
-
-    it('given chat:stream_start, should include messageId, pageId, conversationId, and triggeredBy', async () => {
-      await POST(makeRequest());
-
-      expect(mockBroadcastAiStreamStart).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: 'test-message-id',
-          pageId: 'page-1',
-          conversationId: 'conv-1',
-          triggeredBy: expect.objectContaining({
-            userId: 'user-1',
-            displayName: expect.any(String),
-          }),
-        })
-      );
-    });
-
-    it('given a user profile, should use displayName from userProfiles in triggeredBy', async () => {
-      await POST(makeRequest());
-
-      const payload = mockBroadcastAiStreamStart.mock.calls[0][0];
-      expect(payload.triggeredBy.displayName).toBe('Test User');
-    });
-
-    it('given broadcastAiStreamStart throws, should not interrupt the stream', async () => {
-      mockBroadcastAiStreamStart.mockRejectedValueOnce(new Error('broadcast error'));
-
-      const response = await POST(makeRequest());
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('text-delta chunk → registry push', () => {
-    it('given a text-delta chunk, should push the text to the registry', async () => {
+  describe('chunk forwarding', () => {
+    it('given a text-delta chunk, should forward the text to lifecycle.pushChunk', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'chunk-1' } });
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'c1' } });
 
-      expect(mockRegistryPush).toHaveBeenCalledWith('test-message-id', 'hello');
+      expect(mockLifecyclePushChunk).toHaveBeenCalledWith('hello');
     });
 
-    it('given a non-text-delta chunk type, should not push to the registry', async () => {
+    it('given a non-text-delta chunk, should not forward anything', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'tool-call', toolCallId: 'tc1', toolName: 'search', args: {} } });
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'tool-call', toolCallId: 'tc', toolName: 'x', args: {} } });
 
-      expect(mockRegistryPush).not.toHaveBeenCalled();
-    });
-
-    it('given registry.push throws on a chunk, should not interrupt the stream', async () => {
-      mockRegistryPush.mockImplementationOnce(() => { throw new Error('push error'); });
-
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      expect(() => {
-        captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'chunk-1' } });
-      }).not.toThrow();
+      expect(mockLifecyclePushChunk).not.toHaveBeenCalled();
     });
   });
 
-  describe('onFinish → finish + chat:stream_complete', () => {
-    it('given stream completion, should call finish with aborted=false', async () => {
+  describe('finish forwarding', () => {
+    it('given onFinish runs, should call lifecycle.finish(false)', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
 
-      expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', false);
+      expect(mockLifecycleFinish).toHaveBeenCalledWith(false);
     });
 
-    it('given stream completion, should broadcast chat:stream_complete with aborted=false', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
-
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: 'test-message-id',
-          pageId: 'page-1',
-          aborted: false,
-        })
-      );
-    });
-
-    it('given onFinish called twice, should broadcast chat:stream_complete only once', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
-
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('onAbort → early finish', () => {
-    it('given stream abort, should call registry finish with aborted=true', async () => {
+    it('given onAbort fires, should call lifecycle.finish(true)', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       captured.streamTextOptions.onAbort?.();
 
-      expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', true);
+      expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
     });
 
-    it('given stream abort, should broadcast chat:stream_complete with aborted=true', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onAbort?.();
-
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: 'test-message-id',
-          pageId: 'page-1',
-          aborted: true,
-        })
-      );
-    });
-
-    it('given stream abort followed by onFinish, should broadcast complete only once with aborted=true', async () => {
-      await POST(makeRequest());
-      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
-
-      captured.streamTextOptions.onAbort?.();
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
-
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledTimes(1);
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
-        expect.objectContaining({ aborted: true })
-      );
-    });
-  });
-
-  describe('error finally path', () => {
-    it('given createUIMessageStream throws, should call finish with aborted=true', async () => {
+    it('given createUIMessageStream throws, should call lifecycle.finish(true)', async () => {
       const { createUIMessageStream } = await import('ai');
       vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
         throw new Error('stream creation failed');
@@ -500,20 +387,19 @@ describe('POST /api/ai/chat — stream socket events', () => {
 
       await POST(makeRequest());
 
-      expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', true);
+      expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
     });
 
-    it('given createUIMessageStream throws, should broadcast chat:stream_complete with aborted=true', async () => {
+    it('given the outer route handler errors after lifecycle init, should call lifecycle.finish(true)', async () => {
       const { createUIMessageStream } = await import('ai');
       vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
-        throw new Error('stream creation failed');
+        throw new Error('outer boom');
       });
 
       await POST(makeRequest());
 
-      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
-        expect.objectContaining({ aborted: true })
-      );
+      const calls = mockLifecycleFinish.mock.calls.filter(([aborted]) => aborted === true);
+      expect(calls.length).toBeGreaterThan(0);
     });
   });
 });

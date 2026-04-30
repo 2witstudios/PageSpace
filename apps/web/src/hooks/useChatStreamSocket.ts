@@ -14,7 +14,6 @@ interface ActiveStreamRow {
 
 export function useChatStreamSocket(
   channelId: string | undefined,
-  currentUserId: string | undefined,
   onStreamComplete?: (messageId: string) => void,
 ): void {
   const socket = useSocket();
@@ -31,15 +30,6 @@ export function useChatStreamSocket(
 
     let cancelled = false;
     const localTabId = getTabId();
-
-    // Filter own-tab events. Modern clients always send tabId; legacy clients
-    // (or routes that didn't forward X-Tab-Id) may emit empty/undefined tabId,
-    // so we fall back to userId === currentUserId to avoid self-duplication.
-    const isFromSelf = (triggeredBy: { userId: string; tabId?: string }): boolean => {
-      const tabId = triggeredBy.tabId;
-      if (tabId) return tabId === localTabId;
-      return !!currentUserId && triggeredBy.userId === currentUserId;
-    };
 
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
@@ -94,7 +84,7 @@ export function useChatStreamSocket(
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: isFromSelf(stream.triggeredBy),
+            isOwn: stream.triggeredBy.tabId === localTabId,
           });
           startConsume(stream.messageId);
         }
@@ -106,7 +96,7 @@ export function useChatStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      if (isFromSelf(payload.triggeredBy)) return;
+      if (payload.triggeredBy.tabId === localTabId) return;
       if (controllersRef.current.has(payload.messageId)) return;
 
       addStream({
@@ -148,5 +138,5 @@ export function useChatStreamSocket(
       processedRef.current.clear();
       clearPageStreams(channelId);
     };
-  }, [socket, channelId, currentUserId]);
+  }, [socket, channelId]);
 }

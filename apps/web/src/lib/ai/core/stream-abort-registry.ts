@@ -21,15 +21,14 @@ interface StreamEntry {
 }
 
 const registry = new Map<string, StreamEntry>();
-const messageIdIndex = new Map<string, string>(); // messageId → streamId
+const messageIdToStreamId = new Map<string, string>();
+const streamIdToMessageId = new Map<string, string>();
 
-const removeMessageIdEntry = (streamId: string): void => {
-  for (const [msgId, sid] of messageIdIndex.entries()) {
-    if (sid === streamId) {
-      messageIdIndex.delete(msgId);
-      break;
-    }
-  }
+const removeStreamIdMessageIdLink = (streamId: string): void => {
+  const messageId = streamIdToMessageId.get(streamId);
+  if (messageId === undefined) return;
+  streamIdToMessageId.delete(streamId);
+  messageIdToStreamId.delete(messageId);
 };
 
 // Cleanup streams older than 10 minutes (safety net for orphaned entries)
@@ -46,7 +45,7 @@ const startCleanupInterval = () => {
     for (const [streamId, entry] of registry.entries()) {
       if (now - entry.createdAt > MAX_STREAM_AGE_MS) {
         registry.delete(streamId);
-        removeMessageIdEntry(streamId);
+        removeStreamIdMessageIdLink(streamId);
       }
     }
   }, CLEANUP_INTERVAL_MS);
@@ -92,7 +91,8 @@ export const createStreamAbortController = ({
   });
 
   if (messageId) {
-    messageIdIndex.set(messageId, streamId);
+    messageIdToStreamId.set(messageId, streamId);
+    streamIdToMessageId.set(streamId, messageId);
   }
 
   return {
@@ -129,7 +129,7 @@ export const abortStream = ({
 
   entry.controller.abort();
   registry.delete(streamId);
-  removeMessageIdEntry(streamId);
+  removeStreamIdMessageIdLink(streamId);
 
   return { aborted: true, reason: 'Stream aborted by user request' };
 };
@@ -139,7 +139,7 @@ export const abortStream = ({
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
   registry.delete(streamId);
-  removeMessageIdEntry(streamId);
+  removeStreamIdMessageIdLink(streamId);
 };
 
 export const abortStreamByMessageId = ({
@@ -149,7 +149,7 @@ export const abortStreamByMessageId = ({
   messageId: string;
   userId: string;
 }): { aborted: boolean; reason: string } => {
-  const streamId = messageIdIndex.get(messageId);
+  const streamId = messageIdToStreamId.get(messageId);
   if (!streamId) {
     return { aborted: false, reason: 'Stream not found or already completed' };
   }

@@ -342,7 +342,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [isStreaming, stop, ownStreamMessageId]);
 
   usePageSocketRoom(page.id);
-  useChatStreamSocket(page.id, user?.id, (messageId) => {
+  useChatStreamSocket(page.id, (messageId) => {
     const stream = usePendingStreamsStore.getState().streams.get(messageId);
     if (stream?.text && stream.conversationId === currentConversationId) {
       setMessages((prev) => [

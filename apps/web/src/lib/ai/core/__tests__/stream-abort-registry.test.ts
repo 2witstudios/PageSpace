@@ -283,6 +283,25 @@ describe('stream-abort-registry', () => {
       expect(result.aborted).toBe(false);
       expect(result.reason).toBe('Stream not found or already completed');
     });
+
+    it('given many unrelated streamIds in the registry, should still resolve the messageId reverse-lookup correctly on removeStream', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      for (let i = 0; i < 1000; i++) {
+        registry.createStreamAbortController({ userId: `u-${i}`, streamId: `s-${i}` });
+      }
+      registry.createStreamAbortController({
+        userId: 'user-target',
+        streamId: 'stream-target',
+        messageId: 'msg-target',
+      });
+
+      registry.removeStream({ streamId: 'stream-target' });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-target', userId: 'user-target' });
+      expect(result.aborted).toBe(false);
+      expect(result.reason).toBe('Stream not found or already completed');
+    });
   });
 
   describe('concurrent streams isolation', () => {

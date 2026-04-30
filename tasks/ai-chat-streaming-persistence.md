@@ -150,6 +150,28 @@ Auto-join each authenticated user to their `user:${userId}:global` socket room f
 
 ---
 
+## X-Tab-Id input validation — length cap at boundary
+
+Cap `X-Tab-Id` header length at the route boundary to prevent unbounded text from being persisted to `aiStreamSessions`, broadcast over sockets, and joined into log lines. The DB column is `text` (unbounded); the only client that emits this header sends a short cuid2-style identifier, so a low cap is safe.
+
+**Requirements**:
+- Given an `X-Tab-Id` header longer than 64 characters, should return 400 with reason `invalid_x_tab_id_length` before any other work
+- Given an `X-Tab-Id` header at exactly 64 characters, should accept the request
+- Given the validator is shared between the page and global routes, should live in one module so the cap is co-located with the contract
+
+---
+
+## Global chat route — parallelize displayName lookups
+
+The global route resolves `displayName` via `users.name` then `userProfiles.displayName` in two sequential DB round trips. They have no data dependency — issue them concurrently.
+
+**Requirements**:
+- Given the global route resolves `displayName`, should issue both the `users.name` and `userProfiles.displayName` queries concurrently via `Promise.all`
+- Given `userProfiles.displayName` is non-null, should still prefer it over `users.name` (resolution chain unchanged: profile → auth user → 'Someone')
+- Given both queries fail or return empty, should fall back to `'Someone'`
+
+---
+
 ## GlobalChatContext — stream socket listener + bootstrap
 
 Wire global chat context to handle multiplayer stream events: DB bootstrap on mount, live socket listeners, and SSE cleanup on unmount.
