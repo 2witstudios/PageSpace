@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
@@ -88,6 +88,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   // Global stop function
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+
+  // Protects bootstrap-replayed own streams from SWR clobbers. Surfaces
+  // (GlobalAssistantView, SidebarChatTab) register based on local useChat
+  // status, which is `idle` immediately after a refresh — so they miss the
+  // case where the hook re-detects an in-flight own stream and flips this
+  // provider's isStreaming. This registration covers that gap.
+  useStreamingRegistration('global-chat', isStreaming, {
+    componentName: 'GlobalChatProvider',
+  });
 
   /**
    * Load a conversation by ID
