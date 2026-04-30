@@ -6,6 +6,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
@@ -233,14 +234,20 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   isInitializedRef.current = isInitialized;
 
   useEffect(() => {
-    const didTransitionToConnected =
-      prevConnectionStatusRef.current !== 'connected' && connectionStatus === 'connected';
+    const prevStatus = prevConnectionStatusRef.current;
     prevConnectionStatusRef.current = connectionStatus;
 
-    if (didTransitionToConnected) {
-      if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
-        refreshConversation();
-      }
+    const refreshNow = shouldRefreshOnReconnect(
+      prevStatus,
+      connectionStatus,
+      hasInitialConnectRef.current,
+    );
+    if (refreshNow && isInitializedRef.current && currentConversationId) {
+      refreshConversation();
+    }
+
+    const isFreshConnect = prevStatus !== 'connected' && connectionStatus === 'connected';
+    if (isFreshConnect) {
       hasInitialConnectRef.current = true;
     }
   }, [connectionStatus, currentConversationId, refreshConversation]);
