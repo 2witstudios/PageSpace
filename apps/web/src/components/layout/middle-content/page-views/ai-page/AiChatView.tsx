@@ -27,6 +27,7 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
@@ -321,6 +322,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) => state.getRemotePageStreams(page.id))
   );
+
+  const ownStreams = usePendingStreamsStore(
+    useShallow((state) => state.getOwnStreams(page.id))
+  );
+
+  const effectiveIsStreaming = isStreaming || ownStreams.length > 0;
+
+  const effectiveStop = useCallback(() => {
+    if (isStreaming) {
+      stop();
+      return;
+    }
+    const own = ownStreams[0];
+    if (own) {
+      abortActiveStreamByMessageId({ messageId: own.messageId });
+    }
+  }, [isStreaming, stop, ownStreams]);
 
   usePageSocketRoom(page.id);
   useChatStreamSocket(page.id, user?.id, (messageId) => {
@@ -699,8 +717,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             input={input}
             onInputChange={setInput}
             onSend={handleSendMessage}
-            onStop={stop}
-            isStreaming={isStreaming}
+            onStop={effectiveStop}
+            isStreaming={effectiveIsStreaming}
             isLoading={isLoading}
             disabled={!isAnyProviderConfigured}
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
@@ -734,9 +752,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     owner={VOICE_OWNER}
                     onSend={handleVoiceSend}
                     latestAssistantMessage={lastAIResponse}
-                    isAIStreaming={isStreaming}
+                    isAIStreaming={effectiveIsStreaming}
                     streamingText={streamingAssistantText}
-                    onStopStream={stop}
+                    onStopStream={effectiveStop}
                     onClose={disableVoiceMode}
                   />
                 )}

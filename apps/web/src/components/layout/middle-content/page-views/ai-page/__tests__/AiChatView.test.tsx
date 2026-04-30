@@ -3,9 +3,11 @@ import { render, act, waitFor, screen, fireEvent } from '@testing-library/react'
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
-const { mockFetchWithAuth, mockSetMessages } = vi.hoisted(() => ({
+const { mockFetchWithAuth, mockSetMessages, mockLocalStop, mockAbortByMessageId } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
+  mockLocalStop: vi.fn(),
+  mockAbortByMessageId: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -79,6 +81,9 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
 }));
 
 vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+vi.mock('@/lib/ai/core/stream-abort-client', () => ({
+  abortActiveStreamByMessageId: mockAbortByMessageId,
+}));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 
 const { mockCreateConversation } = vi.hoisted(() => ({
@@ -123,7 +128,7 @@ vi.mock('@/lib/ai/shared', () => ({
   })),
   useChatTransport: vi.fn(() => ({})),
   useStreamingRegistration: vi.fn(),
-  useChatStop: vi.fn(() => vi.fn()),
+  useChatStop: vi.fn(() => mockLocalStop),
   useSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()) })),
 }));
 
@@ -151,7 +156,35 @@ vi.mock('@/components/ai/shared', () => ({
   AiUsageMonitor: vi.fn(() => null),
   TasksDropdown: vi.fn(() => null),
 }));
-vi.mock('@/components/ai/chat/layouts', () => ({ ChatLayout: vi.fn(() => null) }));
+vi.mock('@/components/ai/chat/layouts', () => ({
+  ChatLayout: vi.fn(
+    (props: {
+      renderInput?: (p: Record<string, unknown>) => unknown;
+      onStop?: () => void;
+      isStreaming?: boolean;
+    }) =>
+      props.renderInput?.({
+        value: '',
+        onChange: () => {},
+        onSend: () => {},
+        onStop: props.onStop,
+        isStreaming: props.isStreaming,
+        disabled: false,
+        placeholder: '',
+        driveId: '',
+        crossDrive: undefined,
+        mcpRunningServers: [],
+        mcpServerNames: [],
+        mcpEnabledCount: 0,
+        mcpAllEnabled: false,
+        onMcpToggleAll: () => {},
+        isMcpServerEnabled: () => false,
+        onMcpServerToggle: () => {},
+        showMcp: false,
+        inputPosition: 'centered',
+      }) ?? null
+  ),
+}));
 vi.mock('@/components/ai/chat/input', () => ({ ChatInput: vi.fn(() => null) }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('zustand/react/shallow', () => ({ useShallow: vi.fn((fn: unknown) => fn) }));
@@ -161,6 +194,9 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { ChatLayout } from '@/components/ai/chat/layouts';
+import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
@@ -713,6 +749,220 @@ describe('AiChatView late-joiner conversation sync', () => {
       should: 'NOT make any functional setMessages calls (stale page-A append)',
       actual: functionalCallsAfterNav.length,
       expected: 0,
+    });
+  });
+});
+
+describe('AiChatView stop button for reconnected own streams', () => {
+  const page = makePage();
+
+  type StoreState = {
+    streams: Map<string, unknown>;
+    getRemotePageStreams: (pageId: string) => unknown[];
+    getOwnStreams: (pageId: string) => Array<{ messageId: string; pageId: string; isOwn: true }>;
+  };
+
+  const setStoreSelectors = ({
+    remote = [],
+    own = [],
+  }: {
+    remote?: unknown[];
+    own?: Array<{ messageId: string; pageId: string; isOwn: true }>;
+  }) => {
+    const state: StoreState = {
+      streams: new Map(),
+      getRemotePageStreams: () => remote,
+      getOwnStreams: () => own,
+    };
+    (usePendingStreamsStore as unknown as Mock).mockImplementation(
+      (selector: (s: StoreState) => unknown) => selector(state)
+    );
+  };
+
+  const setupHappyInit = () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [] });
+      }
+      return makeErrorResponse();
+    });
+  };
+
+  const lastChatLayoutProps = () => {
+    const calls = (ChatLayout as unknown as Mock).mock.calls;
+    return calls[calls.length - 1]?.[0] as
+      | { isStreaming: boolean; onStop: () => void; remoteStreams: unknown[] }
+      | undefined;
+  };
+
+  const lastVoiceCallPanelProps = () => {
+    const calls = (VoiceCallPanel as unknown as Mock).mock.calls;
+    return calls[calls.length - 1]?.[0] as
+      | { isAIStreaming: boolean; onStopStream: () => void }
+      | undefined;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setStoreSelectors({ remote: [], own: [] });
+  });
+
+  test('given an own stream is pending and useChat status is idle, ChatLayout receives isStreaming=true (so stop button renders after refresh)', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'msg-own-1', pageId: PAGE_ID, isOwn: true }],
+    });
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'a pending own stream and useChat status idle',
+        should: 'pass effective isStreaming=true to ChatLayout',
+        actual: lastChatLayoutProps()?.isStreaming,
+        expected: true,
+      });
+    });
+  });
+
+  test('given no own stream and useChat status is idle, ChatLayout receives isStreaming=false (no stop button)', async () => {
+    setupHappyInit();
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'no own stream and useChat status idle',
+        should: 'pass isStreaming=false to ChatLayout',
+        actual: lastChatLayoutProps()?.isStreaming,
+        expected: false,
+      });
+    });
+  });
+
+  test('given useChat status is idle but an own stream is pending, calling ChatLayout.onStop calls abortActiveStreamByMessageId with the own stream messageId', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'msg-own-7', pageId: PAGE_ID, isOwn: true }],
+    });
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'AiChatView mounted with own stream',
+        should: 'have rendered ChatLayout with onStop',
+        actual: typeof lastChatLayoutProps()?.onStop,
+        expected: 'function',
+      });
+    });
+
+    act(() => {
+      lastChatLayoutProps()?.onStop();
+    });
+
+    assert({
+      given: 'isStreaming=false but ownStreams[0] exists, onStop invoked',
+      should: 'call abortActiveStreamByMessageId with the own stream messageId',
+      actual: mockAbortByMessageId.mock.calls.map((args) => args[0]),
+      expected: [{ messageId: 'msg-own-7' }],
+    });
+
+    assert({
+      given: 'isStreaming=false branch, onStop invoked',
+      should: 'NOT call the local useChat stop',
+      actual: mockLocalStop.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('given useChat is actively streaming, calling ChatLayout.onStop calls the local useChat stop and not the remote abort', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'msg-own-2', pageId: PAGE_ID, isOwn: true }],
+    });
+    const { useChat } = await import('@ai-sdk/react');
+    const useChatMock = useChat as unknown as Mock;
+    const idleReturn = {
+      messages: [],
+      sendMessage: vi.fn(),
+      status: 'idle',
+      error: undefined,
+      regenerate: vi.fn(),
+      setMessages: mockSetMessages,
+      stop: vi.fn(),
+    };
+    useChatMock.mockReturnValue({ ...idleReturn, status: 'streaming' });
+
+    try {
+      render(<AiChatView page={page} />);
+
+      await waitFor(() => {
+        assert({
+          given: 'AiChatView mounted while streaming',
+          should: 'pass isStreaming=true to ChatLayout',
+          actual: lastChatLayoutProps()?.isStreaming,
+          expected: true,
+        });
+      });
+
+      act(() => {
+        lastChatLayoutProps()?.onStop();
+      });
+
+      assert({
+        given: 'isStreaming=true, onStop invoked',
+        should: 'call local stop exactly once',
+        actual: mockLocalStop.mock.calls.length,
+        expected: 1,
+      });
+
+      assert({
+        given: 'isStreaming=true, onStop invoked',
+        should: 'NOT call abortActiveStreamByMessageId (avoid double-stop)',
+        actual: mockAbortByMessageId.mock.calls.length,
+        expected: 0,
+      });
+    } finally {
+      useChatMock.mockReturnValue(idleReturn);
+    }
+  });
+
+  test('given voice mode is active and an own stream is pending, VoiceCallPanel receives isAIStreaming=true and a stop handler that aborts by messageId', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'msg-own-voice', pageId: PAGE_ID, isOwn: true }],
+    });
+    vi.mocked(useVoiceModeStore).mockImplementation(
+      ((selector: (state: { isEnabled: boolean; owner: string; enable: () => void; disable: () => void }) => unknown) =>
+        selector({ isEnabled: true, owner: 'ai-page', enable: vi.fn(), disable: vi.fn() })) as unknown as typeof useVoiceModeStore
+    );
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'voice mode active with pending own stream',
+        should: 'pass isAIStreaming=true to VoiceCallPanel',
+        actual: lastVoiceCallPanelProps()?.isAIStreaming,
+        expected: true,
+      });
+    });
+
+    act(() => {
+      lastVoiceCallPanelProps()?.onStopStream();
+    });
+
+    assert({
+      given: 'voice panel stop invoked while own stream pending and idle',
+      should: 'abort by messageId',
+      actual: mockAbortByMessageId.mock.calls.map((args) => args[0]),
+      expected: [{ messageId: 'msg-own-voice' }],
     });
   });
 });
