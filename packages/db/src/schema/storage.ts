@@ -3,6 +3,13 @@ import { relations } from 'drizzle-orm';
 import { drives, pages } from './core';
 import { users } from './auth';
 
+export interface AttachmentMeta {
+  originalName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
+
 export const files = pgTable('files', {
   id: text('id').primaryKey(),
   driveId: text('driveId')

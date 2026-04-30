@@ -11,14 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-
-// Type for attachment metadata stored in the database
-interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
-}
+import type { AttachmentMeta } from '@pagespace/lib/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

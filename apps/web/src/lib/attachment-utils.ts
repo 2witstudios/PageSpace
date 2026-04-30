@@ -3,12 +3,8 @@
  * Used by both the inbox channel page and the ChannelView component.
  */
 
-export interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
-}
+import type { AttachmentMeta } from '@pagespace/lib/types';
+export type { AttachmentMeta };
 
 export interface FileRelation {
   id: string;
