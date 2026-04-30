@@ -65,6 +65,7 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
   const [cronExpression, setCronExpression] = useState(initialData?.cronExpression ?? '0 9 * * 1-5');
   const [timezone, setTimezone] = useState(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [isEnabled, setIsEnabled] = useState(initialData?.isEnabled ?? true);
+  const [contextPageIds, setContextPageIds] = useState<string[]>(initialData?.contextPageIds ?? []);
   const [cronPreview, setCronPreview] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -95,6 +96,7 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
       setCronExpression(initialData?.cronExpression ?? '0 9 * * 1-5');
       setTimezone(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
       setIsEnabled(initialData?.isEnabled ?? true);
+      setContextPageIds(initialData?.contextPageIds ?? []);
       setError('');
     }
   }, [open, initialData]);
@@ -109,7 +111,7 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
         name,
         agentPageId,
         prompt,
-        contextPageIds: [],
+        contextPageIds,
         cronExpression,
         timezone,
         isEnabled,

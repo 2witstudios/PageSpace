@@ -47,6 +47,7 @@ import {
   GripVertical,
   LayoutList,
   Kanban,
+  Zap,
 } from 'lucide-react';
 import {
   DndContext,
@@ -68,6 +69,8 @@ import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
 import { StatusConfigManager } from './StatusConfigManager';
+import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
+import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
 import {
   TaskItem,
   TaskListData,
@@ -101,6 +104,7 @@ interface MobileTaskCardProps {
   onSaveTitle: (taskId: string, title: string) => void;
   onDelete: (taskId: string) => void;
   onNavigate: (task: TaskItem) => void;
+  onConfigureTriggers: (task: TaskItem) => void;
   driveId: string;
   isEditing: boolean;
   editingTitle: string;
@@ -123,6 +127,7 @@ function MobileTaskCard({
   onSaveTitle,
   onDelete,
   onNavigate,
+  onConfigureTriggers,
   driveId,
   isEditing,
   editingTitle,
@@ -200,6 +205,10 @@ function MobileTaskCard({
               <Pencil className="h-4 w-4 mr-2" />
               Rename
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onConfigureTriggers(task)} disabled={!canEdit}>
+              <Zap className="h-4 w-4 mr-2" />
+              Agent triggers…
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => onDelete(task.id)}
               className="text-destructive"
@@ -269,6 +278,18 @@ function MobileTaskCard({
           onUpdate={(assigneeIds) => onMultiAssigneeChange(task.id, assigneeIds)}
           disabled={!canEdit}
         />
+
+        {task.metadata?.hasTrigger && (
+          <button
+            type="button"
+            onClick={() => onConfigureTriggers(task)}
+            title="Agent trigger configured — click to edit"
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+          >
+            <Zap className="h-3 w-3" />
+            <span>Trigger</span>
+          </button>
+        )}
 
         {/* Due Date */}
         <DueDatePicker
@@ -343,6 +364,8 @@ function TaskListView({ page }: TaskListViewProps) {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
+  const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   const hasLoadedRef = useRef(false);
@@ -768,6 +791,18 @@ function TaskListView({ page }: TaskListViewProps) {
             />
           )}
 
+          {canEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1"
+              onClick={() => setWorkflowsDialogOpen(true)}
+            >
+              <Zap className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Workflows</span>
+            </Button>
+          )}
+
           {canEdit && viewMode === 'table' && (
             <Button
               size="sm"
@@ -805,6 +840,7 @@ function TaskListView({ page }: TaskListViewProps) {
                 router.push(`/dashboard/${page.driveId}/${t.pageId}`);
               }
             }}
+            onConfigureTriggers={(t) => setTriggerDialogTask(t)}
             driveId={page.driveId}
             isEditing={editingTaskId === task.id}
             editingTitle={editingTitle}
@@ -984,12 +1020,25 @@ function TaskListView({ page }: TaskListViewProps) {
 
                         {/* Multiple Assignees */}
                         <TableCell>
-                          <MultiAssigneeSelect
-                            driveId={page.driveId}
-                            assignees={task.assignees || []}
-                            onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
-                            disabled={!canEdit}
-                          />
+                          <div className="flex items-center gap-1.5">
+                            <MultiAssigneeSelect
+                              driveId={page.driveId}
+                              assignees={task.assignees || []}
+                              onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
+                              disabled={!canEdit}
+                            />
+                            {task.metadata?.hasTrigger && (
+                              <button
+                                type="button"
+                                onClick={() => setTriggerDialogTask(task)}
+                                title="Agent trigger configured — click to edit"
+                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+                              >
+                                <Zap className="h-3 w-3" />
+                                <span className="sr-only">Agent trigger configured</span>
+                              </button>
+                            )}
+                          </div>
                         </TableCell>
 
                         {/* Due Date */}
@@ -1020,6 +1069,10 @@ function TaskListView({ page }: TaskListViewProps) {
                                 <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
                                   <Pencil className="h-4 w-4 mr-2" />
                                   Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setTriggerDialogTask(task)} disabled={!canEdit}>
+                                  <Zap className="h-4 w-4 mr-2" />
+                                  Agent triggers…
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => handleDeleteTask(task.id)}
@@ -1083,6 +1136,27 @@ function TaskListView({ page }: TaskListViewProps) {
             : 'never'}
         </span>
       </div>
+
+      {triggerDialogTask && (
+        <TaskAgentTriggersDialog
+          open={!!triggerDialogTask}
+          onOpenChange={(open) => { if (!open) setTriggerDialogTask(null); }}
+          taskId={triggerDialogTask.id}
+          taskTitle={triggerDialogTask.title}
+          pageId={page.id}
+          driveId={page.driveId}
+          hasDueDate={!!triggerDialogTask.dueDate}
+          onSaved={() => mutate(`/api/pages/${page.id}/tasks`)}
+        />
+      )}
+
+      <TaskListWorkflowsDialog
+        open={workflowsDialogOpen}
+        onOpenChange={setWorkflowsDialogOpen}
+        driveId={page.driveId}
+        pageId={page.id}
+        taskListTitle={data?.taskList.title ?? page.title ?? 'Task list'}
+      />
     </div>
   );
 }

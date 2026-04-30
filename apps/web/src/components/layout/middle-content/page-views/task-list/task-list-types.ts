@@ -44,6 +44,11 @@ export interface TaskItem {
   priority: 'low' | 'medium' | 'high';
   position: number;
   dueDate: string | null;
+  metadata?: {
+    hasTrigger?: boolean;
+    triggerTypes?: string[];
+    [key: string]: unknown;
+  } | null;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
