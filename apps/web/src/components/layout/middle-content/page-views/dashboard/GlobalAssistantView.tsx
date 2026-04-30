@@ -68,8 +68,18 @@ import {
   LocationContext,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
+import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
+import { useSocketStore } from '@/stores/useSocketStore';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { shouldClaimAgentStopSlot } from '@/lib/ai/streams/shouldClaimAgentStopSlot';
+import {
+  shouldRefreshOnReconnect,
+  type ConnectionStatus,
+} from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -124,18 +134,22 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
-  // Remote in-progress streams for the active chat. Filtered by:
-  //   1. Mode — agent mode subscribes to a per-agent channel elsewhere; here we
-  //      only render global-channel streams, so return [] when an agent is selected.
-  //   2. Conversation — the global channel may carry concurrent streams from
-  //      other global conversations; only show streams matching the current one.
-  // Note: PendingStream.pageId holds the channel id (e.g. `user:USERID:global`)
-  // for non-page channels. Renaming the field is tracked as separate tech debt;
-  // until then, the channel string is what gets passed to getRemotePageStreams.
+  // Remote in-progress streams for the active chat. The selector picks the
+  // right channel — agent mode reads `selectedAgent.id`; global mode reads
+  // `user:USERID:global` — and filters by the active conversation so that
+  // concurrent streams in other conversations on the same channel are hidden.
+  // PendingStream.pageId holds the channel id (the `pageId` name is legacy;
+  // it's the bus key, not necessarily a page).
   const globalChannelId = user?.id ? `user:${user.id}:global` : null;
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) => {
-      if (selectedAgent || !globalChannelId || !globalConversationId) return [];
+      if (selectedAgent) {
+        if (!agentConversationId) return [];
+        return state
+          .getRemotePageStreams(selectedAgent.id)
+          .filter((s) => s.conversationId === agentConversationId);
+      }
+      if (!globalChannelId || !globalConversationId) return [];
       return state
         .getRemotePageStreams(globalChannelId)
         .filter((s) => s.conversationId === globalConversationId);
@@ -608,6 +622,92 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStopStreaming(null);
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
+
+  // ============================================
+  // AGENT MODE — multiplayer stream socket (Tasks 2 + 5 + 6)
+  // ============================================
+
+  // Channel-room subscription so chat:stream_start/_complete events land here.
+  usePageSocketRoom(selectedAgent?.id);
+
+  // Stable ref so the hook's onStreamComplete sees the latest setMessages
+  // without re-binding the socket subscription on every render.
+  const setAgentMessagesRef = useRef(setAgentMessages);
+  setAgentMessagesRef.current = setAgentMessages;
+
+  // Single-writer guard for the dashboard store's stop-streaming slot. This
+  // view's onOwnStreamFinalize only clears the slot if THIS view claimed it
+  // — preserving whichever surface (dashboard or sidebar agent mode) wrote
+  // first when both are co-mounted on the same agent.
+  const agentOwnedStopSlotRef = useRef(false);
+
+  useChannelStreamSocket(selectedAgent?.id, {
+    // Local synthesis on stream completion. No `${id}-default` placeholder
+    // branch: the dashboard store is loaded with a real conversationId by
+    // loadMostRecentConversation before bootstrap returns.
+    onStreamComplete: (messageId) => {
+      if (!selectedAgent) return;
+      const stream = usePendingStreamsStore.getState().streams.get(messageId);
+      if (!stream?.text) return;
+      if (stream.conversationId !== agentConversationId) return;
+      setAgentMessagesRef.current((prev) => [
+        ...prev,
+        synthesizeAssistantMessage(messageId, stream.text),
+      ]);
+    },
+    onOwnStreamBootstrap: ({ messageId }) => {
+      const current = usePageAgentDashboardStore.getState();
+      if (!shouldClaimAgentStopSlot(current.agentStopStreaming)) return;
+      agentOwnedStopSlotRef.current = true;
+      setAgentStreaming(true);
+      setAgentStopStreaming(() => () => {
+        abortActiveStreamByMessageId({ messageId });
+      });
+    },
+    onOwnStreamFinalize: () => {
+      if (!agentOwnedStopSlotRef.current) return;
+      agentOwnedStopSlotRef.current = false;
+      setAgentStreaming(false);
+      setAgentStopStreaming(null);
+    },
+  });
+
+  // Channel-id-keyed editing-store registration for agent mode. Sidebar agent
+  // mode (Task 4) will register the same `ai-channel-${id}` key when
+  // co-mounted on the same agent — the editing store dedups same-key writes
+  // naturally. The bool merges useChat-driven streaming with the
+  // bootstrap-replay flag in the dashboard store so a mid-stream refresh
+  // stays protected before useChat re-engages.
+  const dashboardAgentStreaming = usePageAgentDashboardStore((s) => s.isAgentStreaming);
+  useStreamingRegistration(
+    selectedAgent ? `ai-channel-${selectedAgent.id}` : 'ai-channel-no-agent',
+    Boolean(selectedAgent) && (isStreaming || dashboardAgentStreaming),
+    selectedAgent
+      ? { conversationId: agentConversationId || undefined, componentName: 'GlobalAssistantView' }
+      : undefined,
+  );
+
+  // Reconnect-refresh: re-fetch the active agent conversation when the socket
+  // transitions back to connected. Skipped on the very first connect (already
+  // covered by mount-time load).
+  const socketConnectionStatus = useSocketStore((s) => s.connectionStatus);
+  const prevAgentConnectionStatusRef = useRef<ConnectionStatus | null>(null);
+  const agentHasInitialConnectRef = useRef(false);
+  const loadAgentConversation = usePageAgentDashboardStore((state) => state.loadConversation);
+  useEffect(() => {
+    if (!selectedAgent) return;
+    const prev = prevAgentConnectionStatusRef.current;
+    prevAgentConnectionStatusRef.current = socketConnectionStatus;
+    if (
+      shouldRefreshOnReconnect(prev, socketConnectionStatus, agentHasInitialConnectRef.current)
+      && agentConversationId
+    ) {
+      loadAgentConversation(agentConversationId);
+    }
+    if (prev !== 'connected' && socketConnectionStatus === 'connected') {
+      agentHasInitialConnectRef.current = true;
+    }
+  }, [selectedAgent, socketConnectionStatus, agentConversationId, loadAgentConversation]);
 
   // Register streaming state with editing store
   useStreamingRegistration(
