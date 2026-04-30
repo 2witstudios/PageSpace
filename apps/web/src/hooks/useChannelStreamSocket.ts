@@ -13,11 +13,15 @@ interface ActiveStreamRow {
 }
 
 export interface UseChannelStreamSocketOptions {
+  /** Fires once per messageId on clean finalize (SSE resolve or socket complete); NOT on SSE error. */
   onStreamComplete?: (messageId: string) => void;
+  /** Fires once per messageId when DB bootstrap finds an in-flight stream from this browser session. */
   onOwnStreamBootstrap?: (event: { messageId: string }) => void;
+  /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
   onOwnStreamFinalize?: (event: { messageId: string }) => void;
 }
 
+/** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
 export function useChannelStreamSocket(
   channelId: string | undefined,
   options?: UseChannelStreamSocketOptions,
