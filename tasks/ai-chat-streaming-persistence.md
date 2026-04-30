@@ -118,7 +118,7 @@ Extend the pending streams store with an `isOwn` flag to distinguish the current
 Fix own-stream detection to use tabId, support global channel IDs, and bootstrap from DB on mount.
 
 **Requirements**:
-- Given two tabs open by the same user, should mark only the originating tab's stream as own
+- Given a stream from any source, `isOwn` must be `triggeredBy.tabId === getTabId()` — tabId persists through refresh via sessionStorage so the originating tab correctly reclaims its stream; a different window of the same user gets `isOwn: false` (sees indicator, cannot stop)
 - Given `channelId` is a `user:${userId}:global` string, should pass it through to the active-streams endpoint correctly
 - Given active streams exist in DB at mount time, should bootstrap the store before any socket events arrive
 - Given a bootstrapped stream completes via SSE, should call the same completion handler as live socket events
@@ -156,6 +156,8 @@ Wire global chat context to handle multiplayer stream events: DB bootstrap on mo
 
 **Requirements**:
 - Given mount with active streams in DB, should bootstrap `usePendingStreamsStore` before any socket event arrives
+- Given a bootstrapped stream where `triggeredBy.tabId === getTabId()` (own stream), should call `setIsStreaming(true)` and `setStopStreaming(() => abortActiveStreamByMessageId(messageId))` so the existing stop button in the global chat UI works without any UI changes
+- Given the bootstrapped own stream completes via SSE, should call `setIsStreaming(false)`, `setStopStreaming(null)`, and `refreshConversation`
 - Given `chat:stream_start` from the current tab, should skip it (tabId filter prevents duplicate handling)
 - Given `chat:stream_start` for a different user's global channel, should skip it (pageId guard)
 - Given `chat:stream_start` for the correct channel from another tab, should addStream and open SSE join
