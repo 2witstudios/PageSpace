@@ -105,6 +105,7 @@ describe('useChatStreamSocket', () => {
         pageId: 'page-a',
         conversationId: 'conv-1',
         triggeredBy: { userId: 'user-2', displayName: 'Alice' },
+        isOwn: false,
       });
       expect(mockConsumeStreamJoin).toHaveBeenCalledWith(
         'msg-1',

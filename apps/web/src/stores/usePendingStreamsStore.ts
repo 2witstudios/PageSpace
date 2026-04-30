@@ -6,6 +6,7 @@ export interface PendingStream {
   conversationId: string;
   triggeredBy: { userId: string; displayName: string };
   text: string;
+  isOwn: boolean;
 }
 
 interface PendingStreamsState {
@@ -15,6 +16,7 @@ interface PendingStreamsState {
   removeStream: (messageId: string) => void;
   clearPageStreams: (pageId: string) => void;
   getRemotePageStreams: (pageId: string) => PendingStream[];
+  getOwnStreams: (pageId: string) => PendingStream[];
 }
 
 export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => ({
@@ -54,5 +56,11 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
 
   getRemotePageStreams: (pageId) => {
     return Array.from(get().streams.values()).filter((s) => s.pageId === pageId);
+  },
+
+  getOwnStreams: (pageId) => {
+    return Array.from(get().streams.values()).filter(
+      (s) => s.pageId === pageId && s.isOwn,
+    );
   },
 }));
