@@ -206,6 +206,85 @@ describe('stream-abort-registry', () => {
     });
   });
 
+  describe('abortStreamByMessageId', () => {
+    it('aborts stream by messageId when registered', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      const { controller } = registry.createStreamAbortController({
+        userId: 'user-123',
+        streamId: 'stream-abc',
+        messageId: 'msg-123',
+      });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-123', userId: 'user-123' });
+
+      expect(result.aborted).toBe(true);
+      expect(result.reason).toBe('Stream aborted by user request');
+      expect(controller.signal.aborted).toBe(true);
+    });
+
+    it('returns not found when no messageId was registered', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-123', streamId: 'stream-abc' });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-unknown', userId: 'user-123' });
+
+      expect(result.aborted).toBe(false);
+      expect(result.reason).toBe('Stream not found or already completed');
+    });
+
+    it('fails for different userId (IDOR protection via messageId)', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({
+        userId: 'user-123',
+        streamId: 'stream-abc',
+        messageId: 'msg-123',
+      });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-123', userId: 'attacker-456' });
+
+      expect(result.aborted).toBe(false);
+      expect(result.reason).toBe('Unauthorized to abort this stream');
+    });
+
+    it('cleans up messageIdIndex entry after abort', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({
+        userId: 'user-123',
+        streamId: 'stream-abc',
+        messageId: 'msg-123',
+      });
+
+      registry.abortStreamByMessageId({ messageId: 'msg-123', userId: 'user-123' });
+
+      // Second call should find nothing
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-123', userId: 'user-123' });
+      expect(result.aborted).toBe(false);
+      expect(result.reason).toBe('Stream not found or already completed');
+    });
+  });
+
+  describe('removeStream with messageId cleanup', () => {
+    it('cleans up messageIdIndex entry on removeStream', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({
+        userId: 'user-123',
+        streamId: 'stream-abc',
+        messageId: 'msg-123',
+      });
+
+      registry.removeStream({ streamId: 'stream-abc' });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-123', userId: 'user-123' });
+      expect(result.aborted).toBe(false);
+      expect(result.reason).toBe('Stream not found or already completed');
+    });
+  });
+
   describe('concurrent streams isolation', () => {
     it('streams from different users do not interfere', async () => {
       const registry = await import('../stream-abort-registry');

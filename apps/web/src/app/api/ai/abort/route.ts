@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { abortStream } from '@/lib/ai/core/stream-abort-registry';
+import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
@@ -46,25 +46,34 @@ export async function POST(request: Request) {
       );
     }
 
-    const { streamId } = await request.json();
+    const body = await request.json();
+    const { streamId, messageId } = body as { streamId?: string; messageId?: string };
 
-    if (!streamId || typeof streamId !== 'string' || !streamId.trim()) {
+    const hasStreamId = streamId && typeof streamId === 'string' && streamId.trim();
+    const hasMessageId = messageId && typeof messageId === 'string' && messageId.trim();
+
+    if (!hasStreamId && !hasMessageId) {
       return NextResponse.json(
-        { error: 'streamId is required' },
+        { error: 'streamId or messageId is required' },
         { status: 400 }
       );
     }
 
-    const result = abortStream({ streamId, userId });
+    const result = hasMessageId
+      ? abortStreamByMessageId({ messageId: messageId as string, userId })
+      : abortStream({ streamId: streamId as string, userId });
+
+    const resourceId = hasMessageId ? (messageId as string) : (streamId as string);
 
     loggers.api.info('AI stream abort requested', {
       streamId,
+      messageId,
       userId,
       aborted: result.aborted,
       reason: result.reason,
     });
 
-    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_stream', resourceId: streamId, details: {
+    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_stream', resourceId, details: {
       action: 'abort',
       aborted: result.aborted,
     } });

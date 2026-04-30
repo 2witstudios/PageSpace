@@ -7,6 +7,7 @@
 
 export {
   abortActiveStream,
+  abortActiveStreamByMessageId,
   createStreamTrackingFetch,
   setActiveStreamId,
   getActiveStreamId,
