@@ -71,40 +71,22 @@ const mockUserProfile = { displayName: 'Display User' };
 const mockAuthUser = { name: 'Auth User' };
 
 vi.mock('@pagespace/db/db', () => {
-  const select = vi.fn(() => {
-    const where = vi.fn((..._args: unknown[]) => {
-      let nextLimit: unknown[] = [mockUserProfile];
-      const chain = {
-        then: <T>(
-          resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
-          reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
-        ) => Promise.resolve([mockConversation]).then(resolve, reject),
-        orderBy: vi.fn().mockResolvedValue([]),
-        limit: vi.fn().mockImplementation(() => Promise.resolve(nextLimit)),
+  const select = vi.fn(() => ({
+    from: vi.fn((table: unknown) => {
+      const tableLabel = table as { __label?: string } | undefined;
+      const isUsers = tableLabel?.__label === 'users';
+      return {
+        where: vi.fn(() => ({
+          then: <T>(
+            resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+          ) => Promise.resolve([mockConversation]).then(resolve, reject),
+          orderBy: vi.fn().mockResolvedValue([]),
+          limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+        })),
       };
-      return chain;
-    });
-    return {
-      from: vi.fn((table: unknown) => {
-        // Heuristic: when reading users (auth), return Auth User; otherwise userProfiles
-        const tableLabel = table as { __label?: string } | undefined;
-        const isUsers = tableLabel?.__label === 'users';
-        return {
-          where: vi.fn(() => {
-            const data = isUsers ? [mockAuthUser] : [mockUserProfile];
-            return {
-              then: <T>(
-                resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
-                reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
-              ) => Promise.resolve([mockConversation]).then(resolve, reject),
-              orderBy: vi.fn().mockResolvedValue([]),
-              limit: vi.fn().mockResolvedValue(data),
-            };
-          }),
-        };
-      }),
-    };
-  });
+    }),
+  }));
 
   const insert = vi.fn(() => ({
     values: vi.fn(() => ({
