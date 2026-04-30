@@ -2,14 +2,14 @@ import { useEffect, useRef } from 'react';
 import { useSocket } from './useSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
-import { getTabId } from '@/lib/ai/core/tab-id';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
 
 interface ActiveStreamRow {
   messageId: string;
   conversationId: string;
-  triggeredBy: { userId: string; displayName: string; tabId: string };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
 export function useChatStreamSocket(
@@ -29,7 +29,7 @@ export function useChatStreamSocket(
     if (!socket || !channelId) return;
 
     let cancelled = false;
-    const localTabId = getTabId();
+    const localBrowserSessionId = getBrowserSessionId();
 
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
@@ -84,7 +84,7 @@ export function useChatStreamSocket(
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: stream.triggeredBy.tabId === localTabId,
+            isOwn: stream.triggeredBy.browserSessionId === localBrowserSessionId,
           });
           startConsume(stream.messageId);
         }
@@ -96,7 +96,7 @@ export function useChatStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      if (payload.triggeredBy.tabId === localTabId) return;
+      if (payload.triggeredBy.browserSessionId === localBrowserSessionId) return;
       if (controllersRef.current.has(payload.messageId)) return;
 
       addStream({

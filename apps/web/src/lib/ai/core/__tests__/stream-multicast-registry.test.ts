@@ -6,7 +6,7 @@ const meta = (overrides: Partial<StreamMeta> = {}): StreamMeta => ({
   userId: 'user-1',
   displayName: 'Test User',
   conversationId: 'conv-1',
-  tabId: 'tab-1',
+  browserSessionId: 'session-1',
   ...overrides,
 });
 

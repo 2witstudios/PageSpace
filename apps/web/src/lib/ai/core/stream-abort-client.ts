@@ -12,7 +12,7 @@
  */
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getTabId } from './tab-id';
+import { getBrowserSessionId } from './browser-session-id';
 
 // Track active streams by chat/conversation ID
 const activeStreams = new Map<string, string>();
@@ -124,7 +124,7 @@ export const createStreamTrackingFetch = ({
   return async (url, options) => {
     const urlString = url instanceof Request ? url.url : url.toString();
     const merged = new Headers(options?.headers);
-    merged.set('X-Tab-Id', getTabId());
+    merged.set('X-Browser-Session-Id', getBrowserSessionId());
     const headers = Object.fromEntries(merged.entries());
     const response = await fetchWithAuth(urlString, { ...options, headers });
 

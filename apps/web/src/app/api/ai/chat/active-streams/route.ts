@@ -66,7 +66,7 @@ export async function GET(request: Request) {
         conversationId: aiStreamSessions.conversationId,
         userId: aiStreamSessions.userId,
         displayName: aiStreamSessions.displayName,
-        tabId: aiStreamSessions.tabId,
+        browserSessionId: aiStreamSessions.browserSessionId,
       })
       .from(aiStreamSessions)
       .where(
@@ -85,7 +85,7 @@ export async function GET(request: Request) {
         triggeredBy: {
           userId: s.userId,
           displayName: s.displayName,
-          tabId: s.tabId,
+          browserSessionId: s.browserSessionId,
         },
       })),
     });

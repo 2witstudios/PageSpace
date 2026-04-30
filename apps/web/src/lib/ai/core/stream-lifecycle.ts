@@ -11,7 +11,7 @@ export interface StreamLifecycleParams {
   conversationId: string;
   userId: string;
   displayName: string;
-  tabId: string;
+  browserSessionId: string;
 }
 
 export interface StreamLifecycleHandle {
@@ -22,7 +22,7 @@ export interface StreamLifecycleHandle {
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
-  const { messageId, channelId, conversationId, userId, displayName, tabId } = params;
+  const { messageId, channelId, conversationId, userId, displayName, browserSessionId } = params;
 
   try {
     streamMulticastRegistry.register(messageId, {
@@ -30,7 +30,7 @@ export const createStreamLifecycle = async (
       userId,
       displayName,
       conversationId,
-      tabId,
+      browserSessionId,
     });
   } catch (error) {
     loggers.ai.warn('stream-lifecycle: registry.register threw', {
@@ -48,7 +48,7 @@ export const createStreamLifecycle = async (
         conversationId,
         userId,
         displayName,
-        tabId,
+        browserSessionId,
         status: 'streaming',
       })
       .onConflictDoUpdate({
@@ -58,7 +58,7 @@ export const createStreamLifecycle = async (
           conversationId,
           userId,
           displayName,
-          tabId,
+          browserSessionId,
           status: 'streaming',
           startedAt: new Date(),
           completedAt: null,
@@ -75,7 +75,7 @@ export const createStreamLifecycle = async (
     messageId,
     pageId: channelId,
     conversationId,
-    triggeredBy: { userId, displayName, tabId },
+    triggeredBy: { userId, displayName, browserSessionId },
   }).catch(() => {});
 
   let finished = false;

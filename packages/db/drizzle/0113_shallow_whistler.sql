@@ -1,0 +1,1 @@
+ALTER TABLE "ai_stream_sessions" RENAME COLUMN "tab_id" TO "browser_session_id";

@@ -262,7 +262,7 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
-import { MAX_TAB_ID_LENGTH } from '@/lib/ai/core/tab-id-validation';
+import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -273,13 +273,13 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const makeRequest = (overrides: { tabId?: string | null } = {}) => {
+const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'content-length': '200',
   };
-  if (overrides.tabId !== null) {
-    headers['X-Tab-Id'] = overrides.tabId ?? 'tab-1';
+  if (overrides.browserSessionId !== null) {
+    headers['X-Browser-Session-Id'] = overrides.browserSessionId ?? 'session-1';
   }
   return new Request('https://example.com/api/ai/global/conv-1/messages', {
     method: 'POST',
@@ -312,35 +312,35 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
   });
 
-  describe('X-Tab-Id contract', () => {
-    it('given a missing X-Tab-Id header, should return 400 before invoking the lifecycle', async () => {
-      const response = await POST(makeRequest({ tabId: null }), makeContext());
+  describe('X-Browser-Session-Id contract', () => {
+    it('given a missing X-Browser-Session-Id header, should return 400 before invoking the lifecycle', async () => {
+      const response = await POST(makeRequest({ browserSessionId: null }), makeContext());
 
       expect(response.status).toBe(400);
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
 
-    it('given an X-Tab-Id header longer than the cap, should return 400 before invoking the lifecycle', async () => {
-      const oversized = 'a'.repeat(MAX_TAB_ID_LENGTH + 1);
-      const response = await POST(makeRequest({ tabId: oversized }), makeContext());
+    it('given an X-Browser-Session-Id header longer than the cap, should return 400 before invoking the lifecycle', async () => {
+      const oversized = 'a'.repeat(MAX_BROWSER_SESSION_ID_LENGTH + 1);
+      const response = await POST(makeRequest({ browserSessionId: oversized }), makeContext());
 
       expect(response.status).toBe(400);
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
 
-    it('given an X-Tab-Id header at exactly the cap, should accept and invoke the lifecycle', async () => {
-      const maxLength = 'a'.repeat(MAX_TAB_ID_LENGTH);
-      await POST(makeRequest({ tabId: maxLength }), makeContext());
+    it('given an X-Browser-Session-Id header at exactly the cap, should accept and invoke the lifecycle', async () => {
+      const maxLength = 'a'.repeat(MAX_BROWSER_SESSION_ID_LENGTH);
+      await POST(makeRequest({ browserSessionId: maxLength }), makeContext());
 
       expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
-        expect.objectContaining({ tabId: maxLength }),
+        expect.objectContaining({ browserSessionId: maxLength }),
       );
     });
   });
 
   describe('createStreamLifecycle invocation', () => {
-    it('given a new global stream, should construct the lifecycle with channelId user:${userId}:global and the request tabId', async () => {
-      await POST(makeRequest({ tabId: 'tab-y' }), makeContext());
+    it('given a new global stream, should construct the lifecycle with channelId user:${userId}:global and the request browserSessionId', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
 
       expect(mockCreateStreamLifecycle).toHaveBeenCalledTimes(1);
       expect(mockCreateStreamLifecycle).toHaveBeenCalledWith({
@@ -349,7 +349,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         conversationId: 'conv-1',
         userId: 'user-1',
         displayName: 'Display User',
-        tabId: 'tab-y',
+        browserSessionId: 'session-y',
       });
     });
 

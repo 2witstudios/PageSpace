@@ -224,7 +224,7 @@ const mockMCPAuth = (userId: string, allowedDriveIds: string[]): MCPAuthResult =
 const createChatRequest = (chatId: string) => {
   return new Request('https://example.com/api/ai/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Tab-Id': 'tab-1' },
+    headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
     body: JSON.stringify({
       messages: [
         { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },

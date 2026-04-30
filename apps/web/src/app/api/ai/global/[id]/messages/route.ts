@@ -7,7 +7,7 @@ import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subs
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
-import { validateTabIdHeader } from '@/lib/ai/core/tab-id-validation';
+import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -212,11 +212,11 @@ export async function POST(
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
-    const tabIdResult = validateTabIdHeader(request.headers.get('X-Tab-Id'));
-    if (!tabIdResult.ok) {
-      return NextResponse.json({ error: tabIdResult.message }, { status: tabIdResult.status });
+    const browserSessionIdResult = validateBrowserSessionIdHeader(request.headers.get('X-Browser-Session-Id'));
+    if (!browserSessionIdResult.ok) {
+      return NextResponse.json({ error: browserSessionIdResult.message }, { status: browserSessionIdResult.status });
     }
-    const tabId = tabIdResult.tabId;
+    const browserSessionId = browserSessionIdResult.browserSessionId;
 
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
@@ -856,7 +856,7 @@ MENTION PROCESSING:
       conversationId,
       userId,
       displayName,
-      tabId,
+      browserSessionId,
     });
 
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;

@@ -5,7 +5,7 @@ export interface StreamMeta {
   userId: string;
   displayName: string;
   conversationId: string;
-  tabId: string;
+  browserSessionId: string;
 }
 
 interface Subscriber {
