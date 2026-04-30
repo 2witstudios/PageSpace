@@ -1,8 +1,11 @@
 const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
 
 export interface StreamMeta {
-  pageId: string;
+  pageId: string;      // page UUID for page chats, `user:${userId}:global` for global chat
   userId: string;
+  displayName: string;
+  conversationId: string;
+  tabId: string;
 }
 
 interface Subscriber {

@@ -327,7 +327,13 @@ describe('POST /api/ai/chat — stream socket events', () => {
 
       expect(mockRegistryRegister).toHaveBeenCalledWith(
         'test-message-id',
-        { pageId: 'page-1', userId: 'user-1' }
+        expect.objectContaining({
+          pageId: 'page-1',
+          userId: 'user-1',
+          displayName: expect.any(String),
+          conversationId: 'conv-1',
+          tabId: '',
+        })
       );
     });
 

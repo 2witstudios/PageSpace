@@ -826,7 +826,16 @@ export async function POST(request: Request) {
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
     // Register in multicast registry so other viewers can join via stream-join endpoint
-    try { streamMulticastRegistry.register(serverAssistantMessageId, { pageId: chatId, userId: userId! }); } catch {}
+    // displayName is resolved just below; use a placeholder here then update after resolution
+    try {
+      streamMulticastRegistry.register(serverAssistantMessageId, {
+        pageId: chatId,
+        userId: userId!,
+        displayName: user?.name ?? 'Someone',
+        conversationId: conversationId!,
+        tabId: request.headers.get('X-Tab-Id') ?? '',
+      });
+    } catch {}
 
     // Resolve display name for stream_start payload (fall back through user.name → 'Someone')
     // Wrapped in try/catch so a DB hiccup here never aborts the stream
