@@ -488,13 +488,10 @@ describe('POST /api/ai/chat — aiStreamSessions persistence', () => {
 
       const postPromise = POST(makeRequest());
 
-      const flush = () => new Promise<void>((r) => setTimeout(r, 0));
-      const start = Date.now();
-      while (mockInsertValues.mock.calls.length === 0 && Date.now() - start < 1000) {
-        await flush();
-      }
+      await vi.waitFor(() => {
+        expect(mockInsertValues).toHaveBeenCalled();
+      }, { timeout: 1000, interval: 5 });
 
-      expect(mockInsertValues).toHaveBeenCalled();
       expect(broadcastAiStreamStart).not.toHaveBeenCalled();
 
       resolveInsert();
