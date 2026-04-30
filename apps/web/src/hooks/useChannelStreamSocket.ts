@@ -12,54 +12,88 @@ interface ActiveStreamRow {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
-export function useChatStreamSocket(
+export interface UseChannelStreamSocketOptions {
+  /** Fires once per messageId on clean finalize (SSE resolve or socket complete); NOT on SSE error. */
+  onStreamComplete?: (messageId: string) => void;
+  /** Fires once per messageId when DB bootstrap finds an in-flight stream from this browser session. */
+  onOwnStreamBootstrap?: (event: { messageId: string }) => void;
+  /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
+  onOwnStreamFinalize?: (event: { messageId: string }) => void;
+}
+
+/** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
+export function useChannelStreamSocket(
   channelId: string | undefined,
-  onStreamComplete?: (messageId: string) => void,
+  options?: UseChannelStreamSocketOptions,
 ): void {
   const socket = useSocket();
-  const controllersRef = useRef<Map<string, AbortController>>(new Map());
-  // Tracks which messageIds have had onStreamComplete called to prevent double-firing
-  // when both the SSE done sentinel and the chat:stream_complete socket event arrive.
-  const processedRef = useRef<Set<string>>(new Set());
-  // Stable ref so onStreamComplete changes never cause handler re-registration.
-  const onStreamCompleteRef = useRef(onStreamComplete);
-  onStreamCompleteRef.current = onStreamComplete;
+  // Stable refs so callback identity changes never trigger handler re-registration.
+  const onStreamCompleteRef = useRef(options?.onStreamComplete);
+  const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
+  const onOwnStreamFinalizeRef = useRef(options?.onOwnStreamFinalize);
+  onStreamCompleteRef.current = options?.onStreamComplete;
+  onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
+  onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
 
   useEffect(() => {
     if (!socket || !channelId) return;
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
+    const controllers = new Map<string, AbortController>();
+    // Tracks which messageIds have had onStreamComplete called to prevent
+    // double-firing when both the SSE done sentinel and chat:stream_complete
+    // arrive, and to gate post-error stream_complete events.
+    const processed = new Set<string>();
+    // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own"
+    // lookup and a one-shot guard for onOwnStreamFinalize.
+    const ownStreamIds = new Set<string>();
 
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
     const fireComplete = (messageId: string) => {
-      if (processedRef.current.has(messageId)) return;
-      processedRef.current.add(messageId);
+      if (processed.has(messageId)) return;
+      processed.add(messageId);
       onStreamCompleteRef.current?.(messageId);
+    };
+
+    const fireOwnFinalize = (messageId: string) => {
+      if (!ownStreamIds.has(messageId)) return;
+      ownStreamIds.delete(messageId);
+      onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
     const startConsume = (messageId: string) => {
       const controller = new AbortController();
-      controllersRef.current.set(messageId, controller);
+      controllers.set(messageId, controller);
 
       consumeStreamJoin(messageId, controller.signal, (chunk) => {
         appendText(messageId, chunk);
       })
         .then(() => {
-          controllersRef.current.delete(messageId);
+          // Cleanup runs synchronously on unmount but the SSE promise resolves
+          // asynchronously after controller.abort(); skip post-teardown effects.
+          if (cancelled) return;
+          controllers.delete(messageId);
           try {
             fireComplete(messageId);
           } finally {
             removeStream(messageId);
+            fireOwnFinalize(messageId);
           }
         })
         .catch((err) => {
-          controllersRef.current.delete(messageId);
+          if (cancelled) return;
+          controllers.delete(messageId);
+          // Mark as processed so a subsequent chat:stream_complete event for
+          // the same messageId is a no-op for onStreamComplete: the catch
+          // path already finalized this stream locally.
+          processed.add(messageId);
           removeStream(messageId);
+          fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
-            console.error('[useChatStreamSocket] SSE join error:', err);
+            console.error('[useChannelStreamSocket] SSE join error:', err);
           }
         });
     };
@@ -77,27 +111,32 @@ export function useChatStreamSocket(
         const data = (await res.json()) as { streams?: ActiveStreamRow[] };
         if (cancelled) return;
         for (const stream of data.streams ?? []) {
-          if (processedRef.current.has(stream.messageId)) continue;
-          if (controllersRef.current.has(stream.messageId)) continue;
+          if (processed.has(stream.messageId)) continue;
+          if (controllers.has(stream.messageId)) continue;
+          const isOwn = stream.triggeredBy.browserSessionId === localBrowserSessionId;
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: stream.triggeredBy.browserSessionId === localBrowserSessionId,
+            isOwn,
           });
+          if (isOwn) {
+            ownStreamIds.add(stream.messageId);
+            onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
+          }
           startConsume(stream.messageId);
         }
       } catch (err) {
         if (cancelled) return;
-        console.warn('[useChatStreamSocket] bootstrap failed', err);
+        console.warn('[useChannelStreamSocket] bootstrap failed', err);
       }
     })();
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
       if (payload.triggeredBy.browserSessionId === localBrowserSessionId) return;
-      if (controllersRef.current.has(payload.messageId)) return;
+      if (controllers.has(payload.messageId)) return;
 
       addStream({
         messageId: payload.messageId,
@@ -112,15 +151,16 @@ export function useChatStreamSocket(
 
     const handleStreamComplete = (payload: AiStreamCompletePayload) => {
       if (payload.pageId !== channelId) return;
-      const controller = controllersRef.current.get(payload.messageId);
+      const controller = controllers.get(payload.messageId);
       if (controller) {
         controller.abort();
-        controllersRef.current.delete(payload.messageId);
+        controllers.delete(payload.messageId);
       }
       try {
         fireComplete(payload.messageId);
       } finally {
         removeStream(payload.messageId);
+        fireOwnFinalize(payload.messageId);
       }
     };
 
@@ -131,11 +171,9 @@ export function useChatStreamSocket(
       cancelled = true;
       socket.off('chat:stream_start', handleStreamStart);
       socket.off('chat:stream_complete', handleStreamComplete);
-      for (const controller of controllersRef.current.values()) {
+      for (const controller of controllers.values()) {
         controller.abort();
       }
-      controllersRef.current.clear();
-      processedRef.current.clear();
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);

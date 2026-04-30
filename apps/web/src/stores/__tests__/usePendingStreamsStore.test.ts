@@ -39,6 +39,30 @@ describe('usePendingStreamsStore', () => {
       const { getRemotePageStreams } = usePendingStreamsStore.getState();
       expect(getRemotePageStreams('page-a')).toHaveLength(2);
     });
+
+    it('given a stream with messageId X already present, should preserve existing text on duplicate addStream', () => {
+      const { addStream, appendText } = usePendingStreamsStore.getState();
+      addStream(BASE_STREAM);
+      appendText('msg-1', 'partial-text');
+      addStream(BASE_STREAM);
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.text).toBe('partial-text');
+    });
+
+    it('given a duplicate addStream with different metadata, should keep the existing entry unchanged', () => {
+      const { addStream, appendText } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, isOwn: false });
+      appendText('msg-1', 'hello');
+      addStream({ ...BASE_STREAM, isOwn: true, conversationId: 'conv-other' });
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.text).toBe('hello');
+      expect(stream.isOwn).toBe(false);
+      expect(stream.conversationId).toBe('conv-1');
+    });
   });
 
   describe('appendText', () => {

@@ -112,9 +112,11 @@ vi.mock('@/lib/url-state', () => ({
 
 vi.mock('@/lib/ai/shared', () => ({
   useChatTransport: vi.fn().mockReturnValue(null),
+  useStreamingRegistration: vi.fn(),
 }));
 
 import { GlobalChatProvider, useGlobalChat, useGlobalChatConversation } from '../GlobalChatContext';
+import { useStreamingRegistration } from '@/lib/ai/shared';
 
 // --- Helpers ---
 
@@ -732,5 +734,33 @@ describe('GlobalChatProvider — global channel stream socket', () => {
 
     expect(mockAddStream).not.toHaveBeenCalled();
     expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+  });
+});
+
+describe('GlobalChatProvider — editing-store registration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSocket._reset();
+    mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
+      selector({ connectionStatus: 'connected' })
+    );
+    mockFetchWithAuth.mockImplementation(defaultFetch);
+    mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
+    mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
+    mockConsumeStreamJoin.mockResolvedValue(undefined);
+  });
+
+  // Surfaces (GlobalAssistantView, SidebarChatTab) key their useStreamingRegistration
+  // on local useChat status, which is `idle` immediately after a refresh — so they
+  // miss bootstrap-replayed own streams. The provider must register too so SWR
+  // doesn't clobber in-flight chat work during that window.
+  it('given the provider mounts, should register a streaming session keyed `global-chat` with the editing store', () => {
+    renderHook(() => useGlobalChat(), { wrapper: Wrapper });
+
+    expect(useStreamingRegistration).toHaveBeenCalledWith(
+      'global-chat',
+      expect.any(Boolean),
+      expect.objectContaining({ componentName: 'GlobalChatProvider' }),
+    );
   });
 });

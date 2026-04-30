@@ -24,6 +24,7 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
 
   addStream: (stream) => {
     set((state) => {
+      if (state.streams.has(stream.messageId)) return state;
       const next = new Map(state.streams);
       next.set(stream.messageId, { ...stream, text: '' });
       return { streams: next };
