@@ -80,6 +80,7 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
@@ -96,6 +97,8 @@ const GlobalAssistantView: React.FC = () => {
     setMessages: setGlobalMessages,
     setIsStreaming: setGlobalIsStreaming,
     setStopStreaming: setGlobalStopStreaming,
+    isStreaming: contextIsStreaming,
+    stopStreaming: contextStopStreaming,
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation,
@@ -329,6 +332,18 @@ const GlobalAssistantView: React.FC = () => {
     latestGlobalMessagesRef.current = globalLocalMessages;
   }, [globalLocalMessages]);
   const stop = useChatStop(currentConversationId, rawStop);
+
+  // After a refresh mid-stream, useChat starts at idle — but the
+  // GlobalChatContext bootstrap may have detected an own in-flight stream
+  // and registered a stop function. Surface either source so the UI shows
+  // a stop button + streaming indicator from both bootstrap and live paths.
+  const { effectiveIsStreaming, effectiveStop } = useGlobalEffectiveStream({
+    localIsStreaming: isStreaming,
+    rawStop: stop,
+    selectedAgent,
+    contextIsStreaming,
+    contextStopStreaming,
+  });
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -824,8 +839,8 @@ const GlobalAssistantView: React.FC = () => {
         input={input}
         onInputChange={setInput}
         onSend={handleSendMessage}
-        onStop={stop}
-        isStreaming={isStreaming}
+        onStop={effectiveStop}
+        isStreaming={effectiveIsStreaming}
         isLoading={isLoading}
         disabled={!isAnyProviderConfigured}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
@@ -866,9 +881,9 @@ const GlobalAssistantView: React.FC = () => {
                 owner={VOICE_OWNER}
                 onSend={handleVoiceSend}
                 latestAssistantMessage={lastAIResponse}
-                isAIStreaming={isStreaming}
+                isAIStreaming={effectiveIsStreaming}
                 streamingText={streamingAssistantText}
-                onStopStream={stop}
+                onStopStream={effectiveStop}
                 onClose={disableVoiceMode}
               />
             )}
