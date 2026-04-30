@@ -7,19 +7,9 @@ import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport } from '@/lib/ai/shared';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
-import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
+import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
-import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
-import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
-
-interface ActiveStreamRow {
-  messageId: string;
-  conversationId: string;
-  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
-}
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -249,19 +239,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // ============================================
   // GLOBAL CHANNEL STREAM SOCKET — bootstrap + live events
   // ============================================
-  // Mirrors useChatStreamSocket for the synthetic global channel
-  // (`user:${userId}:global`). On mount we replay any in-flight stream rows from
-  // the DB so a refresh mid-stream restores the stop button + remote-stream
-  // append. Live chat:stream_start/_complete events keep the store in sync for
-  // streams started in another tab. Streams initiated by the local browser
-  // session are intentionally ignored — useChat in the active tab is the
-  // source of truth there.
-  const socket = useSocket();
+  // Hook handles DB replay, live chat:stream_start/_complete, SSE join, and
+  // teardown. Local own-stream side effects (the in-flight streaming flag and
+  // stop-button slot driven by useChat in this tab) are wired through the
+  // own-stream callbacks below.
   const { user } = useAuth();
   const userId = user?.id ?? null;
+  const channelId = userId ? `user:${userId}:global` : undefined;
 
-  // Always-current refs so the live SSE complete handler can call into the
-  // latest setters/refresh without re-binding socket listeners every render.
+  // Always-current refs so the hook's stable callbacks can call into the
+  // latest setters/refresh without forcing the hook to resubscribe.
   const setIsStreamingRef = useRef(setIsStreaming);
   setIsStreamingRef.current = setIsStreaming;
   const setStopStreamingRef = useRef(setStopStreaming);
@@ -269,147 +256,21 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const refreshConversationRef = useRef(refreshConversation);
   refreshConversationRef.current = refreshConversation;
 
-  useEffect(() => {
-    if (!socket || !userId) return;
-
-    const channelId = `user:${userId}:global`;
-    const localBrowserSessionId = getBrowserSessionId();
-    const controllers = new Map<string, AbortController>();
-    // Tracks bootstrapped own streams so the corresponding SSE-resolve / live
-    // complete event can clear the local stop button surface — non-own and
-    // live cross-tab streams must NOT mutate the local streaming flags.
-    const ownStreamIds = new Set<string>();
-    // Guards against firing finalize twice for the same messageId when both the
-    // socket complete event and the SSE done sentinel arrive (the abort triggered
-    // by the former resolves consumeStreamJoin, which would otherwise re-enter).
-    const finalized = new Set<string>();
-    let cancelled = false;
-
-    const { addStream, appendText, removeStream, clearPageStreams } =
-      usePendingStreamsStore.getState();
-
-    const clearOwnStreamFlags = (messageId: string): boolean => {
-      if (!ownStreamIds.delete(messageId)) return false;
+  useChannelStreamSocket(channelId, {
+    onStreamComplete: () => {
+      refreshConversationRef.current();
+    },
+    onOwnStreamBootstrap: ({ messageId }) => {
+      setIsStreamingRef.current(true);
+      setStopStreamingRef.current(() => () => {
+        abortActiveStreamByMessageId({ messageId });
+      });
+    },
+    onOwnStreamFinalize: () => {
       setIsStreamingRef.current(false);
       setStopStreamingRef.current(null);
-      return true;
-    };
-
-    const finalizeStream = (messageId: string) => {
-      // After unmount, controllers are aborted which resolves consumeStreamJoin
-      // and re-enters this callback — guard against post-teardown fetch/state.
-      if (cancelled) return;
-      if (finalized.has(messageId)) return;
-      finalized.add(messageId);
-      controllers.delete(messageId);
-      clearOwnStreamFlags(messageId);
-      removeStream(messageId);
-      refreshConversationRef.current();
-    };
-
-    const startConsume = (messageId: string) => {
-      const controller = new AbortController();
-      controllers.set(messageId, controller);
-
-      consumeStreamJoin(messageId, controller.signal, (chunk) => {
-        appendText(messageId, chunk);
-      })
-        .then(() => {
-          finalizeStream(messageId);
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          if (finalized.has(messageId)) return;
-          finalized.add(messageId);
-          controllers.delete(messageId);
-          // Treat a join error as terminal locally so the stop button is not
-          // left dangling — the stream may still finish server-side, but the
-          // socket complete handler will be a no-op (already finalized) and
-          // we have no live SSE to drive the UI forward.
-          clearOwnStreamFlags(messageId);
-          removeStream(messageId);
-          if (!controller.signal.aborted) {
-            console.error('[GlobalChatContext] SSE join error:', err);
-          }
-        });
-    };
-
-    (async () => {
-      try {
-        const res = await fetchWithAuth(
-          `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
-          { credentials: 'include' },
-        );
-        if (cancelled) return;
-        if (!res.ok) return;
-        const data = (await res.json()) as { streams?: ActiveStreamRow[] };
-        if (cancelled) return;
-        for (const stream of data.streams ?? []) {
-          if (controllers.has(stream.messageId)) continue;
-          const isOwn = stream.triggeredBy.browserSessionId === localBrowserSessionId;
-          addStream({
-            messageId: stream.messageId,
-            pageId: channelId,
-            conversationId: stream.conversationId,
-            triggeredBy: stream.triggeredBy,
-            isOwn,
-          });
-          if (isOwn) {
-            ownStreamIds.add(stream.messageId);
-            const messageIdForAbort = stream.messageId;
-            setIsStreamingRef.current(true);
-            setStopStreamingRef.current(() => () => {
-              abortActiveStreamByMessageId({ messageId: messageIdForAbort });
-            });
-          }
-          startConsume(stream.messageId);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        console.warn('[GlobalChatContext] bootstrap failed', err);
-      }
-    })();
-
-    const handleStreamStart = (payload: AiStreamStartPayload) => {
-      if (payload.pageId !== channelId) return;
-      if (payload.triggeredBy.browserSessionId === localBrowserSessionId) return;
-      if (controllers.has(payload.messageId)) return;
-
-      addStream({
-        messageId: payload.messageId,
-        pageId: payload.pageId,
-        conversationId: payload.conversationId,
-        triggeredBy: payload.triggeredBy,
-        isOwn: false,
-      });
-
-      startConsume(payload.messageId);
-    };
-
-    const handleStreamComplete = (payload: AiStreamCompletePayload) => {
-      if (payload.pageId !== channelId) return;
-      const controller = controllers.get(payload.messageId);
-      if (controller) {
-        controller.abort();
-      }
-      finalizeStream(payload.messageId);
-    };
-
-    socket.on('chat:stream_start', handleStreamStart);
-    socket.on('chat:stream_complete', handleStreamComplete);
-
-    return () => {
-      cancelled = true;
-      socket.off('chat:stream_start', handleStreamStart);
-      socket.off('chat:stream_complete', handleStreamComplete);
-      for (const controller of controllers.values()) {
-        controller.abort();
-      }
-      controllers.clear();
-      ownStreamIds.clear();
-      clearPageStreams(channelId);
-    };
-  }, [socket, userId]);
+    },
+  });
 
   // Track the previous conversation ID to detect conversation switches
   const prevConversationIdRef = useRef<string | null>(null);
