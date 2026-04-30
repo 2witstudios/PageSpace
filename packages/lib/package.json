@@ -16,6 +16,11 @@
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
     },
+    "./ai/global-channel-id": {
+      "types": "./dist/ai/global-channel-id.d.ts",
+      "import": "./dist/ai/global-channel-id.js",
+      "require": "./dist/ai/global-channel-id.js"
+    },
     "./logging/logger": {
       "types": "./dist/logging/logger.d.ts",
       "import": "./dist/logging/logger.js",
