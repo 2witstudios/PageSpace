@@ -8,6 +8,7 @@ import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
 import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
+import { formatFileSize } from '@/lib/attachment-utils';
 
 export type { FileAttachment };
 
@@ -114,18 +115,10 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       fileInputRef.current?.click();
     };
 
-    // Get icon for file type
     const getFileIcon = (mimeType: string) => {
       if (mimeType.startsWith('image/')) return ImageIcon;
       if (mimeType.includes('pdf') || mimeType.includes('document')) return FileText;
       return FileIcon;
-    };
-
-    // Format file size
-    const formatFileSize = (bytes: number) => {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     };
 
     // Handle formatting shortcuts
