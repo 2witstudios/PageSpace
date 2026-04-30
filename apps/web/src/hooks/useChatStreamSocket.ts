@@ -12,15 +12,11 @@ interface ActiveStreamRow {
   triggeredBy: { userId: string; displayName: string; tabId: string };
 }
 
-// currentUserId is retained in the signature for caller compatibility
-// (AiChatView passes it positionally). The filter is now tabId-based,
-// so this argument is unused inside the hook.
 export function useChatStreamSocket(
   channelId: string | undefined,
   currentUserId: string | undefined,
   onStreamComplete?: (messageId: string) => void,
 ): void {
-  void currentUserId;
   const socket = useSocket();
   const controllersRef = useRef<Map<string, AbortController>>(new Map());
   // Tracks which messageIds have had onStreamComplete called to prevent double-firing
@@ -35,6 +31,15 @@ export function useChatStreamSocket(
 
     let cancelled = false;
     const localTabId = getTabId();
+
+    // Filter own-tab events. Modern clients always send tabId; legacy clients
+    // (or routes that didn't forward X-Tab-Id) may emit empty/undefined tabId,
+    // so we fall back to userId === currentUserId to avoid self-duplication.
+    const isFromSelf = (triggeredBy: { userId: string; tabId?: string }): boolean => {
+      const tabId = triggeredBy.tabId;
+      if (tabId) return tabId === localTabId;
+      return !!currentUserId && triggeredBy.userId === currentUserId;
+    };
 
     const { addStream, appendText, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
@@ -84,13 +89,12 @@ export function useChatStreamSocket(
         for (const stream of data.streams ?? []) {
           if (processedRef.current.has(stream.messageId)) continue;
           if (controllersRef.current.has(stream.messageId)) continue;
-          const streamTabId = stream.triggeredBy.tabId;
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: !!streamTabId && streamTabId === localTabId,
+            isOwn: isFromSelf(stream.triggeredBy),
           });
           startConsume(stream.messageId);
         }
@@ -102,8 +106,7 @@ export function useChatStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      const incomingTabId = payload.triggeredBy.tabId;
-      if (incomingTabId && incomingTabId === localTabId) return;
+      if (isFromSelf(payload.triggeredBy)) return;
       if (controllersRef.current.has(payload.messageId)) return;
 
       addStream({
@@ -111,7 +114,7 @@ export function useChatStreamSocket(
         pageId: payload.pageId,
         conversationId: payload.conversationId,
         triggeredBy: payload.triggeredBy,
-        isOwn: !!incomingTabId && incomingTabId === localTabId,
+        isOwn: false,
       });
 
       startConsume(payload.messageId);
@@ -145,5 +148,5 @@ export function useChatStreamSocket(
       processedRef.current.clear();
       clearPageStreams(channelId);
     };
-  }, [socket, channelId]);
+  }, [socket, channelId, currentUserId]);
 }

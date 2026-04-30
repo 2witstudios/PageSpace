@@ -231,19 +231,32 @@ describe('useChatStreamSocket', () => {
       }));
     });
 
-    it('given triggeredBy.tabId is missing (legacy payload), should treat as remote and addStream with isOwn=false', () => {
-      const legacyPayload: AiStreamStartPayload = {
+    it('given triggeredBy.tabId is missing AND userId differs (legacy remote), should addStream with isOwn=false', () => {
+      const legacyRemote: AiStreamStartPayload = {
         ...START_PAYLOAD,
         triggeredBy: { userId: 'user-2', displayName: 'Alice' },
       };
 
       renderHook(() => useChatStreamSocket('page-a', 'user-1'));
-      act(() => { mockSocket._trigger('chat:stream_start', legacyPayload); });
+      act(() => { mockSocket._trigger('chat:stream_start', legacyRemote); });
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-1',
         isOwn: false,
       }));
+    });
+
+    it('given triggeredBy.tabId is missing AND userId matches currentUserId (legacy self), should skip (userId fallback prevents self-duplication)', () => {
+      const legacySelf: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me' },
+      };
+
+      renderHook(() => useChatStreamSocket('page-a', 'user-1'));
+      act(() => { mockSocket._trigger('chat:stream_start', legacySelf); });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
   });
 
