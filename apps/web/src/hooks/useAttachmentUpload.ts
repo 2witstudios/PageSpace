@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { createId } from '@paralleldrive/cuid2';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
@@ -23,10 +24,7 @@ interface UseAttachmentUploadReturn {
   isUploading: boolean;
   uploadFile: (file: File) => Promise<void>;
   clearAttachment: () => void;
-  setAttachment: (attachment: FileAttachment | null) => void;
 }
-
-let sessionCounter = 0;
 
 export function useAttachmentUpload({
   uploadUrl,
@@ -41,7 +39,7 @@ export function useAttachmentUpload({
     async (file: File) => {
       if (!uploadUrl) return;
 
-      const sessionId = `attachment-upload-${++sessionCounter}-${Date.now()}`;
+      const sessionId = `attachment-upload-${createId()}`;
       const { startEditing, endEditing } = useEditingStore.getState();
 
       setIsUploading(true);
@@ -104,6 +102,5 @@ export function useAttachmentUpload({
     isUploading,
     uploadFile,
     clearAttachment,
-    setAttachment,
   };
 }
