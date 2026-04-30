@@ -208,6 +208,16 @@ describe('createStreamLifecycle', () => {
 
       expect(() => lifecycle.pushChunk('hi')).not.toThrow();
     });
+
+    it('given the registry throws on push, should warn-log so the swallow is observable', async () => {
+      mockRegistryPush.mockImplementationOnce(() => { throw new Error('boom'); });
+      const lifecycle = await createStreamLifecycle(params());
+
+      mockLoggerWarn.mockClear();
+      lifecycle.pushChunk('hi');
+
+      expect(mockLoggerWarn).toHaveBeenCalled();
+    });
   });
 
   describe('finish — completion path', () => {

@@ -25,6 +25,17 @@ const messageIdToStreamId = new Map<string, string>();
 const streamIdToMessageId = new Map<string, string>();
 
 const linkStream = (streamId: string, messageId: string): void => {
+  // Clear any stale reverse entries before re-linking — otherwise a later
+  // unlink of an orphaned half can wipe the active mapping and break
+  // abortStreamByMessageId.
+  const previousStreamId = messageIdToStreamId.get(messageId);
+  if (previousStreamId !== undefined && previousStreamId !== streamId) {
+    streamIdToMessageId.delete(previousStreamId);
+  }
+  const previousMessageId = streamIdToMessageId.get(streamId);
+  if (previousMessageId !== undefined && previousMessageId !== messageId) {
+    messageIdToStreamId.delete(previousMessageId);
+  }
   messageIdToStreamId.set(messageId, streamId);
   streamIdToMessageId.set(streamId, messageId);
 };

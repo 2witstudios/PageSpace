@@ -121,8 +121,12 @@ export const createStreamLifecycle = async (
   const pushChunk = (text: string): void => {
     try {
       streamMulticastRegistry.push(messageId, text);
-    } catch {
-      // one bad chunk must not interrupt the stream
+    } catch (error) {
+      // one bad chunk must not interrupt the stream — log so the swallow stays observable
+      loggers.ai.warn('stream-lifecycle: registry.push threw', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     }
   };
 

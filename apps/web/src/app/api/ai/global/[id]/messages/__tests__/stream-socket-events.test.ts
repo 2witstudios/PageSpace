@@ -432,5 +432,17 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
 
       expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
     });
+
+    it('given an error throws after lifecycle creation, should call lifecycle.finish(true) from the outer catch', async () => {
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      const aborted = mockLifecycleFinish.mock.calls.filter(([flag]) => flag === true);
+      expect(aborted.length).toBeGreaterThan(0);
+    });
   });
 });

@@ -6,7 +6,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
-import { createStreamLifecycle } from '@/lib/ai/core/stream-lifecycle';
+import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { validateTabIdHeader } from '@/lib/ai/core/tab-id-validation';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
@@ -206,6 +206,8 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   const startTime = Date.now();
+  let lifecycle: StreamLifecycleHandle | undefined;
+  let activeStreamId: string | undefined;
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
@@ -828,6 +830,7 @@ MENTION PROCESSING:
     const serverAssistantMessageId = createId();
 
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    activeStreamId = streamId;
 
     const channelId = `user:${userId}:global`;
 
@@ -847,7 +850,7 @@ MENTION PROCESSING:
     const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
     const displayName = profileDisplayName ?? authUserName ?? 'Someone';
 
-    const lifecycle = await createStreamLifecycle({
+    lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
       channelId,
       conversationId,
@@ -883,7 +886,7 @@ MENTION PROCESSING:
           maxRetries: 20,
           onChunk: ({ chunk }) => {
             if (chunk.type === 'text-delta') {
-              lifecycle.pushChunk(chunk.text);
+              lifecycle!.pushChunk(chunk.text);
             }
           },
           onAbort: () => {
@@ -894,7 +897,7 @@ MENTION PROCESSING:
               model: currentModel,
               provider: currentProvider,
             });
-            lifecycle.finish(true);
+            lifecycle!.finish(true);
           },
         });
 
@@ -1042,7 +1045,7 @@ MENTION PROCESSING:
           }
         }
 
-        lifecycle.finish(false);
+        lifecycle!.finish(false);
       },
     });
 
@@ -1054,6 +1057,10 @@ MENTION PROCESSING:
     });
 
   } catch (error) {
+    if (activeStreamId !== undefined) {
+      removeStream({ streamId: activeStreamId });
+    }
+    lifecycle?.finish(true);
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
 
     return NextResponse.json({

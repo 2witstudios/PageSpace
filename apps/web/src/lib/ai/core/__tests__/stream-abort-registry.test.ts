@@ -302,6 +302,32 @@ describe('stream-abort-registry', () => {
       expect(result.aborted).toBe(false);
       expect(result.reason).toBe('Stream not found or already completed');
     });
+
+    it('given a messageId is re-linked to a new streamId, should let the new streamId resolve via abortStreamByMessageId', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'old-stream', messageId: 'msg-1' });
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'new-stream', messageId: 'msg-1' });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-1', userId: 'user-1' });
+
+      expect(result.aborted).toBe(true);
+      expect(registry.isStreamActive({ streamId: 'new-stream' })).toBe(false);
+    });
+
+    it('given a messageId is re-linked, should not leak stale reverse entries that point at the old streamId', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'old-stream', messageId: 'msg-1' });
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'new-stream', messageId: 'msg-1' });
+
+      // Removing the old (now-orphaned) streamId must not delete the messageId index
+      // entry that now points at new-stream.
+      registry.removeStream({ streamId: 'old-stream' });
+
+      const result = registry.abortStreamByMessageId({ messageId: 'msg-1', userId: 'user-1' });
+      expect(result.aborted).toBe(true);
+    });
   });
 
   describe('concurrent streams isolation', () => {
