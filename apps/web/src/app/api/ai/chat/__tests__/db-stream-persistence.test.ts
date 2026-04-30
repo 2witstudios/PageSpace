@@ -293,6 +293,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { createUIMessageStream } from 'ai';
+import { broadcastAiStreamStart } from '@/lib/websocket';
 
 // ============================================================================
 // Fixtures
@@ -463,6 +464,43 @@ describe('POST /api/ai/chat — aiStreamSessions persistence', () => {
       expect(mockInsertOnConflict).toHaveBeenCalled();
       const [cfg] = mockInsertOnConflict.mock.calls[0];
       expect(cfg.set).toMatchObject({ status: 'streaming', completedAt: null });
+    });
+  });
+
+  describe('INSERT-happens-before-broadcast invariant', () => {
+    it('given a deferred db.insert, should not broadcast chat:stream_start until the row is committed', async () => {
+      let resolveInsert!: () => void;
+      const insertSettled = new Promise<void>((resolve) => {
+        resolveInsert = resolve;
+      });
+
+      vi.mocked(db.insert).mockImplementationOnce(((table: unknown) => ({
+        values: (row: Record<string, unknown>) => {
+          mockInsertValues(table, row);
+          return {
+            onConflictDoUpdate: (cfg: Record<string, unknown>) => {
+              mockInsertOnConflict(cfg);
+              return insertSettled;
+            },
+          };
+        },
+      })) as unknown as typeof db.insert);
+
+      const postPromise = POST(makeRequest());
+
+      const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+      const start = Date.now();
+      while (mockInsertValues.mock.calls.length === 0 && Date.now() - start < 1000) {
+        await flush();
+      }
+
+      expect(mockInsertValues).toHaveBeenCalled();
+      expect(broadcastAiStreamStart).not.toHaveBeenCalled();
+
+      resolveInsert();
+      await postPromise;
+
+      expect(broadcastAiStreamStart).toHaveBeenCalled();
     });
   });
 });
