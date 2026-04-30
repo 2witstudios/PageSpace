@@ -129,6 +129,9 @@ const GlobalAssistantView: React.FC = () => {
   //      only render global-channel streams, so return [] when an agent is selected.
   //   2. Conversation — the global channel may carry concurrent streams from
   //      other global conversations; only show streams matching the current one.
+  // Note: PendingStream.pageId holds the channel id (e.g. `user:USERID:global`)
+  // for non-page channels. Renaming the field is tracked as separate tech debt;
+  // until then, the channel string is what gets passed to getRemotePageStreams.
   const globalChannelId = user?.id ? `user:${user.id}:global` : null;
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) => {

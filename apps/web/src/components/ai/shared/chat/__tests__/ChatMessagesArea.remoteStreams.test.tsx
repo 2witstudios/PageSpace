@@ -154,6 +154,19 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
     expect(remoteRendererCalls()).toHaveLength(0);
   });
 
+  it('given remoteStreams is omitted entirely, renders without crashing and produces no synthesized streams', () => {
+    expect(() =>
+      render(
+        <ChatMessagesArea
+          messages={[makeMessage('m-1', 'user', 'hi')]}
+          isLoading={false}
+          isStreaming={false}
+        />
+      )
+    ).not.toThrow();
+    expect(remoteRendererCalls()).toHaveLength(0);
+  });
+
   it('given remoteStreams but isLoading=true, suppresses synthesized renders (loading skeleton owns the area)', () => {
     render(
       <ChatMessagesArea
