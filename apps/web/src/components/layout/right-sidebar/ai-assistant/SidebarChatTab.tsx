@@ -45,7 +45,7 @@ const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
 /**
  * Inner component for rendering messages with access to stick-to-bottom context
  */
-interface SidebarMessagesContentProps {
+export interface SidebarMessagesContentProps {
   messages: UIMessage[];
   assistantName: string;
   locationContext: LocationContext | null;
@@ -60,7 +60,7 @@ interface SidebarMessagesContentProps {
   remoteStreams: PendingStream[];
 }
 
-const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
+export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   messages,
   assistantName,
   locationContext,
