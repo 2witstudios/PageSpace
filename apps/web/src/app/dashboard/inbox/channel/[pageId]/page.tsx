@@ -5,7 +5,8 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { Hash, ExternalLink, Lock, FileIcon, FileText, Download, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import { Hash, ExternalLink, Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -28,13 +29,6 @@ import { useSocketStore } from '@/stores/useSocketStore';
 import {
   type AttachmentMeta,
   type FileRelation,
-  isImageAttachment,
-  getFileId,
-  getAttachmentName,
-  getAttachmentMimeType,
-  getAttachmentSize,
-  formatFileSize,
-  hasAttachment,
 } from '@/lib/attachment-utils';
 
 const fetcher = async (url: string) => {
@@ -605,50 +599,7 @@ export default function InboxChannelPage() {
                         />
                       </div>
                     ) : null}
-                    {/* File attachment */}
-                    {hasAttachment(m) && (
-                      <div className="mt-2">
-                        {isImageAttachment(m) ? (
-                          <a
-                            href={`/api/files/${getFileId(m)}/view?filename=${encodeURIComponent(getAttachmentName(m))}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block max-w-sm"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
-                            <img
-                              src={`/api/files/${getFileId(m)}/view`}
-                              alt={getAttachmentName(m)}
-                              className="rounded-lg max-h-64 object-contain border border-border/50"
-                            />
-                          </a>
-                        ) : (
-                          <a
-                            href={`/api/files/${getFileId(m)}/download?filename=${encodeURIComponent(getAttachmentName(m))}`}
-                            className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
-                          >
-                            <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                              {getAttachmentMimeType(m).includes('pdf') ? (
-                                <FileText className="h-5 w-5 text-red-500" />
-                              ) : getAttachmentMimeType(m).includes('document') || getAttachmentMimeType(m).includes('word') ? (
-                                <FileText className="h-5 w-5 text-blue-500" />
-                              ) : (
-                                <FileIcon className="h-5 w-5 text-muted-foreground" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
-                              {getAttachmentSize(m) != null && (
-                                <p className="text-xs text-muted-foreground">
-                                  {formatFileSize(getAttachmentSize(m)!)}
-                                </p>
-                              )}
-                            </div>
-                            <Download className="h-4 w-4 text-muted-foreground shrink-0" />
-                          </a>
-                        )}
-                      </div>
-                    )}
+                    <MessageAttachment message={m} />
                     {/* Reactions */}
                     {user && !m.id.startsWith('temp-') && (
                       <MessageReactions

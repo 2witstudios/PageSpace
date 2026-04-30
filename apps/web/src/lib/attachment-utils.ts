@@ -12,7 +12,7 @@ export interface FileRelation {
   sizeBytes: number;
 }
 
-interface MessageWithAttachment {
+export interface MessageWithAttachment {
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
   file?: FileRelation | null;
