@@ -6,9 +6,9 @@ import { UIMessage } from 'ai';
 import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
 import { InputCard } from '@/components/ui/floating-input/InputCard';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
-import { StreamingIndicator } from '@/components/ai/shared/chat/StreamingIndicator';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
+import type { PendingStream } from '@/stores/usePendingStreamsStore';
 
 export interface ChatLayoutProps {
   /** Messages in the conversation */
@@ -101,8 +101,8 @@ export interface ChatLayoutProps {
   onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether to show MCP toggle (desktop only) */
   showMcp?: boolean;
-  /** Remote in-progress streams from other users */
-  remoteStreams?: Array<{ messageId: string; triggeredBy: { displayName: string }; text: string }>;
+  /** Remote in-progress streams from other users (or other tabs) — rendered inline as assistant messages */
+  remoteStreams?: PendingStream[];
 }
 
 export interface ChatLayoutRef {
@@ -258,17 +258,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 isReadOnly={isReadOnly}
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
+                remoteStreams={remoteStreams}
               />
-              {remoteStreams.map((stream) => (
-                <div key={stream.messageId} className="px-4 pb-2">
-                  <StreamingIndicator message={`${stream.triggeredBy.displayName} is waiting for AI response…`} />
-                  {stream.text && (
-                    <p className="mt-1 ml-6 text-sm text-muted-foreground whitespace-pre-wrap">
-                      {stream.text}
-                    </p>
-                  )}
-                </div>
-              ))}
             </motion.div>
           )}
         </AnimatePresence>

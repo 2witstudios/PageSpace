@@ -30,6 +30,7 @@ import {
 import { useStickToBottomContext } from 'use-stick-to-bottom';
 import { useChatPullToRefresh } from '@/hooks/useChatPullToRefresh';
 import { cn } from '@/lib/utils';
+import type { PendingStream } from '@/stores/usePendingStreamsStore';
 
 // Threshold for enabling virtualization - below this count, regular rendering is fine
 const VIRTUALIZATION_THRESHOLD = 50;
@@ -63,6 +64,8 @@ interface ChatMessagesAreaProps {
   isLoadingOlder?: boolean;
   /** Callback for pull-up refresh (to check for missed messages) */
   onPullUpRefresh?: () => Promise<void>;
+  /** Remote in-progress streams from other users (or other tabs) — rendered as synthesized assistant messages */
+  remoteStreams?: PendingStream[];
 }
 
 export interface ChatMessagesAreaRef {
@@ -88,6 +91,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       onScrollNearTop,
       isLoadingOlder = false,
       onPullUpRefresh,
+      remoteStreams,
     },
     ref
   ) => {
@@ -133,6 +137,18 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     useImperativeHandle(ref, () => ({
       scrollToBottom: () => scrollToBottom(),
     }), [scrollToBottom]);
+
+    // Dedup remote streams whose messageId has already landed in `messages`
+    // (handles the brief frame at completion when the real message has been
+    // pushed but `removeStream` has not yet fired).
+    const messageIds = useMemo(
+      () => new Set(messages.map((m) => m.id)),
+      [messages]
+    );
+    const visibleRemoteStreams = useMemo(
+      () => (remoteStreams ?? []).filter((s) => !messageIds.has(s.messageId)),
+      [remoteStreams, messageIds]
+    );
 
     // Memoized render function for virtualized list
     const renderMessage = useCallback((message: UIMessage, _idx: number) => (
@@ -202,7 +218,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
           {isLoading ? (
             LoadingSkeleton
-          ) : messages.length === 0 ? (
+          ) : messages.length === 0 && visibleRemoteStreams.length === 0 ? (
             EmptyState
           ) : shouldVirtualize ? (
             // Virtualized rendering for large conversations
@@ -220,6 +236,19 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             // Regular rendering for smaller conversations
             messages.map((message, idx) => renderMessage(message, idx))
           )}
+
+          {!isLoading && visibleRemoteStreams.map((stream) => (
+            <MessageRenderer
+              key={stream.messageId}
+              message={{
+                id: stream.messageId,
+                role: 'assistant',
+                parts: [{ type: 'text', text: stream.text }],
+                messageType: 'standard',
+              }}
+              isStreaming
+            />
+          ))}
 
           {isStreaming && !isLoading && (
             <StreamingIndicator />

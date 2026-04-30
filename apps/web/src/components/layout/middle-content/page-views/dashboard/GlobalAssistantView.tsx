@@ -81,6 +81,9 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
+import { useAuth } from '@/hooks/useAuth';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
@@ -88,6 +91,13 @@ const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
   const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
+  const { user } = useAuth();
+  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) =>
+      globalChannelId ? state.getRemotePageStreams(globalChannelId) : []
+    )
+  );
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -874,6 +884,7 @@ const GlobalAssistantView: React.FC = () => {
         isMcpServerEnabled={isServerEnabled}
         onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
+        remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
             {isVoiceModeActive && (
