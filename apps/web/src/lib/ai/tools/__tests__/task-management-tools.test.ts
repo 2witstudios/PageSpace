@@ -41,8 +41,16 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskAssignees: { taskId: 'taskId' },
 }));
 
+const { deferredTriggerMock } = vi.hoisted(() => ({
+  deferredTriggerMock: vi.fn(),
+}));
 vi.mock('@/services/api/page-mutation-service', () => ({
-  applyPageMutation: vi.fn().mockResolvedValue({ pageId: 'p', driveId: 'd', nextRevision: 1 }),
+  applyPageMutation: vi.fn().mockResolvedValue({
+    pageId: 'p',
+    driveId: 'd',
+    nextRevision: 1,
+    deferredTrigger: deferredTriggerMock,
+  }),
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {
     currentRevision = 0;
     expectedRevision?: number;
@@ -267,10 +275,14 @@ describe('task-management-tools', () => {
           pageId: 'doc-page-1',
           title: 'Old Task',
         });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
         mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
           id: 'list-1',
           pageId: 'task-list-page-1',
           userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
         });
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
         mockCanUserEditPage.mockResolvedValue(true);
@@ -319,11 +331,18 @@ describe('task-management-tools', () => {
         );
         expect(deleteCalls.length).toBeGreaterThanOrEqual(1);
         expect(disableTaskTriggers).toHaveBeenCalledWith('task-1', expect.any(String));
+        // Deferred workflow trigger from applyPageMutation must run after the tx commits
+        // so downstream automation tied to page-trash activity fires.
+        expect(deferredTriggerMock).toHaveBeenCalled();
         expect(result).toEqual(
           expect.objectContaining({
             success: true,
             action: 'deleted',
             task: expect.objectContaining({ id: 'task-1', pageId: 'doc-page-1' }),
+            // Refreshed list payload so client UIs (TasksDropdown via
+            // useAggregatedTasks) drop the deleted task immediately.
+            tasks: expect.any(Array),
+            taskList: expect.objectContaining({ id: 'list-1' }),
           }),
         );
       });
@@ -335,10 +354,14 @@ describe('task-management-tools', () => {
           pageId: 'doc-page-1',
           title: 'Old Task',
         });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
         mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
           id: 'list-1',
           pageId: 'task-list-page-1',
           userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
         });
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
         mockCanUserEditPage.mockResolvedValue(true);

@@ -18,6 +18,7 @@ import {
   disableTaskTriggers,
 } from '@/lib/workflows/task-trigger-helpers';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
 function normalizeTaskAgentTriggerInput(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -201,6 +202,9 @@ Agent Triggers:
 
             // Trash linked DOCUMENT page (if any) and hard-delete the task row in one transaction.
             // taskAssignees rows cascade-delete via FK on taskItems.
+            // applyPageMutation returns a deferredTrigger that callers passing their own tx
+            // must invoke after commit so downstream workflows tied to page activity fire.
+            let deferredTrigger: DeferredWorkflowTrigger | undefined;
             try {
               await db.transaction(async (tx) => {
                 if (linkedPageId) {
@@ -211,7 +215,7 @@ Agent Triggers:
                     .limit(1);
 
                   if (linkedPage) {
-                    await applyPageMutation({
+                    const mutationResult = await applyPageMutation({
                       pageId: linkedPageId,
                       operation: 'trash',
                       updates: { isTrashed: true, trashedAt: new Date() },
@@ -233,11 +237,13 @@ Agent Triggers:
                       },
                       tx,
                     });
+                    deferredTrigger = mutationResult.deferredTrigger;
                   }
                 }
 
                 await tx.delete(taskItems).where(eq(taskItems.id, taskId));
               });
+              deferredTrigger?.();
             } catch (error) {
               if (error instanceof PageRevisionMismatchError) {
                 throw new Error(`Linked page was modified concurrently — retry the delete: ${error.message}`);
@@ -279,6 +285,27 @@ Agent Triggers:
             }
             await Promise.all(broadcasts);
 
+            // Return the refreshed task list + remaining tasks so client UIs
+            // (e.g. useAggregatedTasks → TasksDropdown) can drop the deleted
+            // task immediately instead of waiting for a subsequent tool call.
+            const remainingTasks = await db.query.taskItems.findMany({
+              where: eq(taskItems.taskListId, taskListId),
+              orderBy: [asc(taskItems.position)],
+              with: {
+                assignee: { columns: { id: true, name: true, image: true } },
+                assigneeAgent: { columns: { id: true, title: true, type: true } },
+                assignees: {
+                  with: {
+                    user: { columns: { id: true, name: true } },
+                    agentPage: { columns: { id: true, title: true } },
+                  },
+                },
+              },
+            });
+            const refreshedTaskList = await db.query.taskLists.findFirst({
+              where: eq(taskLists.id, taskListId),
+            });
+
             return {
               success: true,
               action: 'deleted' as const,
@@ -287,6 +314,43 @@ Agent Triggers:
                 title: existingTask.title,
                 pageId: linkedPageId,
               },
+              taskList: refreshedTaskList ? {
+                id: refreshedTaskList.id,
+                title: refreshedTaskList.title,
+                description: refreshedTaskList.description,
+                status: refreshedTaskList.status,
+                pageId: refreshedTaskList.pageId,
+                driveId: deletedDriveId,
+              } : null,
+              tasks: remainingTasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                description: t.description,
+                status: t.status,
+                priority: t.priority,
+                assigneeId: t.assigneeId,
+                assigneeAgentId: t.assigneeAgentId,
+                dueDate: t.dueDate,
+                position: t.position,
+                completedAt: t.completedAt,
+                pageId: t.pageId,
+                assignee: t.assignee ? {
+                  id: t.assignee.id,
+                  name: t.assignee.name,
+                  image: t.assignee.image,
+                } : null,
+                assigneeAgent: t.assigneeAgent ? {
+                  id: t.assigneeAgent.id,
+                  title: t.assigneeAgent.title,
+                  type: t.assigneeAgent.type,
+                } : null,
+                assignees: t.assignees?.map(a => ({
+                  userId: a.userId,
+                  agentPageId: a.agentPageId,
+                  user: a.user ? { id: a.user.id, name: a.user.name } : null,
+                  agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
+                })) || [],
+              })),
               message: `Deleted task "${existingTask.title}"${linkedPageId ? ' and trashed its linked page' : ''}`,
             };
           }
