@@ -27,6 +27,7 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
@@ -321,6 +322,24 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const remoteStreams = usePendingStreamsStore(
     useShallow((state) => state.getRemotePageStreams(page.id))
   );
+
+  // Subscribe to a primitive (messageId | undefined) so token appends to the
+  // own stream don't churn this hook's identity and re-render ChatLayout per chunk.
+  const ownStreamMessageId = usePendingStreamsStore(
+    (state) => state.getOwnStreams(page.id)[0]?.messageId
+  );
+
+  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
+
+  const effectiveStop = useCallback(() => {
+    if (isStreaming) {
+      stop();
+      return;
+    }
+    if (ownStreamMessageId) {
+      abortActiveStreamByMessageId({ messageId: ownStreamMessageId });
+    }
+  }, [isStreaming, stop, ownStreamMessageId]);
 
   usePageSocketRoom(page.id);
   useChatStreamSocket(page.id, user?.id, (messageId) => {
@@ -699,8 +718,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             input={input}
             onInputChange={setInput}
             onSend={handleSendMessage}
-            onStop={stop}
-            isStreaming={isStreaming}
+            onStop={effectiveStop}
+            isStreaming={effectiveIsStreaming}
             isLoading={isLoading}
             disabled={!isAnyProviderConfigured}
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
@@ -734,9 +753,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     owner={VOICE_OWNER}
                     onSend={handleVoiceSend}
                     latestAssistantMessage={lastAIResponse}
-                    isAIStreaming={isStreaming}
+                    isAIStreaming={effectiveIsStreaming}
                     streamingText={streamingAssistantText}
-                    onStopStream={stop}
+                    onStopStream={effectiveStop}
                     onClose={disableVoiceMode}
                   />
                 )}
