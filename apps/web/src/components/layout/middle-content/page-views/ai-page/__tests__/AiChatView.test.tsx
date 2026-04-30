@@ -471,7 +471,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given fireComplete fires with stream.conversationId matching the persisted conversation while currentConversationId is the page-scoped default, should sync ID and append the message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
       capturedCallback = cb;
     });
 
@@ -512,7 +512,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given fireComplete fires with stream.conversationId that does NOT match the persisted conversation, should NOT append the message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
       capturedCallback = cb;
     });
 
@@ -554,7 +554,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given the sync fetch returns !res.ok, should NOT append any message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
       capturedCallback = cb;
     });
 
@@ -594,7 +594,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given the sync fetch returns an empty conversations array, should NOT append any message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
       capturedCallback = cb;
     });
 
@@ -635,7 +635,7 @@ describe('AiChatView late-joiner conversation sync', () => {
   test('given the sync fetch throws a network error, should warn and NOT append any message', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
       capturedCallback = cb;
     });
 
@@ -685,7 +685,7 @@ describe('AiChatView late-joiner conversation sync', () => {
   test('given the component navigates to a different page while the sync fetch is in-flight, should NOT apply stale page-A state to page B', async () => {
     const PAGE_B_ID = 'page-b-456';
     let capturedPageACallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((pageId, _userId, cb) => {
+    vi.mocked(useChatStreamSocket).mockImplementation((pageId, cb) => {
       if (pageId === PAGE_ID) capturedPageACallback = cb;
     });
 

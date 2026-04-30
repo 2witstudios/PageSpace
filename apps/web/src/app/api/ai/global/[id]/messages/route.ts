@@ -5,8 +5,9 @@ import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent, broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
-import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
+import { broadcastUsageEvent } from '@/lib/websocket';
+import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { validateTabIdHeader } from '@/lib/ai/core/tab-id-validation';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -40,8 +41,8 @@ import {
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
+import { users } from '@pagespace/db/schema/auth';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
@@ -200,17 +201,22 @@ export async function GET(
   }
 }
 
-/**
- * POST - Send a message to the conversation (streaming chat)
- */
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   const startTime = Date.now();
+  let lifecycle: StreamLifecycleHandle | undefined;
+  let activeStreamId: string | undefined;
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
+
+    const tabIdResult = validateTabIdHeader(request.headers.get('X-Tab-Id'));
+    if (!tabIdResult.ok) {
+      return NextResponse.json({ error: tabIdResult.message }, { status: tabIdResult.status });
+    }
+    const tabId = tabIdResult.tabId;
 
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
@@ -821,107 +827,40 @@ MENTION PROCESSING:
       wasTruncated: contextCalculation.wasTruncated,
     });
 
-    // Generate server-side message ID for the AI response
-    // This ensures client and server use the same ID, fixing the undo-after-streaming issue
     const serverAssistantMessageId = createId();
 
-    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
-    // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    activeStreamId = streamId;
 
-    const tabId = request.headers.get('X-Tab-Id') ?? '';
     const channelId = `user:${userId}:global`;
 
-    let displayName = 'Someone';
-    try {
-      const [userProfile] = await db
+    const [authUserResult, profileResult] = await Promise.allSettled([
+      db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1),
+      db
         .select({ displayName: userProfiles.displayName })
         .from(userProfiles)
         .where(eq(userProfiles.userId, userId))
-        .limit(1);
-      displayName = userProfile?.displayName ?? displayName;
-    } catch {
-      // non-critical — fall back to default already set above
-    }
+        .limit(1),
+    ]);
+    const authUserName = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
+    const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
+    const displayName = profileDisplayName ?? authUserName ?? 'Someone';
 
-    try {
-      streamMulticastRegistry.register(serverAssistantMessageId, {
-        pageId: channelId,
-        userId,
-        displayName,
-        conversationId,
-        tabId,
-      });
-    } catch {}
-
-    try {
-      await db
-        .insert(aiStreamSessions)
-        .values({
-          messageId: serverAssistantMessageId,
-          channelId,
-          conversationId,
-          userId,
-          displayName,
-          tabId,
-          status: 'streaming',
-        })
-        .onConflictDoUpdate({
-          target: aiStreamSessions.messageId,
-          set: {
-            channelId,
-            conversationId,
-            userId,
-            displayName,
-            tabId,
-            status: 'streaming',
-            startedAt: new Date(),
-            completedAt: null,
-          },
-        });
-    } catch (error) {
-      loggers.api.error('Global Assistant Chat API: Failed to persist aiStreamSessions row', error as Error);
-    }
-
-    broadcastAiStreamStart({
+    lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
-      pageId: channelId,
+      channelId,
       conversationId,
-      triggeredBy: { userId, displayName, tabId },
-    }).catch(() => {});
+      userId,
+      displayName,
+      tabId,
+    });
 
-    let multicastFinished = false;
-    const finishMulticast = (aborted: boolean): void => {
-      if (multicastFinished) return;
-      multicastFinished = true;
-      try { streamMulticastRegistry.finish(serverAssistantMessageId, aborted); } catch {}
-      broadcastAiStreamComplete({
-        messageId: serverAssistantMessageId,
-        pageId: channelId,
-        aborted,
-      }).catch(() => {});
-      void (async () => {
-        try {
-          await db
-            .update(aiStreamSessions)
-            .set({
-              status: aborted ? 'aborted' : 'complete',
-              completedAt: new Date(),
-            })
-            .where(eq(aiStreamSessions.messageId, serverAssistantMessageId));
-        } catch (error) {
-          loggers.api.debug('Global Assistant Chat API: Failed to update aiStreamSessions row', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-        }
-      })();
-    };
-
-    // Track usage promise for token counting
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
 
-    // Use createUIMessageStream to wrap the streaming response
-    // This ensures server-side processing continues even if the client disconnects
     const stream = createUIMessageStream({
       originalMessages: processedMessages,
       generateId: () => serverAssistantMessageId,
@@ -932,7 +871,8 @@ MENTION PROCESSING:
           messages: modelMessages,
           tools: finalTools,
           stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
-          abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
+          // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+          abortSignal,
           experimental_context: {
             userId,
             timezone: userTimezone,
@@ -946,7 +886,7 @@ MENTION PROCESSING:
           maxRetries: 20,
           onChunk: ({ chunk }) => {
             if (chunk.type === 'text-delta') {
-              try { streamMulticastRegistry.push(serverAssistantMessageId, chunk.text); } catch {}
+              lifecycle!.pushChunk(chunk.text);
             }
           },
           onAbort: () => {
@@ -957,7 +897,7 @@ MENTION PROCESSING:
               model: currentModel,
               provider: currentProvider,
             });
-            finishMulticast(true);
+            lifecycle!.finish(true);
           },
         });
 
@@ -1105,7 +1045,7 @@ MENTION PROCESSING:
           }
         }
 
-        finishMulticast(false);
+        lifecycle!.finish(false);
       },
     });
 
@@ -1117,6 +1057,10 @@ MENTION PROCESSING:
     });
 
   } catch (error) {
+    if (activeStreamId !== undefined) {
+      removeStream({ streamId: activeStreamId });
+    }
+    lifecycle?.finish(true);
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
 
     return NextResponse.json({
