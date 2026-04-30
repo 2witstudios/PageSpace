@@ -12,18 +12,31 @@ interface ActiveStreamRow {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
-export function useChatStreamSocket(
+export interface UseChannelStreamSocketOptions {
+  onStreamComplete?: (messageId: string) => void;
+  onOwnStreamBootstrap?: (event: { messageId: string }) => void;
+  onOwnStreamFinalize?: (event: { messageId: string }) => void;
+}
+
+export function useChannelStreamSocket(
   channelId: string | undefined,
-  onStreamComplete?: (messageId: string) => void,
+  options?: UseChannelStreamSocketOptions,
 ): void {
   const socket = useSocket();
   const controllersRef = useRef<Map<string, AbortController>>(new Map());
   // Tracks which messageIds have had onStreamComplete called to prevent double-firing
   // when both the SSE done sentinel and the chat:stream_complete socket event arrive.
   const processedRef = useRef<Set<string>>(new Set());
-  // Stable ref so onStreamComplete changes never cause handler re-registration.
-  const onStreamCompleteRef = useRef(onStreamComplete);
-  onStreamCompleteRef.current = onStreamComplete;
+  // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own" lookup
+  // and a one-shot guard for onOwnStreamFinalize.
+  const ownStreamIdsRef = useRef<Set<string>>(new Set());
+  // Stable refs so callback identity changes never trigger handler re-registration.
+  const onStreamCompleteRef = useRef(options?.onStreamComplete);
+  const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
+  const onOwnStreamFinalizeRef = useRef(options?.onOwnStreamFinalize);
+  onStreamCompleteRef.current = options?.onStreamComplete;
+  onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
+  onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -40,6 +53,12 @@ export function useChatStreamSocket(
       onStreamCompleteRef.current?.(messageId);
     };
 
+    const fireOwnFinalize = (messageId: string) => {
+      if (!ownStreamIdsRef.current.has(messageId)) return;
+      ownStreamIdsRef.current.delete(messageId);
+      onOwnStreamFinalizeRef.current?.({ messageId });
+    };
+
     const startConsume = (messageId: string) => {
       const controller = new AbortController();
       controllersRef.current.set(messageId, controller);
@@ -53,13 +72,15 @@ export function useChatStreamSocket(
             fireComplete(messageId);
           } finally {
             removeStream(messageId);
+            fireOwnFinalize(messageId);
           }
         })
         .catch((err) => {
           controllersRef.current.delete(messageId);
           removeStream(messageId);
+          fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
-            console.error('[useChatStreamSocket] SSE join error:', err);
+            console.error('[useChannelStreamSocket] SSE join error:', err);
           }
         });
     };
@@ -79,18 +100,23 @@ export function useChatStreamSocket(
         for (const stream of data.streams ?? []) {
           if (processedRef.current.has(stream.messageId)) continue;
           if (controllersRef.current.has(stream.messageId)) continue;
+          const isOwn = stream.triggeredBy.browserSessionId === localBrowserSessionId;
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
-            isOwn: stream.triggeredBy.browserSessionId === localBrowserSessionId,
+            isOwn,
           });
+          if (isOwn) {
+            ownStreamIdsRef.current.add(stream.messageId);
+            onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
+          }
           startConsume(stream.messageId);
         }
       } catch (err) {
         if (cancelled) return;
-        console.warn('[useChatStreamSocket] bootstrap failed', err);
+        console.warn('[useChannelStreamSocket] bootstrap failed', err);
       }
     })();
 
@@ -121,6 +147,7 @@ export function useChatStreamSocket(
         fireComplete(payload.messageId);
       } finally {
         removeStream(payload.messageId);
+        fireOwnFinalize(payload.messageId);
       }
     };
 
@@ -136,6 +163,7 @@ export function useChatStreamSocket(
       }
       controllersRef.current.clear();
       processedRef.current.clear();
+      ownStreamIdsRef.current.clear();
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);
