@@ -26,22 +26,34 @@ interface UseAttachmentUploadReturn {
   clearAttachment: () => void;
 }
 
+interface UploadErrorBody {
+  error?: string;
+}
+
+interface UploadSuccessBody {
+  file: FileAttachment;
+}
+
 export function useAttachmentUpload({
   uploadUrl,
   onUploaded,
 }: UseAttachmentUploadOptions): UseAttachmentUploadReturn {
   const [attachment, setAttachment] = useState<FileAttachment | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  // Ref mirrors isUploading so concurrent uploadFile calls can early-return
+  // without waiting for the React state flush.
+  const isUploadingRef = useRef(false);
   const onUploadedRef = useRef(onUploaded);
   onUploadedRef.current = onUploaded;
 
   const uploadFile = useCallback(
     async (file: File) => {
-      if (!uploadUrl) return;
+      if (!uploadUrl || isUploadingRef.current) return;
 
       const sessionId = `attachment-upload-${createId()}`;
       const { startEditing, endEditing } = useEditingStore.getState();
 
+      isUploadingRef.current = true;
       setIsUploading(true);
       startEditing(sessionId, 'form', { componentName: 'useAttachmentUpload' });
 
@@ -55,9 +67,9 @@ export function useAttachmentUpload({
         });
 
         if (!response.ok) {
-          const errorData = await response
+          const errorData = (await response
             .json()
-            .catch(() => ({ error: 'Upload failed' }));
+            .catch(() => ({ error: 'Upload failed' }))) as UploadErrorBody;
           if (response.status === 413) {
             toast.error(errorData.error || 'File too large');
           } else if (response.status === 429) {
@@ -74,7 +86,7 @@ export function useAttachmentUpload({
           return;
         }
 
-        const result = await response.json();
+        const result = (await response.json()) as UploadSuccessBody;
         const next: FileAttachment = {
           id: result.file.id,
           originalName: result.file.originalName,
@@ -88,6 +100,7 @@ export function useAttachmentUpload({
         console.error('Failed to upload file:', error);
         toast.error('Failed to upload file. Please try again.');
       } finally {
+        isUploadingRef.current = false;
         setIsUploading(false);
         endEditing(sessionId);
       }

@@ -143,4 +143,34 @@ describe('useAttachmentUpload', () => {
     act(() => result.current.clearAttachment());
     expect(result.current.attachment).toBeNull();
   });
+
+  it('drops a second uploadFile call while one is already in flight', async () => {
+    let resolveFirst: ((value: Response) => void) | null = null;
+    mockFetchWithAuth.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    mockFetchWithAuth.mockResolvedValueOnce(okResponse(fileResponse));
+
+    const { result } = renderHook(() =>
+      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+    );
+
+    let secondCall: Promise<void> | undefined;
+    await act(async () => {
+      void result.current.uploadFile(makeFile());
+      secondCall = result.current.uploadFile(makeFile());
+      await secondCall;
+    });
+
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(startEditing).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst?.(okResponse(fileResponse));
+      await Promise.resolve();
+    });
+  });
 });

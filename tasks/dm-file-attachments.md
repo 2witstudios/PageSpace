@@ -11,7 +11,7 @@ Channels already support file attachments end-to-end (schema, upload, renderer, 
 
 ## Centralize AttachmentMeta type
 
-Define `AttachmentMeta` once in `packages/lib/src/types.ts` and import on both `channelMessages.attachmentMeta` and `directMessages.attachmentMeta` JSONB columns.
+Define `AttachmentMeta` once in `packages/db/src/schema/storage.ts` (next to `files`; canonical owner), re-export it from `packages/lib/src/types.ts` for non-db consumers, and import on both `channelMessages.attachmentMeta` and `directMessages.attachmentMeta` JSONB columns. Keeping the canonical type in db avoids the `db → lib → db` cycle.
 
 **Requirements**:
 - Given the existing `channelMessages` table, schema and tests should still typecheck against the imported type with zero behavior change.
