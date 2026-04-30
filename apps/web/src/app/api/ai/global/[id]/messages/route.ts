@@ -5,7 +5,8 @@ import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket';
+import { broadcastUsageEvent, broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
+import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -40,6 +41,8 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { userProfiles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { getMCPBridge } from '@/lib/mcp';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -826,6 +829,94 @@ MENTION PROCESSING:
     // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
 
+    const tabId = request.headers.get('X-Tab-Id') ?? '';
+    const channelId = `user:${userId}:global`;
+
+    let displayName = 'Someone';
+    try {
+      const [userProfile] = await db
+        .select({ displayName: userProfiles.displayName })
+        .from(userProfiles)
+        .where(eq(userProfiles.userId, userId))
+        .limit(1);
+      displayName = userProfile?.displayName ?? displayName;
+    } catch {
+      // non-critical — fall back to default already set above
+    }
+
+    try {
+      streamMulticastRegistry.register(serverAssistantMessageId, {
+        pageId: channelId,
+        userId,
+        displayName,
+        conversationId,
+        tabId,
+      });
+    } catch {}
+
+    try {
+      await db
+        .insert(aiStreamSessions)
+        .values({
+          messageId: serverAssistantMessageId,
+          channelId,
+          conversationId,
+          userId,
+          displayName,
+          tabId,
+          status: 'streaming',
+        })
+        .onConflictDoUpdate({
+          target: aiStreamSessions.messageId,
+          set: {
+            channelId,
+            conversationId,
+            userId,
+            displayName,
+            tabId,
+            status: 'streaming',
+            startedAt: new Date(),
+            completedAt: null,
+          },
+        });
+    } catch (error) {
+      loggers.api.error('Global Assistant Chat API: Failed to persist aiStreamSessions row', error as Error);
+    }
+
+    broadcastAiStreamStart({
+      messageId: serverAssistantMessageId,
+      pageId: channelId,
+      conversationId,
+      triggeredBy: { userId, displayName, tabId },
+    }).catch(() => {});
+
+    let multicastFinished = false;
+    const finishMulticast = (aborted: boolean): void => {
+      if (multicastFinished) return;
+      multicastFinished = true;
+      try { streamMulticastRegistry.finish(serverAssistantMessageId, aborted); } catch {}
+      broadcastAiStreamComplete({
+        messageId: serverAssistantMessageId,
+        pageId: channelId,
+        aborted,
+      }).catch(() => {});
+      void (async () => {
+        try {
+          await db
+            .update(aiStreamSessions)
+            .set({
+              status: aborted ? 'aborted' : 'complete',
+              completedAt: new Date(),
+            })
+            .where(eq(aiStreamSessions.messageId, serverAssistantMessageId));
+        } catch (error) {
+          loggers.api.debug('Global Assistant Chat API: Failed to update aiStreamSessions row', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      })();
+    };
+
     // Track usage promise for token counting
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
 
@@ -853,6 +944,11 @@ MENTION PROCESSING:
             chatSource: { type: 'global' as const },
           },
           maxRetries: 20,
+          onChunk: ({ chunk }) => {
+            if (chunk.type === 'text-delta') {
+              try { streamMulticastRegistry.push(serverAssistantMessageId, chunk.text); } catch {}
+            }
+          },
           onAbort: () => {
             loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
               userId: maskIdentifier(userId),
@@ -861,6 +957,7 @@ MENTION PROCESSING:
               model: currentModel,
               provider: currentProvider,
             });
+            finishMulticast(true);
           },
         });
 
@@ -1007,6 +1104,8 @@ MENTION PROCESSING:
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
         }
+
+        finishMulticast(false);
       },
     });
 
@@ -1019,9 +1118,9 @@ MENTION PROCESSING:
 
   } catch (error) {
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
-    
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
   }
 }

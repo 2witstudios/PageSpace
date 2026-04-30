@@ -1,0 +1,633 @@
+/**
+ * Tests for Task 5: stream socket events wired into the global chat route.
+ *
+ * Verifies that the global chat POST handler:
+ *  - reads tabId from X-Tab-Id header,
+ *  - resolves displayName from userProfiles (with fallback),
+ *  - registers with the multicast registry using channelId user:${userId}:global,
+ *  - INSERTs into aiStreamSessions on stream start (onConflictDoUpdate),
+ *  - pushes text-delta chunks to the registry,
+ *  - broadcasts chat:stream_start on stream start,
+ *  - broadcasts chat:stream_complete on completion or abort (guarded by multicastFinished),
+ *  - UPDATEs aiStreamSessions to status 'complete'/'aborted' with completedAt on cleanup,
+ *  - calls finishMulticast exactly once across success and abort paths.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// ============================================================================
+// Hoisted mocks (referenced inside vi.mock factories)
+// ============================================================================
+
+const {
+  mockRegistryRegister,
+  mockRegistryPush,
+  mockRegistryFinish,
+  mockBroadcastAiStreamStart,
+  mockBroadcastAiStreamComplete,
+  mockInsertValues,
+  mockOnConflictDoUpdate,
+  mockUpdateSet,
+  mockUpdateWhere,
+} = vi.hoisted(() => ({
+  mockRegistryRegister: vi.fn(),
+  mockRegistryPush: vi.fn(),
+  mockRegistryFinish: vi.fn(),
+  mockBroadcastAiStreamStart: vi.fn().mockResolvedValue(undefined),
+  mockBroadcastAiStreamComplete: vi.fn().mockResolvedValue(undefined),
+  mockInsertValues: vi.fn(),
+  mockOnConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+  mockUpdateSet: vi.fn(),
+  mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Captured AI SDK callbacks
+interface MockUIStreamOptions {
+  execute?: (ctx: Record<string, unknown>) => Promise<void> | void;
+  onFinish?: (result: { responseMessage: unknown }) => Promise<void> | void;
+  originalMessages?: unknown[];
+  generateId?: () => string;
+}
+interface MockStreamTextOptions {
+  onChunk?: (ctx: { chunk: Record<string, unknown> }) => void;
+  onAbort?: () => void;
+}
+const captured = vi.hoisted(() => ({
+  createUIMessageStreamOptions: {} as MockUIStreamOptions,
+  streamTextOptions: {} as MockStreamTextOptions,
+}));
+
+// ============================================================================
+// Module mocks
+// ============================================================================
+
+vi.mock('@/lib/ai/core/stream-multicast-registry', () => ({
+  streamMulticastRegistry: {
+    register: mockRegistryRegister,
+    push: mockRegistryPush,
+    finish: mockRegistryFinish,
+    getMeta: vi.fn(),
+    subscribe: vi.fn(),
+  },
+  StreamMulticastRegistry: vi.fn(),
+}));
+
+vi.mock('@/lib/websocket', () => ({
+  broadcastUsageEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastAiStreamStart: mockBroadcastAiStreamStart,
+  broadcastAiStreamComplete: mockBroadcastAiStreamComplete,
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
+  },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const mockConversation = {
+  id: 'conv-1',
+  userId: 'user-1',
+  title: 'Test Conversation',
+  type: 'global',
+  contextId: null,
+  isActive: true,
+};
+
+const mockUserProfile = { displayName: 'Display User' };
+
+vi.mock('@pagespace/db/db', () => {
+  const select = vi.fn(() => {
+    const where = vi.fn((..._args: unknown[]) => {
+      // chain shape: select().from().where()
+      // - returns awaitable [conversation, ...] for conversation lookup
+      // - .orderBy() returns dbMessages array
+      // - .limit() returns userProfile or drive lookup
+      const chain = {
+        then: <T>(
+          resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+          reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+        ) => Promise.resolve([mockConversation]).then(resolve, reject),
+        orderBy: vi.fn().mockResolvedValue([]),
+        limit: vi.fn().mockImplementation(() => Promise.resolve([mockUserProfile])),
+      };
+      return chain;
+    });
+    return {
+      from: vi.fn(() => ({ where })),
+    };
+  });
+
+  const insert = vi.fn(() => ({
+    values: mockInsertValues.mockImplementation(() => ({
+      onConflictDoUpdate: mockOnConflictDoUpdate,
+    })),
+  }));
+
+  const update = vi.fn(() => ({
+    set: mockUpdateSet.mockImplementation(() => ({
+      where: mockUpdateWhere,
+    })),
+  }));
+
+  return {
+    db: { select, insert, update },
+  };
+});
+
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', drivePrompt: 'drivePrompt' },
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
+}));
+
+vi.mock('@pagespace/db/schema/members', () => ({
+  userProfiles: { userId: 'userId', displayName: 'displayName' },
+}));
+
+vi.mock('@pagespace/db/schema/ai-streams', () => ({
+  aiStreamSessions: {
+    messageId: 'messageId',
+    channelId: 'channelId',
+    conversationId: 'conversationId',
+    userId: 'userId',
+    displayName: 'displayName',
+    tabId: 'tabId',
+    status: 'status',
+    completedAt: 'completedAt',
+  },
+}));
+
+vi.mock('@/lib/subscription/usage-service', () => ({
+  incrementUsage: vi.fn().mockResolvedValue({ currentCount: 1, limit: 100, remainingCalls: 99, success: true }),
+  getCurrentUsage: vi.fn().mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 }),
+  getUserUsageSummary: vi.fn().mockResolvedValue({
+    subscriptionTier: 'free',
+    standard: { current: 0, limit: 100, remaining: 100 },
+    pro: { current: 0, limit: 0, remaining: 0 },
+  }),
+}));
+
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
+  createRateLimitResponse: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core', () => ({
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  updateUserProviderSettings: vi.fn(),
+  createProviderErrorResponse: vi.fn(),
+  isProviderError: vi.fn().mockReturnValue(false),
+  pageSpaceTools: {},
+  extractMessageContent: vi.fn().mockReturnValue('test content'),
+  extractToolCalls: vi.fn().mockReturnValue([]),
+  extractToolResults: vi.fn().mockReturnValue([]),
+  sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
+  convertGlobalAssistantMessageToUIMessage: vi.fn(),
+  saveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
+  buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
+  buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+  buildSystemPrompt: vi.fn().mockReturnValue(''),
+  buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
+  filterToolsForReadOnly: vi.fn().mockReturnValue({}),
+  filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  getPageTreeContext: vi.fn().mockResolvedValue(''),
+  getDriveListSummary: vi.fn().mockResolvedValue(''),
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  convertMCPToolsToAISDKSchemas: vi.fn(),
+  parseMCPToolName: vi.fn(),
+  sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
+  getUserPersonalization: vi.fn().mockResolvedValue(null),
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+
+vi.mock('ai', () => ({
+  streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
+    captured.streamTextOptions = options;
+    return {
+      toUIMessageStream: () => (async function* () {})(),
+      totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+    };
+  }),
+  convertToModelMessages: vi.fn().mockReturnValue([]),
+  stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+  tool: vi.fn((config: unknown) => config),
+  createUIMessageStream: vi.fn().mockImplementation((options: MockUIStreamOptions) => {
+    captured.createUIMessageStreamOptions = options;
+    return {};
+  }),
+  createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
+}));
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('test-message-id'),
+}));
+
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
+  calculateTotalContextSize: vi.fn().mockReturnValue({
+    totalTokens: 0,
+    messageCount: 0,
+    systemPromptTokens: 0,
+    toolDefinitionTokens: 0,
+    conversationTokens: 0,
+    wasTruncated: false,
+    truncationStrategy: undefined,
+    messageIds: [],
+  }),
+}));
+
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({ isMember: false, role: null }),
+}));
+
+vi.mock('@/lib/utils/query-params', () => ({
+  parseBoundedIntParam: vi.fn().mockReturnValue(50),
+}));
+
+vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
+
+vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
+  removeStream: vi.fn(),
+  STREAM_ID_HEADER: 'x-stream-id',
+}));
+
+vi.mock('@/lib/ai/core/stream-pipe-utils', () => ({
+  pipeUIMessageStreamStrippingStart: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/ai/core/validate-image-parts', () => ({
+  validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
+  hasFileParts: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
+}));
+
+vi.mock('@/lib/ai/core/tool-utils', () => ({
+  mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
+}));
+
+vi.mock('@/lib/ai/tools/finish-tool', () => ({
+  finishTool: {},
+  FINISH_TOOL_NAME: 'finish',
+}));
+
+// ============================================================================
+// Imports (after mocks)
+// ============================================================================
+
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
+
+// ============================================================================
+// Fixtures
+// ============================================================================
+
+const mockAuth = (): SessionAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess-1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const makeRequest = (overrides?: { tabId?: string }) => {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'content-length': '200',
+  };
+  if (overrides?.tabId !== undefined) {
+    headers['X-Tab-Id'] = overrides.tabId;
+  }
+  return new Request('https://example.com/api/ai/global/conv-1/messages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
+      selectedProvider: 'pagespace',
+      selectedModel: 'glm-4.5-air',
+    }),
+  });
+};
+
+const makeContext = () => ({ params: Promise.resolve({ id: 'conv-1' }) });
+
+const mockResponseMessage = {
+  id: 'test-message-id',
+  role: 'assistant' as const,
+  parts: [{ type: 'text', text: 'Hello' }],
+};
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+describe('POST /api/ai/global/[id]/messages — stream socket events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.createUIMessageStreamOptions = {};
+    captured.streamTextOptions = {};
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    mockOnConflictDoUpdate.mockResolvedValue(undefined);
+    mockInsertValues.mockImplementation(() => ({
+      onConflictDoUpdate: mockOnConflictDoUpdate,
+    }));
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockUpdateSet.mockImplementation(() => ({ where: mockUpdateWhere }));
+  });
+
+  describe('AC1 — tabId from X-Tab-Id header', () => {
+    it('given an X-Tab-Id header, should pass tabId through to multicast register meta', async () => {
+      await POST(makeRequest({ tabId: 'tab-abc' }), makeContext());
+
+      expect(mockRegistryRegister).toHaveBeenCalledWith(
+        'test-message-id',
+        expect.objectContaining({ tabId: 'tab-abc' })
+      );
+    });
+
+    it('given no X-Tab-Id header, should pass empty string tabId to multicast register meta', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(mockRegistryRegister).toHaveBeenCalledWith(
+        'test-message-id',
+        expect.objectContaining({ tabId: '' })
+      );
+    });
+  });
+
+  describe('AC2 — displayName resolution from userProfiles', () => {
+    it('given a userProfile exists, should use displayName from userProfiles in register meta', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(mockRegistryRegister).toHaveBeenCalledWith(
+        'test-message-id',
+        expect.objectContaining({ displayName: 'Display User' })
+      );
+    });
+  });
+
+  describe('AC3 — register with multicast registry', () => {
+    it('given a global chat stream starts, should register with channelId user:${userId}:global stored in pageId field', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(mockRegistryRegister).toHaveBeenCalledWith(
+        'test-message-id',
+        expect.objectContaining({
+          pageId: 'user:user-1:global',
+          userId: 'user-1',
+          conversationId: 'conv-1',
+        })
+      );
+    });
+
+    it('given registry.register throws, should not interrupt the stream', async () => {
+      mockRegistryRegister.mockImplementationOnce(() => { throw new Error('registry error'); });
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  describe('AC4 — INSERT into aiStreamSessions', () => {
+    it('given a global stream starts, should insert row with messageId, channelId, status="streaming" and run onConflictDoUpdate', async () => {
+      await POST(makeRequest({ tabId: 'tab-x' }), makeContext());
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'test-message-id',
+          channelId: 'user:user-1:global',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          displayName: 'Display User',
+          tabId: 'tab-x',
+          status: 'streaming',
+        })
+      );
+      expect(mockOnConflictDoUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          set: expect.objectContaining({
+            channelId: 'user:user-1:global',
+            status: 'streaming',
+          }),
+        })
+      );
+    });
+
+    it('given DB insert throws, should not abort the stream', async () => {
+      mockOnConflictDoUpdate.mockRejectedValueOnce(new Error('db error'));
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  describe('AC5 — push chunks to multicast registry', () => {
+    it('given a text-delta chunk, should push the text to the registry under the messageId', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'chunk-1' } });
+
+      expect(mockRegistryPush).toHaveBeenCalledWith('test-message-id', 'hello');
+    });
+
+    it('given a non-text-delta chunk, should not push to the registry', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'tool-call', toolCallId: 'tc1', toolName: 'search', args: {} } });
+
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given registry.push throws, should not interrupt the stream', async () => {
+      mockRegistryPush.mockImplementationOnce(() => { throw new Error('push error'); });
+
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      expect(() => {
+        captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'chunk-1' } });
+      }).not.toThrow();
+    });
+  });
+
+  describe('AC6 — broadcastAiStreamStart on stream start', () => {
+    it('given a new global stream, should broadcast chat:stream_start after registering', async () => {
+      await POST(makeRequest({ tabId: 'tab-y' }), makeContext());
+
+      expect(mockBroadcastAiStreamStart).toHaveBeenCalled();
+      const callOrder = [
+        mockRegistryRegister.mock.invocationCallOrder[0],
+        mockBroadcastAiStreamStart.mock.invocationCallOrder[0],
+      ];
+      expect(callOrder[0]).toBeLessThan(callOrder[1]);
+    });
+
+    it('given chat:stream_start, should include messageId, channelId in pageId, conversationId, and triggeredBy', async () => {
+      await POST(makeRequest({ tabId: 'tab-y' }), makeContext());
+
+      expect(mockBroadcastAiStreamStart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'test-message-id',
+          pageId: 'user:user-1:global',
+          conversationId: 'conv-1',
+          triggeredBy: expect.objectContaining({
+            userId: 'user-1',
+            displayName: 'Display User',
+            tabId: 'tab-y',
+          }),
+        })
+      );
+    });
+
+    it('given broadcastAiStreamStart rejects, should not interrupt the stream', async () => {
+      mockBroadcastAiStreamStart.mockRejectedValueOnce(new Error('broadcast error'));
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  describe('AC7 — finishMulticast guard with DB UPDATE', () => {
+    it('given onFinish, should call registry.finish with aborted=false', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', false);
+    });
+
+    it('given onFinish, should broadcast chat:stream_complete on the global channel with aborted=false', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'test-message-id',
+          pageId: 'user:user-1:global',
+          aborted: false,
+        })
+      );
+    });
+
+    it('given onFinish, should UPDATE aiStreamSessions with status="complete" and a completedAt date', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      // Allow the IIFE inside finishMulticast to settle.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'complete',
+          completedAt: expect.any(Date),
+        })
+      );
+    });
+
+    it('given onAbort, should UPDATE aiStreamSessions with status="aborted"', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'aborted',
+          completedAt: expect.any(Date),
+        })
+      );
+    });
+
+    it('given onFinish called twice, should broadcast chat:stream_complete only once (guard prevents double-fire)', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('AC8 — finishMulticast called on success and abort paths', () => {
+    it('given stream abort, should call registry.finish with aborted=true', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+
+      expect(mockRegistryFinish).toHaveBeenCalledWith('test-message-id', true);
+    });
+
+    it('given stream abort, should broadcast chat:stream_complete with aborted=true', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'test-message-id',
+          pageId: 'user:user-1:global',
+          aborted: true,
+        })
+      );
+    });
+
+    it('given onAbort followed by onFinish, should broadcast complete only once with aborted=true', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onAbort?.();
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastAiStreamComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ aborted: true })
+      );
+    });
+  });
+});
