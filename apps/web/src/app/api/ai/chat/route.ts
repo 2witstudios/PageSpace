@@ -111,16 +111,29 @@ export async function POST(request: Request) {
     if (multicastFinished || !serverAssistantMessageId) return;
     multicastFinished = true;
     try { streamMulticastRegistry.finish(serverAssistantMessageId, aborted); } catch {}
+    const messageId = serverAssistantMessageId;
     try {
       Promise.resolve(
         db
           .update(aiStreamSessions)
           .set({ status: aborted ? 'aborted' : 'complete', completedAt: new Date() })
-          .where(eq(aiStreamSessions.messageId, serverAssistantMessageId))
-      ).catch(() => {});
-    } catch {}
+          .where(eq(aiStreamSessions.messageId, messageId))
+      ).catch((error) => {
+        loggers.ai.warn('AI Chat API: aiStreamSessions UPDATE failed', {
+          messageId,
+          aborted,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+    } catch (error) {
+      loggers.ai.warn('AI Chat API: aiStreamSessions UPDATE threw synchronously', {
+        messageId,
+        aborted,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
     broadcastAiStreamComplete({
-      messageId: serverAssistantMessageId,
+      messageId,
       pageId: chatId!,
       aborted,
     }).catch(() => {});
@@ -859,24 +872,27 @@ export async function POST(request: Request) {
     } catch {}
 
     try {
-      Promise.resolve(
-        db
-          .insert(aiStreamSessions)
-          .values({
-            messageId: serverAssistantMessageId,
-            channelId: chatId,
-            conversationId: conversationId!,
-            userId: userId!,
-            displayName,
-            tabId,
-            status: 'streaming',
-          })
-          .onConflictDoUpdate({
-            target: aiStreamSessions.messageId,
-            set: { status: 'streaming', completedAt: null },
-          })
-      ).catch(() => {});
-    } catch {}
+      await db
+        .insert(aiStreamSessions)
+        .values({
+          messageId: serverAssistantMessageId,
+          channelId: chatId,
+          conversationId: conversationId!,
+          userId: userId!,
+          displayName,
+          tabId,
+          status: 'streaming',
+        })
+        .onConflictDoUpdate({
+          target: aiStreamSessions.messageId,
+          set: { status: 'streaming', completedAt: null },
+        });
+    } catch (error) {
+      loggers.ai.warn('AI Chat API: aiStreamSessions INSERT failed', {
+        messageId: serverAssistantMessageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
 
     broadcastAiStreamStart({
       messageId: serverAssistantMessageId,
