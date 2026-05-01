@@ -106,6 +106,10 @@ describe('TaskAgentTriggersDialog — editing-store contract', () => {
       screen.getByDisplayValue('remote-prompt'),
     )) as HTMLTextAreaElement;
 
+    const triggersFetchesAfterMount = vi
+      .mocked(fetchWithAuth)
+      .mock.calls.filter(([url]) => String(url).endsWith('/triggers')).length;
+
     await userEvent.clear(promptInput);
     await userEvent.type(promptInput, 'in-flight typing');
 
@@ -126,6 +130,17 @@ describe('TaskAgentTriggersDialog — editing-store contract', () => {
       should: 'preserve the in-progress prompt text rather than refetching and clobbering it',
       actual: promptInput.value,
       expected: 'in-flight typing',
+    });
+
+    const triggersFetchesAfterMutate = vi
+      .mocked(fetchWithAuth)
+      .mock.calls.filter(([url]) => String(url).endsWith('/triggers')).length;
+
+    assert({
+      given: 'globalMutate triggered while an editing session is active',
+      should: 'not issue any new triggers fetch (isPaused suppresses background revalidation)',
+      actual: triggersFetchesAfterMutate - triggersFetchesAfterMount,
+      expected: 0,
     });
   });
 });
