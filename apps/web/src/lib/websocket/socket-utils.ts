@@ -354,7 +354,14 @@ export function createDriveMemberEventPayload(
 }
 
 /**
- * Broadcasts a task event to the realtime server
+ * Broadcasts a task event to the realtime server.
+ *
+ * Always fans out to the originating user's task channel
+ * (`user:${userId}:tasks`) so their other tabs stay in sync. When
+ * `payload.pageId` is set, ALSO fans out to the `pageId` room so any
+ * collaborator currently viewing that task list (joined via
+ * `join_channel`) sees badge / list updates without a manual refresh.
+ *
  * @param payload - The task event payload to broadcast
  */
 export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
@@ -367,30 +374,37 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
     return;
   }
 
-  try {
-    const requestBody = JSON.stringify({
-      channelId: `user:${payload.userId}:tasks`,
-      event: `task:${payload.type}`,
-      payload,
-    });
-
-    await fetch(`${realtimeUrl}/api/broadcast`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (error) {
-    // Log error but don't throw - broadcasting failures shouldn't break operations
-    realtimeLogger.error(
-      'Failed to broadcast task event',
-      error instanceof Error ? error : undefined,
-      {
-        event: 'task',
-        channel: `user:${maskIdentifier(payload.userId)}:tasks`
-      }
-    );
+  const event = `task:${payload.type}`;
+  const channelIds = [`user:${payload.userId}:tasks`];
+  if (payload.pageId) {
+    channelIds.push(payload.pageId);
   }
+
+  await Promise.all(
+    channelIds.map(async (channelId) => {
+      try {
+        const requestBody = JSON.stringify({ channelId, event, payload });
+        await fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (error) {
+        // Log error but don't throw - broadcasting failures shouldn't break operations
+        realtimeLogger.error(
+          'Failed to broadcast task event',
+          error instanceof Error ? error : undefined,
+          {
+            event: 'task',
+            channel: channelId.startsWith('user:')
+              ? `user:${maskIdentifier(payload.userId)}:tasks`
+              : maskIdentifier(channelId),
+          }
+        );
+      }
+    })
+  );
 }
 
 /**
