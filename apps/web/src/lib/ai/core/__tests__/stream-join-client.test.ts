@@ -144,6 +144,36 @@ describe('consumeStreamJoin', () => {
     expect(onChunk).toHaveBeenCalledWith(text('current'));
   });
 
+  it('given a frame with an empty part object, should skip it without forwarding (no type discriminator means no renderer route)', async () => {
+    stubFetch(encodeLines([
+      'data: {"part":{}}\n\n',
+      'data: {"part":{"type":"text","text":"after"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-empty-part', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(text('after'));
+  });
+
+  it('given a tool part frame missing toolCallId, should skip it (the idempotency key would be lost)', async () => {
+    stubFetch(encodeLines([
+      'data: {"part":{"type":"tool-list_pages","state":"output-available"}}\n\n',
+      'data: {"part":{"type":"text","text":"recovered"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-bad-tool', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(text('recovered'));
+  });
+
   it('given fetch call, should include credentials and the correct URL', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

@@ -44,6 +44,48 @@ describe('chunkToPart', () => {
     });
   });
 
+  it('given a tool-call chunk missing toolName, should return null (cannot derive type prefix)', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-call',
+        toolCallId: 'tc1',
+        input: { driveId: 'd1' },
+      } as never),
+    ).toBeNull();
+  });
+
+  it('given a tool-call chunk missing toolCallId, should return null (idempotency key required)', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-call',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+      } as never),
+    ).toBeNull();
+  });
+
+  it('given a tool-result chunk missing toolName, should return null', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-result',
+        toolCallId: 'tc1',
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+      } as never),
+    ).toBeNull();
+  });
+
+  it('given a tool-result chunk missing toolCallId, should return null', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-result',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+      } as never),
+    ).toBeNull();
+  });
+
   it.each([
     ['start'],
     ['start-step'],

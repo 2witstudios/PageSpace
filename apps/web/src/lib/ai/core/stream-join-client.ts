@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
 
 type UIMessagePart = UIMessage['parts'][number];
 
@@ -60,8 +61,8 @@ export async function consumeStreamJoin(
           if (parsed.done) {
             return { aborted: (parsed.aborted as boolean | undefined) ?? false };
           }
-          if (parsed.part && typeof parsed.part === 'object') {
-            onChunk(parsed.part as UIMessagePart);
+          if (isValidPartFrame(parsed.part)) {
+            onChunk(parsed.part);
           }
         } catch {
           // skip malformed SSE lines
