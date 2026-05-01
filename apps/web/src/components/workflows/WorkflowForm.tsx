@@ -1,13 +1,15 @@
 'use client';
 
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useMemo, type FormEvent } from 'react';
 import useSWR from 'swr';
+import { Pin } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -39,12 +41,22 @@ interface AgentPage {
   type: string;
 }
 
+interface PageMeta {
+  id: string;
+  title: string;
+}
+
 interface WorkflowFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   driveId: string;
   initialData?: Partial<WorkflowFormData> & { id?: string };
   onSubmit: (data: WorkflowFormData) => Promise<void>;
+  /** When the form is opened from a page-scoped surface, the workflow is auto-anchored
+   *  to that page (its id is added to contextPageIds on save). Setting these props
+   *  surfaces that relationship so the user knows the field is not arbitrary. */
+  anchorPageId?: string;
+  anchorPageTitle?: string;
 }
 
 const CRON_PRESETS = [
@@ -58,7 +70,25 @@ const CRON_PRESETS = [
 
 const fetcher = <T = unknown>(url: string) => fetchJSON<T>(url);
 
-export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmit }: WorkflowFormProps) {
+function ContextPageChip({ pageId }: { pageId: string }) {
+  const { data, error } = useSWR<PageMeta>(`/api/pages/${pageId}`, fetcher);
+  const label = error ? 'Unknown page' : data?.title ?? 'Loading…';
+  return (
+    <Badge variant="secondary" className="font-normal" title={label}>
+      <span className="truncate max-w-[16rem]">{label}</span>
+    </Badge>
+  );
+}
+
+export function WorkflowForm({
+  open,
+  onOpenChange,
+  driveId,
+  initialData,
+  onSubmit,
+  anchorPageId,
+  anchorPageTitle,
+}: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');
   const [agentPageId, setAgentPageId] = useState(initialData?.agentPageId ?? '');
   const [prompt, setPrompt] = useState(initialData?.prompt ?? '');
@@ -135,12 +165,24 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
 
   const isValid = name && agentPageId && prompt && isTimezoneValid && !!cronExpression;
 
+  const extraContextPageIds = useMemo(
+    () => (anchorPageId ? contextPageIds.filter((id) => id !== anchorPageId) : []),
+    [anchorPageId, contextPageIds],
+  );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{initialData?.id ? 'Edit Workflow' : 'Create Workflow'}</DialogTitle>
         </DialogHeader>
+        {anchorPageId && anchorPageTitle && (
+          <Badge variant="secondary" className="font-normal" title={`Anchored to: ${anchorPageTitle}`}>
+            <Pin className="h-3 w-3" />
+            <span className="text-muted-foreground">Anchored to:</span>
+            <span className="truncate max-w-[14rem]">{anchorPageTitle}</span>
+          </Badge>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="wf-name">Name</Label>
@@ -185,6 +227,18 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
               rows={4}
               required
             />
+            {anchorPageId && extraContextPageIds.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs text-muted-foreground">
+                  Additional context pages ({extraContextPageIds.length})
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {extraContextPageIds.map((id) => (
+                    <ContextPageChip key={id} pageId={id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

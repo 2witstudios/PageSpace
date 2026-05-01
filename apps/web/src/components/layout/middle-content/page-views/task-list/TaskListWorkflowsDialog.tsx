@@ -158,6 +158,8 @@ export function TaskListWorkflowsDialog({
         open={formOpen}
         onOpenChange={setFormOpen}
         driveId={driveId}
+        anchorPageId={pageId}
+        anchorPageTitle={taskListTitle}
         initialData={editing
           ? {
               id: editing.id,
