@@ -712,6 +712,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   onSaveTitle={handleSaveTitle}
                   onDelete={handleDeleteTask}
                   onNavigate={handleNavigate}
+                  onTriggersSaved={() => fetchTasks()}
                 />
                 <TaskFilterSheet
                   open={filterSheetOpen}
