@@ -85,10 +85,13 @@ describe('ai-providers-config', () => {
       expect(getPageSpaceModelTier('some-other-model')).toBe(null);
     });
 
-    it('should return null for alias names (not resolved models)', () => {
-      // Aliases are names like "standard", "pro" - not the actual model IDs
-      expect(getPageSpaceModelTier('standard')).toBe(null);
-      expect(getPageSpaceModelTier('pro')).toBe(null);
+    it('should resolve aliases to their tier', () => {
+      // Agents may store aliases ('standard', 'pro') instead of concrete model IDs.
+      // The helper resolves the alias before doing the reverse lookup.
+      expect(getPageSpaceModelTier('standard')).toBe('standard');
+      expect(getPageSpaceModelTier('pro')).toBe('pro');
+      expect(getPageSpaceModelTier('STANDARD')).toBe('standard');
+      expect(getPageSpaceModelTier('PRO')).toBe('pro');
     });
   });
 

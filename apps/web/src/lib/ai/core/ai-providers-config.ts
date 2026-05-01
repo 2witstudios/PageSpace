@@ -31,16 +31,14 @@ export function isPageSpaceModelAlias(model: string): boolean {
 }
 
 /**
- * Get the PageSpace tier ('standard' or 'pro') for a given model
- * Returns null if the model is not a PageSpace tier model
- *
- * This is the reverse lookup of PAGESPACE_MODEL_ALIASES - given a model ID,
- * find which tier it belongs to. Used for rate limiting and subscription checks.
+ * Get the PageSpace tier ('standard' or 'pro') for a given model.
+ * Accepts either an alias ('standard'/'pro') or a concrete model ID ('glm-4.7'/'glm-5').
+ * Returns null when the input is neither. Used for rate limiting and subscription checks.
  */
 export function getPageSpaceModelTier(model: string): 'standard' | 'pro' | null {
-  const modelLower = model.toLowerCase();
+  const resolvedLower = resolvePageSpaceModel(model).toLowerCase();
   for (const [tier, tierModel] of Object.entries(PAGESPACE_MODEL_ALIASES)) {
-    if (tierModel.toLowerCase() === modelLower) {
+    if (tierModel.toLowerCase() === resolvedLower) {
       return tier as 'standard' | 'pro';
     }
   }
