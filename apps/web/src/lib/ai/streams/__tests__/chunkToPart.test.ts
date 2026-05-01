@@ -43,4 +43,22 @@ describe('chunkToPart', () => {
       output: { pages: [{ id: 'p1' }] },
     });
   });
+
+  it.each([
+    ['start'],
+    ['start-step'],
+    ['finish-step'],
+    ['finish'],
+    ['abort'],
+    ['error'],
+    ['raw'],
+    ['reasoning-delta'],
+    ['tool-input-start'],
+    ['tool-input-delta'],
+    ['tool-input-end'],
+    ['source'],
+    ['file'],
+  ])('given a %s chunk, should return null (out of v1 multicast scope)', (type) => {
+    expect(chunkToPart({ type } as never)).toBeNull();
+  });
 });
