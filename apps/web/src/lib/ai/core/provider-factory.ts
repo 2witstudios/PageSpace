@@ -72,9 +72,19 @@ export async function createAIProvider(
     let model;
 
     if (currentProvider === 'pagespace') {
-      const pageSpaceSettings = await getDefaultPageSpaceSettings();
+      const pageSpaceSettings = getDefaultPageSpaceSettings();
       if (!pageSpaceSettings) {
         return notConfigured('PageSpace AI');
+      }
+
+      // The pagespace alias resolves to a real backend provider (glm/google/openrouter).
+      // In on-prem mode, none of those cloud backends are allowed — block here so the
+      // alias can't be a back door around the route-layer policy.
+      if (isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(pageSpaceSettings.provider)) {
+        return {
+          error: `PageSpace backend "${pageSpaceSettings.provider}" is not available in on-premise mode.`,
+          status: 403,
+        };
       }
 
       if (pageSpaceSettings.provider === 'google') {

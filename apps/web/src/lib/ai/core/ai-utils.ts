@@ -63,38 +63,82 @@ export function getManagedProviderKey(provider: string): ManagedProviderKey | nu
 
 /**
  * Gets the default PageSpace AI backend (GLM with Google/OpenRouter fallback).
+ * Synchronous — only reads env vars; placeholder values like
+ * `your_glm_api_key_here` are treated as unset so availability checks elsewhere
+ * stay consistent with what `createAIProvider()` will accept.
  */
-export async function getDefaultPageSpaceSettings(): Promise<{
+export function getDefaultPageSpaceSettings(): {
   apiKey: string;
   isConfigured: boolean;
   provider: 'glm' | 'google' | 'openrouter';
-} | null> {
+} | null {
   const glmApiKey = process.env.GLM_DEFAULT_API_KEY;
   if (glmApiKey && glmApiKey !== 'your_glm_api_key_here') {
-    return {
-      apiKey: glmApiKey,
-      isConfigured: true,
-      provider: 'glm',
-    };
+    return { apiKey: glmApiKey, isConfigured: true, provider: 'glm' };
   }
 
   const googleApiKey = process.env.GOOGLE_AI_DEFAULT_API_KEY;
   if (googleApiKey && googleApiKey !== 'your_google_ai_api_key_here') {
-    return {
-      apiKey: googleApiKey,
-      isConfigured: true,
-      provider: 'google',
-    };
+    return { apiKey: googleApiKey, isConfigured: true, provider: 'google' };
   }
 
   const openRouterApiKey = process.env.OPENROUTER_DEFAULT_API_KEY;
   if (openRouterApiKey) {
-    return {
-      apiKey: openRouterApiKey,
-      isConfigured: true,
-      provider: 'openrouter',
-    };
+    return { apiKey: openRouterApiKey, isConfigured: true, provider: 'openrouter' };
   }
 
   return null;
+}
+
+/**
+ * Every provider name `/api/ai/settings` and `/api/ai/chat` advertise.
+ * Centralizing the list prevents drift between the two GET handlers.
+ */
+export const ALL_PROVIDER_NAMES = [
+  'pagespace',
+  'openrouter',
+  'openrouter_free',
+  'google',
+  'openai',
+  'anthropic',
+  'xai',
+  'ollama',
+  'lmstudio',
+  'glm',
+  'minimax',
+  'azure_openai',
+] as const;
+export type ProviderName = (typeof ALL_PROVIDER_NAMES)[number];
+
+/**
+ * Resolves whether the deployment can route AI calls through the given provider.
+ * Combines env-var presence (via `getManagedProviderKey` / `getDefaultPageSpaceSettings`)
+ * with the on-prem allowlist so the chat picker, settings page, and PATCH guard
+ * stay in lockstep.
+ */
+export function isProviderAvailable(
+  provider: string,
+  options: { isOnPrem: boolean; onPremAllowed: ReadonlySet<string> }
+): boolean {
+  if (options.isOnPrem && provider !== 'pagespace' && !options.onPremAllowed.has(provider)) {
+    return false;
+  }
+  if (provider === 'pagespace') {
+    return getDefaultPageSpaceSettings() !== null;
+  }
+  return getManagedProviderKey(provider) !== null;
+}
+
+/**
+ * Builds the `{ [provider]: { isAvailable } }` map both AI GET routes return.
+ */
+export function buildProviderAvailabilityMap(options: {
+  isOnPrem: boolean;
+  onPremAllowed: ReadonlySet<string>;
+}): Record<ProviderName, { isAvailable: boolean }> {
+  const result = {} as Record<ProviderName, { isAvailable: boolean }>;
+  for (const name of ALL_PROVIDER_NAMES) {
+    result[name] = { isAvailable: isProviderAvailable(name, options) };
+  }
+  return result;
 }

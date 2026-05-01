@@ -77,34 +77,17 @@ export function useProviderSettings({
     loadProviderSettings();
   }, [loadProviderSettings]);
 
-  // Check if a specific provider is configured
+  // Check whether the deployment can route AI calls through the given provider.
+  // Naming retained as `isProviderConfigured` for backwards compatibility with
+  // the existing prop contract in PageAgentSettingsTab and Sidebar.
   const isProviderConfigured = useCallback(
     (provider: string): boolean => {
       if (!providerSettings) return false;
-
-      // PageSpace provider check
-      if (provider === 'pagespace') {
-        return providerSettings.providers.pagespace?.isConfigured || false;
-      }
-
-      // GLM provider check
-      if (provider === 'glm') {
-        return providerSettings.providers.glm?.isConfigured || false;
-      }
-
-      // Map UI provider to backend provider for checking configuration
       const backendProvider = getBackendProvider(provider);
-
-      // For openrouter_free, check the openrouter configuration
-      if (backendProvider === 'openrouter') {
-        return providerSettings.providers.openrouter?.isConfigured || false;
-      }
-
-      const providerConfig =
-        providerSettings.providers[
-          backendProvider as keyof typeof providerSettings.providers
-        ];
-      return providerConfig?.isConfigured || false;
+      const status =
+        providerSettings.providers[backendProvider as keyof typeof providerSettings.providers] ??
+        providerSettings.providers[provider as keyof typeof providerSettings.providers];
+      return status?.isAvailable ?? false;
     },
     [providerSettings]
   );

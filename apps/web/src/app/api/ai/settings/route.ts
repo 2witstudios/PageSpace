@@ -2,27 +2,16 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getDefaultPageSpaceSettings, getManagedProviderKey } from '@/lib/ai/core/ai-utils';
+import {
+  ALL_PROVIDER_NAMES,
+  buildProviderAvailabilityMap,
+  getDefaultPageSpaceSettings,
+  isProviderAvailable,
+} from '@/lib/ai/core/ai-utils';
 import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-
-/** Providers exposed in the GET availability response and selectable via PATCH. */
-const KNOWN_PROVIDERS = [
-  'pagespace',
-  'openrouter',
-  'openrouter_free',
-  'google',
-  'openai',
-  'anthropic',
-  'xai',
-  'ollama',
-  'lmstudio',
-  'glm',
-  'minimax',
-  'azure_openai',
-] as const;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -31,14 +20,8 @@ const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
 };
 
-function isProviderAvailable(provider: string): boolean {
-  if (isOnPrem() && provider !== 'pagespace' && !ONPREM_ALLOWED_PROVIDERS.has(provider)) {
-    return false;
-  }
-  if (provider === 'pagespace') {
-    return !!(process.env.GLM_DEFAULT_API_KEY || process.env.GOOGLE_AI_DEFAULT_API_KEY);
-  }
-  return getManagedProviderKey(provider) !== null;
+function availabilityOptions() {
+  return { isOnPrem: isOnPrem(), onPremAllowed: ONPREM_ALLOWED_PROVIDERS };
 }
 
 /**
@@ -55,12 +38,8 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     const user = await aiSettingsRepository.getUserSettings(userId);
-    const pageSpaceSettings = await getDefaultPageSpaceSettings();
-
-    const providers: Record<string, { isAvailable: boolean }> = {};
-    for (const provider of KNOWN_PROVIDERS) {
-      providers[provider] = { isAvailable: isProviderAvailable(provider) };
-    }
+    const pageSpaceSettings = getDefaultPageSpaceSettings();
+    const providers = buildProviderAvailabilityMap(availabilityOptions());
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
@@ -114,14 +93,14 @@ export async function PATCH(request: Request) {
     const body = await request.json();
     const { provider, model } = body;
 
-    if (!provider || !(KNOWN_PROVIDERS as readonly string[]).includes(provider)) {
+    if (!provider || !(ALL_PROVIDER_NAMES as readonly string[]).includes(provider)) {
       return NextResponse.json(
-        { error: `Invalid provider. Must be one of: ${KNOWN_PROVIDERS.join(', ')}` },
+        { error: `Invalid provider. Must be one of: ${ALL_PROVIDER_NAMES.join(', ')}` },
         { status: 400 }
       );
     }
 
-    if (!isProviderAvailable(provider)) {
+    if (!isProviderAvailable(provider, availabilityOptions())) {
       return NextResponse.json(
         { error: `Provider "${provider}" is not configured on this deployment.` },
         { status: 503 }

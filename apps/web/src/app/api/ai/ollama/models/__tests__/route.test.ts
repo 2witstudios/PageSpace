@@ -92,7 +92,7 @@ describe('GET /api/ai/ollama/models', () => {
       expect(response.status).toBe(503);
       expect(body.success).toBe(false);
       expect(body.error).toContain('not configured');
-      expect(body.models).toEqual([]);
+      expect(body.models).toEqual({});
     });
   });
 

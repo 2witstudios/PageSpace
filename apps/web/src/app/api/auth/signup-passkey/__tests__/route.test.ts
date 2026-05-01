@@ -232,7 +232,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('redirects to /dashboard when drive provisioning returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -279,7 +279,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('continues when getting started drive returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();

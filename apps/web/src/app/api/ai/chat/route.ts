@@ -11,7 +11,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
@@ -31,8 +32,7 @@ import {
   createProviderErrorResponse,
   isProviderError,
   type ProviderRequest,
-  getDefaultPageSpaceSettings,
-  getManagedProviderKey,
+  buildProviderAvailabilityMap,
   pageSpaceTools,
   extractMessageContent,
   extractToolCalls,
@@ -1169,19 +1169,10 @@ export async function GET(request: Request) {
       }
     }
     
-    const pageSpaceSettings = await getDefaultPageSpaceSettings();
-    const providerNames = [
-      'pagespace', 'openrouter', 'google', 'openai', 'anthropic',
-      'xai', 'ollama', 'lmstudio', 'glm',
-    ] as const;
-    const providers: Record<string, { isAvailable: boolean }> = {};
-    for (const name of providerNames) {
-      providers[name] = {
-        isAvailable: name === 'pagespace'
-          ? !!pageSpaceSettings?.isConfigured
-          : getManagedProviderKey(name) !== null,
-      };
-    }
+    const providers = buildProviderAvailabilityMap({
+      isOnPrem: isOnPrem(),
+      onPremAllowed: ONPREM_ALLOWED_PROVIDERS,
+    });
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_chat_settings', resourceId: pageId || userId, details: {
       action: 'get_provider_settings',

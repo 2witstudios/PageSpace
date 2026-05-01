@@ -384,13 +384,18 @@ describe('provider-factory', () => {
         expect(isProviderError(result)).toBe(false);
       });
 
-      it('allows pagespace in onprem mode when GLM_DEFAULT_API_KEY is set', async () => {
+      it('blocks pagespace in onprem mode when its backend resolves to a cloud provider', async () => {
         vi.mocked(isOnPrem).mockReturnValue(true);
         process.env.GLM_DEFAULT_API_KEY = 'glm-managed';
 
         const result = await createAIProvider('user-123', {});
 
-        expect(isProviderError(result)).toBe(false);
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) {
+          expect(result.status).toBe(403);
+          expect(result.error).toContain('on-premise');
+          expect(result.error).toContain('glm');
+        }
       });
     });
 

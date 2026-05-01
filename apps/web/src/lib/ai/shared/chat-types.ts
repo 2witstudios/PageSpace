@@ -4,21 +4,32 @@
  */
 
 /**
- * Provider configuration status from the backend
+ * Provider availability snapshot returned by /api/ai/chat and /api/ai/settings.
+ * Each entry tells the UI whether the deployment can route AI calls through that
+ * provider (managed env keys present + on-prem allowlist satisfied).
  */
+export interface ProviderAvailability {
+  isAvailable: boolean;
+}
+
 export interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
-  providers: {
-    pagespace?: { isConfigured: boolean; hasApiKey: boolean };
-    openrouter: { isConfigured: boolean; hasApiKey: boolean };
-    google: { isConfigured: boolean; hasApiKey: boolean };
-    openai?: { isConfigured: boolean; hasApiKey: boolean };
-    anthropic?: { isConfigured: boolean; hasApiKey: boolean };
-    xai?: { isConfigured: boolean; hasApiKey: boolean };
-    ollama?: { isConfigured: boolean; hasBaseUrl: boolean };
-    glm?: { isConfigured: boolean; hasApiKey: boolean };
-  };
+  providers: Partial<Record<
+    | 'pagespace'
+    | 'openrouter'
+    | 'openrouter_free'
+    | 'google'
+    | 'openai'
+    | 'anthropic'
+    | 'xai'
+    | 'ollama'
+    | 'lmstudio'
+    | 'glm'
+    | 'minimax'
+    | 'azure_openai',
+    ProviderAvailability
+  >>;
   isAnyProviderConfigured: boolean;
 }
 

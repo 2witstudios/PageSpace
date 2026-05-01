@@ -16,21 +16,14 @@ import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
 
+interface ProviderAvailability {
+  isAvailable: boolean;
+}
+
 interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
-  providers: {
-    pagespace?: { isConfigured: boolean; hasApiKey: boolean };
-    openrouter: { isConfigured: boolean; hasApiKey: boolean };
-    google: { isConfigured: boolean; hasApiKey: boolean };
-    openai: { isConfigured: boolean; hasApiKey: boolean };
-    anthropic: { isConfigured: boolean; hasApiKey: boolean };
-    xai: { isConfigured: boolean; hasApiKey: boolean };
-    ollama: { isConfigured: boolean; hasBaseUrl: boolean };
-    lmstudio: { isConfigured: boolean; hasBaseUrl: boolean };
-    glm: { isConfigured: boolean; hasApiKey: boolean };
-    minimax: { isConfigured: boolean; hasApiKey: boolean };
-  };
+  providers: Partial<Record<string, ProviderAvailability>>;
   isAnyProviderConfigured: boolean;
   userSubscriptionTier?: string;
 }
@@ -281,19 +274,19 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     // PageSpace provider should check its own configuration directly
     // (not the user's OpenRouter configuration)
     if (provider === 'pagespace') {
-      return providerSettings.providers.pagespace?.isConfigured || false;
+      return providerSettings.providers.pagespace?.isAvailable || false;
     }
 
     // GLM provider should check its own configuration directly
     // (not the OpenAI configuration, even though GLM uses OpenAI-compatible backend)
     if (provider === 'glm') {
-      return providerSettings.providers.glm?.isConfigured || false;
+      return providerSettings.providers.glm?.isAvailable || false;
     }
 
     // MiniMax provider should check its own configuration directly
     // (not the Anthropic configuration, even though MiniMax uses Anthropic-compatible backend)
     if (provider === 'minimax') {
-      return providerSettings.providers.minimax?.isConfigured || false;
+      return providerSettings.providers.minimax?.isAvailable || false;
     }
 
     // Map UI provider to backend provider for checking configuration
@@ -302,19 +295,19 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     // Check the appropriate provider configuration
     switch (backendProvider) {
       case 'openrouter':
-        return providerSettings.providers.openrouter?.isConfigured || false;
+        return providerSettings.providers.openrouter?.isAvailable || false;
       case 'google':
-        return providerSettings.providers.google?.isConfigured || false;
+        return providerSettings.providers.google?.isAvailable || false;
       case 'openai':
-        return providerSettings.providers.openai?.isConfigured || false;
+        return providerSettings.providers.openai?.isAvailable || false;
       case 'anthropic':
-        return providerSettings.providers.anthropic?.isConfigured || false;
+        return providerSettings.providers.anthropic?.isAvailable || false;
       case 'xai':
-        return providerSettings.providers.xai?.isConfigured || false;
+        return providerSettings.providers.xai?.isAvailable || false;
       case 'ollama':
-        return providerSettings.providers.ollama?.isConfigured || false;
+        return providerSettings.providers.ollama?.isAvailable || false;
       case 'lmstudio':
-        return providerSettings.providers.lmstudio?.isConfigured || false;
+        return providerSettings.providers.lmstudio?.isAvailable || false;
       default:
         return false;
     }
