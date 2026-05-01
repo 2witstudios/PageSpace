@@ -10,12 +10,30 @@ type AnyPart = UIMessage['parts'][number];
  * transitions input-available → output-available are convergent). Other part
  * types append as-is. Pure — never mutates input.
  */
+const isToolPart = (
+  part: AnyPart,
+): part is AnyPart & { type: `tool-${string}`; toolCallId: string } =>
+  typeof part.type === 'string' &&
+  part.type.startsWith('tool-') &&
+  'toolCallId' in part &&
+  typeof (part as { toolCallId?: unknown }).toolCallId === 'string';
+
 export const appendPart = (
   parts: readonly AnyPart[],
   part: AnyPart,
 ): AnyPart[] => {
   if (part.type === 'text') {
     return mergeTextDeltas(parts, part);
+  }
+  if (isToolPart(part)) {
+    const idx = parts.findIndex(
+      (p) => isToolPart(p) && p.toolCallId === part.toolCallId,
+    );
+    if (idx >= 0) {
+      const next = parts.slice();
+      next[idx] = part;
+      return next;
+    }
   }
   return [...parts, part];
 };

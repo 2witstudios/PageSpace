@@ -18,4 +18,29 @@ describe('appendPart', () => {
     };
     expect(appendPart(initial, tool)).toEqual([...initial, tool]);
   });
+
+  it('given a tool part whose toolCallId is already present, should replace the existing entry in place', () => {
+    const initial = [
+      { type: 'text' as const, text: 'before' },
+      {
+        type: 'tool-list_pages' as const,
+        toolCallId: 'tc1',
+        state: 'input-available' as const,
+        input: { driveId: 'd1' },
+      },
+      { type: 'text' as const, text: 'after' },
+    ];
+    const completed = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'output-available' as const,
+      input: { driveId: 'd1' },
+      output: { pages: [{ id: 'p1' }] },
+    };
+    expect(appendPart(initial, completed)).toEqual([
+      { type: 'text', text: 'before' },
+      completed,
+      { type: 'text', text: 'after' },
+    ]);
+  });
 });
