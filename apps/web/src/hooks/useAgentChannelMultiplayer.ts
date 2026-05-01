@@ -90,6 +90,12 @@ export function useAgentChannelMultiplayer({
   }, []);
 
   useChannelStreamSocket(channelId, {
+    onUserMessage: (message, payload) => {
+      if (payload.conversationId !== agentConversationIdRef.current) return;
+      setLocalMessagesRef.current((prev) =>
+        prev.some((m) => m.id === message.id) ? prev : [...prev, message],
+      );
+    },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
       if (!stream || stream.parts.length === 0) return;
