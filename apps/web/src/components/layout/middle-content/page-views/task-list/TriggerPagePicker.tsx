@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
 import { Check, ChevronDown, FileText, X } from 'lucide-react';
 import {
@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { cn } from '@/lib/utils';
 
 interface PageSuggestion {
@@ -62,9 +63,28 @@ interface MultiProps {
 
 type Props = SingleProps | MultiProps;
 
+// Selection state is fully owned by the parent (TaskAgentTriggersDialog) through
+// the props.value / onChange contract — this picker has no internal selection state
+// that a remote refetch could clobber. The two SWRs below (searchFetcher, pageFetcher)
+// are read-only display: they fetch search results and chip titles, but neither writes
+// back to selection. The hasLoadedRef + isPaused gates still apply so the chip label
+// and the search list don't flicker mid-edit when an editing session is active, mirroring
+// the contract the dialog uses for its own triggers/agents SWRs (see useEditingSession).
+// No dedicated "remote refetch must not clobber selection" test is added because the
+// data flow makes that property structural rather than behavioural.
+
 function PageLabel({ pageId }: { pageId: string }) {
+  // Pause background revalidation while any editing session is active so a remote
+  // task_updated broadcast cannot refetch and clobber the chip label mid-edit.
+  // Initial load is unaffected because pageLoadedRef gates the pause until first success.
+  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const pageLoadedRef = useRef(false);
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
+    isPaused: () => pageLoadedRef.current && isAnyActive,
+    onSuccess: () => {
+      pageLoadedRef.current = true;
+    },
   });
   if (error) return <span className="text-destructive">unavailable</span>;
   return <span className="truncate">{data?.title ?? '…'}</span>;
@@ -76,12 +96,20 @@ export function TriggerPagePicker(props: Props) {
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounce(query, 200);
 
+  // Same pause-while-editing contract as PageLabel — see comment there for rationale.
+  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const searchLoadedRef = useRef(false);
+
   const searchKey = open && driveId
     ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${driveId}&types=page`
     : null;
   const { data: results = [], isLoading } = useSWR(searchKey, searchFetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
+    isPaused: () => searchLoadedRef.current && isAnyActive,
+    onSuccess: () => {
+      searchLoadedRef.current = true;
+    },
   });
   const searching = isLoading || query !== debouncedQuery;
 
