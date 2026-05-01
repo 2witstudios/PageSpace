@@ -139,6 +139,10 @@
       "types": "./dist/schema/tasks.d.ts",
       "default": "./dist/schema/tasks.js"
     },
+    "./schema/task-triggers": {
+      "types": "./dist/schema/task-triggers.d.ts",
+      "default": "./dist/schema/task-triggers.js"
+    },
     "./schema/versioning": {
       "types": "./dist/schema/versioning.d.ts",
       "default": "./dist/schema/versioning.js"
