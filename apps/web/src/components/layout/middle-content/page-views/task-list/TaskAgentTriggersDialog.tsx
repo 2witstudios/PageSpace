@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Bot, Zap } from 'lucide-react';
+import { AlertCircle, Bot, ChevronRight, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate as globalMutate } from 'swr';
 import {
@@ -23,9 +23,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
+import { TriggerPagePicker } from './TriggerPagePicker';
+
+const MAX_CONTEXT_PAGES = 10;
 
 type ApiTriggerType = 'task_due_date' | 'task_completion';
 type UiTriggerType = 'due_date' | 'completion';
@@ -43,6 +51,8 @@ interface TriggerRow {
   isEnabled: boolean;
   lastRunStatus: 'never_run' | 'success' | 'error' | 'running';
   lastRunAt: string | null;
+  instructionPageId: string | null;
+  contextPageIds: string[] | null;
 }
 
 interface TaskAgentTriggersDialogProps {
@@ -90,9 +100,17 @@ interface SectionState {
   enabled: boolean;
   agentPageId: string;
   prompt: string;
+  instructionPageId: string | null;
+  contextPageIds: string[];
 }
 
-const EMPTY_SECTION: SectionState = { enabled: false, agentPageId: '', prompt: '' };
+const EMPTY_SECTION: SectionState = {
+  enabled: false,
+  agentPageId: '',
+  prompt: '',
+  instructionPageId: null,
+  contextPageIds: [],
+};
 
 export function TaskAgentTriggersDialog({
   open,
@@ -164,6 +182,8 @@ export function TaskAgentTriggersDialog({
         enabled: row.isEnabled,
         agentPageId: row.agentPageId,
         prompt: row.prompt ?? '',
+        instructionPageId: row.instructionPageId ?? null,
+        contextPageIds: row.contextPageIds ?? [],
       };
     }
     setSections(next);
@@ -194,6 +214,8 @@ export function TaskAgentTriggersDialog({
         triggerType: type,
         agentPageId: section.agentPageId,
         prompt: section.prompt.trim(),
+        instructionPageId: section.instructionPageId,
+        contextPageIds: section.contextPageIds,
       });
       await refetchTriggers();
       await globalMutate(`/api/pages/${pageId}/tasks`);
@@ -310,6 +332,55 @@ export function TaskAgentTriggersDialog({
                           rows={3}
                         />
                       </div>
+
+                      <Collapsible>
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 -ml-2 px-2 text-xs text-muted-foreground hover:text-foreground group"
+                          >
+                            <ChevronRight className="mr-1 h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
+                            Advanced
+                            {(section.instructionPageId || section.contextPageIds.length > 0) && (
+                              <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">
+                                {(section.instructionPageId ? 1 : 0) + section.contextPageIds.length}
+                              </span>
+                            )}
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="space-y-3 pt-2">
+                          <div className="space-y-2">
+                            <Label className="text-xs">Instruction page</Label>
+                            <p className="text-xs text-muted-foreground">
+                              When set, the page&apos;s body becomes the agent&apos;s instructions when the trigger fires.
+                            </p>
+                            <TriggerPagePicker
+                              mode="single"
+                              driveId={driveId}
+                              value={section.instructionPageId}
+                              onChange={(id) => updateSection(ui, { instructionPageId: id })}
+                              placeholder="Pick an instruction page…"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-xs">Context pages</Label>
+                            <p className="text-xs text-muted-foreground">
+                              Additional pages the agent can read for context (max {MAX_CONTEXT_PAGES}).
+                            </p>
+                            <TriggerPagePicker
+                              mode="multi"
+                              driveId={driveId}
+                              value={section.contextPageIds}
+                              onChange={(ids) => updateSection(ui, { contextPageIds: ids })}
+                              placeholder="Add context pages…"
+                              max={MAX_CONTEXT_PAGES}
+                            />
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
 
                       {existing?.lastRunStatus && existing.lastRunStatus !== 'never_run' && (
                         <p className={statusToneClass(existing.lastRunStatus)}>
