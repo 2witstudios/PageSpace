@@ -4,10 +4,11 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { eq, and, inArray } from '@pagespace/db/operators';
+import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { workflows } from '@pagespace/db/schema/workflows';
+import { recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -59,26 +60,7 @@ export async function DELETE(
     .set({ isEnabled: false, lastRunError: 'Disabled by user', nextRunAt: null })
     .where(and(eq(workflows.taskItemId, taskId), eq(workflows.triggerType, triggerTypeDb)));
 
-  // Recompute metadata.triggerTypes from the workflows table — task.metadata can
-  // drift (e.g., when a trigger's agent page is trashed and the workflow row
-  // cascade-deletes without touching task metadata).
-  const remainingRows = await db
-    .select({ triggerType: workflows.triggerType })
-    .from(workflows)
-    .where(and(
-      eq(workflows.taskItemId, taskId),
-      eq(workflows.isEnabled, true),
-      inArray(workflows.triggerType, ['task_due_date', 'task_completion']),
-    ));
-  const remaining = Array.from(new Set(remainingRows.map((r) => r.triggerType)));
-
-  await db.update(taskItems).set({
-    metadata: {
-      ...((task.metadata as Record<string, unknown> | null) ?? {}),
-      triggerTypes: remaining,
-      hasTrigger: remaining.length > 0,
-    },
-  }).where(eq(taskItems.id, taskId));
+  await recomputeTaskTriggerMetadata(db, taskId, task.metadata as Record<string, unknown> | null);
 
   auditRequest(request, {
     eventType: 'data.delete',
