@@ -56,10 +56,6 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.channelReadStatus).toBeDefined();
   });
 
-  it('schema object contains ai tables', () => {
-    expect(schemaModule.schema.userAiSettings).toBeDefined();
-  });
-
   it('schema object contains dashboard tables', () => {
     expect(schemaModule.schema.userDashboards).toBeDefined();
     expect(schemaModule.schema.pulseSummaries).toBeDefined();

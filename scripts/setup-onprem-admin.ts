@@ -8,16 +8,14 @@
  * This script:
  * 1. Creates a user with admin role and business-tier subscription
  * 2. Sets emailVerified (pre-verified for on-prem)
- * 3. Creates default Ollama AI settings
- * 4. Generates a one-time magic link for initial sign-in (no SMTP required)
+ * 3. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
-import { userAiSettings } from '@pagespace/db/schema/ai';
-import { eq, and } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
-import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';
+import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
 import { parseArgs } from 'node:util';
 
@@ -83,18 +81,6 @@ async function main() {
         .set({ role: 'admin', ...getOnPremUserDefaults() })
         .where(eq(users.id, existing.id));
 
-      // Ensure default Ollama AI settings exist for promoted user
-      const existingSettings = await db.query.userAiSettings.findFirst({
-        where: and(eq(userAiSettings.userId, existing.id), eq(userAiSettings.provider, 'ollama')),
-      });
-      if (!existingSettings) {
-        await db.insert(userAiSettings).values({
-          id: createId(),
-          userId: existing.id,
-          ...getOnPremOllamaSettings(),
-        });
-      }
-
       const link = await generateSetupLink(existing.id);
       console.log(`Existing user ${email} promoted to admin with business tier.`);
       console.log('');
@@ -113,13 +99,6 @@ async function main() {
     role: 'admin',
     emailVerified: new Date(),
     ...getOnPremUserDefaults(),
-  });
-
-  // Create default Ollama AI settings
-  await db.insert(userAiSettings).values({
-    id: createId(),
-    userId,
-    ...getOnPremOllamaSettings(),
   });
 
   const link = await generateSetupLink(userId);

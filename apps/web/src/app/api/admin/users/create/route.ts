@@ -3,10 +3,9 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { userAiSettings } from '@pagespace/db/schema/ai';
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib/onprem-defaults';
+import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -56,15 +55,6 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       emailVerified: new Date(), // Admin-created accounts are pre-verified
       ...(onPrem ? getOnPremUserDefaults() : { subscriptionTier: 'free' }),
     });
-
-    // Create default Ollama AI settings (on-prem default local provider)
-    if (onPrem) {
-      await db.insert(userAiSettings).values({
-        id: createId(),
-        userId,
-        ...getOnPremOllamaSettings(),
-      });
-    }
 
     // Provision Getting Started drive
     try {

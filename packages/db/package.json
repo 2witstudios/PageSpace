@@ -15,10 +15,6 @@
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"
     },
-    "./schema/ai": {
-      "types": "./dist/schema/ai.d.ts",
-      "default": "./dist/schema/ai.js"
-    },
     "./schema/ai-streams": {
       "types": "./dist/schema/ai-streams.d.ts",
       "default": "./dist/schema/ai-streams.js"

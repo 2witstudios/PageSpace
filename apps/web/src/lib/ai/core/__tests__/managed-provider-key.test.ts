@@ -1,19 +1,5 @@
-import { describe, test, beforeEach, vi } from 'vitest';
+import { describe, test, beforeEach } from 'vitest';
 import { assert } from './riteway';
-
-vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
-vi.mock('@pagespace/db/schema/ai', () => ({ userAiSettings: {} }));
-vi.mock('@pagespace/lib/encryption/encryption-utils', () => ({
-  decrypt: vi.fn(),
-  encrypt: vi.fn(),
-}));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    ai: { child: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() }) },
-  },
-}));
-vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: (s: string) => s }));
 
 import { getManagedProviderKey } from '../ai-utils';
 

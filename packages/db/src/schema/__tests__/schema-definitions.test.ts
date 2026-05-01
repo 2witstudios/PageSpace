@@ -20,7 +20,6 @@ import * as members from '../members';
 // Chat schema
 import * as chat from '../chat';
 // AI schema
-import * as ai from '../ai';
 // Dashboard schema
 import * as dashboard from '../dashboard';
 // Conversations schema
@@ -174,16 +173,6 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(chat.channelMessagesRelations).toBeDefined();
       expect(chat.channelMessageReactionsRelations).toBeDefined();
-    });
-  });
-
-  describe('ai schema', () => {
-    it('exports tables', () => {
-      expect(ai.userAiSettings).toBeDefined();
-    });
-
-    it('exports relations', () => {
-      expect(ai.userAiSettingsRelations).toBeDefined();
     });
   });
 

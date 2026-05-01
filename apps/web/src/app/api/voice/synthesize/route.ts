@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { getUserOpenAISettings } from '@/lib/ai/core/ai-utils';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -34,15 +34,15 @@ export async function POST(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Get OpenAI API key
-    const openAISettings = await getUserOpenAISettings(userId);
+    // Get managed OpenAI key for TTS
+    const openAISettings = getManagedProviderKey('openai');
     if (!openAISettings?.apiKey) {
       return NextResponse.json(
         {
-          error: 'OpenAI API key required',
-          message: 'Voice mode requires an OpenAI API key. Please configure it in Settings > AI.',
+          error: 'Voice mode unavailable',
+          message: 'Voice synthesis is not configured on this deployment.',
         },
-        { status: 400 }
+        { status: 503 }
       );
     }
 

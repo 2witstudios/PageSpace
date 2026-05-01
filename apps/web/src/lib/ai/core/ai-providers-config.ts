@@ -47,6 +47,32 @@ export function getPageSpaceModelTier(model: string): 'standard' | 'pro' | null 
   return null;
 }
 
+/**
+ * Classify a (provider, model) pair into the daily-quota tier the call should
+ * count against. Used by the rate-limit gate and subscription check so all
+ * managed providers share the same per-tier quota.
+ *
+ * Pro tier covers frontier flagship models (Claude Opus, GPT-5, OpenAI o3,
+ * GLM 5). Smaller variants (mini/nano/flash/haiku/lite/small) are always
+ * demoted to standard regardless of family.
+ */
+export function getProviderTier(provider: string, model: string | undefined): 'standard' | 'pro' {
+  if (provider === 'pagespace' && model) {
+    return getPageSpaceModelTier(resolvePageSpaceModel(model)) === 'pro' ? 'pro' : 'standard';
+  }
+  if (!model) return 'standard';
+
+  const m = model.toLowerCase();
+
+  if (/\b(mini|nano|flash|haiku|lite|small)\b/.test(m)) return 'standard';
+  if (m.includes('opus')) return 'pro';
+  if (/\bgpt-?5(\.|-|$|\/)/.test(m)) return 'pro';
+  if (/\bo3([\s-]|$|\/)/.test(m)) return 'pro';
+  if (m === 'glm-5' || m.endsWith('/glm-5')) return 'pro';
+
+  return 'standard';
+}
+
 export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',

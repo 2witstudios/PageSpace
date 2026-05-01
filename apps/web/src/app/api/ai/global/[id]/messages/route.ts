@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -266,13 +266,6 @@ export async function POST(
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      openRouterApiKey,
-      googleApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
       locationContext,
       isReadOnly,
       webSearchEnabled,
@@ -401,10 +394,11 @@ export async function POST(
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
-    // This prevents users from exceeding their daily AI call limits
-    if (currentProvider === 'pagespace') {
-      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming.
+    // Per-tier daily quota applies to every managed provider; getUsageLimits
+    // returns -1 for onprem/tenant via !isBillingEnabled().
+    {
+      const providerType = getProviderTier(currentProvider, currentModel);
 
       loggers.api.debug('Global Assistant Chat API: Checking rate limit before streaming', {
         userId: maskIdentifier(userId),
@@ -987,51 +981,47 @@ MENTION PROCESSING:
               });
             }
 
-            // Track usage for PageSpace providers only (rate limiting/quota tracking)
-            const isPageSpaceProvider = currentProvider === 'pagespace';
+            // Track usage for every managed provider against the per-tier daily quota.
+            try {
+              const providerType = getProviderTier(currentProvider, currentModel);
 
-            if (isPageSpaceProvider) {
+              const usageResult = await incrementUsage(userId, providerType);
+
+              usageLogger.info('Global Assistant usage incremented', {
+                userId: maskIdentifier(userId),
+                provider: currentProvider,
+                providerType,
+                messageId: maskIdentifier(messageId),
+                conversationId: maskIdentifier(conversationId),
+                currentCount: usageResult.currentCount,
+                limit: usageResult.limit,
+                remaining: usageResult.remainingCalls,
+                success: usageResult.success,
+              });
+
+              // Broadcast usage event for real-time updates
               try {
-                const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
-
-                const usageResult = await incrementUsage(userId, providerType);
-
-                usageLogger.info('Global Assistant usage incremented', {
-                  userId: maskIdentifier(userId),
-                  provider: currentProvider,
-                  providerType,
-                  messageId: maskIdentifier(messageId),
-                  conversationId: maskIdentifier(conversationId),
-                  currentCount: usageResult.currentCount,
-                  limit: usageResult.limit,
-                  remaining: usageResult.remainingCalls,
-                  success: usageResult.success,
+                const currentUsageSummary = await getUserUsageSummary(userId);
+                await broadcastUsageEvent({
+                  userId,
+                  operation: 'updated',
+                  subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
+                  standard: currentUsageSummary.standard,
+                  pro: currentUsageSummary.pro
                 });
-
-                // Broadcast usage event for real-time updates
-                try {
-                  const currentUsageSummary = await getUserUsageSummary(userId);
-                  await broadcastUsageEvent({
-                    userId,
-                    operation: 'updated',
-                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                    standard: currentUsageSummary.standard,
-                    pro: currentUsageSummary.pro
-                  });
-                } catch (broadcastError) {
-                  usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                    userId: maskIdentifier(userId),
-                    conversationId: maskIdentifier(conversationId),
-                  });
-                }
-              } catch (usageError) {
-                usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
+              } catch (broadcastError) {
+                usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
                   userId: maskIdentifier(userId),
-                  provider: currentProvider,
-                  messageId: maskIdentifier(messageId),
                   conversationId: maskIdentifier(conversationId),
                 });
               }
+            } catch (usageError) {
+              usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
+                userId: maskIdentifier(userId),
+                provider: currentProvider,
+                messageId: maskIdentifier(messageId),
+                conversationId: maskIdentifier(conversationId),
+              });
             }
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);

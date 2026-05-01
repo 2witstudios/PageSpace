@@ -31,18 +31,6 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
 }));
-vi.mock('@pagespace/db/schema/ai', () => ({ userAiSettings: {} }));
-vi.mock('@pagespace/lib/encryption/encryption-utils', () => ({
-  decrypt: vi.fn(),
-  encrypt: vi.fn(),
-}));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    ai: { child: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() }) },
-  },
-}));
-vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: (s: string) => s }));
-
 vi.mock('@openrouter/ai-sdk-provider', () => ({
   createOpenRouter: vi.fn(() => ({
     chat: vi.fn(() => ({ modelId: 'openrouter-model' })),

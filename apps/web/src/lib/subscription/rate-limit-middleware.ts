@@ -3,7 +3,7 @@ import { incrementUsage } from './usage-service';
 import { getTomorrowMidnightUTC } from '@pagespace/lib/services/date-utils';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import type { ProviderType } from '@pagespace/lib/services/rate-limit-cache';
-import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -20,10 +20,7 @@ export async function checkAIRateLimit(
   provider: string,
   model?: string
 ): Promise<RateLimitResult> {
-  // Determine provider type based on PageSpace tier (standard/pro)
-  // Uses centralized alias config so model changes don't require code updates
-  const modelTier = provider === 'pagespace' && model ? getPageSpaceModelTier(model) : null;
-  const providerType: ProviderType = modelTier === 'pro' ? 'pro' : 'standard';
+  const providerType: ProviderType = getProviderTier(provider, model);
 
   try {
     const result = await incrementUsage(userId, providerType);
@@ -96,12 +93,7 @@ export function createRateLimitResponse(
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
   if (!isBillingEnabled()) return false;
-
-  // Check if model is a Pro tier model using centralized alias config
-  const modelTier = provider === 'pagespace' && model ? getPageSpaceModelTier(model) : null;
-  if (modelTier !== 'pro') {
-    return false;
-  }
+  if (getProviderTier(provider, model) !== 'pro') return false;
 
   // Allow access for 'pro' and 'business' tiers
   return subscriptionTier !== 'pro' && subscriptionTier !== 'business';

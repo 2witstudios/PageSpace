@@ -8,12 +8,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('@/lib/repositories/oauth-repository', () => ({
-  oauthRepository: {
-    createDefaultAiSettings: vi.fn().mockResolvedValue(undefined),
-  },
-}));
-
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifySignupRegistration: vi.fn(),
 }));
@@ -81,7 +75,6 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 }));
 
 import { POST } from '../route';
-import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -176,12 +169,6 @@ describe('POST /api/auth/signup-passkey', () => {
       await POST(createRequest());
 
       expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
-    });
-
-    it('creates default AI settings for new user', async () => {
-      await POST(createRequest());
-
-      expect(oauthRepository.createDefaultAiSettings).toHaveBeenCalledWith('new-user-1');
     });
 
     it('logs auth events', async () => {
@@ -291,17 +278,15 @@ describe('POST /api/auth/signup-passkey', () => {
       });
     });
 
-    it('continues when AI settings insertion fails', async () => {
-      vi.mocked(oauthRepository.createDefaultAiSettings).mockRejectedValueOnce(new Error('Insert error'));
+    it('continues when getting started drive returns null', async () => {
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to insert default AI settings', new Error('Insert error'), {
-        userId: 'new-user-1',
-      });
+      expect(body.redirectUrl).toBe('/dashboard?welcome=true');
     });
   });
 

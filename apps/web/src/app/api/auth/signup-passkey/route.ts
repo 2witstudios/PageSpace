@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -159,13 +158,6 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
         userId,
       });
-    }
-
-    // Add default 'ollama' provider for the new user
-    try {
-      await oauthRepository.createDefaultAiSettings(userId);
-    } catch (error) {
-      loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
     }
 
     loggers.auth.info('Passkey signup successful', { userId, email: maskEmail(email) });

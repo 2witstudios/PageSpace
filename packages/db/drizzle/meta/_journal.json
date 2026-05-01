@@ -799,6 +799,13 @@
       "when": 1777563837809,
       "tag": "0113_shallow_whistler",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1777585792480,
+      "tag": "0114_far_nomad",
+      "breakpoints": true
     }
   ]
 }
