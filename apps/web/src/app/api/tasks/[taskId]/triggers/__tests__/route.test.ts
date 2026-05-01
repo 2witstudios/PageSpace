@@ -8,7 +8,6 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: vi.fn(),
-  canUserViewPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -59,7 +58,7 @@ vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { taskItemId: 't', triggerType: 'tt' } }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { GET, PUT } from '../route';
@@ -113,12 +112,12 @@ describe('Task triggers API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('returns 403 when user lacks view permission', async () => {
+    it('returns 403 when user lacks edit permission (trigger configs are editor-only)', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserViewPage).mockResolvedValue(false);
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
 
       const res = await GET(mkRequest('GET'), { params: mkParams() });
       expect(res.status).toBe(403);
@@ -129,7 +128,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
       const triggerRow = { id: 'wf-1', triggerType: 'task_completion', agentPageId, prompt: 'do it', isEnabled: true };
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([triggerRow]) })),

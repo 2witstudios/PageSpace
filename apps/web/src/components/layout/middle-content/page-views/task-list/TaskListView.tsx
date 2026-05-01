@@ -281,7 +281,7 @@ function MobileTaskCard({
           disabled={!canEdit}
         />
 
-        {(task.activeTriggerCount ?? 0) > 0 && (
+        {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
           <button
             type="button"
             onClick={() => onConfigureTriggers(task)}
@@ -1032,7 +1032,7 @@ function TaskListView({ page }: TaskListViewProps) {
                               onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
                               disabled={!canEdit}
                             />
-                            {(task.activeTriggerCount ?? 0) > 0 && (
+                            {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
                               <button
                                 type="button"
                                 onClick={() => setTriggerDialogTask(task)}
