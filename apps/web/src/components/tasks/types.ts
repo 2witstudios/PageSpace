@@ -64,6 +64,10 @@ export interface Task {
   driveId?: string;
   taskListPageId?: string;
   taskListPageTitle?: string;
+  // Live join from /api/pages/[pageId]/tasks. Optional here because /api/tasks
+  // (the dashboard endpoint) does not currently surface this field — the bell
+  // badge stays hidden until a follow-up enriches that response.
+  activeTriggerCount?: number;
   // Status metadata (computed from custom status configs)
   statusGroup?: TaskStatusGroup;
   statusLabel?: string;
