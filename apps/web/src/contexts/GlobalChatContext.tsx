@@ -274,6 +274,10 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   refreshConversationRef.current = refreshConversation;
 
   useChannelStreamSocket(channelId, {
+    onUserMessage: (message, payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    },
     onStreamComplete: () => {
       refreshConversationRef.current();
     },

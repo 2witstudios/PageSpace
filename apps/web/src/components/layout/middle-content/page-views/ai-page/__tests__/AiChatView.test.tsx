@@ -753,6 +753,135 @@ describe('AiChatView late-joiner conversation sync', () => {
   });
 });
 
+describe('AiChatView remote user-message broadcast', () => {
+  const page = makePage();
+
+  type UserMsgCallback = (
+    msg: { id: string; role: string; parts: unknown[] },
+    payload: { conversationId: string },
+  ) => void;
+
+  const captureCallback = () => {
+    let captured: UserMsgCallback | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      captured = opts?.onUserMessage as UserMsgCallback | undefined;
+    });
+    return () => captured;
+  };
+
+  const setupExistingConversation = (testMessages: { id: string; role: string }[] = []) => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: testMessages });
+      }
+      return makeErrorResponse();
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('given onUserMessage fires with conversationId matching the active conversation, should append the message', async () => {
+    const getCb = captureCallback();
+    setupExistingConversation([]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const userMsg = { id: 'msg-from-alice', role: 'user' as const, parts: [{ type: 'text', text: 'hi from Alice' }] };
+    act(() => {
+      getCb()?.(userMsg, { conversationId: CONV_ID });
+    });
+
+    assert({
+      given: 'a remote user-message event for the active conversation',
+      should: 'append it to messages via setMessages',
+      actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+      expected: true,
+    });
+  });
+
+  test('given onUserMessage fires for a conversationId different from the current one, should NOT append', async () => {
+    const getCb = captureCallback();
+    setupExistingConversation([]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const callsBefore = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    const userMsg = { id: 'msg-from-other-conv', role: 'user' as const, parts: [{ type: 'text', text: 'wrong conv' }] };
+    act(() => {
+      getCb()?.(userMsg, { conversationId: 'different-conv-id' });
+    });
+
+    const callsAfter = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    assert({
+      given: 'a remote user-message event for a different conversation',
+      should: 'NOT append (no functional setMessages call added)',
+      actual: callsAfter,
+      expected: callsBefore,
+    });
+  });
+
+  test('given onUserMessage fires with a messageId already present in messages, should NOT append a duplicate', async () => {
+    const getCb = captureCallback();
+    const existingMsg = { id: 'msg-already-there', role: 'user' as const, parts: [{ type: 'text', text: 'duplicate' }] };
+    setupExistingConversation([existingMsg]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation that includes the message',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const callsBefore = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    act(() => {
+      getCb()?.(existingMsg, { conversationId: CONV_ID });
+    });
+    // The handler may invoke setMessages with an updater that returns prev unchanged;
+    // verify the resulting messages array has no duplicate.
+    const allFunctional = mockSetMessages.mock.calls
+      .slice(callsBefore)
+      .filter((a) => typeof a[0] === 'function')
+      .map((a) => (a[0] as (prev: unknown[]) => unknown[])([existingMsg]));
+
+    const noDup = allFunctional.every(
+      (next) => (next as Array<{ id: string }>).filter((m) => m.id === existingMsg.id).length === 1,
+    );
+
+    assert({
+      given: 'a remote user-message event whose messageId is already in messages',
+      should: 'leave the array with a single copy of that messageId',
+      actual: noDup,
+      expected: true,
+    });
+  });
+});
+
 describe('AiChatView stop button for reconnected own streams', () => {
   const page = makePage();
 

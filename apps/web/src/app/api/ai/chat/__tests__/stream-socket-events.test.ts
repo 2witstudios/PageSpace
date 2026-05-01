@@ -13,10 +13,14 @@ const {
   mockCreateStreamLifecycle,
   mockLifecyclePushPart,
   mockLifecycleFinish,
+  mockBroadcastChatUserMessage,
+  mockSaveMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
+  mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface MockUIStreamOptions {
@@ -40,6 +44,7 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastUsageEvent: vi.fn(),
+  broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -131,7 +136,7 @@ vi.mock('@/lib/ai/core', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
-  saveMessageToDatabase: vi.fn(),
+  saveMessageToDatabase: mockSaveMessageToDatabase,
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertDbMessageToUIMessage: vi.fn(),
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
@@ -339,6 +344,34 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         displayName: 'Profile User',
         browserSessionId: 'session-7',
       });
+    });
+  });
+
+  describe('user-message broadcast', () => {
+    it('given a POST with a user message, should broadcast chat:user_message after the DB save resolves with the saved message and full envelope', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-7' }));
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith({
+        message: { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        triggeredBy: { userId: 'user-1', displayName: 'Profile User', browserSessionId: 'session-7' },
+      });
+    });
+
+    it('given the user-message DB save rejects, should NOT broadcast chat:user_message', async () => {
+      mockSaveMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+
+      await POST(makeRequest());
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given broadcastChatUserMessage rejects, should not block the request', async () => {
+      mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
+
+      await expect(POST(makeRequest())).resolves.toBeDefined();
     });
   });
 

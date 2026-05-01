@@ -89,7 +89,11 @@ vi.mock('@/lib/ai/core/browser-session-id', () => ({
 }));
 
 import { useChannelStreamSocket } from '../useChannelStreamSocket';
-import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
+import type {
+  AiStreamStartPayload,
+  AiStreamCompletePayload,
+  ChatUserMessagePayload,
+} from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
   messageId: 'msg-1',
@@ -101,6 +105,13 @@ const START_PAYLOAD: AiStreamStartPayload = {
 const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
   messageId: 'msg-1',
   pageId: 'page-a',
+};
+
+const USER_MESSAGE_PAYLOAD: ChatUserMessagePayload = {
+  message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+  pageId: 'page-a',
+  conversationId: 'conv-1',
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
 };
 
 describe('useChannelStreamSocket', () => {
@@ -234,6 +245,58 @@ describe('useChannelStreamSocket', () => {
   });
 
   // A1 — pageId guard
+  describe('chat:user_message', () => {
+    it('given a chat:user_message from another user for the current channel, should call onUserMessage with the message payload', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => { mockSocket._trigger('chat:user_message', USER_MESSAGE_PAYLOAD); });
+
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+      expect(onUserMessage).toHaveBeenCalledWith(USER_MESSAGE_PAYLOAD.message, USER_MESSAGE_PAYLOAD);
+    });
+
+    it('given chat:user_message with a different pageId, should NOT call onUserMessage (stale-room guard)', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => {
+        mockSocket._trigger('chat:user_message', { ...USER_MESSAGE_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(onUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given chat:user_message whose triggeredBy.browserSessionId matches the local session, should NOT call onUserMessage (own-tab dedup)', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => {
+        mockSocket._trigger('chat:user_message', {
+          ...USER_MESSAGE_PAYLOAD,
+          triggeredBy: { ...USER_MESSAGE_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given the socket reconnects, should keep the chat:user_message handler registered', () => {
+      const onUserMessage = vi.fn();
+      const { rerender } = renderHook(({ id }) => useChannelStreamSocket(id, { onUserMessage }), {
+        initialProps: { id: 'page-a' as string | undefined },
+      });
+
+      // Re-render to a different channel and back — exercises the listener re-registration path.
+      rerender({ id: 'page-b' });
+      rerender({ id: 'page-a' });
+
+      act(() => { mockSocket._trigger('chat:user_message', USER_MESSAGE_PAYLOAD); });
+
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('pageId guard', () => {
     it('given chat:stream_start with a different pageId, should ignore the event', () => {
       renderHook(() => useChannelStreamSocket('page-a'));

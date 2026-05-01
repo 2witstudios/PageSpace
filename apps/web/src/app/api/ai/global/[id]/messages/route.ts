@@ -5,7 +5,7 @@ import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket';
+import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
@@ -851,6 +851,15 @@ MENTION PROCESSING:
     const authUserName = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
     const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
     const displayName = profileDisplayName ?? authUserName ?? 'Someone';
+
+    if (userMessage && userMessage.role === 'user') {
+      broadcastChatUserMessage({
+        message: userMessage,
+        pageId: channelId,
+        conversationId,
+        triggeredBy: { userId, displayName, browserSessionId },
+      }).catch(() => {});
+    }
 
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,

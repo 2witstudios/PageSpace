@@ -306,6 +306,75 @@ describe('useAgentChannelMultiplayer', () => {
     });
   });
 
+  describe('remote user-message broadcast', () => {
+    it('given onUserMessage fires with conversationId matching the active agent conversation, should append via setLocalMessages', () => {
+      const setLocalMessages = vi.fn();
+      renderWiring(baseOptions({
+        selectedAgent: AGENT,
+        agentConversationId: 'conv-active',
+        setLocalMessages,
+      }));
+
+      const remoteUser = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'remote prompt' }] };
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, {
+          message: remoteUser,
+          pageId: AGENT.id,
+          conversationId: 'conv-active',
+          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
+        });
+      });
+
+      expect(setLocalMessages).toHaveBeenCalledTimes(1);
+      const updater = setLocalMessages.mock.calls[0][0] as (prev: UIMessage[]) => UIMessage[];
+      expect(updater([])).toEqual([remoteUser]);
+    });
+
+    it('given onUserMessage fires for a different conversationId, should NOT call setLocalMessages', () => {
+      const setLocalMessages = vi.fn();
+      renderWiring(baseOptions({
+        selectedAgent: AGENT,
+        agentConversationId: 'conv-active',
+        setLocalMessages,
+      }));
+
+      const remoteUser = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'wrong conv' }] };
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, {
+          message: remoteUser,
+          pageId: AGENT.id,
+          conversationId: 'conv-different',
+          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
+        });
+      });
+
+      expect(setLocalMessages).not.toHaveBeenCalled();
+    });
+
+    it('given onUserMessage fires for a messageId already in messages, the updater should leave the array unchanged', () => {
+      const setLocalMessages = vi.fn();
+      renderWiring(baseOptions({
+        selectedAgent: AGENT,
+        agentConversationId: 'conv-active',
+        setLocalMessages,
+      }));
+
+      const remoteUser = { id: 'u-already', role: 'user' as const, parts: [{ type: 'text' as const, text: 'dup' }] };
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, {
+          message: remoteUser,
+          pageId: AGENT.id,
+          conversationId: 'conv-active',
+          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
+        });
+      });
+
+      const updater = setLocalMessages.mock.calls[0][0] as (prev: UIMessage[]) => UIMessage[];
+      const prev = [remoteUser];
+      expect(updater(prev)).toBe(prev); // same reference — no append happened
+    });
+  });
+
   describe('reconnect refresh', () => {
     it('given the very first connect, the surface-provided loadConversation should NOT be called (mount-time load already covers it)', () => {
       seedDashboard();

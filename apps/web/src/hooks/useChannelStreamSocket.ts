@@ -6,7 +6,12 @@ import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
-import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
+import type {
+  AiStreamStartPayload,
+  AiStreamCompletePayload,
+  ChatUserMessagePayload,
+} from '@/lib/websocket/socket-utils';
+import type { UIMessage } from 'ai';
 
 interface ActiveStreamRow {
   messageId: string;
@@ -21,6 +26,24 @@ export interface UseChannelStreamSocketOptions {
   onOwnStreamBootstrap?: (event: { messageId: string }) => void;
   /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
   onOwnStreamFinalize?: (event: { messageId: string }) => void;
+  /**
+   * Fires when a remote user submits a message in this channel.
+   *
+   * Filters applied before invocation:
+   *   1. Stale-room: events for a different `pageId` are dropped.
+   *   2. Own-tab dedup: events whose `triggeredBy.browserSessionId` matches
+   *      the local session are dropped (the originator's `useChat` already
+   *      appended the message locally).
+   *
+   * Server-side ordering: the broadcast fires AFTER `saveMessageToDatabase`
+   * resolves and BEFORE the assistant `chat:stream_start` event, so consumers
+   * always see the user message land before the assistant ghost text begins.
+   *
+   * Consumers must dedup against their existing messages by `message.id`
+   * (the bootstrap REST GET may also surface the message if it ran after
+   * the save and before the broadcast was processed locally).
+   */
+  onUserMessage?: (message: UIMessage, payload: ChatUserMessagePayload) => void;
 }
 
 /** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
@@ -33,9 +56,11 @@ export function useChannelStreamSocket(
   const onStreamCompleteRef = useRef(options?.onStreamComplete);
   const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
   const onOwnStreamFinalizeRef = useRef(options?.onOwnStreamFinalize);
+  const onUserMessageRef = useRef(options?.onUserMessage);
   onStreamCompleteRef.current = options?.onStreamComplete;
   onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
   onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
+  onUserMessageRef.current = options?.onUserMessage;
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -165,13 +190,21 @@ export function useChannelStreamSocket(
       }
     };
 
+    const handleUserMessage = (payload: ChatUserMessagePayload) => {
+      if (payload.pageId !== channelId) return;
+      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
+      onUserMessageRef.current?.(payload.message, payload);
+    };
+
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:stream_complete', handleStreamComplete);
+    socket.on('chat:user_message', handleUserMessage);
 
     return () => {
       cancelled = true;
       socket.off('chat:stream_start', handleStreamStart);
       socket.off('chat:stream_complete', handleStreamComplete);
+      socket.off('chat:user_message', handleUserMessage);
       for (const controller of controllers.values()) {
         controller.abort();
       }

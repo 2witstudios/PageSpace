@@ -523,6 +523,13 @@ export interface AiStreamCompletePayload {
   aborted?: boolean;
 }
 
+export interface ChatUserMessagePayload {
+  message: import('ai').UIMessage;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -585,6 +592,40 @@ export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload
       error instanceof Error ? error : undefined,
       {
         event: 'ai_stream_complete',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastChatUserMessage(payload: ChatUserMessagePayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat user-message broadcast', {
+      event: 'chat:user_message',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:user_message',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat user-message',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:user_message',
         channel: maskIdentifier(payload.pageId),
       }
     );

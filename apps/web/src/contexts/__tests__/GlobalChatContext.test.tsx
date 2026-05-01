@@ -550,6 +550,49 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     });
   });
 
+  // remote user-message broadcast
+  it('given chat:user_message from another browser session for the active conversation, should append the message to context messages', async () => {
+    const { result } = renderHook(() => useGlobalChat(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+    await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
+
+    const remoteUser = {
+      id: 'msg-remote-user',
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, text: 'remote prompt' }],
+    };
+    act(() => {
+      mockSocket._trigger('chat:user_message', {
+        message: remoteUser,
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: CONV_ID,
+        triggeredBy: { userId: USER_ID, displayName: 'Me-otherTab', browserSessionId: SESSION_ID_REMOTE },
+      });
+    });
+
+    expect(result.current.messages.find((m) => m.id === 'msg-remote-user')).toEqual(remoteUser);
+  });
+
+  it('given chat:user_message for a different conversation, should NOT append', async () => {
+    const { result } = renderHook(() => useGlobalChat(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+    await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
+
+    const before = result.current.messages.length;
+    act(() => {
+      mockSocket._trigger('chat:user_message', {
+        message: { id: 'msg-stale', role: 'user', parts: [{ type: 'text', text: 'wrong conv' }] },
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: 'conv-different',
+        triggeredBy: { userId: USER_ID, displayName: 'Me-otherTab', browserSessionId: SESSION_ID_REMOTE },
+      });
+    });
+
+    expect(result.current.messages.length).toBe(before);
+  });
+
   // AC8 — unmount safety
   it('given the provider unmounts, should abort in-flight SSE controllers and remove socket listeners', async () => {
     let capturedSignal!: AbortSignal;
