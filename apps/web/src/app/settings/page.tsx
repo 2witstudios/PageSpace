@@ -81,8 +81,8 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "AI API Keys",
-          description: "Configure AI provider API keys",
+          title: "AI Providers",
+          description: "Check which AI providers are available on this deployment",
           icon: Key,
           href: "/settings/ai",
           available: true,
