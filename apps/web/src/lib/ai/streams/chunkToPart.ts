@@ -2,36 +2,56 @@ import type { UIMessage } from 'ai';
 
 type AnyPart = UIMessage['parts'][number];
 
+interface ToolPart {
+  type: `tool-${string}`;
+  toolCallId: string;
+  toolName: string;
+  state: 'input-available' | 'output-available';
+  input: unknown;
+  output?: unknown;
+}
+
+interface AISDKChunk {
+  type: string;
+  text?: string;
+  toolName?: string;
+  toolCallId?: string;
+  input?: unknown;
+  output?: unknown;
+  [key: string]: unknown;
+}
+
+const toolPart = (
+  state: ToolPart['state'],
+  chunk: AISDKChunk & { toolName: string; toolCallId: string },
+): ToolPart => ({
+  type: `tool-${chunk.toolName}`,
+  toolCallId: chunk.toolCallId,
+  toolName: chunk.toolName,
+  state,
+  input: chunk.input,
+  ...(state === 'output-available' ? { output: chunk.output } : {}),
+});
+
 /**
  * Convert an AI SDK v5 streamText `onChunk` chunk into a `UIMessagePart`
  * suitable for multicast. Returns `null` for chunk types we don't forward
- * (step-start/finish, raw, reasoning-delta, tool-input-delta — minimal v1
- * scope; later waves can extend).
+ * (step boundaries, raw, reasoning, tool-input-streaming, source/file —
+ * minimal v1 scope; later waves can extend without a wire change).
  *
  * Pure — never reads or writes external state.
  */
-export const chunkToPart = (chunk: { type: string } & Record<string, unknown>): AnyPart | null => {
+export const chunkToPart = (chunk: AISDKChunk): AnyPart | null => {
   if (chunk.type === 'text-delta' && typeof chunk.text === 'string') {
     return { type: 'text', text: chunk.text };
   }
-  if (chunk.type === 'tool-call' && typeof chunk.toolName === 'string') {
-    return {
-      type: `tool-${chunk.toolName}`,
-      toolCallId: chunk.toolCallId as string,
-      toolName: chunk.toolName,
-      state: 'input-available',
-      input: chunk.input,
-    } as unknown as AnyPart;
-  }
-  if (chunk.type === 'tool-result' && typeof chunk.toolName === 'string') {
-    return {
-      type: `tool-${chunk.toolName}`,
-      toolCallId: chunk.toolCallId as string,
-      toolName: chunk.toolName,
-      state: 'output-available',
-      input: chunk.input,
-      output: chunk.output,
-    } as unknown as AnyPart;
+  if (
+    (chunk.type === 'tool-call' || chunk.type === 'tool-result') &&
+    typeof chunk.toolName === 'string' &&
+    typeof chunk.toolCallId === 'string'
+  ) {
+    const state = chunk.type === 'tool-call' ? 'input-available' : 'output-available';
+    return toolPart(state, { ...chunk, toolName: chunk.toolName, toolCallId: chunk.toolCallId }) as unknown as AnyPart;
   }
   return null;
 };
