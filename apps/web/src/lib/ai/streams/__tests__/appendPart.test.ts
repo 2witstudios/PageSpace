@@ -43,4 +43,17 @@ describe('appendPart', () => {
       { type: 'text', text: 'after' },
     ]);
   });
+
+  it('given the same final tool part applied twice, should converge to a single entry (idempotent)', () => {
+    const completed = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'output-available' as const,
+      input: { driveId: 'd1' },
+      output: { pages: [] },
+    };
+    const once = appendPart([], completed);
+    const twice = appendPart(once, completed);
+    expect(twice).toEqual([completed]);
+  });
 });
