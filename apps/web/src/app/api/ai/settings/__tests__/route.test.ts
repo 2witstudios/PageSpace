@@ -115,6 +115,16 @@ describe('AI settings route', () => {
       expect(body.providers.anthropic.isAvailable).toBe(false);
       expect(body.providers.pagespace.isAvailable).toBe(false);
       expect(body.providers.openai.isAvailable).toBe(false);
+      expect(body.isAnyProviderConfigured).toBe(false);
+    });
+
+    it('reports isAnyProviderConfigured true when at least one provider has an env key', async () => {
+      process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.isAnyProviderConfigured).toBe(true);
     });
 
     it('marks pagespace available when GLM_DEFAULT_API_KEY is set', async () => {

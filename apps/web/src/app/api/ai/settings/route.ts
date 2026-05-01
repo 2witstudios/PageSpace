@@ -51,6 +51,7 @@ export async function GET(request: Request) {
       userSubscriptionTier: user?.subscriptionTier || 'free',
       pageSpaceBackend: pageSpaceSettings?.provider ?? null,
       providers,
+      isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
