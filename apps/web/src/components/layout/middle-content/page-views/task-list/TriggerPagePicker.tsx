@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useDebounce } from '@/hooks/useDebounce';
 import { cn } from '@/lib/utils';
 
 interface PageSuggestion {
@@ -74,14 +75,16 @@ export function TriggerPagePicker(props: Props) {
   const { driveId, mode, placeholder, disabled } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 200);
 
   const searchKey = open && driveId
-    ? `/api/mentions/search?q=${encodeURIComponent(query)}&driveId=${driveId}&types=page`
+    ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${driveId}&types=page`
     : null;
-  const { data: results = [], isLoading: searching } = useSWR(searchKey, searchFetcher, {
+  const { data: results = [], isLoading } = useSWR(searchKey, searchFetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
   });
+  const searching = isLoading || query !== debouncedQuery;
 
   const selectedIds = useMemo(
     () => new Set(mode === 'multi' ? props.value : props.value ? [props.value] : []),
