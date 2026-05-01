@@ -36,6 +36,8 @@ import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -363,6 +365,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onMessageDeleted: (payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) => applyMessageDelete(prev, payload.messageId) as typeof prev);
+    },
+    onUndoApplied: (payload) => {
+      if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
+      void loadConversation(payload.conversationId);
     },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);

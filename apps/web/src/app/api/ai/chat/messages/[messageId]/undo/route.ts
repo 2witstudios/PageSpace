@@ -8,7 +8,10 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { broadcastAiUndoApplied } from '@/lib/websocket/socket-utils';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -218,6 +221,34 @@ export async function POST(
         { status: 500 }
       );
     }
+
+    // Broadcast chat:undo_applied so remote viewers refresh their conversation.
+    // Page-event broadcasts below cover the page-domain side; this one covers the
+    // chat-domain side (conversation history). Failure must never break the request.
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(userId, request);
+        const broadcastPageId = preview.source === 'page_chat' && preview.pageId
+          ? preview.pageId
+          : globalChannelId(userId);
+        const messageIdsFromActivities = preview.activitiesAffected
+          .filter((a) => a.resourceType === 'message')
+          .map((a) => a.resourceId);
+        const affectedMessageIds = Array.from(new Set([messageId, ...messageIdsFromActivities]));
+        await broadcastAiUndoApplied({
+          conversationId: preview.conversationId,
+          pageId: broadcastPageId,
+          mode,
+          affectedMessageIds,
+          triggeredBy,
+        });
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast chat undo-applied', broadcastError as Error, {
+          messageId: maskIdentifier(messageId),
+          conversationId: maskIdentifier(preview.conversationId),
+        });
+      }
+    })();
 
     // Broadcast real-time updates for affected pages and channels
     if (mode === 'messages_and_changes') {

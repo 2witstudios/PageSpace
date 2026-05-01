@@ -95,6 +95,7 @@ import type {
   ChatUserMessagePayload,
   ChatMessageEditedPayload,
   ChatMessageDeletedPayload,
+  ChatUndoAppliedPayload,
 } from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
@@ -129,6 +130,14 @@ const MESSAGE_DELETED_PAYLOAD: ChatMessageDeletedPayload = {
   messageId: 'msg-1',
   pageId: 'page-a',
   conversationId: 'conv-1',
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+const UNDO_APPLIED_PAYLOAD: ChatUndoAppliedPayload = {
+  conversationId: 'conv-1',
+  pageId: 'page-a',
+  mode: 'messages_and_changes',
+  affectedMessageIds: ['msg-1', 'msg-2'],
   triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
 };
 
@@ -409,6 +418,43 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:message_deleted', MESSAGE_DELETED_PAYLOAD); });
 
       expect(onMessageDeleted).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('chat:undo_applied', () => {
+    it('given a chat:undo_applied from another tab for the current channel, should call onUndoApplied with the payload', () => {
+      const onUndoApplied = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUndoApplied }));
+
+      act(() => { mockSocket._trigger('chat:undo_applied', UNDO_APPLIED_PAYLOAD); });
+
+      expect(onUndoApplied).toHaveBeenCalledTimes(1);
+      expect(onUndoApplied).toHaveBeenCalledWith(UNDO_APPLIED_PAYLOAD);
+    });
+
+    it('given chat:undo_applied with a different pageId, should NOT call onUndoApplied (stale-room guard)', () => {
+      const onUndoApplied = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUndoApplied }));
+
+      act(() => {
+        mockSocket._trigger('chat:undo_applied', { ...UNDO_APPLIED_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(onUndoApplied).not.toHaveBeenCalled();
+    });
+
+    it('given chat:undo_applied whose triggeredBy.browserSessionId matches the local session, should NOT call onUndoApplied (own-tab dedup)', () => {
+      const onUndoApplied = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUndoApplied }));
+
+      act(() => {
+        mockSocket._trigger('chat:undo_applied', {
+          ...UNDO_APPLIED_PAYLOAD,
+          triggeredBy: { ...UNDO_APPLIED_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onUndoApplied).not.toHaveBeenCalled();
     });
   });
 
