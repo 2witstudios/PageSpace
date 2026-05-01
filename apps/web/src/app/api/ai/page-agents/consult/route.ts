@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -293,6 +294,24 @@ export async function POST(request: Request) {
         )
       : {};
 
+    // INTEGRATION TOOLS: resolve and merge integration tools for this agent
+    let toolsForRun: Record<string, unknown> = availableTools;
+    let integrationToolCount = 0;
+    try {
+      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const integrationTools = await resolvePageAgentIntegrationTools({
+        agentId,
+        userId,
+        driveId: agent.driveId,
+      });
+      integrationToolCount = Object.keys(integrationTools).length;
+      if (integrationToolCount > 0) {
+        toolsForRun = mergeToolSets(toolsForRun as Parameters<typeof mergeToolSets>[0], integrationTools);
+      }
+    } catch (error) {
+      loggers.api.error('Agent consultation: failed to resolve integration tools', error as Error);
+    }
+
     // Generate response using the AI model
     let responseText = '';
     try {
@@ -311,11 +330,13 @@ export async function POST(request: Request) {
         agentTitle: agent.title,
         toolsEnabled: Array.isArray(enabledTools) ? enabledTools.length : 0,
         availableToolsCount: Object.keys(availableTools).length,
+        integrationToolCount,
+        totalToolsForRun: Object.keys(toolsForRun).length,
         enabledToolsList: enabledTools,
         hasDriveContext: !!drive
       });
 
-      const result = Object.keys(availableTools).length > 0
+      const result = Object.keys(toolsForRun).length > 0
         ? await generateText({
             model,
             system: enhancedSystemPrompt,
@@ -324,7 +345,7 @@ export async function POST(request: Request) {
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
             }))),
-            tools: { ...availableTools, ...finishTool },
+            tools: { ...toolsForRun, ...finishTool },
             toolChoice: 'auto',
             temperature: 0.7,
             maxRetries: 3,
