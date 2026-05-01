@@ -209,7 +209,7 @@ function MobileTaskCard({
               Rename
             </DropdownMenuItem>
             {onConfigureTriggers && (
-              <DropdownMenuItem onClick={() => onConfigureTriggers?.(task)} disabled={!canEdit}>
+              <DropdownMenuItem onClick={() => onConfigureTriggers(task)} disabled={!canEdit}>
                 <Zap className="h-4 w-4 mr-2" />
                 Agent triggers…
               </DropdownMenuItem>
@@ -287,7 +287,7 @@ function MobileTaskCard({
         {canEdit && onConfigureTriggers && (task.activeTriggerCount ?? 0) > 0 && (
           <button
             type="button"
-            onClick={() => onConfigureTriggers?.(task)}
+            onClick={() => onConfigureTriggers(task)}
             title="Agent trigger configured — click to edit"
             aria-label="Agent trigger configured — click to edit"
             className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"

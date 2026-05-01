@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Zap } from 'lucide-react';
+import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate as globalMutate } from 'swr';
 import {
@@ -70,6 +70,9 @@ const TRIGGER_TYPES: { ui: UiTriggerType; api: ApiTriggerType; label: string; he
     help: 'Fires the moment the task is moved to a status in the Done group.',
   },
 ];
+
+export const statusToneClass = (status: TriggerRow['lastRunStatus']) =>
+  status === 'error' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground';
 
 const triggersFetcher = async (url: string): Promise<{ triggers: TriggerRow[] }> => {
   const res = await fetchWithAuth(url);
@@ -309,11 +312,10 @@ export function TaskAgentTriggersDialog({
                       </div>
 
                       {existing?.lastRunStatus && existing.lastRunStatus !== 'never_run' && (
-                        <p className={
-                          existing.lastRunStatus === 'error'
-                            ? 'text-xs text-destructive'
-                            : 'text-xs text-muted-foreground'
-                        }>
+                        <p className={statusToneClass(existing.lastRunStatus)}>
+                          {existing.lastRunStatus === 'error' && (
+                            <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
+                          )}
                           Last run: <span className="font-medium">{existing.lastRunStatus}</span>
                           {existing.lastRunAt
                             ? ` • ${new Date(existing.lastRunAt).toLocaleString()}`

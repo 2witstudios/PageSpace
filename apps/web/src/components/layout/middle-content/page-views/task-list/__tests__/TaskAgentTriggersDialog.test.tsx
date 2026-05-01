@@ -16,7 +16,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { TaskAgentTriggersDialog } from '../TaskAgentTriggersDialog';
+import { TaskAgentTriggersDialog, statusToneClass } from '../TaskAgentTriggersDialog';
 
 const TASK_ID = 'task-1';
 const PAGE_ID = 'page-1';
@@ -67,6 +67,30 @@ const renderDialog = () =>
       />
     </SWRConfig>,
   );
+
+describe('statusToneClass', () => {
+  test('error status maps to destructive tone', () => {
+    assert({
+      given: 'lastRunStatus = "error"',
+      should: 'return the destructive tone class',
+      actual: statusToneClass('error'),
+      expected: 'text-xs text-destructive',
+    });
+  });
+
+  test('non-error statuses map to muted tone', () => {
+    assert({
+      given: 'lastRunStatus values that are not "error"',
+      should: 'return the muted-foreground tone class',
+      actual: (['success', 'running', 'never_run'] as const).map(statusToneClass),
+      expected: [
+        'text-xs text-muted-foreground',
+        'text-xs text-muted-foreground',
+        'text-xs text-muted-foreground',
+      ],
+    });
+  });
+});
 
 describe('TaskAgentTriggersDialog — editing-store contract', () => {
   beforeEach(() => {
