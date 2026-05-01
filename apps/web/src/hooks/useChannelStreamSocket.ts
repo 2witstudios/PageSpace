@@ -27,9 +27,21 @@ export interface UseChannelStreamSocketOptions {
   /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
   onOwnStreamFinalize?: (event: { messageId: string }) => void;
   /**
-   * Fires when a remote user submits a message in this channel. Filters out
-   * own-tab broadcasts (the originator's `useChat` already appended) and
-   * stale-room events. Consumers append to their own messages array.
+   * Fires when a remote user submits a message in this channel.
+   *
+   * Filters applied before invocation:
+   *   1. Stale-room: events for a different `pageId` are dropped.
+   *   2. Own-tab dedup: events whose `triggeredBy.browserSessionId` matches
+   *      the local session are dropped (the originator's `useChat` already
+   *      appended the message locally).
+   *
+   * Server-side ordering: the broadcast fires AFTER `saveMessageToDatabase`
+   * resolves and BEFORE the assistant `chat:stream_start` event, so consumers
+   * always see the user message land before the assistant ghost text begins.
+   *
+   * Consumers must dedup against their existing messages by `message.id`
+   * (the bootstrap REST GET may also surface the message if it ran after
+   * the save and before the broadcast was processed locally).
    */
   onUserMessage?: (message: UIMessage, payload: ChatUserMessagePayload) => void;
 }
