@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { StreamMulticastRegistry, type StreamMeta } from '../stream-multicast-registry';
+import {
+  StreamMulticastRegistry,
+  type StreamMeta,
+  type UIMessagePart,
+} from '../stream-multicast-registry';
 
 const meta = (overrides: Partial<StreamMeta> = {}): StreamMeta => ({
   pageId: 'page-1',
@@ -9,6 +13,8 @@ const meta = (overrides: Partial<StreamMeta> = {}): StreamMeta => ({
   browserSessionId: 'session-1',
   ...overrides,
 });
+
+const text = (text: string): UIMessagePart => ({ type: 'text', text });
 
 describe('StreamMulticastRegistry', () => {
   afterEach(() => {
@@ -30,55 +36,77 @@ describe('StreamMulticastRegistry', () => {
   });
 
   describe('push', () => {
-    it('given a registered stream with subscribers, should push text chunks to all active subscribers', () => {
+    it('given a registered stream with subscribers, should fan out each part to every active subscriber', () => {
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
 
-      const received1: string[] = [];
-      const received2: string[] = [];
-      registry.subscribe('msg-1', (text) => received1.push(text), () => {});
-      registry.subscribe('msg-1', (text) => received2.push(text), () => {});
+      const received1: UIMessagePart[] = [];
+      const received2: UIMessagePart[] = [];
+      registry.subscribe('msg-1', (p) => received1.push(p), () => {});
+      registry.subscribe('msg-1', (p) => received2.push(p), () => {});
 
-      registry.push('msg-1', 'hello');
-      registry.push('msg-1', ' world');
+      registry.push('msg-1', text('hello'));
+      registry.push('msg-1', text(' world'));
 
-      expect(received1).toEqual(['hello', ' world']);
-      expect(received2).toEqual(['hello', ' world']);
+      expect(received1).toEqual([text('hello'), text(' world')]);
+      expect(received2).toEqual([text('hello'), text(' world')]);
     });
 
     it('silently ignores push for unknown messageId', () => {
       const registry = new StreamMulticastRegistry();
-      expect(() => registry.push('unknown', 'chunk')).not.toThrow();
+      expect(() => registry.push('unknown', text('chunk'))).not.toThrow();
+    });
+
+    it('given an interleaved sequence of text and tool parts, should preserve order at every subscriber', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', meta());
+
+      const received: UIMessagePart[] = [];
+      registry.subscribe('msg-1', (p) => received.push(p), () => {});
+
+      const tool: UIMessagePart = {
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        state: 'output-available',
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+      } as unknown as UIMessagePart;
+
+      registry.push('msg-1', text('thinking'));
+      registry.push('msg-1', tool);
+      registry.push('msg-1', text('done'));
+
+      expect(received).toEqual([text('thinking'), tool, text('done')]);
     });
   });
 
   describe('subscribe', () => {
-    it('given a late-joining subscriber, should replay all buffered chunks before delivering live ones', () => {
+    it('given a late-joining subscriber, should replay all buffered parts before delivering live ones', () => {
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
 
-      registry.push('msg-1', 'chunk1');
-      registry.push('msg-1', 'chunk2');
+      registry.push('msg-1', text('chunk1'));
+      registry.push('msg-1', text('chunk2'));
 
-      const received: string[] = [];
-      registry.subscribe('msg-1', (text) => received.push(text), () => {});
+      const received: UIMessagePart[] = [];
+      registry.subscribe('msg-1', (p) => received.push(p), () => {});
 
-      expect(received).toEqual(['chunk1', 'chunk2']);
+      expect(received).toEqual([text('chunk1'), text('chunk2')]);
     });
 
-    it('given buffered and live chunks, should deliver them in order to a late subscriber', () => {
+    it('given buffered then live parts, should deliver them in order to a late subscriber', () => {
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
 
-      registry.push('msg-1', 'chunk1');
-      registry.push('msg-1', 'chunk2');
+      registry.push('msg-1', text('chunk1'));
+      registry.push('msg-1', text('chunk2'));
 
-      const received: string[] = [];
-      registry.subscribe('msg-1', (text) => received.push(text), () => {});
+      const received: UIMessagePart[] = [];
+      registry.subscribe('msg-1', (p) => received.push(p), () => {});
 
-      registry.push('msg-1', 'chunk3');
+      registry.push('msg-1', text('chunk3'));
 
-      expect(received).toEqual(['chunk1', 'chunk2', 'chunk3']);
+      expect(received).toEqual([text('chunk1'), text('chunk2'), text('chunk3')]);
     });
 
     it('given a finished stream, should return null', () => {
@@ -106,23 +134,23 @@ describe('StreamMulticastRegistry', () => {
   });
 
   describe('unsubscribe', () => {
-    it('given a subscriber that unsubscribes, should stop receiving chunks without affecting other subscribers', () => {
+    it('given a subscriber that unsubscribes, should stop receiving parts without affecting others', () => {
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
 
-      const received1: string[] = [];
-      const received2: string[] = [];
+      const received1: UIMessagePart[] = [];
+      const received2: UIMessagePart[] = [];
 
-      const unsubscribe1 = registry.subscribe('msg-1', (text) => received1.push(text), () => {});
-      registry.subscribe('msg-1', (text) => received2.push(text), () => {});
+      const unsubscribe1 = registry.subscribe('msg-1', (p) => received1.push(p), () => {});
+      registry.subscribe('msg-1', (p) => received2.push(p), () => {});
 
-      registry.push('msg-1', 'chunk1');
+      registry.push('msg-1', text('chunk1'));
       expect(unsubscribe1).not.toBeNull();
       (unsubscribe1 as () => void)();
-      registry.push('msg-1', 'chunk2');
+      registry.push('msg-1', text('chunk2'));
 
-      expect(received1).toEqual(['chunk1']);
-      expect(received2).toEqual(['chunk1', 'chunk2']);
+      expect(received1).toEqual([text('chunk1')]);
+      expect(received2).toEqual([text('chunk1'), text('chunk2')]);
     });
 
     it('given an unsubscribed listener, should not call its onComplete when stream finishes', () => {
@@ -259,12 +287,12 @@ describe('StreamMulticastRegistry', () => {
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
 
-      const received: string[] = [];
+      const received: UIMessagePart[] = [];
       registry.subscribe('msg-1', () => { throw new Error('bad subscriber'); }, () => {});
-      registry.subscribe('msg-1', (text) => received.push(text), () => {});
+      registry.subscribe('msg-1', (p) => received.push(p), () => {});
 
-      expect(() => registry.push('msg-1', 'chunk1')).not.toThrow();
-      expect(received).toEqual(['chunk1']);
+      expect(() => registry.push('msg-1', text('chunk1'))).not.toThrow();
+      expect(received).toEqual([text('chunk1')]);
     });
 
     it('given a subscriber whose onComplete throws, should still remove the entry and notify remaining subscribers', () => {
