@@ -68,6 +68,8 @@ interface ToolResult {
   toolName: string;
   output: unknown;
   state: 'output-available' | 'output-error';
+  /** Populated when state is 'output-error' so the renderer can show the failure after refresh. */
+  errorText?: string;
 }
 
 /** Local tool part shape for reconstructing parts from database data */
@@ -193,12 +195,20 @@ export function extractToolResults(message: UIMessage): ToolResult[] {
   return message.parts
     .filter(isToolInvocationPart)
     .filter(toolPart => toolPart.state === 'output-available' || toolPart.state === 'output-error')
-    .map(toolPart => ({
-      toolCallId: toolPart.toolCallId,
-      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-      output: 'output' in toolPart ? toolPart.output : undefined,
-      state: toolPart.state as 'output-available' | 'output-error',
-    }));
+    .map(toolPart => {
+      const state = toolPart.state as 'output-available' | 'output-error';
+      const result: ToolResult = {
+        toolCallId: toolPart.toolCallId,
+        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+        output: 'output' in toolPart ? toolPart.output : undefined,
+        state,
+      };
+      if (state === 'output-error') {
+        const errorText = (toolPart as { errorText?: unknown }).errorText;
+        if (typeof errorText === 'string') result.errorText = errorText;
+      }
+      return result;
+    });
 }
 
 /**
@@ -319,14 +329,19 @@ function reconstructFromStructuredContent(
       const toolResult = toolResultsMap.get(partOrder.toolCallId);
 
       if (toolCall) {
-        parts.push({
+        const reconstructed: ToolPart = {
           type: partOrder.type,
           toolCallId: toolCall.toolCallId,
           toolName: toolCall.toolName,
           input: toolCall.input,
-          output: toolResult?.output,
-          state: toolResult ? 'output-available' : 'input-available',
-        });
+          state: toolResult?.state ?? 'input-available',
+        };
+        if (reconstructed.state === 'output-error' && toolResult?.errorText) {
+          (reconstructed as ToolPart & { errorText?: string }).errorText = toolResult.errorText;
+        } else if (toolResult && reconstructed.state !== 'output-error') {
+          reconstructed.output = toolResult.output;
+        }
+        parts.push(reconstructed);
       }
     } else if (partOrder.type === 'step-start') {
       // Skip step-start parts for now - they're AI SDK internal

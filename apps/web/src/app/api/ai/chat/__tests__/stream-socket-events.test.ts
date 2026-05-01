@@ -426,6 +426,30 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       });
     });
 
+    it('given a tool-error chunk, should forward an output-error tool part with errorText to lifecycle.pushPart', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({
+        chunk: {
+          type: 'tool-error',
+          toolCallId: 'tc1',
+          toolName: 'list_pages',
+          input: { driveId: 'd1' },
+          error: new Error('drive permission denied'),
+        },
+      });
+
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'output-error',
+        input: { driveId: 'd1' },
+        errorText: 'drive permission denied',
+      });
+    });
+
     it('given a chunk type out of v1 multicast scope, should not forward anything', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
