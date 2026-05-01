@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render } from '@testing-library/react';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — must be before any imports that trigger the modules
@@ -13,12 +13,12 @@ vi.mock('motion/react', () => ({
   useReducedMotion: () => false,
 }));
 
+const chatMessagesAreaSpy = vi.fn();
 vi.mock('@/components/ai/shared/chat/ChatMessagesArea', () => ({
-  ChatMessagesArea: () => <div data-testid="chat-messages-area" />,
-}));
-
-vi.mock('@/components/ai/shared/chat/StreamingIndicator', () => ({
-  StreamingIndicator: ({ message }: { message?: string }) => <>{message}</>,
+  ChatMessagesArea: (props: unknown) => {
+    chatMessagesAreaSpy(props);
+    return <div data-testid="chat-messages-area" />;
+  },
 }));
 
 vi.mock('@/components/ui/floating-input/InputPositioner', () => ({
@@ -39,8 +39,8 @@ vi.mock('../WelcomeContent', () => ({
 
 import React from 'react';
 import { ChatLayout } from '../ChatLayout';
+import type { PendingStream } from '@/stores/usePendingStreamsStore';
 
-// Minimal required props to get the component to render messages area
 const BASE_PROPS = {
   messages: [{ id: '1', role: 'user' as const, content: 'hello', parts: [{ type: 'text' as const, text: 'hello' }] }],
   input: '',
@@ -51,55 +51,52 @@ const BASE_PROPS = {
   isLoading: false,
 };
 
-describe('ChatLayout — remoteStreams', () => {
-  it('given no remoteStreams, should render no stream indicators', () => {
+const makeStream = (overrides: Partial<PendingStream>): PendingStream => ({
+  messageId: 'msg-1',
+  pageId: 'page-1',
+  conversationId: 'conv-1',
+  triggeredBy: { userId: 'u-1', displayName: 'Alice' },
+  parts: [],
+  isOwn: false,
+  ...overrides,
+});
+
+const lastMessagesAreaProps = () => {
+  const calls = chatMessagesAreaSpy.mock.calls;
+  return calls[calls.length - 1]?.[0] as { remoteStreams?: PendingStream[] } | undefined;
+};
+
+describe('ChatLayout — remoteStreams plumbing', () => {
+  beforeEach(() => {
+    chatMessagesAreaSpy.mockClear();
+  });
+
+  it('given no remoteStreams, passes undefined or empty array down to ChatMessagesArea', () => {
     render(<ChatLayout {...BASE_PROPS} />);
-    expect(screen.queryByText(/is waiting for AI response/)).toBeNull();
+    const props = lastMessagesAreaProps();
+    expect(props?.remoteStreams ?? []).toEqual([]);
   });
 
-  it('given a remote pending stream, should render StreamingIndicator with display name', () => {
+  it('given a remote pending stream, forwards it to ChatMessagesArea', () => {
+    const remoteStreams = [makeStream({ messageId: 'msg-1' })];
+    render(<ChatLayout {...BASE_PROPS} remoteStreams={remoteStreams} />);
+    expect(lastMessagesAreaProps()?.remoteStreams).toEqual(remoteStreams);
+  });
+
+  it('given multiple concurrent remote streams, forwards all of them in order', () => {
     const remoteStreams = [
-      { messageId: 'msg-1', triggeredBy: { displayName: 'Alice' }, text: '' },
+      makeStream({ messageId: 'msg-1', triggeredBy: { userId: 'u-1', displayName: 'Alice' } }),
+      makeStream({ messageId: 'msg-2', triggeredBy: { userId: 'u-2', displayName: 'Bob' } }),
     ];
     render(<ChatLayout {...BASE_PROPS} remoteStreams={remoteStreams} />);
-    expect(screen.getByText('Alice is waiting for AI response…')).toBeTruthy();
+    expect(lastMessagesAreaProps()?.remoteStreams).toEqual(remoteStreams);
   });
 
-  it('given accumulated ghost text, should render it below the indicator', () => {
-    const remoteStreams = [
-      { messageId: 'msg-1', triggeredBy: { displayName: 'Alice' }, text: 'Here is my partial response' },
-    ];
-    render(<ChatLayout {...BASE_PROPS} remoteStreams={remoteStreams} />);
-    expect(screen.getByText('Here is my partial response')).toBeTruthy();
-  });
-
-  it('given empty ghost text, should not render the ghost text paragraph', () => {
-    const remoteStreams = [
-      { messageId: 'msg-1', triggeredBy: { displayName: 'Alice' }, text: '' },
-    ];
-    const { container } = render(<ChatLayout {...BASE_PROPS} remoteStreams={remoteStreams} />);
-    // The muted text paragraph should not be present when text is empty
-    const paras = container.querySelectorAll('p.text-muted-foreground');
-    expect(paras).toHaveLength(0);
-  });
-
-  it('given multiple concurrent remote streams, should render one indicator per stream', () => {
-    const remoteStreams = [
-      { messageId: 'msg-1', triggeredBy: { displayName: 'Alice' }, text: '' },
-      { messageId: 'msg-2', triggeredBy: { displayName: 'Bob' }, text: '' },
-    ];
-    render(<ChatLayout {...BASE_PROPS} remoteStreams={remoteStreams} />);
-    expect(screen.getByText('Alice is waiting for AI response…')).toBeTruthy();
-    expect(screen.getByText('Bob is waiting for AI response…')).toBeTruthy();
-  });
-
-  it('given remoteStreams with no local messages, should still show the messages area', () => {
+  it('given remoteStreams with no local messages, still mounts the messages area', () => {
     const noMessages = { ...BASE_PROPS, messages: [] };
-    const remoteStreams = [
-      { messageId: 'msg-1', triggeredBy: { displayName: 'Alice' }, text: '' },
-    ];
-    render(<ChatLayout {...noMessages} remoteStreams={remoteStreams} />);
-    expect(screen.getByTestId('chat-messages-area')).toBeTruthy();
-    expect(screen.getByText('Alice is waiting for AI response…')).toBeTruthy();
+    const remoteStreams = [makeStream({ messageId: 'msg-1' })];
+    const { getByTestId } = render(<ChatLayout {...noMessages} remoteStreams={remoteStreams} />);
+    expect(getByTestId('chat-messages-area')).toBeTruthy();
+    expect(lastMessagesAreaProps()?.remoteStreams).toEqual(remoteStreams);
   });
 });

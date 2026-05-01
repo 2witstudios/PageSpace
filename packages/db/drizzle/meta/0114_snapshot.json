@@ -1,5 +1,5 @@
 {
-  "id": "d376c351-6a20-40e0-9593-98af6837d3d1",
+  "id": "57ff0f4b-bcd3-478e-9680-3261a55d732b",
   "prevId": "841d51c9-29c6-4ee1-822a-c1f9f5f3cc53",
   "version": "7",
   "dialect": "postgresql",
@@ -3782,6 +3782,83 @@
         }
       },
       "uniqueConstraints": {}
+    },
+    "public.user_ai_settings": {
+      "name": "user_ai_settings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedApiKey": {
+          "name": "encryptedApiKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "baseUrl": {
+          "name": "baseUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "user_ai_settings_userId_users_id_fk": {
+          "name": "user_ai_settings_userId_users_id_fk",
+          "tableFrom": "user_ai_settings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_provider_unique": {
+          "name": "user_provider_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "userId",
+            "provider"
+          ]
+        }
+      }
     },
     "public.pulse_summaries": {
       "name": "pulse_summaries",
@@ -7900,6 +7977,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "isRead": {
           "name": "isRead",
           "type": "boolean",
@@ -7970,6 +8059,21 @@
           "columns": [
             {
               "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "direct_messages_file_id_idx": {
+          "name": "direct_messages_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -8075,6 +8179,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "direct_messages_fileId_files_id_fk": {
+          "name": "direct_messages_fileId_files_id_fk",
+          "tableFrom": "direct_messages",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -8724,6 +8841,126 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.file_conversations": {
+      "name": "file_conversations",
+      "schema": "",
+      "columns": {
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversationId": {
+          "name": "conversationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "linkedBy": {
+          "name": "linkedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "linkedAt": {
+          "name": "linkedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "linkSource": {
+          "name": "linkSource",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "file_conversations_file_id_idx": {
+          "name": "file_conversations_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_conversations_conversation_id_idx": {
+          "name": "file_conversations_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "file_conversations_fileId_files_id_fk": {
+          "name": "file_conversations_fileId_files_id_fk",
+          "tableFrom": "file_conversations",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "file_conversations_conversationId_dm_conversations_id_fk": {
+          "name": "file_conversations_conversationId_dm_conversations_id_fk",
+          "tableFrom": "file_conversations",
+          "tableTo": "dm_conversations",
+          "columnsFrom": [
+            "conversationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "file_conversations_linkedBy_users_id_fk": {
+          "name": "file_conversations_linkedBy_users_id_fk",
+          "tableFrom": "file_conversations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "linkedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "file_conversations_fileId_conversationId_pk": {
+          "name": "file_conversations_fileId_conversationId_pk",
+          "columns": [
+            "fileId",
+            "conversationId"
+          ]
+        }
+      },
+      "uniqueConstraints": {}
+    },
     "public.file_pages": {
       "name": "file_pages",
       "schema": "",
@@ -8858,7 +9095,7 @@
           "name": "driveId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "sizeBytes": {
           "name": "sizeBytes",

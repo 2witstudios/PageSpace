@@ -2,7 +2,7 @@ import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex, primaryKe
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
-import { files } from './storage';
+import { files, type AttachmentMeta } from './storage';
 import { createId } from '@paralleldrive/cuid2';
 
 export const channelMessages = pgTable('channel_messages', {
@@ -13,13 +13,7 @@ export const channelMessages = pgTable('channel_messages', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   // File attachment (optional)
   fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
-  // Attachment metadata: {originalName, size, mimeType, contentHash}
-  attachmentMeta: jsonb('attachmentMeta').$type<{
-    originalName: string;
-    size: number;
-    mimeType: string;
-    contentHash: string;
-  } | null>(),
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
   // Soft-delete flag for rollback support (matches messages/chatMessages pattern)
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),

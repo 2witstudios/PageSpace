@@ -10,7 +10,7 @@ const SESSION_ID_REMOTE = 'session-other';
 const {
   mockSocket,
   mockAddStream,
-  mockAppendText,
+  mockAppendPart,
   mockRemoveStream,
   mockClearPageStreams,
   mockConsumeStreamJoin,
@@ -39,7 +39,7 @@ const {
   };
 
   const mockAddStream = vi.fn();
-  const mockAppendText = vi.fn();
+  const mockAppendPart = vi.fn();
   const mockRemoveStream = vi.fn();
   const mockClearPageStreams = vi.fn();
   const mockConsumeStreamJoin = vi.fn().mockResolvedValue({ aborted: false });
@@ -52,7 +52,7 @@ const {
   return {
     mockSocket,
     mockAddStream,
-    mockAppendText,
+    mockAppendPart,
     mockRemoveStream,
     mockClearPageStreams,
     mockConsumeStreamJoin,
@@ -69,7 +69,7 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
   usePendingStreamsStore: {
     getState: () => ({
       addStream: mockAddStream,
-      appendText: mockAppendText,
+      appendPart: mockAppendPart,
       removeStream: mockRemoveStream,
       clearPageStreams: mockClearPageStreams,
     }),
@@ -88,8 +88,12 @@ vi.mock('@/lib/ai/core/browser-session-id', () => ({
   getBrowserSessionId: mockGetBrowserSessionId,
 }));
 
-import { useChatStreamSocket } from '../useChatStreamSocket';
-import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
+import { useChannelStreamSocket } from '../useChannelStreamSocket';
+import type {
+  AiStreamStartPayload,
+  AiStreamCompletePayload,
+  ChatUserMessagePayload,
+} from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
   messageId: 'msg-1',
@@ -103,7 +107,14 @@ const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
   pageId: 'page-a',
 };
 
-describe('useChatStreamSocket', () => {
+const USER_MESSAGE_PAYLOAD: ChatUserMessagePayload = {
+  message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+  pageId: 'page-a',
+  conversationId: 'conv-1',
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+describe('useChannelStreamSocket', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSocket._reset();
@@ -121,7 +132,7 @@ describe('useChatStreamSocket', () => {
 
   describe('chat:stream_start from another user', () => {
     it('should call addStream and start consumeStreamJoin', () => {
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -139,20 +150,21 @@ describe('useChatStreamSocket', () => {
       );
     });
 
-    it('should wire onChunk to appendText in the store', async () => {
-      let capturedOnChunk!: (text: string) => void;
+    it('should wire onChunk to appendPart in the store', async () => {
+      let capturedOnChunk!: (part: unknown) => void;
       mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (text: string) => void) => {
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
           capturedOnChunk = onChunk;
           return new Promise(() => {}); // never resolves
         },
       );
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
-      capturedOnChunk('hello');
-      expect(mockAppendText).toHaveBeenCalledWith('msg-1', 'hello');
+      const textPart = { type: 'text', text: 'hello' };
+      capturedOnChunk(textPart);
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-1', textPart);
     });
 
     it('should call removeStream and onStreamComplete after consumeStreamJoin resolves', async () => {
@@ -162,7 +174,7 @@ describe('useChatStreamSocket', () => {
       );
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { resolveJoin(); });
@@ -180,7 +192,7 @@ describe('useChatStreamSocket', () => {
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { resolveJoin(); });
@@ -193,7 +205,7 @@ describe('useChatStreamSocket', () => {
     it('given consumeStreamJoin rejects, should call removeStream to prevent stale store entry', async () => {
       mockConsumeStreamJoin.mockRejectedValue(new Error('network error'));
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       await act(async () => { await Promise.resolve(); });
@@ -209,7 +221,7 @@ describe('useChatStreamSocket', () => {
         triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
       };
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', localPayload); });
 
       expect(mockAddStream).not.toHaveBeenCalled();
@@ -222,7 +234,7 @@ describe('useChatStreamSocket', () => {
         triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_REMOTE },
       };
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', otherSessionSameUser); });
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
@@ -233,9 +245,61 @@ describe('useChatStreamSocket', () => {
   });
 
   // A1 — pageId guard
+  describe('chat:user_message', () => {
+    it('given a chat:user_message from another user for the current channel, should call onUserMessage with the message payload', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => { mockSocket._trigger('chat:user_message', USER_MESSAGE_PAYLOAD); });
+
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+      expect(onUserMessage).toHaveBeenCalledWith(USER_MESSAGE_PAYLOAD.message, USER_MESSAGE_PAYLOAD);
+    });
+
+    it('given chat:user_message with a different pageId, should NOT call onUserMessage (stale-room guard)', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => {
+        mockSocket._trigger('chat:user_message', { ...USER_MESSAGE_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(onUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given chat:user_message whose triggeredBy.browserSessionId matches the local session, should NOT call onUserMessage (own-tab dedup)', () => {
+      const onUserMessage = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onUserMessage }));
+
+      act(() => {
+        mockSocket._trigger('chat:user_message', {
+          ...USER_MESSAGE_PAYLOAD,
+          triggeredBy: { ...USER_MESSAGE_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given the socket reconnects, should keep the chat:user_message handler registered', () => {
+      const onUserMessage = vi.fn();
+      const { rerender } = renderHook(({ id }) => useChannelStreamSocket(id, { onUserMessage }), {
+        initialProps: { id: 'page-a' as string | undefined },
+      });
+
+      // Re-render to a different channel and back — exercises the listener re-registration path.
+      rerender({ id: 'page-b' });
+      rerender({ id: 'page-a' });
+
+      act(() => { mockSocket._trigger('chat:user_message', USER_MESSAGE_PAYLOAD); });
+
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('pageId guard', () => {
     it('given chat:stream_start with a different pageId, should ignore the event', () => {
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => {
         mockSocket._trigger('chat:stream_start', { ...START_PAYLOAD, pageId: 'page-b' });
@@ -247,7 +311,7 @@ describe('useChatStreamSocket', () => {
 
     it('given chat:stream_complete with a different pageId, should ignore the event', () => {
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
       act(() => {
         mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, pageId: 'page-b' });
@@ -261,7 +325,7 @@ describe('useChatStreamSocket', () => {
   describe('chat:stream_complete', () => {
     it('should call removeStream and onStreamComplete', () => {
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -274,7 +338,7 @@ describe('useChatStreamSocket', () => {
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -290,7 +354,7 @@ describe('useChatStreamSocket', () => {
         },
       );
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
@@ -307,7 +371,7 @@ describe('useChatStreamSocket', () => {
       );
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       // SSE done resolves first
@@ -323,7 +387,7 @@ describe('useChatStreamSocket', () => {
       mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves naturally
       const onStreamComplete = vi.fn();
 
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
       // stream_complete fires (aborts the SSE join)
@@ -334,13 +398,51 @@ describe('useChatStreamSocket', () => {
 
       expect(onStreamComplete).toHaveBeenCalledTimes(1);
     });
+
+    it('given SSE rejects then chat:stream_complete fires, should NOT call onStreamComplete', async () => {
+      let rejectJoin!: (err: Error) => void;
+      mockConsumeStreamJoin.mockReturnValueOnce(
+        new Promise((_res, rej) => { rejectJoin = rej; }),
+      );
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      await act(async () => { rejectJoin(new Error('network down')); await Promise.resolve(); });
+
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      expect(onStreamComplete).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('given SSE resolves after unmount via aborted controller, should NOT call onStreamComplete', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onStreamComplete = vi.fn();
+
+      const { unmount } = renderHook(() =>
+        useChannelStreamSocket('page-a', { onStreamComplete }),
+      );
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      unmount();
+
+      await act(async () => { resolveJoin(); await Promise.resolve(); });
+
+      expect(onStreamComplete).not.toHaveBeenCalled();
+    });
   });
 
   // A3 — callback ref: onStreamComplete change should not re-register handlers
   describe('onStreamComplete stability', () => {
     it('given onStreamComplete reference changes between renders, should not re-register socket handlers', () => {
       let callback = vi.fn();
-      const { rerender } = renderHook(() => useChatStreamSocket('page-a', callback));
+      const { rerender } = renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete: callback }));
 
       const onCallCount = mockSocket.on.mock.calls.length;
 
@@ -358,7 +460,7 @@ describe('useChatStreamSocket', () => {
 
       const firstCallback = vi.fn();
       let callback = firstCallback;
-      const { rerender } = renderHook(() => useChatStreamSocket('page-a', callback));
+      const { rerender } = renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete: callback }));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -376,7 +478,7 @@ describe('useChatStreamSocket', () => {
 
   describe('cleanup on unmount', () => {
     it('should remove socket listeners, abort controllers, and clearPageStreams', () => {
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));
 
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
@@ -396,7 +498,7 @@ describe('useChatStreamSocket', () => {
   // AC5 — DB bootstrap on mount
   describe('DB bootstrap on mount', () => {
     it('given the hook mounts, should fetch active streams for the channelId', async () => {
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -407,7 +509,7 @@ describe('useChatStreamSocket', () => {
     });
 
     it('given the channelId contains characters needing encoding, should encode it in the URL', async () => {
-      renderHook(() => useChatStreamSocket('user:abc:global'));
+      renderHook(() => useChannelStreamSocket('user:abc:global'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -429,7 +531,7 @@ describe('useChatStreamSocket', () => {
         }),
       });
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -459,7 +561,7 @@ describe('useChatStreamSocket', () => {
         }),
       });
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); });
 
@@ -485,7 +587,7 @@ describe('useChatStreamSocket', () => {
       });
 
       const onStreamComplete = vi.fn();
-      renderHook(() => useChatStreamSocket('page-a', onStreamComplete));
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
       // Fire stream_complete BEFORE the bootstrap fetch resolves —
       // this populates processedRef, so the bootstrap should skip msg-1.
@@ -500,12 +602,12 @@ describe('useChatStreamSocket', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockFetchWithAuth.mockRejectedValueOnce(new Error('network down'));
 
-      renderHook(() => useChatStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
       expect(warn).toHaveBeenCalledWith(
-        '[useChatStreamSocket] bootstrap failed',
+        '[useChannelStreamSocket] bootstrap failed',
         expect.any(Error),
       );
       warn.mockRestore();
@@ -520,7 +622,7 @@ describe('useChatStreamSocket', () => {
         () => new Promise((res) => { resolveFetch = res; }),
       );
 
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));
       unmount();
 
       await act(async () => {
@@ -554,7 +656,7 @@ describe('useChatStreamSocket', () => {
       });
       mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves
 
-      const { unmount } = renderHook(() => useChatStreamSocket('page-a'));
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));
 
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
@@ -565,6 +667,147 @@ describe('useChatStreamSocket', () => {
       unmount();
 
       expect(capturedSignal.aborted).toBe(true);
+    });
+  });
+
+  describe('onOwnStreamBootstrap', () => {
+    it('given a bootstrapped stream from the local browser session, should fire onOwnStreamBootstrap exactly once with the messageId', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own-bootstrap',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+      const onOwnStreamBootstrap = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamBootstrap }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onOwnStreamBootstrap).toHaveBeenCalledTimes(1);
+      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({ messageId: 'msg-own-bootstrap' });
+    });
+
+    it('given a bootstrapped stream from a remote tab, should not fire onOwnStreamBootstrap', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-remote-bootstrap',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+      const onOwnStreamBootstrap = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamBootstrap }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onOwnStreamBootstrap).not.toHaveBeenCalled();
+    });
+
+    it('given a chat:stream_start fires after mount, should not fire onOwnStreamBootstrap', () => {
+      const onOwnStreamBootstrap = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamBootstrap }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      expect(onOwnStreamBootstrap).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onOwnStreamFinalize', () => {
+    const bootstrapOwnStream = (messageId = 'msg-own') => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId,
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+    };
+
+    it('given a bootstrapped own stream completes via SSE resolve, should fire onOwnStreamFinalize exactly once', async () => {
+      bootstrapOwnStream();
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onOwnStreamFinalize = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      await act(async () => { resolveJoin(); });
+
+      expect(onOwnStreamFinalize).toHaveBeenCalledTimes(1);
+      expect(onOwnStreamFinalize).toHaveBeenCalledWith({ messageId: 'msg-own' });
+    });
+
+    it('given a bootstrapped own stream is finalized via chat:stream_complete socket, should fire onOwnStreamFinalize exactly once', async () => {
+      bootstrapOwnStream();
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves
+      const onOwnStreamFinalize = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => {
+        mockSocket._trigger('chat:stream_complete', { messageId: 'msg-own', pageId: 'page-a' });
+      });
+      await act(async () => { await Promise.resolve(); });
+
+      expect(onOwnStreamFinalize).toHaveBeenCalledTimes(1);
+      expect(onOwnStreamFinalize).toHaveBeenCalledWith({ messageId: 'msg-own' });
+    });
+
+    it('given both SSE resolve and chat:stream_complete fire for the same own stream, should fire onOwnStreamFinalize exactly once', async () => {
+      bootstrapOwnStream();
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onOwnStreamFinalize = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      await act(async () => { resolveJoin(); });
+      act(() => {
+        mockSocket._trigger('chat:stream_complete', { messageId: 'msg-own', pageId: 'page-a' });
+      });
+
+      expect(onOwnStreamFinalize).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a remote stream completes, should not fire onOwnStreamFinalize', async () => {
+      const onOwnStreamFinalize = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+
+      expect(onOwnStreamFinalize).not.toHaveBeenCalled();
+    });
+
+    it('given the hook unmounts while an own stream is in flight, should not fire onOwnStreamFinalize', async () => {
+      bootstrapOwnStream();
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {}));
+      const onOwnStreamFinalize = vi.fn();
+
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(onOwnStreamFinalize).not.toHaveBeenCalled();
     });
   });
 });

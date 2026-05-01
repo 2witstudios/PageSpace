@@ -1,5 +1,6 @@
-import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
+import { convertToModelMessages, generateText, stepCountIs, hasToolCall, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import {
   createAIProvider,
@@ -135,13 +136,39 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
 
     // 6. Filter tools based on agent's enabled tools
     const enabledTools = (agent.enabledTools as string[] | null) ?? [];
-    const availableTools = enabledTools.length > 0
+    let availableTools: ToolSet = enabledTools.length > 0
       ? Object.fromEntries(
           Object.entries(pageSpaceTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
-        )
+        ) as ToolSet
       : {};
+
+    // Workflows execute the same page agent used in chat, so they should also
+    // inherit integration grants such as GitHub/Notion tools.
+    try {
+      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const integrationTools = await resolvePageAgentIntegrationTools({
+        agentId: agent.id,
+        userId: workflow.createdBy,
+        driveId: workflow.driveId,
+      });
+
+      if (Object.keys(integrationTools).length > 0) {
+        availableTools = mergeToolSets(availableTools, integrationTools);
+        loggers.api.info('Workflow executor: merged integration tools', {
+          workflowId: workflow.id,
+          agentId: agent.id,
+          integrationToolCount: Object.keys(integrationTools).length,
+          totalTools: Object.keys(availableTools).length,
+        });
+      }
+    } catch (error) {
+      loggers.api.error('Workflow executor: failed to resolve integration tools', error as Error, {
+        workflowId: workflow.id,
+        agentId: agent.id,
+      });
+    }
 
     // 7. Build execution context
     const conversationId = `workflow-${workflow.id}-${Date.now()}`;

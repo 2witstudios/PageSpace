@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
+const text = (text: string) => ({ type: 'text' as const, text });
+
 describe('consumeStreamJoin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -28,10 +30,10 @@ describe('consumeStreamJoin', () => {
     );
   }
 
-  it('given valid SSE chunks and done sentinel, should call onChunk for each text and return { aborted: false }', async () => {
+  it('given valid part frames and done sentinel, should call onChunk for each part and return { aborted: false }', async () => {
     stubFetch(encodeLines([
-      'data: {"text":"hello"}\n\n',
-      'data: {"text":" world"}\n\n',
+      'data: {"part":{"type":"text","text":"hello"}}\n\n',
+      'data: {"part":{"type":"text","text":" world"}}\n\n',
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
@@ -40,14 +42,35 @@ describe('consumeStreamJoin', () => {
     const result = await consumeStreamJoin('msg-1', AbortSignal.timeout(5000), onChunk);
 
     expect(onChunk).toHaveBeenCalledTimes(2);
-    expect(onChunk).toHaveBeenNthCalledWith(1, 'hello');
-    expect(onChunk).toHaveBeenNthCalledWith(2, ' world');
+    expect(onChunk).toHaveBeenNthCalledWith(1, text('hello'));
+    expect(onChunk).toHaveBeenNthCalledWith(2, text(' world'));
     expect(result).toEqual({ aborted: false });
+  });
+
+  it('given a tool part frame, should pass the full tool object through to onChunk', async () => {
+    const tool = {
+      type: 'tool-list_pages',
+      toolCallId: 'tc1',
+      toolName: 'list_pages',
+      state: 'output-available',
+      input: { driveId: 'd1' },
+      output: { pages: [] },
+    };
+    stubFetch(encodeLines([
+      `data: ${JSON.stringify({ part: tool })}\n\n`,
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-tool', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledWith(tool);
   });
 
   it('given done sentinel with aborted: true, should return { aborted: true } without throwing', async () => {
     stubFetch(encodeLines([
-      'data: {"text":"partial"}\n\n',
+      'data: {"part":{"type":"text","text":"partial"}}\n\n',
       'data: {"done":true,"aborted":true}\n\n',
     ]));
 
@@ -55,7 +78,7 @@ describe('consumeStreamJoin', () => {
     const onChunk = vi.fn();
     const result = await consumeStreamJoin('msg-2', AbortSignal.timeout(5000), onChunk);
 
-    expect(onChunk).toHaveBeenCalledWith('partial');
+    expect(onChunk).toHaveBeenCalledWith(text('partial'));
     expect(result).toEqual({ aborted: true });
   });
 
@@ -93,7 +116,7 @@ describe('consumeStreamJoin', () => {
     stubFetch(encodeLines([
       'data: not-json\n\n',
       'comment: ignored\n\n',
-      'data: {"text":"ok"}\n\n',
+      'data: {"part":{"type":"text","text":"ok"}}\n\n',
       'data: {"done":true,"aborted":false}\n\n',
     ]));
 
@@ -102,8 +125,53 @@ describe('consumeStreamJoin', () => {
     const result = await consumeStreamJoin('msg-5', AbortSignal.timeout(5000), onChunk);
 
     expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk).toHaveBeenCalledWith('ok');
+    expect(onChunk).toHaveBeenCalledWith(text('ok'));
     expect(result).toEqual({ aborted: false });
+  });
+
+  it('given a legacy {text:...} frame from an old server, should skip it (no part field present)', async () => {
+    stubFetch(encodeLines([
+      'data: {"text":"legacy"}\n\n',
+      'data: {"part":{"type":"text","text":"current"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-mixed', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(text('current'));
+  });
+
+  it('given a frame with an empty part object, should skip it without forwarding (no type discriminator means no renderer route)', async () => {
+    stubFetch(encodeLines([
+      'data: {"part":{}}\n\n',
+      'data: {"part":{"type":"text","text":"after"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-empty-part', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(text('after'));
+  });
+
+  it('given a tool part frame missing toolCallId, should skip it (the idempotency key would be lost)', async () => {
+    stubFetch(encodeLines([
+      'data: {"part":{"type":"tool-list_pages","state":"output-available"}}\n\n',
+      'data: {"part":{"type":"text","text":"recovered"}}\n\n',
+      'data: {"done":true,"aborted":false}\n\n',
+    ]));
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    const onChunk = vi.fn();
+    await consumeStreamJoin('msg-bad-tool', AbortSignal.timeout(5000), onChunk);
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith(text('recovered'));
   });
 
   it('given fetch call, should include credentials and the correct URL', async () => {
@@ -123,7 +191,6 @@ describe('consumeStreamJoin', () => {
     );
   });
 
-  // C1 — encodeURIComponent
   it('given messageId with special characters, should URL-encode it in the request', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -141,7 +208,6 @@ describe('consumeStreamJoin', () => {
     );
   });
 
-  // C2 — null body guard
   it('given a 2xx response with a null body, should throw', async () => {
     vi.stubGlobal(
       'fetch',
@@ -155,12 +221,10 @@ describe('consumeStreamJoin', () => {
     ).rejects.toThrow();
   });
 
-  // C5 — partial-chunk buffer
-  it('given SSE line split across two read chunks, should buffer and parse correctly', async () => {
+  it('given an SSE line split across two read chunks, should buffer and parse correctly', async () => {
     const encoder = new TextEncoder();
-    // 'data: {"text":"hello"}\n\n' split mid-JSON across two enqueues
-    const halfA = 'data: {"text"';
-    const halfB = ':"hello"}\n\ndata: {"done":true,"aborted":false}\n\n';
+    const halfA = 'data: {"part":{"type":"text"';
+    const halfB = ',"text":"hello"}}\n\ndata: {"done":true,"aborted":false}\n\n';
 
     stubFetch(new ReadableStream({
       start(controller) {
@@ -174,7 +238,7 @@ describe('consumeStreamJoin', () => {
     const onChunk = vi.fn();
     const result = await consumeStreamJoin('msg-split', AbortSignal.timeout(5000), onChunk);
 
-    expect(onChunk).toHaveBeenCalledWith('hello');
+    expect(onChunk).toHaveBeenCalledWith(text('hello'));
     expect(result).toEqual({ aborted: false });
   });
 });

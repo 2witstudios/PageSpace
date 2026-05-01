@@ -5,8 +5,13 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { useAuth } from '@/hooks/useAuth';
+import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
+import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -85,6 +90,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   // Global stop function
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+
+  // Protects bootstrap-replayed own streams from SWR clobbers. Surfaces
+  // (GlobalAssistantView, SidebarChatTab) register based on local useChat
+  // status, which is `idle` immediately after a refresh — so they miss the
+  // case where the hook re-detects an in-flight own stream and flips this
+  // provider's isStreaming. This registration covers that gap.
+  useStreamingRegistration('global-chat', isStreaming, {
+    componentName: 'GlobalChatProvider',
+  });
 
   /**
    * Load a conversation by ID
@@ -221,17 +235,63 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   isInitializedRef.current = isInitialized;
 
   useEffect(() => {
-    const didTransitionToConnected =
-      prevConnectionStatusRef.current !== 'connected' && connectionStatus === 'connected';
+    const prevStatus = prevConnectionStatusRef.current;
     prevConnectionStatusRef.current = connectionStatus;
 
-    if (didTransitionToConnected) {
-      if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
-        refreshConversation();
-      }
+    const refreshNow = shouldRefreshOnReconnect(
+      prevStatus,
+      connectionStatus,
+      hasInitialConnectRef.current,
+    );
+    if (refreshNow && isInitializedRef.current && currentConversationId) {
+      refreshConversation();
+    }
+
+    const isFreshConnect = prevStatus !== 'connected' && connectionStatus === 'connected';
+    if (isFreshConnect) {
       hasInitialConnectRef.current = true;
     }
   }, [connectionStatus, currentConversationId, refreshConversation]);
+
+  // ============================================
+  // GLOBAL CHANNEL STREAM SOCKET — bootstrap + live events
+  // ============================================
+  // Hook handles DB replay, live chat:stream_start/_complete, SSE join, and
+  // teardown. Local own-stream side effects (the in-flight streaming flag and
+  // stop-button slot driven by useChat in this tab) are wired through the
+  // own-stream callbacks below.
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const channelId = userId ? globalChannelId(userId) : undefined;
+
+  // Always-current refs so the hook's stable callbacks can call into the
+  // latest setters/refresh without forcing the hook to resubscribe.
+  const setIsStreamingRef = useRef(setIsStreaming);
+  setIsStreamingRef.current = setIsStreaming;
+  const setStopStreamingRef = useRef(setStopStreaming);
+  setStopStreamingRef.current = setStopStreaming;
+  const refreshConversationRef = useRef(refreshConversation);
+  refreshConversationRef.current = refreshConversation;
+
+  useChannelStreamSocket(channelId, {
+    onUserMessage: (message, payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    },
+    onStreamComplete: () => {
+      refreshConversationRef.current();
+    },
+    onOwnStreamBootstrap: ({ messageId }) => {
+      setIsStreamingRef.current(true);
+      setStopStreamingRef.current(() => () => {
+        abortActiveStreamByMessageId({ messageId });
+      });
+    },
+    onOwnStreamFinalize: () => {
+      setIsStreamingRef.current(false);
+      setStopStreamingRef.current(null);
+    },
+  });
 
   // Track the previous conversation ID to detect conversation switches
   const prevConversationIdRef = useRef<string | null>(null);

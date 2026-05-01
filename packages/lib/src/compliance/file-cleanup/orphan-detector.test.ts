@@ -87,6 +87,35 @@ describe('findOrphanedFileRecords', () => {
     const fullSql = sqlArg.strings.join('');
     expect(fullSql).toContain('storagePath');
   });
+
+  it('given_dmLinkageTablesExist_queryReferencesFileConversationsAndDirectMessages', async () => {
+    // Locks in the predicate so a file with a live DM linkage is never deleted.
+    // Without these joins, polymorphic uploads (PR #6 of the DM-files epic) silently
+    // become harvest targets for the cleanup cron.
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await findOrphanedFileRecords(db as never);
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    expect(fullSql).toContain('file_conversations');
+    expect(fullSql).toContain('direct_messages');
+  });
+
+  it('given_nullDriveId_preservesNullThroughMapper', async () => {
+    // After files.driveId became nullable, conversation-uploaded files surface as null.
+    const db = {
+      execute: vi.fn().mockResolvedValue({
+        rows: [{ id: 'f1', storagePath: '/p', driveId: null, sizeBytes: 256 }],
+      }),
+    };
+
+    const result = await findOrphanedFileRecords(db as never);
+
+    expect(result[0].driveId).toBeNull();
+  });
 });
 
 describe('isFileOrphaned', () => {
@@ -112,6 +141,19 @@ describe('isFileOrphaned', () => {
     };
 
     await expect(isFileOrphaned(db as never, 'file-1')).rejects.toThrow('timeout');
+  });
+
+  it('given_dmLinkageTablesExist_queryReferencesFileConversationsAndDirectMessages', async () => {
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await isFileOrphaned(db as never, 'file-1');
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    expect(fullSql).toContain('file_conversations');
+    expect(fullSql).toContain('direct_messages');
   });
 });
 

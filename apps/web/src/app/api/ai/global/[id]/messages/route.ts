@@ -5,9 +5,11 @@ import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket';
+import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -819,7 +821,7 @@ MENTION PROCESSING:
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
-    const channelId = `user:${userId}:global`;
+    const channelId = globalChannelId(userId);
 
     const [authUserResult, profileResult] = await Promise.allSettled([
       db
@@ -836,6 +838,15 @@ MENTION PROCESSING:
     const authUserName = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
     const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
     const displayName = profileDisplayName ?? authUserName ?? 'Someone';
+
+    if (userMessage && userMessage.role === 'user') {
+      broadcastChatUserMessage({
+        message: userMessage,
+        pageId: channelId,
+        conversationId,
+        triggeredBy: { userId, displayName, browserSessionId },
+      }).catch(() => {});
+    }
 
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
@@ -872,9 +883,8 @@ MENTION PROCESSING:
           },
           maxRetries: 20,
           onChunk: ({ chunk }) => {
-            if (chunk.type === 'text-delta') {
-              lifecycle!.pushChunk(chunk.text);
-            }
+            const part = chunkToPart(chunk as never);
+            if (part) lifecycle!.pushPart(part);
           },
           onAbort: () => {
             loggers.api.info('Global Assistant Chat API: Stream aborted by user', {

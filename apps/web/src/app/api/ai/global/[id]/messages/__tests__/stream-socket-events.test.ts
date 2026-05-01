@@ -10,12 +10,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushChunk,
+  mockLifecyclePushPart,
   mockLifecycleFinish,
+  mockBroadcastChatUserMessage,
+  mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushChunk: vi.fn(),
+  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
+  mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface MockUIStreamOptions {
@@ -39,6 +43,7 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastUsageEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -155,7 +160,7 @@ vi.mock('@/lib/ai/core', () => ({
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
-  saveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
   buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
@@ -308,7 +313,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
-      pushChunk: mockLifecyclePushChunk,
+      pushPart: mockLifecyclePushPart,
       finish: mockLifecycleFinish,
     });
   });
@@ -397,23 +402,99 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
   });
 
+  describe('user-message broadcast', () => {
+    it('given a POST with a user message, should broadcast chat:user_message routed to the per-user global channel', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+      // displayName resolution is covered by its own test; here we lock the
+      // routing fields and the saved-message passthrough.
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+          pageId: 'user:user-1:global',
+          conversationId: 'conv-1',
+          triggeredBy: expect.objectContaining({
+            userId: 'user-1',
+            browserSessionId: 'session-y',
+          }),
+        }),
+      );
+    });
+
+    it('given the user-message DB save rejects, should NOT broadcast chat:user_message', async () => {
+      mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given broadcastChatUserMessage rejects, should not block the request', async () => {
+      mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
+
+      await expect(POST(makeRequest(), makeContext())).resolves.toBeDefined();
+    });
+  });
+
   describe('chunk forwarding', () => {
-    it('given a text-delta chunk, should forward the text to lifecycle.pushChunk', async () => {
+    it('given a text-delta chunk, should forward a text part to lifecycle.pushPart', async () => {
       await POST(makeRequest(), makeContext());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'c1' } });
 
-      expect(mockLifecyclePushChunk).toHaveBeenCalledWith('hello');
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({ type: 'text', text: 'hello' });
     });
 
-    it('given a non-text-delta chunk, should not forward anything', async () => {
+    it('given a tool-call chunk, should forward an input-available tool part', async () => {
       await POST(makeRequest(), makeContext());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'tool-call', toolCallId: 't', toolName: 'x', args: {} } });
+      captured.streamTextOptions.onChunk?.({
+        chunk: { type: 'tool-call', toolCallId: 'tc1', toolName: 'list_pages', input: { driveId: 'd1' } },
+      });
 
-      expect(mockLifecyclePushChunk).not.toHaveBeenCalled();
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'input-available',
+        input: { driveId: 'd1' },
+      });
+    });
+
+    it('given a tool-result chunk, should forward an output-available tool part', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({
+        chunk: {
+          type: 'tool-result',
+          toolCallId: 'tc1',
+          toolName: 'list_pages',
+          input: { driveId: 'd1' },
+          output: { pages: [{ id: 'p1' }] },
+        },
+      });
+
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'output-available',
+        input: { driveId: 'd1' },
+        output: { pages: [{ id: 'p1' }] },
+      });
+    });
+
+    it('given a chunk type out of v1 multicast scope, should not forward anything', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'finish-step' } });
+
+      expect(mockLifecyclePushPart).not.toHaveBeenCalled();
     });
   });
 

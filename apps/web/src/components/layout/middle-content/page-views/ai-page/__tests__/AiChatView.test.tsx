@@ -73,7 +73,7 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
 }));
 
 vi.mock('@/hooks/usePageSocketRoom', () => ({ usePageSocketRoom: vi.fn() }));
-vi.mock('@/hooks/useChatStreamSocket', () => ({ useChatStreamSocket: vi.fn() }));
+vi.mock('@/hooks/useChannelStreamSocket', () => ({ useChannelStreamSocket: vi.fn() }));
 vi.mock('@/hooks/useAppStateRecovery', () => ({ useAppStateRecovery: vi.fn() }));
 
 vi.mock('@/hooks/useDisplayPreferences', () => ({
@@ -192,7 +192,7 @@ vi.mock('zustand/react/shallow', () => ({ useShallow: vi.fn((fn: unknown) => fn)
 import AiChatView from '../AiChatView';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useChatStreamSocket } from '@/hooks/useChatStreamSocket';
+import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { ChatLayout } from '@/components/ai/chat/layouts';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -471,8 +471,8 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given fireComplete fires with stream.conversationId matching the persisted conversation while currentConversationId is the page-scoped default, should sync ID and append the message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
-      capturedCallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
     });
 
     setupNoConversationsInit();
@@ -488,7 +488,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -512,8 +512,8 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given fireComplete fires with stream.conversationId that does NOT match the persisted conversation, should NOT append the message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
-      capturedCallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
     });
 
     setupNoConversationsInit();
@@ -529,7 +529,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -554,8 +554,8 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given the sync fetch returns !res.ok, should NOT append any message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
-      capturedCallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
     });
 
     setupNoConversationsInit();
@@ -571,7 +571,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -594,8 +594,8 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   test('given the sync fetch returns an empty conversations array, should NOT append any message', async () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
-      capturedCallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
     });
 
     setupNoConversationsInit();
@@ -611,7 +611,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -635,8 +635,8 @@ describe('AiChatView late-joiner conversation sync', () => {
   test('given the sync fetch throws a network error, should warn and NOT append any message', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let capturedCallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((_pageId, cb) => {
-      capturedCallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
     });
 
     setupNoConversationsInit();
@@ -652,7 +652,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -685,8 +685,8 @@ describe('AiChatView late-joiner conversation sync', () => {
   test('given the component navigates to a different page while the sync fetch is in-flight, should NOT apply stale page-A state to page B', async () => {
     const PAGE_B_ID = 'page-b-456';
     let capturedPageACallback: ((messageId: string) => void) | undefined;
-    vi.mocked(useChatStreamSocket).mockImplementation((pageId, cb) => {
-      if (pageId === PAGE_ID) capturedPageACallback = cb;
+    vi.mocked(useChannelStreamSocket).mockImplementation((pageId, opts) => {
+      if (pageId === PAGE_ID) capturedPageACallback = opts?.onStreamComplete;
     });
 
     let resolveSyncFetch!: () => void;
@@ -723,7 +723,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI from page A', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI from page A' }], conversationId: REAL_CONV_ID }]]),
     });
 
     // Trigger the late-joiner sync (starts the deferred fetch)
@@ -749,6 +749,135 @@ describe('AiChatView late-joiner conversation sync', () => {
       should: 'NOT make any functional setMessages calls (stale page-A append)',
       actual: functionalCallsAfterNav.length,
       expected: 0,
+    });
+  });
+});
+
+describe('AiChatView remote user-message broadcast', () => {
+  const page = makePage();
+
+  type UserMsgCallback = (
+    msg: { id: string; role: string; parts: unknown[] },
+    payload: { conversationId: string },
+  ) => void;
+
+  const captureCallback = () => {
+    let captured: UserMsgCallback | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      captured = opts?.onUserMessage as UserMsgCallback | undefined;
+    });
+    return () => captured;
+  };
+
+  const setupExistingConversation = (testMessages: { id: string; role: string }[] = []) => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: testMessages });
+      }
+      return makeErrorResponse();
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('given onUserMessage fires with conversationId matching the active conversation, should append the message', async () => {
+    const getCb = captureCallback();
+    setupExistingConversation([]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const userMsg = { id: 'msg-from-alice', role: 'user' as const, parts: [{ type: 'text', text: 'hi from Alice' }] };
+    act(() => {
+      getCb()?.(userMsg, { conversationId: CONV_ID });
+    });
+
+    assert({
+      given: 'a remote user-message event for the active conversation',
+      should: 'append it to messages via setMessages',
+      actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+      expected: true,
+    });
+  });
+
+  test('given onUserMessage fires for a conversationId different from the current one, should NOT append', async () => {
+    const getCb = captureCallback();
+    setupExistingConversation([]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const callsBefore = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    const userMsg = { id: 'msg-from-other-conv', role: 'user' as const, parts: [{ type: 'text', text: 'wrong conv' }] };
+    act(() => {
+      getCb()?.(userMsg, { conversationId: 'different-conv-id' });
+    });
+
+    const callsAfter = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    assert({
+      given: 'a remote user-message event for a different conversation',
+      should: 'NOT append (no functional setMessages call added)',
+      actual: callsAfter,
+      expected: callsBefore,
+    });
+  });
+
+  test('given onUserMessage fires with a messageId already present in messages, should NOT append a duplicate', async () => {
+    const getCb = captureCallback();
+    const existingMsg = { id: 'msg-already-there', role: 'user' as const, parts: [{ type: 'text', text: 'duplicate' }] };
+    setupExistingConversation([existingMsg]);
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with existing conversation that includes the message',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    const callsBefore = mockSetMessages.mock.calls.filter((a) => typeof a[0] === 'function').length;
+    act(() => {
+      getCb()?.(existingMsg, { conversationId: CONV_ID });
+    });
+    // The handler may invoke setMessages with an updater that returns prev unchanged;
+    // verify the resulting messages array has no duplicate.
+    const allFunctional = mockSetMessages.mock.calls
+      .slice(callsBefore)
+      .filter((a) => typeof a[0] === 'function')
+      .map((a) => (a[0] as (prev: unknown[]) => unknown[])([existingMsg]));
+
+    const noDup = allFunctional.every(
+      (next) => (next as Array<{ id: string }>).filter((m) => m.id === existingMsg.id).length === 1,
+    );
+
+    assert({
+      given: 'a remote user-message event whose messageId is already in messages',
+      should: 'leave the array with a single copy of that messageId',
+      actual: noDup,
+      expected: true,
     });
   });
 });

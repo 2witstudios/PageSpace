@@ -1,18 +1,22 @@
 import { create } from 'zustand';
+import type { UIMessage } from 'ai';
+import { appendPart as appendPartPure } from '@/lib/ai/streams/appendPart';
+
+type UIMessagePart = UIMessage['parts'][number];
 
 export interface PendingStream {
   messageId: string;
   pageId: string;
   conversationId: string;
   triggeredBy: { userId: string; displayName: string };
-  text: string;
+  parts: UIMessagePart[];
   isOwn: boolean;
 }
 
 interface PendingStreamsState {
   streams: Map<string, PendingStream>;
-  addStream: (stream: Omit<PendingStream, 'text'>) => void;
-  appendText: (messageId: string, chunk: string) => void;
+  addStream: (stream: Omit<PendingStream, 'parts'>) => void;
+  appendPart: (messageId: string, part: UIMessagePart) => void;
   removeStream: (messageId: string) => void;
   clearPageStreams: (pageId: string) => void;
   getRemotePageStreams: (pageId: string) => PendingStream[];
@@ -24,18 +28,19 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
 
   addStream: (stream) => {
     set((state) => {
+      if (state.streams.has(stream.messageId)) return state;
       const next = new Map(state.streams);
-      next.set(stream.messageId, { ...stream, text: '' });
+      next.set(stream.messageId, { ...stream, parts: [] });
       return { streams: next };
     });
   },
 
-  appendText: (messageId, chunk) => {
+  appendPart: (messageId, part) => {
     set((state) => {
       const existing = state.streams.get(messageId);
       if (!existing) return state;
       const next = new Map(state.streams);
-      next.set(messageId, { ...existing, text: existing.text + chunk });
+      next.set(messageId, { ...existing, parts: appendPartPure(existing.parts, part) });
       return { streams: next };
     });
   },

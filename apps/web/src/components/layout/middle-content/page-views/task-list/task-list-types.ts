@@ -44,6 +44,11 @@ export interface TaskItem {
   priority: 'low' | 'medium' | 'high';
   position: number;
   dueDate: string | null;
+  metadata?: Record<string, unknown> | null;
+  // activeTriggerCount is the canonical UI source for trigger presence (live join in
+  // /api/pages/[pageId]/tasks). The DB row also carries metadata.hasTrigger/triggerTypes
+  // written by recomputeTaskTriggerMetadata, but no UI path reads them.
+  activeTriggerCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -134,4 +139,5 @@ export interface TaskHandlers {
   onDelete: (taskId: string) => void;
   onNavigate: (task: TaskItem) => void;
   onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
 }

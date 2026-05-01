@@ -1,6 +1,7 @@
-import { pgTable, text, timestamp, boolean, pgEnum, index, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, jsonb, pgEnum, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { files, type AttachmentMeta } from './storage';
 import { createId } from '@paralleldrive/cuid2';
 
 // Connection status enum
@@ -61,6 +62,8 @@ export const directMessages = pgTable('direct_messages', {
   conversationId: text('conversationId').notNull().references(() => dmConversations.id, { onDelete: 'cascade' }),
   senderId: text('senderId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   content: text('content').notNull(),
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  attachmentMeta: jsonb('attachmentMeta').$type<AttachmentMeta | null>(),
   isRead: boolean('isRead').default(false).notNull(),
   readAt: timestamp('readAt', { mode: 'date' }),
   isEdited: boolean('isEdited').default(false).notNull(),
@@ -71,6 +74,7 @@ export const directMessages = pgTable('direct_messages', {
     conversationIdx: index('direct_messages_conversation_id_idx').on(table.conversationId),
     senderIdx: index('direct_messages_sender_id_idx').on(table.senderId),
     createdAtIdx: index('direct_messages_created_at_idx').on(table.createdAt),
+    fileIdx: index('direct_messages_file_id_idx').on(table.fileId),
     // Composite index for fetching messages in a conversation
     conversationCreatedIdx: index('direct_messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     // Index for unread messages
@@ -126,5 +130,9 @@ export const directMessagesRelations = relations(directMessages, ({ one }) => ({
   sender: one(users, {
     fields: [directMessages.senderId],
     references: [users.id],
+  }),
+  file: one(files, {
+    fields: [directMessages.fileId],
+    references: [files.id],
   }),
 }));

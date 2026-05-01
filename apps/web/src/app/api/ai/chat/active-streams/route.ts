@@ -6,6 +6,7 @@ import { and, asc, eq, gte } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -31,9 +32,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'channelId is required' }, { status: 400 });
     }
 
-    const globalMatch = channelId.match(/^user:(.+):global$/);
-    if (globalMatch) {
-      if (globalMatch[1] !== userId) {
+    const channelOwnerUserId = parseGlobalChannelId(channelId);
+    if (channelOwnerUserId !== null) {
+      if (channelOwnerUserId !== userId) {
         auditRequest(request, {
           eventType: 'authz.access.denied',
           userId,

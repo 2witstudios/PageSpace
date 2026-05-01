@@ -41,6 +41,8 @@ import {
   broadcastTaskEvent,
   broadcastUsageEvent,
   broadcastAiStreamStart,
+  broadcastChatUserMessage,
+  type ChatUserMessagePayload,
   broadcastAiStreamComplete,
   createPageEventPayload,
   createDriveEventPayload,
@@ -220,11 +222,52 @@ describe('socket-utils', () => {
 
       await broadcastTaskEvent(payload);
 
-      const fetchCall = mockFetch.mock.calls[0];
-      const requestBody = JSON.parse(fetchCall[1].body);
+      const channelIds = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body).channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      const userCallBody = JSON.parse(
+        mockFetch.mock.calls.find((call) => JSON.parse(call[1].body).channelId === 'user:user-789:tasks')![1].body
+      );
+      expect(userCallBody.event).toBe('task:task_added');
+    });
 
-      expect(requestBody.channelId).toBe('user:user-789:tasks');
-      expect(requestBody.event).toBe('task:task_added');
+    it('given payload with pageId, should fan out to BOTH user:{userId}:tasks and pageId channels', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_updated',
+        userId: 'user-789',
+        taskId: 'task-123',
+        pageId: 'page-456',
+        data: { title: 'Updated Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const bodies = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body));
+      const channelIds = bodies.map((b) => b.channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      expect(channelIds).toContain('page-456');
+
+      // Both fetches should carry the same event name and payload
+      for (const body of bodies) {
+        expect(body.event).toBe('task:task_updated');
+        expect(body.payload).toEqual(payload);
+      }
+    });
+
+    it('given payload without pageId, should fan out only to user:{userId}:tasks channel', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_added',
+        userId: 'user-789',
+        data: { title: 'Pageless Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.channelId).toBe('user:user-789:tasks');
+      expect(body.event).toBe('task:task_added');
     });
   });
 
@@ -436,6 +479,40 @@ describe('socket-utils', () => {
       await expect(
         broadcastAiStreamComplete({ messageId: 'msg-1', pageId: 'page-1' })
       ).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastChatUserMessage', () => {
+    const payload: ChatUserMessagePayload = {
+      message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:user_message event', async () => {
+      await broadcastChatUserMessage(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:user_message');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastChatUserMessage(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastChatUserMessage(payload)).resolves.not.toThrow();
     });
   });
 

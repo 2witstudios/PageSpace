@@ -70,6 +70,9 @@ import {
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
+import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -80,6 +83,10 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
+import { useAuth } from '@/hooks/useAuth';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useShallow } from 'zustand/react/shallow';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
@@ -87,6 +94,7 @@ const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
   const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
   const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
+  const { user } = useAuth();
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -96,6 +104,8 @@ const GlobalAssistantView: React.FC = () => {
     setMessages: setGlobalMessages,
     setIsStreaming: setGlobalIsStreaming,
     setStopStreaming: setGlobalStopStreaming,
+    isStreaming: contextIsStreaming,
+    stopStreaming: contextStopStreaming,
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation,
@@ -116,6 +126,22 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+  const loadAgentConversation = usePageAgentDashboardStore((state) => state.loadConversation);
+
+  // Remote in-progress streams for the active chat — channel + filter logic
+  // lives in the pure helper so both this view and the sidebar share one
+  // tested implementation.
+  const channelIdForGlobal = user?.id ? globalChannelId(user.id) : null;
+  const remoteStreams = usePendingStreamsStore(
+    useShallow((state) =>
+      selectChannelRemoteStreams(state, {
+        selectedAgent,
+        agentConversationId,
+        globalChannelId: channelIdForGlobal,
+        globalConversationId,
+      }),
+    ),
+  );
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -329,6 +355,18 @@ const GlobalAssistantView: React.FC = () => {
     latestGlobalMessagesRef.current = globalLocalMessages;
   }, [globalLocalMessages]);
   const stop = useChatStop(currentConversationId, rawStop);
+
+  // After a refresh mid-stream, useChat starts at idle — but the
+  // GlobalChatContext bootstrap may have detected an own in-flight stream
+  // and registered a stop function. Surface either source so the UI shows
+  // a stop button + streaming indicator from both bootstrap and live paths.
+  const { effectiveIsStreaming, effectiveStop } = useGlobalEffectiveStream({
+    localIsStreaming: isStreaming,
+    rawStop: stop,
+    selectedAgent,
+    contextIsStreaming,
+    contextStopStreaming,
+  });
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -571,6 +609,19 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStopStreaming(null);
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
+
+  // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
+  // is null. Encapsulates page-room subscription, stream bootstrap/socket
+  // events, dashboard-store stop-slot single-writer claim, channel-id-keyed
+  // editing-store registration, and reconnect-refresh.
+  useAgentChannelMultiplayer({
+    selectedAgent,
+    agentConversationId,
+    setLocalMessages: setAgentMessages,
+    isLocallyStreaming: isStreaming,
+    surfaceComponentName: 'GlobalAssistantView',
+    loadConversation: loadAgentConversation,
+  });
 
   // Register streaming state with editing store
   useStreamingRegistration(
@@ -824,8 +875,8 @@ const GlobalAssistantView: React.FC = () => {
         input={input}
         onInputChange={setInput}
         onSend={handleSendMessage}
-        onStop={stop}
-        isStreaming={isStreaming}
+        onStop={effectiveStop}
+        isStreaming={effectiveIsStreaming}
         isLoading={isLoading}
         disabled={!isAnyProviderConfigured}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
@@ -859,6 +910,7 @@ const GlobalAssistantView: React.FC = () => {
         isMcpServerEnabled={isServerEnabled}
         onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
+        remoteStreams={remoteStreams}
         renderInput={(props) => (
           <>
             {isVoiceModeActive && (
@@ -866,9 +918,9 @@ const GlobalAssistantView: React.FC = () => {
                 owner={VOICE_OWNER}
                 onSend={handleVoiceSend}
                 latestAssistantMessage={lastAIResponse}
-                isAIStreaming={isStreaming}
+                isAIStreaming={effectiveIsStreaming}
                 streamingText={streamingAssistantText}
-                onStopStream={stop}
+                onStopStream={effectiveStop}
                 onClose={disableVoiceMode}
               />
             )}

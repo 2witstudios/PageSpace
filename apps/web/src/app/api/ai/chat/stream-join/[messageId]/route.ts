@@ -54,8 +54,8 @@ export async function GET(
 
   const unsubscribe = streamMulticastRegistry.subscribe(
     messageId,
-    (text) => {
-      const chunk = encoder.encode(`data: ${JSON.stringify({ text })}\n\n`);
+    (part) => {
+      const chunk = encoder.encode(`data: ${JSON.stringify({ part })}\n\n`);
       if (streamController) {
         streamController.enqueue(chunk);
       } else {

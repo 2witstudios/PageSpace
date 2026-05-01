@@ -3,21 +3,14 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
-import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
+import { formatFileSize } from '@/lib/attachment-utils';
 
-// File attachment info returned from upload
-export interface FileAttachment {
-  id: string;
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
-}
+export type { FileAttachment };
 
 export interface ChannelInputProps {
   /** Current input value */
@@ -85,8 +78,11 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const fileInputRef = useRef<HTMLInputElement>(null);
     const shouldReduceMotion = useReducedMotion();
     const [isFocused, setIsFocused] = useState(false);
-    const [attachment, setAttachment] = useState<FileAttachment | null>(null);
-    const [isUploading, setIsUploading] = useState(false);
+
+    const { attachment, isUploading, uploadFile, clearAttachment } = useAttachmentUpload({
+      uploadUrl: channelId ? `/api/channels/${channelId}/upload` : null,
+      onUploaded: () => textareaRef.current?.focus(),
+    });
 
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
@@ -101,84 +97,28 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const handleSend = () => {
       if ((value.trim() || attachment) && !disabled && !isUploading) {
         onSend(attachment || undefined);
-        setAttachment(null);
+        clearAttachment();
       }
     };
 
-    // Handle file selection
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (!file || !channelId) return;
-
-      setIsUploading(true);
+      if (!file) return;
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetchWithAuth(`/api/channels/${channelId}/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-          if (response.status === 413) {
-            toast.error(errorData.error || 'File too large');
-          } else if (response.status === 429) {
-            toast.error('Too many uploads in progress. Please wait.');
-          } else if (response.status === 503) {
-            toast.error('Server is busy. Please try again later.');
-          } else if (response.status === 403) {
-            toast.error(errorData.error || 'You do not have permission to upload files here.');
-          } else {
-            toast.error(errorData.error || 'Upload failed');
-          }
-          return;
-        }
-
-        const result = await response.json();
-        setAttachment({
-          id: result.file.id,
-          originalName: result.file.originalName,
-          size: result.file.size,
-          mimeType: result.file.mimeType,
-          contentHash: result.file.contentHash,
-        });
-        textareaRef.current?.focus();
-      } catch (error) {
-        console.error('Failed to upload file:', error);
-        toast.error('Failed to upload file. Please try again.');
+        await uploadFile(file);
       } finally {
-        setIsUploading(false);
-        // Reset file input
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
 
-    // Handle attachment button click
     const handleAttachmentClick = () => {
       fileInputRef.current?.click();
     };
 
-    // Remove attachment
-    const handleRemoveAttachment = () => {
-      setAttachment(null);
-    };
-
-    // Get icon for file type
     const getFileIcon = (mimeType: string) => {
       if (mimeType.startsWith('image/')) return ImageIcon;
       if (mimeType.includes('pdf') || mimeType.includes('document')) return FileText;
       return FileIcon;
-    };
-
-    // Format file size
-    const formatFileSize = (bytes: number) => {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     };
 
     // Handle formatting shortcuts
@@ -285,7 +225,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                       <p className="text-xs text-muted-foreground">{formatFileSize(attachment.size)}</p>
                     </div>
                     <button
-                      onClick={handleRemoveAttachment}
+                      onClick={clearAttachment}
                       className="p-1 hover:bg-muted rounded"
                       title="Remove attachment"
                     >

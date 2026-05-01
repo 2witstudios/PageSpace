@@ -354,7 +354,14 @@ export function createDriveMemberEventPayload(
 }
 
 /**
- * Broadcasts a task event to the realtime server
+ * Broadcasts a task event to the realtime server.
+ *
+ * Always fans out to the originating user's task channel
+ * (`user:${userId}:tasks`) so their other tabs stay in sync. When
+ * `payload.pageId` is set, ALSO fans out to the `pageId` room so any
+ * collaborator currently viewing that task list (joined via
+ * `join_channel`) sees badge / list updates without a manual refresh.
+ *
  * @param payload - The task event payload to broadcast
  */
 export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<void> {
@@ -367,30 +374,37 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
     return;
   }
 
-  try {
-    const requestBody = JSON.stringify({
-      channelId: `user:${payload.userId}:tasks`,
-      event: `task:${payload.type}`,
-      payload,
-    });
-
-    await fetch(`${realtimeUrl}/api/broadcast`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (error) {
-    // Log error but don't throw - broadcasting failures shouldn't break operations
-    realtimeLogger.error(
-      'Failed to broadcast task event',
-      error instanceof Error ? error : undefined,
-      {
-        event: 'task',
-        channel: `user:${maskIdentifier(payload.userId)}:tasks`
-      }
-    );
+  const event = `task:${payload.type}`;
+  const channelIds = [`user:${payload.userId}:tasks`];
+  if (payload.pageId) {
+    channelIds.push(payload.pageId);
   }
+
+  await Promise.all(
+    channelIds.map(async (channelId) => {
+      try {
+        const requestBody = JSON.stringify({ channelId, event, payload });
+        await fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (error) {
+        // Log error but don't throw - broadcasting failures shouldn't break operations
+        realtimeLogger.error(
+          'Failed to broadcast task event',
+          error instanceof Error ? error : undefined,
+          {
+            event: 'task',
+            channel: channelId.startsWith('user:')
+              ? `user:${maskIdentifier(payload.userId)}:tasks`
+              : maskIdentifier(channelId),
+          }
+        );
+      }
+    })
+  );
 }
 
 /**
@@ -509,6 +523,13 @@ export interface AiStreamCompletePayload {
   aborted?: boolean;
 }
 
+export interface ChatUserMessagePayload {
+  message: import('ai').UIMessage;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -571,6 +592,40 @@ export async function broadcastAiStreamComplete(payload: AiStreamCompletePayload
       error instanceof Error ? error : undefined,
       {
         event: 'ai_stream_complete',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastChatUserMessage(payload: ChatUserMessagePayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat user-message broadcast', {
+      event: 'chat:user_message',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:user_message',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat user-message',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:user_message',
         channel: maskIdentifier(payload.pageId),
       }
     );

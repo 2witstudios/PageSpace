@@ -40,6 +40,8 @@ import {
   FileText,
   GripVertical,
   Plus,
+  Zap,
+  Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -236,6 +238,15 @@ function TaskCard({
                 <Pencil className="h-4 w-4 mr-2" />
                 Rename
               </DropdownMenuItem>
+              {handlers.onConfigureTriggers && (
+                <DropdownMenuItem
+                  onClick={() => handlers.onConfigureTriggers?.(task)}
+                  disabled={!canEdit}
+                >
+                  <Zap className="h-4 w-4 mr-2" />
+                  Agent triggers…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => handlers.onDelete(task.id)}
                 className="text-destructive"
@@ -267,6 +278,19 @@ function TaskCard({
             <span className="text-xs text-muted-foreground">
               {new Date(task.dueDate).toLocaleDateString()}
             </span>
+          )}
+
+          {canEdit && handlers.onConfigureTriggers && (task.activeTriggerCount ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => handlers.onConfigureTriggers?.(task)}
+              title="Agent trigger configured — click to edit"
+              aria-label="Agent trigger configured — click to edit"
+              className="inline-flex h-5 items-center gap-0.5 rounded-md border border-amber-300/60 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+            >
+              <Bell className="h-2.5 w-2.5" />
+              <span>Trigger</span>
+            </button>
           )}
         </div>
       </CardContent>

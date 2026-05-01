@@ -2,12 +2,18 @@ import { pgTable, text, timestamp, bigint, integer, index, primaryKey } from 'dr
 import { relations } from 'drizzle-orm';
 import { drives, pages } from './core';
 import { users } from './auth';
+import { dmConversations } from './social';
+
+export interface AttachmentMeta {
+  originalName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
 
 export const files = pgTable('files', {
   id: text('id').primaryKey(),
-  driveId: text('driveId')
-    .notNull()
-    .references(() => drives.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').references(() => drives.id, { onDelete: 'cascade' }),
   sizeBytes: bigint('sizeBytes', { mode: 'number' }).notNull(),
   mimeType: text('mimeType'),
   storagePath: text('storagePath'),
@@ -36,6 +42,22 @@ export const filePages = pgTable('file_pages', {
   pageIdx: index('file_pages_page_id_idx').on(table.pageId),
 }));
 
+export const fileConversations = pgTable('file_conversations', {
+  fileId: text('fileId')
+    .notNull()
+    .references(() => files.id, { onDelete: 'cascade' }),
+  conversationId: text('conversationId')
+    .notNull()
+    .references(() => dmConversations.id, { onDelete: 'cascade' }),
+  linkedBy: text('linkedBy').references(() => users.id, { onDelete: 'set null' }),
+  linkedAt: timestamp('linkedAt', { mode: 'date' }).defaultNow().notNull(),
+  linkSource: text('linkSource'),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.fileId, table.conversationId] }),
+  fileIdx: index('file_conversations_file_id_idx').on(table.fileId),
+  conversationIdx: index('file_conversations_conversation_id_idx').on(table.conversationId),
+}));
+
 export const filesRelations = relations(files, ({ one, many }) => ({
   drive: one(drives, {
     fields: [files.driveId],
@@ -46,6 +68,7 @@ export const filesRelations = relations(files, ({ one, many }) => ({
     references: [users.id],
   }),
   filePages: many(filePages),
+  fileConversations: many(fileConversations),
 }));
 
 export const filePagesRelations = relations(filePages, ({ one }) => ({
@@ -59,6 +82,21 @@ export const filePagesRelations = relations(filePages, ({ one }) => ({
   }),
   linker: one(users, {
     fields: [filePages.linkedBy],
+    references: [users.id],
+  }),
+}));
+
+export const fileConversationsRelations = relations(fileConversations, ({ one }) => ({
+  file: one(files, {
+    fields: [fileConversations.fileId],
+    references: [files.id],
+  }),
+  conversation: one(dmConversations, {
+    fields: [fileConversations.conversationId],
+    references: [dmConversations.id],
+  }),
+  linker: one(users, {
+    fields: [fileConversations.linkedBy],
     references: [users.id],
   }),
 }));

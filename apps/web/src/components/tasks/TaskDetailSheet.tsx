@@ -3,9 +3,11 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import {
+  Bell,
   ExternalLink,
   Trash2,
   FileText,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +30,7 @@ import {
 import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
+import { TaskAgentTriggersDialog } from '@/components/layout/middle-content/page-views/task-list/TaskAgentTriggersDialog';
 import {
   PRIORITY_CONFIG,
   buildStatusConfig,
@@ -35,6 +38,7 @@ import {
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { useCanEdit } from '@/hooks/usePermissions';
 import type { Task } from './types';
 import { getStatusDisplay } from './task-helpers';
 
@@ -51,6 +55,7 @@ export interface TaskDetailSheetProps {
   onSaveTitle: (task: Task, title: string) => void;
   onDelete: (task: Task) => void;
   onNavigate: (task: Task) => void;
+  onTriggersSaved?: () => void;
 }
 
 export function TaskDetailSheet({
@@ -66,15 +71,22 @@ export function TaskDetailSheet({
   onSaveTitle,
   onDelete,
   onNavigate,
+  onTriggersSaved,
 }: TaskDetailSheetProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitle, setEditingTitle] = useState('');
+  const [triggersDialogOpen, setTriggersDialogOpen] = useState(false);
   const cancelTriggeredRef = useRef(false);
+
+  // Permission gate mirrors the row-level Task List badge: edit on the parent
+  // task list page is what authorizes configuring triggers on its tasks.
+  const canEdit = useCanEdit(task?.taskListPageId ?? null);
 
   // Reset editing state when task changes
   useEffect(() => {
     setIsEditingTitle(false);
     setEditingTitle('');
+    setTriggersDialogOpen(false);
   }, [task?.id]);
 
   const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
@@ -86,6 +98,9 @@ export function TaskDetailSheet({
   const isCompleted = statusDisplay.group === 'done';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
+  const triggerCount = task.activeTriggerCount ?? 0;
+  const canConfigureTriggers = canEdit && Boolean(task.taskListPageId && task.driveId);
+  const showTriggerBadge = canConfigureTriggers && triggerCount > 0;
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
@@ -174,6 +189,22 @@ export function TaskDetailSheet({
               )}
             </div>
           </div>
+
+          {/* Trigger badge — opens dialog, mirrors row-level UX on the Task List page */}
+          {showTriggerBadge && (
+            <div className="flex">
+              <button
+                type="button"
+                onClick={() => setTriggersDialogOpen(true)}
+                title="Agent trigger configured — click to edit"
+                aria-label="Agent trigger configured — click to edit"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
+              >
+                <Bell className="h-3 w-3" />
+                <span>Trigger</span>
+              </button>
+            </div>
+          )}
 
           {/* Status & Priority row */}
           <div className="grid grid-cols-2 gap-3">
@@ -283,6 +314,18 @@ export function TaskDetailSheet({
                 Open Page
               </Button>
             )}
+            {canConfigureTriggers && (
+              <Button
+                variant="outline"
+                className="h-11"
+                onClick={() => setTriggersDialogOpen(true)}
+                title="Agent triggers"
+                aria-label="Agent triggers"
+              >
+                <Zap className="h-4 w-4 mr-2" />
+                Triggers
+              </Button>
+            )}
             <Button
               variant="outline"
               className="h-11 text-destructive hover:text-destructive hover:bg-destructive/10"
@@ -293,6 +336,19 @@ export function TaskDetailSheet({
           </div>
         </div>
       </SheetContent>
+
+      {canConfigureTriggers && task.taskListPageId && task.driveId && (
+        <TaskAgentTriggersDialog
+          open={triggersDialogOpen}
+          onOpenChange={setTriggersDialogOpen}
+          taskId={task.id}
+          taskTitle={task.title}
+          pageId={task.taskListPageId}
+          driveId={task.driveId}
+          hasDueDate={!!task.dueDate}
+          onSaved={onTriggersSaved}
+        />
+      )}
     </Sheet>
   );
 }

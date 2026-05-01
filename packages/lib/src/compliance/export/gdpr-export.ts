@@ -57,7 +57,7 @@ export interface UserMessageExport {
 
 export interface UserFileExport {
   id: string;
-  driveId: string;
+  driveId: string | null;
   sizeBytes: number;
   mimeType: string | null;
   storagePath: string | null;

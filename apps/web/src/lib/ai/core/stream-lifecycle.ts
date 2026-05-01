@@ -3,7 +3,10 @@ import { eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
-import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
+import {
+  streamMulticastRegistry,
+  type UIMessagePart,
+} from '@/lib/ai/core/stream-multicast-registry';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -16,7 +19,7 @@ export interface StreamLifecycleParams {
 
 export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
-  pushChunk: (text: string) => void;
+  pushPart: (part: UIMessagePart) => void;
 }
 
 export const createStreamLifecycle = async (
@@ -118,9 +121,9 @@ export const createStreamLifecycle = async (
     }).catch(() => {});
   };
 
-  const pushChunk = (text: string): void => {
+  const pushPart = (part: UIMessagePart): void => {
     try {
-      streamMulticastRegistry.push(messageId, text);
+      streamMulticastRegistry.push(messageId, part);
     } catch (error) {
       // one bad chunk must not interrupt the stream — log so the swallow stays observable
       loggers.ai.warn('stream-lifecycle: registry.push threw', {
@@ -130,5 +133,5 @@ export const createStreamLifecycle = async (
     }
   };
 
-  return { finish, pushChunk };
+  return { finish, pushPart };
 };

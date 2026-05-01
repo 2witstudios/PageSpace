@@ -94,7 +94,7 @@ async function getDeleteFileContext(contentHash: string): Promise<DeleteFileCont
 
   return {
     links,
-    fileDriveId: fileRecord?.driveId,
+    fileDriveId: fileRecord?.driveId ?? undefined,
     hasFilePageReferences: filePageRef !== undefined,
     hasChannelReferences: channelRef !== undefined,
     hasPagePathReferences: pagePathRef !== undefined,

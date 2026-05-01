@@ -195,18 +195,38 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       );
     });
 
-    it('given buffered chunks, should stream them as SSE data events', async () => {
+    it('given buffered parts, should stream them as SSE part frames', async () => {
       testRegistry.register(mockMessageId, mockMeta);
-      testRegistry.push(mockMessageId, 'hello');
-      testRegistry.push(mockMessageId, ' world');
+      testRegistry.push(mockMessageId, { type: 'text', text: 'hello' });
+      testRegistry.push(mockMessageId, { type: 'text', text: ' world' });
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
       testRegistry.finish(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: {"text":"hello"}\n\n');
-      expect(body).toContain('data: {"text":" world"}\n\n');
+      expect(body).toContain('data: {"part":{"type":"text","text":"hello"}}\n\n');
+      expect(body).toContain('data: {"part":{"type":"text","text":" world"}}\n\n');
+    });
+
+    it('given a tool part, should stream it as an SSE part frame preserving the full tool shape', async () => {
+      testRegistry.register(mockMessageId, mockMeta);
+      const toolPart = {
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'output-available',
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+      } as const;
+      testRegistry.push(mockMessageId, toolPart as never);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain(`data: ${JSON.stringify({ part: toolPart })}\n\n`);
     });
 
     it('given stream completion, should send [DONE] sentinel and close', async () => {
@@ -231,19 +251,19 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
     });
 
-    it('given live chunks pushed after subscribe, should stream them in order', async () => {
+    it('given live parts pushed after subscribe, should stream them in order', async () => {
       testRegistry.register(mockMessageId, mockMeta);
-      testRegistry.push(mockMessageId, 'buffered');
+      testRegistry.push(mockMessageId, { type: 'text', text: 'buffered' });
 
       const response = await GET(makeRequest(), makeContext(mockMessageId));
 
-      testRegistry.push(mockMessageId, 'live');
+      testRegistry.push(mockMessageId, { type: 'text', text: 'live' });
       testRegistry.finish(mockMessageId);
 
       const body = await readSSEBody(response);
 
-      expect(body).toContain('data: {"text":"buffered"}\n\n');
-      expect(body).toContain('data: {"text":"live"}\n\n');
+      expect(body).toContain('data: {"part":{"type":"text","text":"buffered"}}\n\n');
+      expect(body).toContain('data: {"part":{"type":"text","text":"live"}}\n\n');
       expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
     });
 
