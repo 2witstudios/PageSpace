@@ -193,20 +193,22 @@ describe('createStreamLifecycle', () => {
     });
   });
 
-  describe('pushChunk', () => {
-    it('given a chunk, should push it through the multicast registry under the messageId', async () => {
+  describe('pushPart', () => {
+    const textPart = { type: 'text' as const, text: 'hello' };
+
+    it('given a part, should forward it to the multicast registry under the messageId', async () => {
       const lifecycle = await createStreamLifecycle(params());
 
-      lifecycle.pushChunk('hello');
+      lifecycle.pushPart(textPart);
 
-      expect(mockRegistryPush).toHaveBeenCalledWith('msg-1', 'hello');
+      expect(mockRegistryPush).toHaveBeenCalledWith('msg-1', textPart);
     });
 
-    it('given the registry throws on push, should not throw out of pushChunk', async () => {
+    it('given the registry throws on push, should not throw out of pushPart', async () => {
       mockRegistryPush.mockImplementationOnce(() => { throw new Error('push'); });
       const lifecycle = await createStreamLifecycle(params());
 
-      expect(() => lifecycle.pushChunk('hi')).not.toThrow();
+      expect(() => lifecycle.pushPart(textPart)).not.toThrow();
     });
 
     it('given the registry throws on push, should warn-log so the swallow is observable', async () => {
@@ -214,7 +216,7 @@ describe('createStreamLifecycle', () => {
       const lifecycle = await createStreamLifecycle(params());
 
       mockLoggerWarn.mockClear();
-      lifecycle.pushChunk('hi');
+      lifecycle.pushPart(textPart);
 
       expect(mockLoggerWarn).toHaveBeenCalled();
     });
