@@ -19,7 +19,6 @@ interface Plan {
     storage: string;
     aiCalls: string;
     proAiCalls: string;
-    byok: boolean;
     realtime: boolean;
     hierarchicalAgents: boolean;
     prioritySupport: boolean;
@@ -37,7 +36,6 @@ const plans: Plan[] = [
       storage: "500 MB",
       aiCalls: "50/day",
       proAiCalls: "—",
-      byok: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: false,
@@ -55,7 +53,6 @@ const plans: Plan[] = [
       storage: "2 GB",
       aiCalls: "200/day",
       proAiCalls: "50/day",
-      byok: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -72,7 +69,6 @@ const plans: Plan[] = [
       storage: "10 GB",
       aiCalls: "500/day",
       proAiCalls: "100/day",
-      byok: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -89,7 +85,6 @@ const plans: Plan[] = [
       storage: "50 GB",
       aiCalls: "1,000/day",
       proAiCalls: "500/day",
-      byok: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -166,7 +161,6 @@ export default function PricingPage() {
 
                   <div className="border-t border-border pt-4 space-y-2">
                     {[
-                      { key: "byok", label: "Bring Your Own Key", value: plan.features.byok },
                       { key: "realtime", label: "Real-time collaboration", value: plan.features.realtime },
                       { key: "hierarchicalAgents", label: "Hierarchical AI agents", value: plan.features.hierarchicalAgents },
                       { key: "prioritySupport", label: "Priority support", value: plan.features.prioritySupport },
@@ -229,7 +223,6 @@ export default function PricingPage() {
                   { key: "storage", label: "Storage" },
                   { key: "aiCalls", label: "Standard AI calls" },
                   { key: "proAiCalls", label: "Pro AI calls" },
-                  { key: "byok", label: "BYOK (Unlimited)" },
                   { key: "realtime", label: "Real-time Collaboration" },
                   { key: "hierarchicalAgents", label: "Hierarchical AI Agents" },
                   { key: "prioritySupport", label: "Priority Support" },

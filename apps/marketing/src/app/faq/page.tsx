@@ -77,20 +77,7 @@ const faqs: FAQItem[] = [
     id: "hit-daily-ai-limit",
     question: "What happens when I run out of AI calls for the day?",
     answer:
-      "Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until your limit resets the next day. Add your own API key (see below) and there's no daily limit.",
-    category: "Pricing and plans",
-  },
-  {
-    id: "bring-your-own-key",
-    question: "Can I use my own OpenAI or Anthropic key instead of the built-in limits?",
-    answer: (
-      <>
-        Yes. Paste your API key into Settings and PageSpace will use it for your
-        AI calls instead of counting against your daily limit. Available on
-        every plan including Free. See {docsLink("/pricing", "Pricing")} for
-        the full comparison.
-      </>
-    ),
+      "Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until your limit resets the next day. Upgrade your plan for higher daily quotas.",
     category: "Pricing and plans",
   },
 
