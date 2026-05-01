@@ -8,6 +8,7 @@ import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middlewar
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   createAIProvider,
@@ -832,7 +833,7 @@ MENTION PROCESSING:
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
-    const channelId = `user:${userId}:global`;
+    const channelId = globalChannelId(userId);
 
     const [authUserResult, profileResult] = await Promise.allSettled([
       db

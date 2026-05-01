@@ -6,10 +6,12 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -233,14 +235,20 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   isInitializedRef.current = isInitialized;
 
   useEffect(() => {
-    const didTransitionToConnected =
-      prevConnectionStatusRef.current !== 'connected' && connectionStatus === 'connected';
+    const prevStatus = prevConnectionStatusRef.current;
     prevConnectionStatusRef.current = connectionStatus;
 
-    if (didTransitionToConnected) {
-      if (hasInitialConnectRef.current && isInitializedRef.current && currentConversationId) {
-        refreshConversation();
-      }
+    const refreshNow = shouldRefreshOnReconnect(
+      prevStatus,
+      connectionStatus,
+      hasInitialConnectRef.current,
+    );
+    if (refreshNow && isInitializedRef.current && currentConversationId) {
+      refreshConversation();
+    }
+
+    const isFreshConnect = prevStatus !== 'connected' && connectionStatus === 'connected';
+    if (isFreshConnect) {
       hasInitialConnectRef.current = true;
     }
   }, [connectionStatus, currentConversationId, refreshConversation]);
@@ -254,7 +262,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // own-stream callbacks below.
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  const channelId = userId ? `user:${userId}:global` : undefined;
+  const channelId = userId ? globalChannelId(userId) : undefined;
 
   // Always-current refs so the hook's stable callbacks can call into the
   // latest setters/refresh without forcing the hook to resubscribe.

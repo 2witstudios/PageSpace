@@ -19,6 +19,7 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
@@ -490,7 +491,7 @@ io.on('connection', (socket: AuthSocket) => {
     const taskRoom = `user:${user.id}:tasks`;
     const calendarRoom = `user:${user.id}:calendar`;
     const userDrivesRoom = `user:${user.id}:drives`;
-    const globalRoom = `user:${user.id}:global`;
+    const globalRoom = globalChannelId(user.id);
     socket.join(notificationRoom);
     socket.join(taskRoom);
     socket.join(calendarRoom);

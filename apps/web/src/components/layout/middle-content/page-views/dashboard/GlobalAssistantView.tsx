@@ -70,6 +70,9 @@ import {
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
+import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -123,23 +126,21 @@ const GlobalAssistantView: React.FC = () => {
   const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
   const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
   const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+  const loadAgentConversation = usePageAgentDashboardStore((state) => state.loadConversation);
 
-  // Remote in-progress streams for the active chat. Filtered by:
-  //   1. Mode — agent mode subscribes to a per-agent channel elsewhere; here we
-  //      only render global-channel streams, so return [] when an agent is selected.
-  //   2. Conversation — the global channel may carry concurrent streams from
-  //      other global conversations; only show streams matching the current one.
-  // Note: PendingStream.pageId holds the channel id (e.g. `user:USERID:global`)
-  // for non-page channels. Renaming the field is tracked as separate tech debt;
-  // until then, the channel string is what gets passed to getRemotePageStreams.
-  const globalChannelId = user?.id ? `user:${user.id}:global` : null;
+  // Remote in-progress streams for the active chat — channel + filter logic
+  // lives in the pure helper so both this view and the sidebar share one
+  // tested implementation.
+  const channelIdForGlobal = user?.id ? globalChannelId(user.id) : null;
   const remoteStreams = usePendingStreamsStore(
-    useShallow((state) => {
-      if (selectedAgent || !globalChannelId || !globalConversationId) return [];
-      return state
-        .getRemotePageStreams(globalChannelId)
-        .filter((s) => s.conversationId === globalConversationId);
-    })
+    useShallow((state) =>
+      selectChannelRemoteStreams(state, {
+        selectedAgent,
+        agentConversationId,
+        globalChannelId: channelIdForGlobal,
+        globalConversationId,
+      }),
+    ),
   );
 
   // ============================================
@@ -608,6 +609,19 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStopStreaming(null);
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
+
+  // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
+  // is null. Encapsulates page-room subscription, stream bootstrap/socket
+  // events, dashboard-store stop-slot single-writer claim, channel-id-keyed
+  // editing-store registration, and reconnect-refresh.
+  useAgentChannelMultiplayer({
+    selectedAgent,
+    agentConversationId,
+    setLocalMessages: setAgentMessages,
+    isLocallyStreaming: isStreaming,
+    surfaceComponentName: 'GlobalAssistantView',
+    loadConversation: loadAgentConversation,
+  });
 
   // Register streaming state with editing store
   useStreamingRegistration(

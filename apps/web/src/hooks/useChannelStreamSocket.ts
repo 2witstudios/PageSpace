@@ -4,6 +4,8 @@ import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
+import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
 import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
 
 interface ActiveStreamRow {
@@ -111,9 +113,8 @@ export function useChannelStreamSocket(
         const data = (await res.json()) as { streams?: ActiveStreamRow[] };
         if (cancelled) return;
         for (const stream of data.streams ?? []) {
-          if (processed.has(stream.messageId)) continue;
-          if (controllers.has(stream.messageId)) continue;
-          const isOwn = stream.triggeredBy.browserSessionId === localBrowserSessionId;
+          if (shouldSkipBootstrappedStream(stream.messageId, processed, controllers)) continue;
+          const isOwn = isOwnStream(stream.triggeredBy, localBrowserSessionId);
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
@@ -135,7 +136,7 @@ export function useChannelStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      if (payload.triggeredBy.browserSessionId === localBrowserSessionId) return;
+      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
       if (controllers.has(payload.messageId)) return;
 
       addStream({
