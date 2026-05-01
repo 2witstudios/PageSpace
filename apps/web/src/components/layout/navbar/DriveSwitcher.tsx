@@ -163,13 +163,13 @@ export default function DriveSwitcher() {
 
           <DropdownMenuSeparator />
 
-          <CustomScrollArea className="max-h-[320px] overflow-x-hidden">
-            {/* Favorites Section */}
-            {favoriteDrives.length > 0 && (
-              <>
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-                  Favorites
-                </DropdownMenuLabel>
+          {/* Favorites Section */}
+          {favoriteDrives.length > 0 && (
+            <>
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
+                Favorites · {favoriteDrives.length}
+              </DropdownMenuLabel>
+              <CustomScrollArea className="max-h-[200px] overflow-x-hidden">
                 <DropdownMenuGroup>
                   {favoriteDrives.map((drive) => (
                     <DriveMenuItem
@@ -182,36 +182,38 @@ export default function DriveSwitcher() {
                     />
                   ))}
                 </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-              </>
-            )}
+              </CustomScrollArea>
+              <DropdownMenuSeparator />
+            </>
+          )}
 
-            {/* Recent Section */}
-            {recentDrives.length > 0 && !searchQuery && (
-              <>
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-                  Recent
-                </DropdownMenuLabel>
-                <DropdownMenuGroup>
-                  {recentDrives.map((drive) => (
-                    <DriveMenuItem
-                      key={drive.id}
-                      drive={drive}
-                      isActive={drive.id === currentDriveId}
-                      isFavorite={false}
-                      onSelect={() => handleSelectDrive(drive)}
-                      onToggleFavorite={(e) => handleToggleFavorite(e, drive)}
-                    />
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-              </>
-            )}
+          {/* Recent Section */}
+          {recentDrives.length > 0 && !searchQuery && (
+            <>
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
+                Recent
+              </DropdownMenuLabel>
+              <DropdownMenuGroup>
+                {recentDrives.map((drive) => (
+                  <DriveMenuItem
+                    key={drive.id}
+                    drive={drive}
+                    isActive={drive.id === currentDriveId}
+                    isFavorite={false}
+                    onSelect={() => handleSelectDrive(drive)}
+                    onToggleFavorite={(e) => handleToggleFavorite(e, drive)}
+                  />
+                ))}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+            </>
+          )}
 
-            {/* All Drives Section */}
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-              {searchQuery ? "Results" : "All Drives"}
-            </DropdownMenuLabel>
+          {/* All Drives Section */}
+          <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
+            {searchQuery ? "Results" : "All Drives"}
+          </DropdownMenuLabel>
+          <CustomScrollArea className="max-h-[240px] overflow-x-hidden">
             <DropdownMenuGroup>
               {allDrives.length > 0 ? (
                 allDrives.map((drive) => (
