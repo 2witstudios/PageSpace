@@ -145,6 +145,14 @@ export async function GET(
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
+    // Conversation-uploaded files (driveId === null) require a conversation-scoped
+    // token mint that lands with the polymorphic upload core. Until then no such
+    // files exist in production, so this guard is dead at runtime but keeps the
+    // type narrow.
+    if (file.driveId === null) {
+      return NextResponse.json({ error: 'Not yet supported' }, { status: 503 });
+    }
+
     const contentHash = file.storagePath || file.id;
 
     try {
