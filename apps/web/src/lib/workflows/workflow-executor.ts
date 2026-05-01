@@ -10,8 +10,10 @@ import {
   type ToolExecutionContext,
   type ProviderRequest,
 } from '@/lib/ai/core';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -134,6 +136,22 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };
     }
 
+    // Charge quota only for PageSpace-subsidized inference. BYO-key calls (anthropic/openai/etc.)
+    // pass through uncharged, matching the chat route's gating.
+    const chargesQuota = selectedProvider === 'pagespace';
+    const providerType = getPageSpaceModelTier(selectedModel ?? 'glm-4.5-air') ?? 'standard';
+
+    if (chargesQuota) {
+      const currentUsage = await getCurrentUsage(workflow.createdBy, providerType);
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        return {
+          success: false,
+          durationMs: Date.now() - startTime,
+          error: 'Daily AI quota exceeded',
+        };
+      }
+    }
+
     // 6. Filter tools based on agent's enabled tools
     const enabledTools = (agent.enabledTools as string[] | null) ?? [];
     let availableTools: ToolSet = enabledTools.length > 0
@@ -233,6 +251,18 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       (count, step) => count + (step.toolCalls?.length || 0),
       0
     ) || 0;
+
+    // Charge one quota credit. Mirrors chat route: log on failure, never fail the workflow on tracking errors.
+    if (chargesQuota) {
+      try {
+        await incrementUsage(workflow.createdBy, providerType);
+      } catch (usageError) {
+        loggers.api.error('Workflow usage tracking failed', usageError as Error, {
+          workflowId: workflow.id,
+          providerType,
+        });
+      }
+    }
 
     // 9. Save user prompt + AI response as chat messages
     const userMessageId = createId();

@@ -4,6 +4,9 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
+import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import {
@@ -293,6 +296,17 @@ export async function POST(request: Request) {
         )
       : {};
 
+    // Charge quota only for PageSpace-subsidized inference. BYO-key calls pass through uncharged.
+    const chargesQuota = (agent.aiProvider || 'pagespace') === 'pagespace';
+    const providerType = getPageSpaceModelTier(agent.aiModel || 'glm-4.5-air') ?? 'standard';
+
+    if (chargesQuota) {
+      const currentUsage = await getCurrentUsage(userId, providerType);
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+    }
+
     // Generate response using the AI model
     let responseText = '';
     try {
@@ -451,6 +465,18 @@ export async function POST(request: Request) {
         driveId: agent.driveId,
         success: true,
       });
+
+      if (chargesQuota) {
+        try {
+          await incrementUsage(userId, providerType);
+        } catch (usageError) {
+          loggers.api.error('Agent consultation usage tracking failed', usageError as Error, {
+            userId,
+            agentId,
+            providerType,
+          });
+        }
+      }
     } catch (aiError) {
       loggers.api.error('Agent consultation AI generation error:', aiError as Error);
       return NextResponse.json(

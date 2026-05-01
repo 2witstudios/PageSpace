@@ -10,11 +10,17 @@ const {
   mockSelectFrom,
   mockSelect,
   mockResolvePageAgentIntegrationTools,
+  mockGetCurrentUsage,
+  mockIncrementUsage,
+  mockGetPageSpaceModelTier,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
   mockSelect: vi.fn(),
   mockResolvePageAgentIntegrationTools: vi.fn(),
+  mockGetCurrentUsage: vi.fn(),
+  mockIncrementUsage: vi.fn(),
+  mockGetPageSpaceModelTier: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -67,6 +73,15 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
+}));
+
+vi.mock('@/lib/subscription/usage-service', () => ({
+  getCurrentUsage: mockGetCurrentUsage,
+  incrementUsage: mockIncrementUsage,
+}));
+
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  getPageSpaceModelTier: mockGetPageSpaceModelTier,
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -165,6 +180,9 @@ describe('executeWorkflow', () => {
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockGetCurrentUsage.mockResolvedValue({ success: true, remainingCalls: 99, currentCount: 1, limit: 100 });
+    mockIncrementUsage.mockResolvedValue({ success: true, remainingCalls: 98, currentCount: 2, limit: 100 });
+    mockGetPageSpaceModelTier.mockReturnValue('standard');
     vi.mocked(generateText).mockResolvedValue({
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
@@ -364,5 +382,60 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('Network timeout');
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // --------------------------------------------------------------------------
+  // Quota tracking
+  // --------------------------------------------------------------------------
+
+  test('charges quota for pagespace agents on success', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createWorkflowFixture());
+
+    expect(result.success).toBe(true);
+    expect(mockGetCurrentUsage).toHaveBeenCalledWith('user_123', 'standard');
+    expect(mockIncrementUsage).toHaveBeenCalledWith('user_123', 'standard');
+  });
+
+  test('returns quota-exceeded error before invoking the model', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    mockGetCurrentUsage.mockResolvedValue({ success: true, remainingCalls: 0, currentCount: 100, limit: 100 });
+
+    const result = await executeWorkflow(createWorkflowFixture());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Daily AI quota exceeded');
+    expect(generateText).not.toHaveBeenCalled();
+    expect(mockIncrementUsage).not.toHaveBeenCalled();
+  });
+
+  test('charges pro tier when agent uses a pro model', async () => {
+    setupSelectChain([{ ...mockAgent, aiModel: 'glm-5' }], [mockDrive]);
+    mockGetPageSpaceModelTier.mockReturnValue('pro');
+
+    await executeWorkflow(createWorkflowFixture());
+
+    expect(mockGetCurrentUsage).toHaveBeenCalledWith('user_123', 'pro');
+    expect(mockIncrementUsage).toHaveBeenCalledWith('user_123', 'pro');
+  });
+
+  test('does not charge quota when agent uses a BYO provider', async () => {
+    setupSelectChain([{ ...mockAgent, aiProvider: 'anthropic' }], [mockDrive]);
+
+    const result = await executeWorkflow(createWorkflowFixture());
+
+    expect(result.success).toBe(true);
+    expect(mockGetCurrentUsage).not.toHaveBeenCalled();
+    expect(mockIncrementUsage).not.toHaveBeenCalled();
+  });
+
+  test('still returns success when incrementUsage throws', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    mockIncrementUsage.mockRejectedValue(new Error('rate-limit cache offline'));
+
+    const result = await executeWorkflow(createWorkflowFixture());
+
+    expect(result.success).toBe(true);
   });
 });

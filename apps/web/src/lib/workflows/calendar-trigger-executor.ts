@@ -7,7 +7,6 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult } from './workflow-executor';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -46,18 +45,12 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Rate-limit check: consume one standard AI call from the scheduler's budget
-    const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
-    if (!usageResult.success) {
-      const error = 'Daily AI call limit reached for scheduling user';
-      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 4. Build prompt from trigger instructions + instruction page + event context
+    // 3. Build prompt from trigger instructions + instruction page + event context
+    //    Quota is charged inside executeWorkflow so the correct tier (standard/pro)
+    //    is billed based on the agent's actual model.
     const prompt = await buildTriggerPrompt(trigger, event);
 
-    // 5. Construct synthetic WorkflowRow that executeWorkflow can consume.
+    // 4. Construct synthetic WorkflowRow that executeWorkflow can consume.
     //    We only populate the fields the executor actually reads.
     const syntheticWorkflow = {
       id: trigger.id,
@@ -85,10 +78,10 @@ export async function executeCalendarTrigger(
       updatedAt: trigger.updatedAt,
     };
 
-    // 6. Execute via the standard workflow executor
+    // 5. Execute via the standard workflow executor
     const result = await executeWorkflow(syntheticWorkflow);
 
-    // 7. Update trigger with execution results
+    // 6. Update trigger with execution results
     await db
       .update(calendarTriggers)
       .set({

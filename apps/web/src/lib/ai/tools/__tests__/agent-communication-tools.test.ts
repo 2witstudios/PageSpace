@@ -77,6 +77,15 @@ vi.mock('../../core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock('@/lib/subscription/usage-service', () => ({
+  getCurrentUsage: vi.fn(),
+  incrementUsage: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  getPageSpaceModelTier: vi.fn(() => 'standard'),
+}));
+
 // Mock core AI modules
 vi.mock('../../core', () => ({
   sanitizeMessagesForModel: vi.fn((msgs) => msgs),
@@ -96,6 +105,7 @@ import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
+import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
 
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
@@ -189,6 +199,12 @@ describe('agent-communication-tools', () => {
         steps: [],
       } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
       vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      vi.mocked(getCurrentUsage).mockResolvedValue({
+        success: true, remainingCalls: 99, currentCount: 1, limit: 100,
+      });
+      vi.mocked(incrementUsage).mockResolvedValue({
+        success: true, remainingCalls: 98, currentCount: 2, limit: 100,
+      });
     });
 
     it('has correct tool definition', () => {
@@ -697,6 +713,81 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         // When built-in tool set is empty, generateText is called with no tools at all
         expect(toolsArg?.github_list_repos).toBeUndefined();
+      });
+    });
+
+    describe('quota tracking', () => {
+      const pagespaceAgent = {
+        id: 'agent-1',
+        title: 'PageSpace Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null, // null === pagespace default
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(pagespaceAgent);
+      });
+
+      it('charges quota for pagespace target agents', async () => {
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Test' },
+          context
+        );
+
+        expect(getCurrentUsage).toHaveBeenCalledWith('user-123', 'standard');
+        expect(incrementUsage).toHaveBeenCalledWith('user-123', 'standard');
+      });
+
+      it('returns quota-exceeded error before invoking the model', async () => {
+        vi.mocked(getCurrentUsage).mockResolvedValue({
+          success: true, remainingCalls: 0, currentCount: 100, limit: 100,
+        });
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        const result = await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Test' },
+          context
+        );
+
+        if (!('error' in result)) throw new Error('Expected error result');
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Daily AI quota exceeded');
+        expect(generateText).not.toHaveBeenCalled();
+        expect(incrementUsage).not.toHaveBeenCalled();
+      });
+
+      it('does not charge quota for BYO-key target agents', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          ...pagespaceAgent,
+          aiProvider: 'anthropic',
+        });
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Test' },
+          context
+        );
+
+        expect(getCurrentUsage).not.toHaveBeenCalled();
+        expect(incrementUsage).not.toHaveBeenCalled();
       });
     });
   });

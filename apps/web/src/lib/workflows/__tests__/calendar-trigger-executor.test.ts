@@ -5,7 +5,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ============================================================================
 
 const {
-  mockIncrementUsage,
   mockExecuteWorkflow,
   mockSelect,
   mockSelectFrom,
@@ -25,7 +24,6 @@ const {
     child: vi.fn(() => makeChildLogger()),
   });
   return {
-    mockIncrementUsage: vi.fn(),
     mockExecuteWorkflow: vi.fn(),
     mockSelect: vi.fn(),
     mockSelectFrom: vi.fn(),
@@ -81,10 +79,6 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
-}));
-
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: mockIncrementUsage,
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -171,9 +165,6 @@ describe('executeCalendarTrigger', () => {
     // Default: scheduling user still has drive access
     mockIsUserDriveMember.mockResolvedValue(true);
 
-    // Default: rate limit passes
-    mockIncrementUsage.mockResolvedValue({ success: true });
-
     // Default select chain: agent page preflight → attendees → etc.
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({
@@ -254,16 +245,6 @@ describe('executeCalendarTrigger', () => {
     const syntheticWorkflow = mockExecuteWorkflow.mock.calls[0][0];
     expect(syntheticWorkflow.prompt).toContain('Alice');
     expect(syntheticWorkflow.prompt).toContain('bob@test.com');
-  });
-
-  it('fails when daily AI call limit is reached', async () => {
-    mockIncrementUsage.mockResolvedValue({ success: false });
-
-    const result = await executeCalendarTrigger(createTrigger(), createEvent());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('limit');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   it('updates trigger status to completed on success', async () => {
@@ -383,7 +364,7 @@ describe('executeCalendarTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('fails without consuming usage when agent page is missing', async () => {
+  it('fails without invoking the workflow when agent page is missing', async () => {
     // Override default: agent page preflight returns empty (deleted since scheduling)
     mockSelectWhere.mockReset();
     mockSelectWhere.mockResolvedValue([]);
@@ -392,7 +373,6 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('agent');
-    expect(mockIncrementUsage).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });

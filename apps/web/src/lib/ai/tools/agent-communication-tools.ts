@@ -26,6 +26,8 @@ import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -433,6 +435,27 @@ export const agentCommunicationTools = {
           throw new Error(`Insufficient permissions to consult agent "${targetAgent.title}"`);
         }
 
+        // 2b. Quota check — only PageSpace-subsidized inference is metered.
+        // Each ask_agent call invokes a separate model run, so it counts as its own credit
+        // even when nested inside another agent's chat that already counted one.
+        const chargesQuota = (targetAgent.aiProvider || 'pagespace') === 'pagespace';
+        const providerType = getPageSpaceModelTier(targetAgent.aiModel || 'glm-4.5-air') ?? 'standard';
+
+        if (chargesQuota) {
+          const currentUsage = await getCurrentUsage(userId, providerType);
+          if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+            await logAgentInteraction({
+              requestingUserId: userId,
+              requestingAgent: executionContext?.locationContext?.currentPage?.id,
+              targetAgent: agentId,
+              question,
+              success: false,
+              error: 'Daily AI quota exceeded'
+            });
+            throw new Error(`Daily AI quota exceeded — cannot consult agent "${targetAgent.title}"`);
+          }
+        }
+
         // 3. Create or use existing conversation
         const activeConversationId = conversationId || createId();
 
@@ -603,6 +626,19 @@ export const agentCommunicationTools = {
             agentId,
             errors: toolErrors,
           });
+        }
+
+        // Charge one quota credit for the sub-agent's LLM invocation.
+        if (chargesQuota) {
+          try {
+            await incrementUsage(userId, providerType);
+          } catch (usageError) {
+            loggers.ai.error('ask_agent usage tracking failed', usageError as Error, {
+              userId,
+              agentId,
+              providerType,
+            });
+          }
         }
 
         // 13. Save assistant's response to database
