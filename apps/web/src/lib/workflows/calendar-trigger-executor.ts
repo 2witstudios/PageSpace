@@ -45,9 +45,8 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Build prompt from trigger instructions + instruction page + event context
-    //    Quota is charged inside executeWorkflow so the correct tier (standard/pro)
-    //    is billed based on the agent's actual model.
+    // 3. Build prompt from trigger instructions + instruction page + event context.
+    //    Quota is charged inside executeWorkflow against the agent's actual model tier.
     const prompt = await buildTriggerPrompt(trigger, event);
 
     // 4. Construct synthetic WorkflowRow that executeWorkflow can consume.

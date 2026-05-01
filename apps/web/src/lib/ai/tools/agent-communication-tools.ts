@@ -435,9 +435,8 @@ export const agentCommunicationTools = {
           throw new Error(`Insufficient permissions to consult agent "${targetAgent.title}"`);
         }
 
-        // 2b. Quota check — only PageSpace-subsidized inference is metered.
-        // Each ask_agent call invokes a separate model run, so it counts as its own credit
-        // even when nested inside another agent's chat that already counted one.
+        // 2b. Quota check — each ask_agent invocation runs its own model call, so it
+        // costs its own credit even when nested inside a parent agent's already-charged chat.
         const chargesQuota = (targetAgent.aiProvider || 'pagespace') === 'pagespace';
         const providerType = getPageSpaceModelTier(targetAgent.aiModel || 'glm-4.5-air') ?? 'standard';
 

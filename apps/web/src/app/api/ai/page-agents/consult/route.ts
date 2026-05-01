@@ -296,7 +296,7 @@ export async function POST(request: Request) {
         )
       : {};
 
-    // Charge quota only for PageSpace-subsidized inference. BYO-key calls pass through uncharged.
+    // Only charge for subsidized inference; BYO-key calls pass through uncharged.
     const chargesQuota = (agent.aiProvider || 'pagespace') === 'pagespace';
     const providerType = getPageSpaceModelTier(agent.aiModel || 'glm-4.5-air') ?? 'standard';
 

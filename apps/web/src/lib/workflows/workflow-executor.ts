@@ -136,8 +136,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };
     }
 
-    // Charge quota only for PageSpace-subsidized inference. BYO-key calls (anthropic/openai/etc.)
-    // pass through uncharged, matching the chat route's gating.
+    // Only charge for subsidized inference; BYO-key calls pass through uncharged (matches chat route).
     const chargesQuota = selectedProvider === 'pagespace';
     const providerType = getPageSpaceModelTier(selectedModel ?? 'glm-4.5-air') ?? 'standard';
 
@@ -252,7 +251,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       0
     ) || 0;
 
-    // Charge one quota credit. Mirrors chat route: log on failure, never fail the workflow on tracking errors.
+    // Mirrors chat route: tracking errors log but never fail the workflow.
     if (chargesQuota) {
       try {
         await incrementUsage(workflow.createdBy, providerType);
