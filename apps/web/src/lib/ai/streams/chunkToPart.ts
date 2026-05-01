@@ -14,5 +14,14 @@ export const chunkToPart = (chunk: { type: string } & Record<string, unknown>): 
   if (chunk.type === 'text-delta' && typeof chunk.text === 'string') {
     return { type: 'text', text: chunk.text };
   }
+  if (chunk.type === 'tool-call' && typeof chunk.toolName === 'string') {
+    return {
+      type: `tool-${chunk.toolName}`,
+      toolCallId: chunk.toolCallId as string,
+      toolName: chunk.toolName,
+      state: 'input-available',
+      input: chunk.input,
+    } as unknown as AnyPart;
+  }
   return null;
 };
