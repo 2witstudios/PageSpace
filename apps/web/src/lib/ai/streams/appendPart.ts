@@ -10,6 +10,10 @@ type AnyPart = UIMessage['parts'][number];
  * transitions input-available → output-available are convergent). Other part
  * types append as-is. Pure — never mutates input.
  */
+// Stricter than message-utils.ts's `isToolInvocationPart` (which only checks
+// the `tool-` prefix): we additionally require a string `toolCallId` because
+// it is the merge key for the replace-by-toolCallId branch below — a tool
+// part missing the id can't converge state transitions.
 const isToolPart = (
   part: AnyPart,
 ): part is AnyPart & { type: `tool-${string}`; toolCallId: string } =>

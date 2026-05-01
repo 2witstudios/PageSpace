@@ -3,6 +3,13 @@ import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
 
 type UIMessagePart = UIMessage['parts'][number];
 
+/**
+ * SSE wire protocol (paired with `apps/web/src/app/api/ai/chat/stream-join/[messageId]/route.ts`):
+ *   data: {"part": <UIMessagePart>}\n\n      — one accumulated part per frame
+ *   data: {"done": true, "aborted": <bool>}\n\n  — end sentinel
+ * Anything else (legacy `{text:...}` frames, malformed JSON, frames missing
+ * required fields) is silently skipped — `isValidPartFrame` is the gate.
+ */
 export async function consumeStreamJoin(
   messageId: string,
   signal: AbortSignal,
