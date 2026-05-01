@@ -26,7 +26,7 @@ const {
     mockUseStreamingRegistration: vi.fn(),
     mockAbortByMessageId: vi.fn(),
     mockSocketStatus: { current: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error' },
-    pendingStreams: { current: new Map<string, { messageId: string; pageId: string; conversationId: string; triggeredBy: { userId: string; displayName: string }; text: string; isOwn: boolean }>() },
+    pendingStreams: { current: new Map<string, { messageId: string; pageId: string; conversationId: string; triggeredBy: { userId: string; displayName: string }; parts: UIMessage['parts']; isOwn: boolean }>() },
   };
 });
 
