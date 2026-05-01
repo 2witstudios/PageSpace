@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate as globalMutate } from 'swr';
@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 
 type ApiTriggerType = 'task_due_date' | 'task_completion';
@@ -103,15 +104,35 @@ export function TaskAgentTriggersDialog({
   const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
   const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
 
+  // Pause background revalidation while any editing session is active so a remote
+  // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
+  // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
+  // unaffected because *LoadedRef gates the pause until first success.
+  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const triggersLoadedRef = useRef(false);
+  const agentsLoadedRef = useRef(false);
+
   const { data: triggersData, isLoading: triggersLoading, mutate: refetchTriggers } = useSWR(
     triggersKey,
     triggersFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      isPaused: () => triggersLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        triggersLoadedRef.current = true;
+      },
+    },
   );
   const { data: agentsData, isLoading: agentsLoading } = useSWR(
     agentsKey,
     agentsFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        agentsLoadedRef.current = true;
+      },
+    },
   );
 
   const agents = agentsData?.agents ?? [];
