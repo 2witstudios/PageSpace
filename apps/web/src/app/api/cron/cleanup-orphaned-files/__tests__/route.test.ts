@@ -96,4 +96,23 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     expect(mockAudit).not.toHaveBeenCalled();
   });
+
+  it('skips physical and DB cleanup for null-driveId orphans', async () => {
+    // Conversation-uploaded orphans need a conversation-scoped token mint that
+    // doesn't exist yet. Until the polymorphic upload core PR lands, the cron
+    // must defer them rather than mint a non-existent token.
+    mockFindOrphans.mockResolvedValue([
+      { id: 'f1', storagePath: '/storage/abc/original', driveId: null },
+    ]);
+
+    await GET(makeRequest());
+
+    expect(mockCreateServiceToken).not.toHaveBeenCalled();
+    expect(mockDeleteRecords).not.toHaveBeenCalled();
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: { orphansFound: 1, filesDeleted: 0, physicalFilesDeleted: 0 },
+      })
+    );
+  });
 });
