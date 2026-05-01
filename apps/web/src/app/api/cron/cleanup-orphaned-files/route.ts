@@ -46,6 +46,16 @@ export async function GET(request: Request) {
     for (const orphan of orphans) {
       if (!orphan.storagePath) continue;
 
+      // Conversation-uploaded orphans (driveId === null) need a conversation-scoped
+      // token mint that lands with the polymorphic upload core PR. Skip them here so
+      // their DB rows aren't reaped before their physical blobs can be cleaned up.
+      // Dead at runtime today — no driveId-null orphans exist yet.
+      if (orphan.driveId === null) {
+        failedPhysicalDeletes.push(orphan.id);
+        console.warn(`[Cron] Orphan ${orphan.id} has null driveId; physical cleanup deferred until conversation-scoped token mint lands`);
+        continue;
+      }
+
       // Extract content hash from storagePath (format: /storage/<contentHash>/original or just the hash)
       const contentHash = orphan.storagePath.split('/').filter(Boolean).find(segment =>
         /^[a-f0-9]{64}$/i.test(segment)
