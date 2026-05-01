@@ -44,6 +44,12 @@ export interface TaskItem {
   priority: 'low' | 'medium' | 'high';
   position: number;
   dueDate: string | null;
+  metadata?: {
+    hasTrigger?: boolean;
+    triggerTypes?: string[];
+    [key: string]: unknown;
+  } | null;
+  activeTriggerCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -134,4 +140,5 @@ export interface TaskHandlers {
   onDelete: (taskId: string) => void;
   onNavigate: (task: TaskItem) => void;
   onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
 }

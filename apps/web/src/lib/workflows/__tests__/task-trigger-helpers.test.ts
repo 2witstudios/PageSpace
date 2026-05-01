@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, mockInsert, mockValues, mockOnConflict, mockQueryPages } = vi.hoisted(() => {
+const { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, mockSelectWhere, mockInsert, mockValues, mockOnConflict, mockQueryPages } = vi.hoisted(() => {
   const mockReturning = vi.fn().mockResolvedValue([]);
   const mockWhere = vi.fn(() => ({ returning: mockReturning }));
   const mockSet = vi.fn(() => ({ where: mockWhere }));
-  const mockFrom = vi.fn().mockReturnThis();
+  // db.select(...).from(...).where(...) resolves directly to a row array (no .returning())
+  const mockSelectWhere = vi.fn().mockResolvedValue([]);
+  const mockFrom = vi.fn(() => ({ where: mockSelectWhere }));
   const mockUpdate = vi.fn(() => ({ set: mockSet }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockOnConflict = vi.fn().mockResolvedValue(undefined);
   const mockValues = vi.fn(() => ({ onConflictDoUpdate: mockOnConflict }));
   const mockInsert = vi.fn(() => ({ values: mockValues }));
   const mockQueryPages = { findFirst: vi.fn(), findMany: vi.fn() };
-  return { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, mockInsert, mockValues, mockOnConflict, mockQueryPages };
+  return { mockUpdate, mockSet, mockWhere, mockReturning, mockFrom, mockSelect, mockSelectWhere, mockInsert, mockValues, mockOnConflict, mockQueryPages };
 });
 
 vi.mock('@pagespace/db/db', () => ({
@@ -71,6 +73,7 @@ import {
   fireCompletionTrigger,
   disableTaskTriggers,
   createTaskTriggerWorkflow,
+  recomputeTaskTriggerMetadata,
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
 import { db } from '@pagespace/db/db';
@@ -84,7 +87,8 @@ describe('task-trigger-helpers', () => {
     mockWhere.mockImplementation(() => ({ returning: mockReturning }));
     mockReturning.mockResolvedValue([]);
     mockSelect.mockImplementation(() => ({ from: mockFrom }));
-    mockFrom.mockImplementation(() => ({ where: mockWhere }));
+    mockFrom.mockImplementation(() => ({ where: mockSelectWhere }));
+    mockSelectWhere.mockResolvedValue([]);
   });
 
   describe('syncTaskDueDateTrigger', () => {
@@ -313,6 +317,51 @@ describe('task-trigger-helpers', () => {
       await createTaskTriggerWorkflow(validParams);
 
       expect(mockOnConflict).toHaveBeenCalled();
+    });
+  });
+
+  describe('recomputeTaskTriggerMetadata', () => {
+    it('writes triggerTypes and hasTrigger from the live workflows table, ignoring stale baseMetadata', async () => {
+      // Live DB state: only due_date is enabled (completion was just disabled)
+      mockSelectWhere.mockResolvedValueOnce([{ triggerType: 'task_due_date' }]);
+      // Caller passes stale baseMetadata claiming both types are active
+      const stale = { hasTrigger: true, triggerTypes: ['task_completion', 'task_due_date'], otherKey: 'preserved' };
+
+      await recomputeTaskTriggerMetadata(db, 'task-1', stale);
+
+      expect(mockSet).toHaveBeenCalledWith({
+        metadata: {
+          otherKey: 'preserved',
+          triggerTypes: ['task_due_date'],
+          hasTrigger: true,
+        },
+      });
+    });
+
+    it('clears hasTrigger when no enabled triggers remain', async () => {
+      mockSelectWhere.mockResolvedValueOnce([]);
+
+      await recomputeTaskTriggerMetadata(db, 'task-1', { hasTrigger: true, triggerTypes: ['task_completion'] });
+
+      expect(mockSet).toHaveBeenCalledWith({
+        metadata: {
+          triggerTypes: [],
+          hasTrigger: false,
+        },
+      });
+    });
+
+    it('handles null baseMetadata', async () => {
+      mockSelectWhere.mockResolvedValueOnce([{ triggerType: 'task_completion' }]);
+
+      await recomputeTaskTriggerMetadata(db, 'task-1', null);
+
+      expect(mockSet).toHaveBeenCalledWith({
+        metadata: {
+          triggerTypes: ['task_completion'],
+          hasTrigger: true,
+        },
+      });
     });
   });
 });

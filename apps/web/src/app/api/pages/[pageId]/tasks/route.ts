@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, count } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
+import { workflows } from '@pagespace/db/schema/workflows';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
@@ -207,6 +208,30 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     );
   }
 
+  // Ground-truth active trigger count from the workflows table so badges don't
+  // go stale when an agent page is trashed and the workflow row cascade-deletes.
+  const triggerCountByTaskId = new Map<string, number>();
+  if (tasks.length > 0) {
+    const taskIdList = tasks.map((t) => t.id);
+    const triggerRows = await db
+      .select({ taskItemId: workflows.taskItemId, total: count() })
+      .from(workflows)
+      .where(and(
+        inArray(workflows.taskItemId, taskIdList),
+        eq(workflows.isEnabled, true),
+        inArray(workflows.triggerType, ['task_due_date', 'task_completion']),
+      ))
+      .groupBy(workflows.taskItemId);
+    for (const row of triggerRows) {
+      if (row.taskItemId) triggerCountByTaskId.set(row.taskItemId, Number(row.total));
+    }
+  }
+
+  const enrichedTasks = tasks.map((t) => ({
+    ...t,
+    activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
+  }));
+
   return NextResponse.json({
     taskList: {
       id: taskList.id,
@@ -215,7 +240,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       status: taskList.status,
       updatedAt: taskList.updatedAt,
     },
-    tasks,
+    tasks: enrichedTasks,
     statusConfigs,
   });
 }

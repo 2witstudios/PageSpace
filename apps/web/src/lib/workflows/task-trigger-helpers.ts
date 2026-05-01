@@ -27,6 +27,37 @@ export interface CreateTaskTriggerWorkflowParams {
 
 const logger = loggers.api.child({ module: 'task-trigger-helpers' });
 
+const TASK_TRIGGER_TYPES: ('task_due_date' | 'task_completion')[] = ['task_due_date', 'task_completion'];
+
+/**
+ * Recompute taskItems.metadata.triggerTypes / hasTrigger from the live workflows table.
+ * Use this after any insert/upsert/disable so metadata never drifts from DB truth — in
+ * particular it stays correct when an agent page cascade-deletes a workflow row without
+ * touching the task.
+ */
+export async function recomputeTaskTriggerMetadata(
+  database: typeof db,
+  taskId: string,
+  baseMetadata: Record<string, unknown> | null,
+): Promise<void> {
+  const rows = await database
+    .select({ triggerType: workflows.triggerType })
+    .from(workflows)
+    .where(and(
+      eq(workflows.taskItemId, taskId),
+      eq(workflows.isEnabled, true),
+      inArray(workflows.triggerType, TASK_TRIGGER_TYPES),
+    ));
+  const triggerTypes = Array.from(new Set(rows.map((r) => r.triggerType)));
+  await database.update(taskItems).set({
+    metadata: {
+      ...(baseMetadata ?? {}),
+      triggerTypes,
+      hasTrigger: triggerTypes.length > 0,
+    },
+  }).where(eq(taskItems.id, taskId));
+}
+
 /**
  * Create (or upsert) a task trigger workflow.
  * Validates agent page, instruction page, and context pages before inserting.
@@ -107,16 +138,8 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
     },
   });
 
-  // Mark task metadata — store trigger types as array to support both types on one task
-  const existingTypes = ((taskMetadata as Record<string, unknown> | null)?.triggerTypes as string[]) ?? [];
-  const triggerTypes = existingTypes.includes(triggerType) ? existingTypes : [...existingTypes, triggerType];
-  await database.update(taskItems).set({
-    metadata: {
-      ...(taskMetadata || {}),
-      hasTrigger: true,
-      triggerTypes,
-    },
-  }).where(eq(taskItems.id, taskId));
+  // Recompute metadata from the live workflows table so it never drifts from DB truth.
+  await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
 }
 
 /**

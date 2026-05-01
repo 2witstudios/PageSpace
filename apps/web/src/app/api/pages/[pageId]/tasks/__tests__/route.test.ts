@@ -60,6 +60,14 @@ vi.mock('@pagespace/db/db', () => {
       returning: vi.fn(),
     })),
   }));
+  // Active-trigger-count lookup: db.select(...).from(workflows).where(...).groupBy(...)
+  const mockSelect = vi.fn(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        groupBy: vi.fn().mockResolvedValue([]),
+      })),
+    })),
+  }));
   return {
     db: {
       query: {
@@ -78,6 +86,7 @@ vi.mock('@pagespace/db/db', () => {
         },
       },
       insert: mockInsert,
+      select: mockSelect,
       transaction: vi.fn(async (callback) => {
         let insertCallCount = 0;
         // Create a tx object that mimics the transaction context
@@ -102,9 +111,14 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions) => conditions),
   asc: vi.fn((col) => ({ type: 'asc', col })),
   desc: vi.fn((col) => ({ type: 'desc', col })),
+  inArray: vi.fn((col, values) => ({ type: 'inArray', col, values })),
+  count: vi.fn(() => ({ type: 'count' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: {},
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { taskItemId: 'taskItemId-col', isEnabled: 'isEnabled-col', triggerType: 'triggerType-col' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: {},
@@ -147,6 +161,14 @@ describe('Task API Routes', () => {
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({
         returning: vi.fn(),
+      })),
+    } as never);
+    // Re-set up db.select default for active-trigger-count lookup
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          groupBy: vi.fn().mockResolvedValue([]),
+        })),
       })),
     } as never);
     // Re-set up db.transaction
