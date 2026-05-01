@@ -167,7 +167,7 @@ export default function DriveSwitcher() {
           {favoriteDrives.length > 0 && (
             <>
               <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 py-1.5">
-                Favorites · {favoriteDrives.length}
+                Favorites <span aria-hidden>·</span> {favoriteDrives.length}
               </DropdownMenuLabel>
               <CustomScrollArea className="max-h-[200px] overflow-x-hidden">
                 <DropdownMenuGroup>
