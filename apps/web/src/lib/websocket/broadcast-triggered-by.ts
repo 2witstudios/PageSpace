@@ -1,6 +1,7 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { users, userProfiles } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { userProfiles } from '@pagespace/db/schema/members';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 
 export interface TriggeredBy {

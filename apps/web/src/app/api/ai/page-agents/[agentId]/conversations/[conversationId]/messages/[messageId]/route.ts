@@ -91,16 +91,7 @@ export async function PATCH(
         const updated = await chatMessageRepository.getMessageById(messageId);
         if (!updated) return;
         const triggeredBy = await resolveTriggeredBy(userId, request);
-        const uiMessage = convertDbMessageToUIMessage({
-          id: updated.id,
-          role: updated.role as 'user' | 'assistant' | 'system',
-          content: updated.content,
-          createdAt: updated.createdAt,
-          editedAt: updated.editedAt,
-          messageType: updated.messageType,
-          toolCalls: updated.toolCalls,
-          toolResults: updated.toolResults,
-        });
+        const uiMessage = convertDbMessageToUIMessage(updated);
         await broadcastAiMessageEdited({
           messageId,
           pageId: agentId,

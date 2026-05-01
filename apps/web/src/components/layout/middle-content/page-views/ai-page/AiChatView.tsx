@@ -34,6 +34,8 @@ import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -347,6 +349,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    },
+    onMessageEdited: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) =>
+        applyMessageEdit(prev as never, {
+          messageId: payload.messageId,
+          parts: payload.parts,
+          editedAt: new Date(payload.editedAt),
+        }) as typeof prev,
+      );
+    },
+    onMessageDeleted: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) => applyMessageDelete(prev, payload.messageId) as typeof prev);
     },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);

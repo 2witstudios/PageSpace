@@ -9,6 +9,8 @@ import { useStreamingRegistration } from '@/lib/ai/shared';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { shouldClaimAgentStopSlot } from '@/lib/ai/streams/shouldClaimAgentStopSlot';
+import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
@@ -95,6 +97,20 @@ export function useAgentChannelMultiplayer({
       setLocalMessagesRef.current((prev) =>
         prev.some((m) => m.id === message.id) ? prev : [...prev, message],
       );
+    },
+    onMessageEdited: (payload) => {
+      if (payload.conversationId !== agentConversationIdRef.current) return;
+      setLocalMessagesRef.current((prev) =>
+        applyMessageEdit(prev as never, {
+          messageId: payload.messageId,
+          parts: payload.parts,
+          editedAt: new Date(payload.editedAt),
+        }) as typeof prev,
+      );
+    },
+    onMessageDeleted: (payload) => {
+      if (payload.conversationId !== agentConversationIdRef.current) return;
+      setLocalMessagesRef.current((prev) => applyMessageDelete(prev, payload.messageId) as typeof prev);
     },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
