@@ -6,6 +6,9 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -60,6 +63,26 @@ export async function PATCH(
 
     // Update the message content
     await globalConversationRepository.updateMessageContent(messageId, updatedContent);
+
+    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(userId, request);
+        await broadcastAiMessageEdited({
+          messageId,
+          pageId: globalChannelId(userId),
+          conversationId,
+          parts: [{ type: 'text', text: updatedContent }],
+          editedAt: new Date().toISOString(),
+          triggeredBy,
+        });
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast global message edit', broadcastError as Error, {
+          messageId: maskIdentifier(messageId),
+          conversationId: maskIdentifier(conversationId),
+        });
+      }
+    })();
 
     // Log activity for audit trail (non-blocking)
     try {
@@ -144,6 +167,24 @@ export async function DELETE(
 
     // Soft delete the message
     await globalConversationRepository.softDeleteMessage(messageId);
+
+    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(userId, request);
+        await broadcastAiMessageDeleted({
+          messageId,
+          pageId: globalChannelId(userId),
+          conversationId,
+          triggeredBy,
+        });
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast global message delete', broadcastError as Error, {
+          messageId: maskIdentifier(messageId),
+          conversationId: maskIdentifier(conversationId),
+        });
+      }
+    })();
 
     // Log activity for audit trail (non-blocking)
     try {

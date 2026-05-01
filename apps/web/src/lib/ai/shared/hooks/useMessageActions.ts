@@ -7,6 +7,11 @@ import { useCallback, useRef } from 'react';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+
+const browserSessionHeaders = (): Record<string, string> => ({
+  'X-Browser-Session-Id': getBrowserSessionId(),
+});
 
 type SetMessagesAction = UIMessage[] | ((previousMessages: UIMessage[]) => UIMessage[]);
 
@@ -95,12 +100,14 @@ export function useMessageActions({
         if (isAgentMode) {
           await patch(
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
-            { content: newContent }
+            { content: newContent },
+            { headers: browserSessionHeaders() }
           );
         } else {
           await patch(
             `/api/ai/global/${conversationId}/messages/${messageId}`,
-            { content: newContent }
+            { content: newContent },
+            { headers: browserSessionHeaders() }
           );
         }
 
@@ -159,10 +166,16 @@ export function useMessageActions({
       try {
         if (isAgentMode) {
           await del(
-            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`
+            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
+            undefined,
+            { headers: browserSessionHeaders() }
           );
         } else {
-          await del(`/api/ai/global/${conversationId}/messages/${messageId}`);
+          await del(
+            `/api/ai/global/${conversationId}/messages/${messageId}`,
+            undefined,
+            { headers: browserSessionHeaders() }
+          );
         }
 
         toast.success('Message deleted');
@@ -213,7 +226,7 @@ export function useMessageActions({
           const url = isAgentMode
             ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
             : `/api/ai/global/${conversationId}/messages/${msg.id}`;
-          return del(url).catch((error) => {
+          return del(url, undefined, { headers: browserSessionHeaders() }).catch((error) => {
             console.error('Failed to delete old assistant message:', error);
           });
         })

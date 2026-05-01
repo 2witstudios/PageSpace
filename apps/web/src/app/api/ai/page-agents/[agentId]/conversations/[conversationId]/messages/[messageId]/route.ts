@@ -9,6 +9,9 @@ import {
   processMessageContentUpdate,
 } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -80,6 +83,39 @@ export async function PATCH(
 
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+
+    // Broadcast to remote viewers so their message bubble re-renders without a refetch.
+    // Failure to broadcast must never break the request — wrapped in catch.
+    void (async () => {
+      try {
+        const updated = await chatMessageRepository.getMessageById(messageId);
+        if (!updated) return;
+        const triggeredBy = await resolveTriggeredBy(userId, request);
+        const uiMessage = convertDbMessageToUIMessage({
+          id: updated.id,
+          role: updated.role as 'user' | 'assistant' | 'system',
+          content: updated.content,
+          createdAt: updated.createdAt,
+          editedAt: updated.editedAt,
+          messageType: updated.messageType,
+          toolCalls: updated.toolCalls,
+          toolResults: updated.toolResults,
+        });
+        await broadcastAiMessageEdited({
+          messageId,
+          pageId: agentId,
+          conversationId,
+          parts: uiMessage.parts,
+          editedAt: (updated.editedAt ?? new Date()).toISOString(),
+          triggeredBy,
+        });
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast agent message edit', broadcastError as Error, {
+          messageId: maskIdentifier(messageId),
+          agentId: maskIdentifier(agentId),
+        });
+      }
+    })();
 
     // Log activity for audit trail
     try {
@@ -183,6 +219,24 @@ export async function DELETE(
 
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Broadcast to remote viewers. Failure must never break the request.
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(userId, request);
+        await broadcastAiMessageDeleted({
+          messageId,
+          pageId: agentId,
+          conversationId,
+          triggeredBy,
+        });
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast agent message delete', broadcastError as Error, {
+          messageId: maskIdentifier(messageId),
+          agentId: maskIdentifier(agentId),
+        });
+      }
+    })();
 
     // Log activity for audit trail
     try {
