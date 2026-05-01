@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 type ApiTriggerType = 'task_due_date' | 'task_completion';
 type UiTriggerType = 'due_date' | 'completion';
@@ -121,6 +122,15 @@ export function TaskAgentTriggersDialog({
   });
   const [savingType, setSavingType] = useState<UiTriggerType | null>(null);
   const [removingType, setRemovingType] = useState<UiTriggerType | null>(null);
+
+  // Block SWR refetch from clobbering in-progress prompt typing while the dialog is open.
+  useEffect(() => {
+    const sessionId = `task-triggers:${taskId}`;
+    if (open) {
+      useEditingStore.getState().startEditing(sessionId, 'form', { pageId, componentName: 'TaskAgentTriggersDialog' });
+      return () => useEditingStore.getState().endEditing(sessionId);
+    }
+  }, [open, taskId, pageId]);
 
   useEffect(() => {
     if (!open) return;
@@ -282,7 +292,11 @@ export function TaskAgentTriggersDialog({
                       </div>
 
                       {existing?.lastRunStatus && existing.lastRunStatus !== 'never_run' && (
-                        <p className="text-xs text-muted-foreground">
+                        <p className={
+                          existing.lastRunStatus === 'error'
+                            ? 'text-xs text-destructive'
+                            : 'text-xs text-muted-foreground'
+                        }>
                           Last run: <span className="font-medium">{existing.lastRunStatus}</span>
                           {existing.lastRunAt
                             ? ` • ${new Date(existing.lastRunAt).toLocaleString()}`
