@@ -12,4 +12,29 @@ describe('mergeTextDeltas', () => {
     const next = { type: 'text' as const, text: 'lo' };
     expect(mergeTextDeltas(initial, next)).toEqual([{ type: 'text', text: 'hello' }]);
   });
+
+  it('given parts ending in a tool part, should append the text part as a new entry rather than concat', () => {
+    const initial = [
+      { type: 'text' as const, text: 'before' },
+      {
+        type: 'tool-list_pages' as const,
+        toolCallId: 'tc1',
+        state: 'output-available' as const,
+        input: { driveId: 'd1' },
+        output: { pages: [] },
+      },
+    ];
+    const next = { type: 'text' as const, text: 'after' };
+    expect(mergeTextDeltas(initial, next)).toEqual([
+      ...initial,
+      { type: 'text', text: 'after' },
+    ]);
+  });
+
+  it('given a non-empty initial, should not mutate the input array', () => {
+    const initial = [{ type: 'text' as const, text: 'hel' }];
+    const snapshot = JSON.parse(JSON.stringify(initial));
+    mergeTextDeltas(initial, { type: 'text', text: 'lo' });
+    expect(initial).toEqual(snapshot);
+  });
 });
