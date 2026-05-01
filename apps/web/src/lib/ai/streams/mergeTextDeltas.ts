@@ -11,5 +11,12 @@ export const mergeTextDeltas = (
   parts: readonly AnyPart[],
   textPart: TextPart,
 ): AnyPart[] => {
+  const last = parts[parts.length - 1];
+  if (last && last.type === 'text') {
+    return [
+      ...parts.slice(0, -1),
+      { ...last, text: last.text + textPart.text },
+    ];
+  }
   return [...parts, textPart];
 };
