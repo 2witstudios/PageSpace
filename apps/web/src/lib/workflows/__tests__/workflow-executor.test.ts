@@ -9,10 +9,12 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockResolvePageAgentIntegrationTools,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
   mockSelect: vi.fn(),
+  mockResolvePageAgentIntegrationTools: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -57,6 +59,10 @@ vi.mock('@/lib/ai/core', () => ({
 
 vi.mock('@/lib/ai/core/message-utils', () => ({
   saveMessageToDatabase: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
+  resolvePageAgentIntegrationTools: mockResolvePageAgentIntegrationTools,
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -158,6 +164,7 @@ describe('executeWorkflow', () => {
     vi.resetAllMocks();
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({});
     vi.mocked(generateText).mockResolvedValue({
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
@@ -249,6 +256,30 @@ describe('executeWorkflow', () => {
     expect(toolKeys).toContain('list_pages');
     expect(toolKeys).toContain('create_page');
     expect(toolKeys).not.toContain('search_pages');
+  });
+
+  test('merges granted integration tools for workflow agents', async () => {
+    setupSelectChain(
+      [{ ...mockAgent, enabledTools: [] }],
+      [mockDrive],
+    );
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({
+      github_create_issue: { name: 'github_create_issue' },
+    });
+
+    const result = await executeWorkflow(createWorkflowFixture());
+
+    expect(result.success).toBe(true);
+    expect(mockResolvePageAgentIntegrationTools).toHaveBeenCalledWith({
+      agentId: 'agent_1',
+      userId: 'user_123',
+      driveId: 'drive_abc',
+    });
+
+    const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+    expect(genCall.tools).toBeDefined();
+    const toolKeys = Object.keys(genCall.tools as object);
+    expect(toolKeys).toContain('github_create_issue');
   });
 
   test('execution without tools when enabledTools is empty', async () => {
