@@ -49,6 +49,7 @@ export interface TaskItem {
     triggerTypes?: string[];
     [key: string]: unknown;
   } | null;
+  activeTriggerCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;

@@ -6,7 +6,8 @@ import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
-import { usePermissions } from '@/hooks/usePermissions';
+import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
+import { useDriveStore } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { TreePage } from '@/hooks/usePageTree';
@@ -48,6 +49,7 @@ import {
   LayoutList,
   Kanban,
   Zap,
+  Bell,
 } from 'lucide-react';
 import {
   DndContext,
@@ -279,14 +281,15 @@ function MobileTaskCard({
           disabled={!canEdit}
         />
 
-        {task.metadata?.hasTrigger && (
+        {(task.activeTriggerCount ?? 0) > 0 && (
           <button
             type="button"
             onClick={() => onConfigureTriggers(task)}
             title="Agent trigger configured — click to edit"
+            aria-label="Agent trigger configured — click to edit"
             className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300/60 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
           >
-            <Zap className="h-3 w-3" />
+            <Bell className="h-3 w-3" />
             <span>Trigger</span>
           </button>
         )}
@@ -357,6 +360,8 @@ function TaskListView({ page }: TaskListViewProps) {
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const drive = useDriveStore((s) => s.drives.find((d) => d.id === page.driveId));
+  const canManageWorkflows = canManageDrive(drive);
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
@@ -791,7 +796,7 @@ function TaskListView({ page }: TaskListViewProps) {
             />
           )}
 
-          {canEdit && (
+          {canManageWorkflows && (
             <Button
               variant="ghost"
               size="sm"
@@ -1027,14 +1032,15 @@ function TaskListView({ page }: TaskListViewProps) {
                               onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
                               disabled={!canEdit}
                             />
-                            {task.metadata?.hasTrigger && (
+                            {(task.activeTriggerCount ?? 0) > 0 && (
                               <button
                                 type="button"
                                 onClick={() => setTriggerDialogTask(task)}
                                 title="Agent trigger configured — click to edit"
+                                aria-label="Agent trigger configured — click to edit"
                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
                               >
-                                <Zap className="h-3 w-3" />
+                                <Bell className="h-3 w-3" />
                                 <span className="sr-only">Agent trigger configured</span>
                               </button>
                             )}
