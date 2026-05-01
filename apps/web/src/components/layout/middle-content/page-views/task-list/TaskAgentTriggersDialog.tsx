@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Bot, Zap } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate as globalMutate } from 'swr';
 import {
@@ -24,6 +24,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
+import { useEditingSession } from '@/stores/useEditingSession';
 
 type ApiTriggerType = 'task_due_date' | 'task_completion';
 type UiTriggerType = 'due_date' | 'completion';
@@ -69,6 +71,9 @@ const TRIGGER_TYPES: { ui: UiTriggerType; api: ApiTriggerType; label: string; he
   },
 ];
 
+export const statusToneClass = (status: TriggerRow['lastRunStatus']) =>
+  status === 'error' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground';
+
 const triggersFetcher = async (url: string): Promise<{ triggers: TriggerRow[] }> => {
   const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to load triggers');
@@ -102,15 +107,35 @@ export function TaskAgentTriggersDialog({
   const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
   const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
 
+  // Pause background revalidation while any editing session is active so a remote
+  // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
+  // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
+  // unaffected because *LoadedRef gates the pause until first success.
+  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const triggersLoadedRef = useRef(false);
+  const agentsLoadedRef = useRef(false);
+
   const { data: triggersData, isLoading: triggersLoading, mutate: refetchTriggers } = useSWR(
     triggersKey,
     triggersFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      isPaused: () => triggersLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        triggersLoadedRef.current = true;
+      },
+    },
   );
   const { data: agentsData, isLoading: agentsLoading } = useSWR(
     agentsKey,
     agentsFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        agentsLoadedRef.current = true;
+      },
+    },
   );
 
   const agents = agentsData?.agents ?? [];
@@ -121,6 +146,11 @@ export function TaskAgentTriggersDialog({
   });
   const [savingType, setSavingType] = useState<UiTriggerType | null>(null);
   const [removingType, setRemovingType] = useState<UiTriggerType | null>(null);
+
+  useEditingSession(`task-triggers:${taskId}`, open, 'form', {
+    pageId,
+    componentName: 'TaskAgentTriggersDialog',
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -282,7 +312,10 @@ export function TaskAgentTriggersDialog({
                       </div>
 
                       {existing?.lastRunStatus && existing.lastRunStatus !== 'never_run' && (
-                        <p className="text-xs text-muted-foreground">
+                        <p className={statusToneClass(existing.lastRunStatus)}>
+                          {existing.lastRunStatus === 'error' && (
+                            <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
+                          )}
                           Last run: <span className="font-medium">{existing.lastRunStatus}</span>
                           {existing.lastRunAt
                             ? ` • ${new Date(existing.lastRunAt).toLocaleString()}`
