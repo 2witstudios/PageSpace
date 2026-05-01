@@ -1,5 +1,7 @@
 import { PageType, PermissionAction } from './utils/enums';
 
+export type { AttachmentMeta } from '@pagespace/db/schema/storage';
+
 // JSON-compatible value types for structured data (logging, metadata, etc.)
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
