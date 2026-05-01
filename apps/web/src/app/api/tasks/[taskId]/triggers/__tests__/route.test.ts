@@ -51,6 +51,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
+  inArray: vi.fn((col, values) => ({ type: 'inArray', col, values })),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
@@ -199,6 +200,24 @@ describe('Task triggers API', () => {
       expect(res.status).toBe(200);
       expect(createTaskTriggerWorkflow).toHaveBeenCalledOnce();
     });
+
+    it('returns 500 if the trigger row is missing after upsert', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      // Simulate the post-upsert re-query coming back empty (race / constraint loss)
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+      } as never);
+
+      const res = await PUT(
+        mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go' }),
+        { params: mkParams() },
+      );
+      expect(res.status).toBe(500);
+    });
   });
 
   describe('DELETE /api/tasks/[taskId]/triggers/[triggerType]', () => {
@@ -212,22 +231,73 @@ describe('Task triggers API', () => {
       expect(res.status).toBe(400);
     });
 
-    it('disables trigger and clears metadata triggerTypes', async () => {
+    it('disables trigger and recomputes metadata from the workflows table', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
         id: taskId,
         taskListId,
+        // Stale metadata: claims both triggers active even though completion is being removed
         metadata: { hasTrigger: true, triggerTypes: ['task_completion', 'task_due_date'] },
       } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
 
+      // Live workflows query returns only the due_date trigger (the completion one was just disabled)
+      const setCalls: Record<string, unknown>[] = [];
+      const setSpy = vi.fn((args) => {
+        setCalls.push(args);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      });
+      vi.mocked(db.update).mockReturnValue({ set: setSpy } as never);
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ triggerType: 'task_due_date' }]),
+        })),
+      } as never);
+
       const res = await DELETE(mkRequest('DELETE'), { params: mkDeleteParams('completion') });
       expect(res.status).toBe(200);
 
       // db.update was called twice: once for workflows, once for taskItems metadata
       expect(db.update).toHaveBeenCalledTimes(2);
+
+      // Metadata write should reflect the live workflows table, not the stale task.metadata
+      const metadataWrite = setCalls.find((c) => c.metadata !== undefined);
+      const meta = metadataWrite?.metadata as { triggerTypes?: string[]; hasTrigger?: boolean };
+      expect(meta?.triggerTypes).toEqual(['task_due_date']);
+      expect(meta?.hasTrigger).toBe(true);
+    });
+
+    it('marks hasTrigger=false when removing the last trigger', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+        id: taskId,
+        taskListId,
+        metadata: { hasTrigger: true, triggerTypes: ['task_completion'] },
+      } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+      const setCalls: Record<string, unknown>[] = [];
+      const setSpy = vi.fn((args) => {
+        setCalls.push(args);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      });
+      vi.mocked(db.update).mockReturnValue({ set: setSpy } as never);
+      // No remaining triggers
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+      } as never);
+
+      const res = await DELETE(mkRequest('DELETE'), { params: mkDeleteParams('completion') });
+      expect(res.status).toBe(200);
+
+      const metadataWrite = setCalls.find((c) => c.metadata !== undefined);
+      const meta = metadataWrite?.metadata as { triggerTypes?: string[]; hasTrigger?: boolean };
+      expect(meta?.triggerTypes).toEqual([]);
+      expect(meta?.hasTrigger).toBe(false);
     });
   });
 });

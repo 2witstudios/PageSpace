@@ -165,6 +165,11 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     .from(workflows)
     .where(and(eq(workflows.taskItemId, taskId), eq(workflows.triggerType, triggerTypeDb)));
 
+  if (!saved) {
+    logger.error('Trigger row missing after upsert', { taskId, triggerType: triggerTypeDb });
+    return NextResponse.json({ error: 'Failed to retrieve saved trigger' }, { status: 500 });
+  }
+
   auditRequest(request, {
     eventType: 'data.write',
     userId,
