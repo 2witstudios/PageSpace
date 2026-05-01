@@ -220,11 +220,52 @@ describe('socket-utils', () => {
 
       await broadcastTaskEvent(payload);
 
-      const fetchCall = mockFetch.mock.calls[0];
-      const requestBody = JSON.parse(fetchCall[1].body);
+      const channelIds = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body).channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      const userCallBody = JSON.parse(
+        mockFetch.mock.calls.find((call) => JSON.parse(call[1].body).channelId === 'user:user-789:tasks')![1].body
+      );
+      expect(userCallBody.event).toBe('task:task_added');
+    });
 
-      expect(requestBody.channelId).toBe('user:user-789:tasks');
-      expect(requestBody.event).toBe('task:task_added');
+    it('given payload with pageId, should fan out to BOTH user:{userId}:tasks and pageId channels', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_updated',
+        userId: 'user-789',
+        taskId: 'task-123',
+        pageId: 'page-456',
+        data: { title: 'Updated Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const bodies = mockFetch.mock.calls.map((call) => JSON.parse(call[1].body));
+      const channelIds = bodies.map((b) => b.channelId);
+      expect(channelIds).toContain('user:user-789:tasks');
+      expect(channelIds).toContain('page-456');
+
+      // Both fetches should carry the same event name and payload
+      for (const body of bodies) {
+        expect(body.event).toBe('task:task_updated');
+        expect(body.payload).toEqual(payload);
+      }
+    });
+
+    it('given payload without pageId, should fan out only to user:{userId}:tasks channel', async () => {
+      const payload: TaskEventPayload = {
+        type: 'task_added',
+        userId: 'user-789',
+        data: { title: 'Pageless Task' },
+      };
+
+      await broadcastTaskEvent(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.channelId).toBe('user:user-789:tasks');
+      expect(body.event).toBe('task:task_added');
     });
   });
 

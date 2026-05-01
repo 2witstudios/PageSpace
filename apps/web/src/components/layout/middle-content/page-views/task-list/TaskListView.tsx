@@ -424,7 +424,7 @@ function TaskListView({ page }: TaskListViewProps) {
   useEffect(() => {
     if (!socket || connectionStatus !== 'connected') return;
 
-    socket.emit('join_page', page.id);
+    socket.emit('join_channel', page.id);
 
     // Handle task events (event names match backend broadcast format: task:${operation})
     const handleTaskAdded = () => {
