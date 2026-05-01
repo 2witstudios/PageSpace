@@ -1,44 +1,52 @@
 /**
  * File Access Authorization
  *
- * Files linked to pages via `filePages` require page-level access (canUserViewPage)
- * for at least one linked page. Files with no page linkages fall back to drive
- * membership check (isUserDriveMember).
- *
- * This closes the gap where files attached to restricted pages could be accessed
- * by any drive member via direct URL.
+ * Files can be linked to pages (via `filePages`) or to DM conversations
+ * (via `fileConversations`). When linkages exist, access requires qualifying
+ * on at least one of them — page-view permission for any linked page, or
+ * participation in any linked conversation. With no linkages, access falls
+ * back to drive membership; conversation-uploaded files have `driveId = null`
+ * and no linkage means deny.
  */
 
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { filePages } from '@pagespace/db/schema/storage';
+import { fileConversations, filePages } from '@pagespace/db/schema/storage';
+import { dmConversations } from '@pagespace/db/schema/social';
 import { canUserViewPage, isUserDriveMember } from './permissions';
 
-/**
- * Check if a user can access a file.
- *
- * Authorization logic:
- * 1. Look up page linkages via `filePages`
- * 2. If linkages exist: require canUserViewPage for at least one linked page
- * 3. If no linkages: fall back to isUserDriveMember for the file's drive
- */
 export async function canUserAccessFile(
   userId: string,
   fileId: string,
-  driveId: string
+  driveId: string | null
 ): Promise<boolean> {
-  const linkedPages = await db
-    .select({ pageId: filePages.pageId })
-    .from(filePages)
-    .where(eq(filePages.fileId, fileId));
+  const [linkedPages, linkedConversations] = await Promise.all([
+    db
+      .select({ pageId: filePages.pageId })
+      .from(filePages)
+      .where(eq(filePages.fileId, fileId)),
+    db
+      .select({
+        participant1Id: dmConversations.participant1Id,
+        participant2Id: dmConversations.participant2Id,
+      })
+      .from(fileConversations)
+      .innerJoin(dmConversations, eq(dmConversations.id, fileConversations.conversationId))
+      .where(eq(fileConversations.fileId, fileId)),
+  ]);
 
-  if (linkedPages.length > 0) {
+  const hasLinkages = linkedPages.length > 0 || linkedConversations.length > 0;
+
+  if (hasLinkages) {
     for (const { pageId } of linkedPages) {
-      const hasAccess = await canUserViewPage(userId, pageId);
-      if (hasAccess) return true;
+      if (await canUserViewPage(userId, pageId)) return true;
+    }
+    for (const { participant1Id, participant2Id } of linkedConversations) {
+      if (participant1Id === userId || participant2Id === userId) return true;
     }
     return false;
   }
 
+  if (driveId === null) return false;
   return isUserDriveMember(userId, driveId);
 }
