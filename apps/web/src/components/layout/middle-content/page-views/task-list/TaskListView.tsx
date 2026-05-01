@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useEditingSession } from '@/stores/useEditingSession';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
@@ -389,15 +390,10 @@ function TaskListView({ page }: TaskListViewProps) {
     })
   );
 
-  // Register/unregister editing state for UI refresh protection
-  useEffect(() => {
-    if (editingTaskId) {
-      useEditingStore.getState().startEditing(page.id, 'form', { pageId: page.id, componentName: 'TaskListView' });
-    } else {
-      useEditingStore.getState().endEditing(page.id);
-    }
-    return () => useEditingStore.getState().endEditing(page.id);
-  }, [editingTaskId, page.id]);
+  useEditingSession(page.id, !!editingTaskId, 'form', {
+    pageId: page.id,
+    componentName: 'TaskListView',
+  });
 
   // Fetch tasks with refresh protection
   // CRITICAL: Only pause AFTER initial load - never block the first fetch

@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { useEditingSession } from '@/stores/useEditingSession';
 
 type ApiTriggerType = 'task_due_date' | 'task_completion';
 type UiTriggerType = 'due_date' | 'completion';
@@ -123,14 +123,10 @@ export function TaskAgentTriggersDialog({
   const [savingType, setSavingType] = useState<UiTriggerType | null>(null);
   const [removingType, setRemovingType] = useState<UiTriggerType | null>(null);
 
-  // Block SWR refetch from clobbering in-progress prompt typing while the dialog is open.
-  useEffect(() => {
-    const sessionId = `task-triggers:${taskId}`;
-    if (open) {
-      useEditingStore.getState().startEditing(sessionId, 'form', { pageId, componentName: 'TaskAgentTriggersDialog' });
-      return () => useEditingStore.getState().endEditing(sessionId);
-    }
-  }, [open, taskId, pageId]);
+  useEditingSession(`task-triggers:${taskId}`, open, 'form', {
+    pageId,
+    componentName: 'TaskAgentTriggersDialog',
+  });
 
   useEffect(() => {
     if (!open) return;
