@@ -147,4 +147,58 @@ describe('multicast outcome — text + tool-call + tool-result render parity', (
 
     expect(currentParts(messageId)!).toEqual([finalToolPart]);
   });
+
+  it('given a failed tool call (input-available followed by tool-error), should transition the part to output-error rather than leave it pending', () => {
+    const messageId = 'msg-tool-failure';
+    const { addStream, appendPart } = usePendingStreamsStore.getState();
+    const currentParts = (id: string) => usePendingStreamsStore.getState().streams.get(id)?.parts;
+
+    addStream({
+      messageId,
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      triggeredBy: { userId: 'user-author', displayName: 'Author' },
+      isOwn: false,
+    });
+
+    const callPart = chunkToPart({
+      type: 'tool-call',
+      toolCallId: 'tc-fail',
+      toolName: 'list_pages',
+      input: { driveId: 'd1' },
+    } as never);
+    appendPart(messageId, callPart!);
+
+    // Mid-flight, remote viewer sees input-available — exactly as the originator does.
+    expect(currentParts(messageId)).toEqual([
+      {
+        type: 'tool-list_pages',
+        toolCallId: 'tc-fail',
+        toolName: 'list_pages',
+        state: 'input-available',
+        input: { driveId: 'd1' },
+      },
+    ]);
+
+    const errorPart = chunkToPart({
+      type: 'tool-error',
+      toolCallId: 'tc-fail',
+      toolName: 'list_pages',
+      input: { driveId: 'd1' },
+      error: new Error('drive permission denied'),
+    } as never);
+    appendPart(messageId, errorPart!);
+
+    // After the error chunk lands, the same toolCallId is replaced with an
+    // output-error part — the renderer transitions from "pending tool" to
+    // "tool failed", matching the originator's view.
+    const final = currentParts(messageId)!;
+    expect(final).toHaveLength(1);
+    expect(final[0]).toMatchObject({
+      type: 'tool-list_pages',
+      toolCallId: 'tc-fail',
+      state: 'output-error',
+      errorText: 'drive permission denied',
+    });
+  });
 });
