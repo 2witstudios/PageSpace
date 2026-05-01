@@ -86,6 +86,83 @@ describe('chunkToPart', () => {
     ).toBeNull();
   });
 
+  it('given a tool-error chunk with an Error instance, should return a tool part with state output-error and the error.message as errorText', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-error',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        error: new Error('drive not found'),
+      } as never),
+    ).toEqual({
+      type: 'tool-list_pages',
+      toolCallId: 'tc1',
+      toolName: 'list_pages',
+      state: 'output-error',
+      input: { driveId: 'd1' },
+      errorText: 'drive not found',
+    });
+  });
+
+  it('given a tool-error chunk with a string error, should use the string verbatim as errorText', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-error',
+        toolCallId: 'tc2',
+        toolName: 'read_page',
+        input: { pageId: 'p1' },
+        error: 'permission denied',
+      } as never),
+    ).toEqual({
+      type: 'tool-read_page',
+      toolCallId: 'tc2',
+      toolName: 'read_page',
+      state: 'output-error',
+      input: { pageId: 'p1' },
+      errorText: 'permission denied',
+    });
+  });
+
+  it('given a tool-error chunk with a non-Error non-string error, should fall back to a generic errorText (renderer expects a string)', () => {
+    const part = chunkToPart({
+      type: 'tool-error',
+      toolCallId: 'tc3',
+      toolName: 'list_pages',
+      input: { driveId: 'd1' },
+      error: { code: 500 },
+    } as never);
+    expect(part).toMatchObject({
+      type: 'tool-list_pages',
+      toolCallId: 'tc3',
+      state: 'output-error',
+    });
+    expect(typeof (part as { errorText: unknown }).errorText).toBe('string');
+    expect((part as { errorText: string }).errorText.length).toBeGreaterThan(0);
+  });
+
+  it('given a tool-error chunk missing toolName, should return null', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-error',
+        toolCallId: 'tc1',
+        input: { driveId: 'd1' },
+        error: new Error('boom'),
+      } as never),
+    ).toBeNull();
+  });
+
+  it('given a tool-error chunk missing toolCallId, should return null (idempotency key required so the error replaces the in-flight tool part)', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-error',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        error: new Error('boom'),
+      } as never),
+    ).toBeNull();
+  });
+
   it.each([
     ['start'],
     ['start-step'],
