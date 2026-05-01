@@ -524,6 +524,14 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     return grouped;
   }, [tasks]);
 
+  // Resolve the sheet's task against the live tasks array so edits and refetches
+  // (status, priority, trigger badge after onTriggersSaved, etc.) are reflected
+  // without closing and reopening the sheet.
+  const liveDetailSheetTask = useMemo(
+    () => (detailSheetTask ? tasks.find(t => t.id === detailSheetTask.id) ?? detailSheetTask : null),
+    [detailSheetTask, tasks],
+  );
+
   // Loading skeleton
   if (loading && tasks.length === 0) {
     return (
@@ -700,8 +708,8 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
                 {/* Mobile Sheets */}
                 <TaskDetailSheet
-                  task={detailSheetTask}
-                  statusConfigs={detailSheetTask ? getConfigsForTask(detailSheetTask) : []}
+                  task={liveDetailSheetTask}
+                  statusConfigs={liveDetailSheetTask ? getConfigsForTask(liveDetailSheetTask) : []}
                   open={detailSheetOpen}
                   onOpenChange={setDetailSheetOpen}
                   onStatusChange={handleStatusChange}
