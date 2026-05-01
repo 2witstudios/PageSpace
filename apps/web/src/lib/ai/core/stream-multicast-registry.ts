@@ -1,4 +1,8 @@
+import type { UIMessage } from 'ai';
+
 const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
+
+export type UIMessagePart = UIMessage['parts'][number];
 
 export interface StreamMeta {
   pageId: string;
@@ -9,13 +13,13 @@ export interface StreamMeta {
 }
 
 interface Subscriber {
-  onChunk: (text: string) => void;
+  onChunk: (part: UIMessagePart) => void;
   onComplete: (aborted: boolean) => void;
 }
 
 interface StreamEntry {
   meta: StreamMeta;
-  buffer: string[];
+  buffer: UIMessagePart[];
   subscribers: Map<symbol, Subscriber>;
   finished: boolean;
   cleanupTimeoutId: ReturnType<typeof setTimeout> | null;
@@ -41,14 +45,14 @@ export class StreamMulticastRegistry {
     });
   }
 
-  push(messageId: string, text: string): void {
+  push(messageId: string, part: UIMessagePart): void {
     const entry = this.entries.get(messageId);
     if (!entry || entry.finished) return;
 
-    entry.buffer.push(text);
+    entry.buffer.push(part);
     for (const subscriber of entry.subscribers.values()) {
       try {
-        subscriber.onChunk(text);
+        subscriber.onChunk(part);
       } catch {
         // one bad subscriber must not break fanout to others
       }
@@ -57,14 +61,14 @@ export class StreamMulticastRegistry {
 
   subscribe(
     messageId: string,
-    onChunk: (text: string) => void,
+    onChunk: (part: UIMessagePart) => void,
     onComplete: (aborted: boolean) => void,
   ): (() => void) | null {
     const entry = this.entries.get(messageId);
     if (!entry || entry.finished) return null;
 
-    for (const chunk of entry.buffer) {
-      onChunk(chunk);
+    for (const part of entry.buffer) {
+      onChunk(part);
     }
 
     const key = Symbol();

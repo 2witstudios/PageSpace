@@ -51,7 +51,7 @@ export function useChannelStreamSocket(
     // lookup and a one-shot guard for onOwnStreamFinalize.
     const ownStreamIds = new Set<string>();
 
-    const { addStream, appendText, removeStream, clearPageStreams } =
+    const { addStream, appendPart, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
     const fireComplete = (messageId: string) => {
@@ -70,8 +70,8 @@ export function useChannelStreamSocket(
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
-      consumeStreamJoin(messageId, controller.signal, (chunk) => {
-        appendText(messageId, chunk);
+      consumeStreamJoin(messageId, controller.signal, (part) => {
+        appendPart(messageId, part);
       })
         .then(() => {
           // Cleanup runs synchronously on unmount but the SSE promise resolves

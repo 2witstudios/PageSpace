@@ -33,6 +33,7 @@ import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -345,18 +346,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   useChannelStreamSocket(page.id, {
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (stream?.text && stream.conversationId === currentConversationId) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: messageId,
-            role: 'assistant' as const,
-            content: stream.text,
-            parts: [{ type: 'text' as const, text: stream.text }],
-          },
-        ]);
-      } else if (stream?.text && currentConversationId === `${page.id}-default`) {
-        const { text, conversationId: streamConvId } = stream;
+      if (!stream || stream.parts.length === 0) return;
+
+      if (stream.conversationId === currentConversationId) {
+        setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, stream.parts)]);
+        return;
+      }
+
+      if (currentConversationId === `${page.id}-default`) {
+        const { parts, conversationId: streamConvId } = stream;
         fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
           .then(async (res) => {
             if (pageIdRef.current !== page.id) return;
@@ -365,15 +363,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             const persisted = data.conversations?.[0];
             if (!persisted || persisted.id !== streamConvId) return;
             setCurrentConversationId(persisted.id);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: messageId,
-                role: 'assistant' as const,
-                content: text,
-                parts: [{ type: 'text' as const, text }],
-              },
-            ]);
+            setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, parts)]);
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
       }

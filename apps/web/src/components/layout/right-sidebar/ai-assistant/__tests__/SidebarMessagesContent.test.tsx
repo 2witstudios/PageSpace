@@ -72,7 +72,7 @@ const stream = (overrides: Partial<PendingStream>): PendingStream => ({
   pageId: 'user:u1:global',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'user-2', displayName: 'Alice' },
-  text: '',
+  parts: [],
   isOwn: false,
   ...overrides,
 });
@@ -99,7 +99,7 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
       <SidebarMessagesContent
         {...baseProps}
         messages={[]}
-        remoteStreams={[stream({ messageId: 'msg-remote', text: 'partial response' })]}
+        remoteStreams={[stream({ messageId: 'msg-remote', parts: [{ type: 'text', text: 'partial response' }] })]}
       />,
     );
 
@@ -115,7 +115,7 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
         {...baseProps}
         messages={[assistantMessage('msg-shared', 'final landed')]}
         remoteStreams={[
-          stream({ messageId: 'msg-shared', text: 'should not show as duplicate' }),
+          stream({ messageId: 'msg-shared', parts: [{ type: 'text', text: 'should not show as duplicate' }] }),
         ]}
       />,
     );
@@ -130,7 +130,7 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
       <SidebarMessagesContent
         {...baseProps}
         messages={[userMessage('msg-u', 'user question')]}
-        remoteStreams={[stream({ messageId: 'msg-r', text: 'remote answer' })]}
+        remoteStreams={[stream({ messageId: 'msg-r', parts: [{ type: 'text', text: 'remote answer' }] })]}
       />,
     );
 
@@ -159,7 +159,7 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
       <SidebarMessagesContent
         {...baseProps}
         messages={[]}
-        remoteStreams={[stream({ messageId: 'msg-only', text: 'mid-stream content' })]}
+        remoteStreams={[stream({ messageId: 'msg-only', parts: [{ type: 'text', text: 'mid-stream content' }] })]}
       />,
     );
 
@@ -173,9 +173,9 @@ describe('SidebarMessagesContent — multiplayer remote stream rendering (Task 3
         {...baseProps}
         messages={[]}
         remoteStreams={[
-          stream({ messageId: 'msg-a', text: 'first' }),
-          stream({ messageId: 'msg-b', text: 'second' }),
-          stream({ messageId: 'msg-c', text: 'third' }),
+          stream({ messageId: 'msg-a', parts: [{ type: 'text', text: 'first' }] }),
+          stream({ messageId: 'msg-b', parts: [{ type: 'text', text: 'second' }] }),
+          stream({ messageId: 'msg-c', parts: [{ type: 'text', text: 'third' }] }),
         ]}
       />,
     );

@@ -18,6 +18,7 @@ import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subs
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
@@ -875,9 +876,8 @@ export async function POST(request: Request) {
             }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onChunk: ({ chunk }) => {
-              if (chunk.type === 'text-delta') {
-                lifecycle!.pushChunk(chunk.text);
-              }
+              const part = chunkToPart(chunk as never);
+              if (part) lifecycle!.pushPart(part);
             },
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {

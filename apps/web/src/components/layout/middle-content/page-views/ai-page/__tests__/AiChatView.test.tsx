@@ -488,7 +488,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -529,7 +529,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -571,7 +571,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -611,7 +611,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -652,7 +652,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI response', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
     });
 
     mockFetchWithAuth.mockImplementation(async (url: string) => {
@@ -723,7 +723,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
-      streams: new Map([[MESSAGE_ID, { text: 'AI from page A', conversationId: REAL_CONV_ID }]]),
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI from page A' }], conversationId: REAL_CONV_ID }]]),
     });
 
     // Trigger the late-joiner sync (starts the deferred fetch)

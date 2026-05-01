@@ -26,7 +26,7 @@ const {
     mockUseStreamingRegistration: vi.fn(),
     mockAbortByMessageId: vi.fn(),
     mockSocketStatus: { current: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error' },
-    pendingStreams: { current: new Map<string, { messageId: string; pageId: string; conversationId: string; triggeredBy: { userId: string; displayName: string }; text: string; isOwn: boolean }>() },
+    pendingStreams: { current: new Map<string, { messageId: string; pageId: string; conversationId: string; triggeredBy: { userId: string; displayName: string }; parts: UIMessage['parts']; isOwn: boolean }>() },
   };
 });
 
@@ -219,7 +219,7 @@ describe('useAgentChannelMultiplayer', () => {
             pageId: AGENT.id,
             conversationId: 'conv-active',
             triggeredBy: { userId: 'someone-else', displayName: 'X' },
-            text: 'final response text',
+            parts: [{ type: 'text', text: 'final response text' }],
             isOwn: false,
           },
         ],
@@ -256,7 +256,7 @@ describe('useAgentChannelMultiplayer', () => {
             pageId: AGENT.id,
             conversationId: 'conv-different',
             triggeredBy: { userId: 'x', displayName: 'X' },
-            text: 'belongs to different conversation',
+            parts: [{ type: 'text', text: 'belongs to different conversation' }],
             isOwn: false,
           },
         ],
@@ -276,7 +276,7 @@ describe('useAgentChannelMultiplayer', () => {
       expect(setLocalMessages).not.toHaveBeenCalled();
     });
 
-    it('given a stream finalizes with empty text, setLocalMessages should not be called', () => {
+    it('given a stream finalizes with empty parts, setLocalMessages should not be called', () => {
       pendingStreams.current = new Map([
         [
           'msg-empty',
@@ -285,7 +285,7 @@ describe('useAgentChannelMultiplayer', () => {
             pageId: AGENT.id,
             conversationId: 'conv-active',
             triggeredBy: { userId: 'x', displayName: 'X' },
-            text: '',
+            parts: [],
             isOwn: false,
           },
         ],

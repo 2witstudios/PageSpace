@@ -7,6 +7,7 @@ import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subs
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -886,9 +887,8 @@ MENTION PROCESSING:
           },
           maxRetries: 20,
           onChunk: ({ chunk }) => {
-            if (chunk.type === 'text-delta') {
-              lifecycle!.pushChunk(chunk.text);
-            }
+            const part = chunkToPart(chunk as never);
+            if (part) lifecycle!.pushPart(part);
           },
           onAbort: () => {
             loggers.api.info('Global Assistant Chat API: Stream aborted by user', {

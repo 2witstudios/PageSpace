@@ -92,11 +92,11 @@ export function useAgentChannelMultiplayer({
   useChannelStreamSocket(channelId, {
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (!stream?.text) return;
+      if (!stream || stream.parts.length === 0) return;
       if (stream.conversationId !== agentConversationIdRef.current) return;
       setLocalMessagesRef.current((prev) => [
         ...prev,
-        synthesizeAssistantMessage(messageId, stream.text),
+        synthesizeAssistantMessage(messageId, stream.parts),
       ]);
     },
     onOwnStreamBootstrap: ({ messageId }) => {
