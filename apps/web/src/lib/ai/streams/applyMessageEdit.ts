@@ -15,9 +15,9 @@ type EditableMessage = UIMessage & { editedAt?: Date | null };
  * mutates input.
  */
 export const applyMessageEdit = <T extends EditableMessage>(
-  messages: readonly T[],
+  messages: T[],
   payload: MessageEditPayload,
-): readonly T[] => {
+): T[] => {
   const idx = messages.findIndex((m) => m.id === payload.messageId);
   if (idx < 0) return messages;
   const next = messages.slice();

@@ -6,9 +6,9 @@ import type { UIMessage } from 'ai';
  * unchanged when the messageId is not present. Pure — never mutates input.
  */
 export const applyMessageDelete = <T extends UIMessage>(
-  messages: readonly T[],
+  messages: T[],
   messageId: string,
-): readonly T[] => {
+): T[] => {
   const idx = messages.findIndex((m) => m.id === messageId);
   if (idx < 0) return messages;
   return messages.filter((m) => m.id !== messageId);

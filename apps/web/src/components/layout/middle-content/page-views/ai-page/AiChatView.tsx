@@ -357,16 +357,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onMessageEdited: (payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) =>
-        applyMessageEdit(prev as never, {
+        applyMessageEdit(prev, {
           messageId: payload.messageId,
           parts: payload.parts,
           editedAt: new Date(payload.editedAt),
-        }) as typeof prev,
+        }),
       );
     },
     onMessageDeleted: (payload) => {
       if (payload.conversationId !== currentConversationId) return;
-      setMessages((prev) => applyMessageDelete(prev, payload.messageId) as typeof prev);
+      setMessages((prev) => applyMessageDelete(prev, payload.messageId));
     },
     onUndoApplied: (payload) => {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
