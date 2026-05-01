@@ -25,7 +25,7 @@ import {
 import { fetchJSON } from '@/lib/auth/auth-fetch';
 import { getHumanReadableCron } from '@/lib/workflows/cron-utils';
 
-interface WorkflowFormData {
+export interface WorkflowFormData {
   name: string;
   agentPageId: string;
   prompt: string;

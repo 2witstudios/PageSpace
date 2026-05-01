@@ -14,19 +14,9 @@ import { Button } from '@/components/ui/button';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { useWorkflows } from '@/hooks/useWorkflows';
 import { WorkflowList } from '@/components/workflows/WorkflowList';
-import { WorkflowForm } from '@/components/workflows/WorkflowForm';
+import { WorkflowForm, type WorkflowFormData } from '@/components/workflows/WorkflowForm';
 import { DeleteWorkflowDialog } from '@/components/workflows/DeleteWorkflowDialog';
 import type { Workflow } from '@/components/workflows/types';
-
-interface WorkflowFormData {
-  name: string;
-  agentPageId: string;
-  prompt: string;
-  contextPageIds: string[];
-  cronExpression: string;
-  timezone: string;
-  isEnabled: boolean;
-}
 
 interface TaskListWorkflowsDialogProps {
   open: boolean;
