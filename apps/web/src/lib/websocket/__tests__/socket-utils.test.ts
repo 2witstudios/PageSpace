@@ -44,9 +44,11 @@ import {
   broadcastChatUserMessage,
   broadcastAiMessageEdited,
   broadcastAiMessageDeleted,
+  broadcastAiUndoApplied,
   type ChatUserMessagePayload,
   type ChatMessageEditedPayload,
   type ChatMessageDeletedPayload,
+  type ChatUndoAppliedPayload,
   broadcastAiStreamComplete,
   createPageEventPayload,
   createDriveEventPayload,
@@ -587,6 +589,41 @@ describe('socket-utils', () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       await expect(broadcastAiMessageDeleted(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiUndoApplied', () => {
+    const payload: ChatUndoAppliedPayload = {
+      conversationId: 'conv-1',
+      pageId: 'page-1',
+      mode: 'messages_and_changes',
+      affectedMessageIds: ['msg-2', 'msg-3'],
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:undo_applied event', async () => {
+      await broadcastAiUndoApplied(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:undo_applied');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiUndoApplied(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiUndoApplied(payload)).resolves.not.toThrow();
     });
   });
 

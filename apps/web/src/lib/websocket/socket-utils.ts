@@ -546,6 +546,14 @@ export interface ChatMessageDeletedPayload {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+export interface ChatUndoAppliedPayload {
+  conversationId: string;
+  pageId: string;
+  mode: 'messages_only' | 'messages_and_changes';
+  affectedMessageIds: string[];
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -710,6 +718,40 @@ export async function broadcastAiMessageDeleted(payload: ChatMessageDeletedPaylo
       error instanceof Error ? error : undefined,
       {
         event: 'chat:message_deleted',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiUndoApplied(payload: ChatUndoAppliedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat undo-applied broadcast', {
+      event: 'chat:undo_applied',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:undo_applied',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat undo-applied',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:undo_applied',
         channel: maskIdentifier(payload.pageId),
       }
     );
