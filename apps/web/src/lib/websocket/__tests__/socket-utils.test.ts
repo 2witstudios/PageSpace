@@ -42,7 +42,11 @@ import {
   broadcastUsageEvent,
   broadcastAiStreamStart,
   broadcastChatUserMessage,
+  broadcastAiMessageEdited,
+  broadcastAiMessageDeleted,
   type ChatUserMessagePayload,
+  type ChatMessageEditedPayload,
+  type ChatMessageDeletedPayload,
   broadcastAiStreamComplete,
   createPageEventPayload,
   createDriveEventPayload,
@@ -513,6 +517,76 @@ describe('socket-utils', () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       await expect(broadcastChatUserMessage(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiMessageEdited', () => {
+    const payload: ChatMessageEditedPayload = {
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      parts: [{ type: 'text', text: 'updated' }],
+      editedAt: '2026-05-01T00:00:00.000Z',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:message_edited event', async () => {
+      await broadcastAiMessageEdited(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:message_edited');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiMessageEdited(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiMessageEdited(payload)).resolves.not.toThrow();
+    });
+  });
+
+  describe('broadcastAiMessageDeleted', () => {
+    const payload: ChatMessageDeletedPayload = {
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
+    };
+
+    it('given a valid payload, should route to the {pageId} channel with chat:message_deleted event', async () => {
+      await broadcastAiMessageDeleted(payload);
+
+      const fetchCall = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(fetchCall[1].body);
+
+      expect(requestBody.channelId).toBe('page-1');
+      expect(requestBody.event).toBe('chat:message_deleted');
+      expect(requestBody.payload).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await broadcastAiMessageDeleted(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(broadcastAiMessageDeleted(payload)).resolves.not.toThrow();
     });
   });
 
