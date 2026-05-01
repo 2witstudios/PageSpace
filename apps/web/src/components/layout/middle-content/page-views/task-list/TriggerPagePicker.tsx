@@ -65,7 +65,6 @@ type Props = SingleProps | MultiProps;
 function PageLabel({ pageId }: { pageId: string }) {
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
-    shouldRetryOnError: false,
   });
   if (error) return <span className="text-destructive">unavailable</span>;
   return <span className="truncate">{data?.title ?? '…'}</span>;
