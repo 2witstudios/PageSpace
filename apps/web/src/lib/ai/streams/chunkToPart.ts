@@ -23,5 +23,15 @@ export const chunkToPart = (chunk: { type: string } & Record<string, unknown>): 
       input: chunk.input,
     } as unknown as AnyPart;
   }
+  if (chunk.type === 'tool-result' && typeof chunk.toolName === 'string') {
+    return {
+      type: `tool-${chunk.toolName}`,
+      toolCallId: chunk.toolCallId as string,
+      toolName: chunk.toolName,
+      state: 'output-available',
+      input: chunk.input,
+      output: chunk.output,
+    } as unknown as AnyPart;
+  }
   return null;
 };

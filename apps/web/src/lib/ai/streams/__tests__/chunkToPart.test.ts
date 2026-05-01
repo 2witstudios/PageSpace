@@ -24,4 +24,23 @@ describe('chunkToPart', () => {
       input: { driveId: 'd1' },
     });
   });
+
+  it('given a tool-result chunk, should return a tool part with state output-available carrying input and output', () => {
+    expect(
+      chunkToPart({
+        type: 'tool-result',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        input: { driveId: 'd1' },
+        output: { pages: [{ id: 'p1' }] },
+      }),
+    ).toEqual({
+      type: 'tool-list_pages',
+      toolCallId: 'tc1',
+      toolName: 'list_pages',
+      state: 'output-available',
+      input: { driveId: 'd1' },
+      output: { pages: [{ id: 'p1' }] },
+    });
+  });
 });
