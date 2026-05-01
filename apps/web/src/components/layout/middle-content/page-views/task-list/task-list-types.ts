@@ -140,4 +140,5 @@ export interface TaskHandlers {
   onDelete: (taskId: string) => void;
   onNavigate: (task: TaskItem) => void;
   onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
 }

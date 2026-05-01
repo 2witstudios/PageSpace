@@ -704,6 +704,7 @@ function TaskListView({ page }: TaskListViewProps) {
     onDelete: handleDeleteTask,
     onNavigate: handleNavigate,
     onStartEdit: handleStartEdit,
+    onConfigureTriggers: setTriggerDialogTask,
   };
 
   if (isLoading) {
