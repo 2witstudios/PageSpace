@@ -11,11 +11,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,
-  mockLifecyclePushChunk,
+  mockLifecyclePushPart,
   mockLifecycleFinish,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
-  mockLifecyclePushChunk: vi.fn(),
+  mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
 }));
 
@@ -295,7 +295,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
-      pushChunk: mockLifecyclePushChunk,
+      pushPart: mockLifecyclePushPart,
       finish: mockLifecycleFinish,
     });
   });
@@ -343,22 +343,63 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   });
 
   describe('chunk forwarding', () => {
-    it('given a text-delta chunk, should forward the text to lifecycle.pushChunk', async () => {
+    it('given a text-delta chunk, should forward a text part to lifecycle.pushPart', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       captured.streamTextOptions.onChunk?.({ chunk: { type: 'text-delta', text: 'hello', id: 'c1' } });
 
-      expect(mockLifecyclePushChunk).toHaveBeenCalledWith('hello');
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({ type: 'text', text: 'hello' });
     });
 
-    it('given a non-text-delta chunk, should not forward anything', async () => {
+    it('given a tool-call chunk, should forward an input-available tool part to lifecycle.pushPart', async () => {
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      captured.streamTextOptions.onChunk?.({ chunk: { type: 'tool-call', toolCallId: 'tc', toolName: 'x', args: {} } });
+      captured.streamTextOptions.onChunk?.({
+        chunk: { type: 'tool-call', toolCallId: 'tc1', toolName: 'list_pages', input: { driveId: 'd1' } },
+      });
 
-      expect(mockLifecyclePushChunk).not.toHaveBeenCalled();
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'input-available',
+        input: { driveId: 'd1' },
+      });
+    });
+
+    it('given a tool-result chunk, should forward an output-available tool part to lifecycle.pushPart', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({
+        chunk: {
+          type: 'tool-result',
+          toolCallId: 'tc1',
+          toolName: 'list_pages',
+          input: { driveId: 'd1' },
+          output: { pages: [{ id: 'p1' }] },
+        },
+      });
+
+      expect(mockLifecyclePushPart).toHaveBeenCalledWith({
+        type: 'tool-list_pages',
+        toolCallId: 'tc1',
+        toolName: 'list_pages',
+        state: 'output-available',
+        input: { driveId: 'd1' },
+        output: { pages: [{ id: 'p1' }] },
+      });
+    });
+
+    it('given a chunk type out of v1 multicast scope, should not forward anything', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      captured.streamTextOptions.onChunk?.({ chunk: { type: 'finish-step' } });
+
+      expect(mockLifecyclePushPart).not.toHaveBeenCalled();
     });
   });
 
