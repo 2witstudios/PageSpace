@@ -30,6 +30,8 @@ import { SearchResultsRenderer, type SearchResult } from './SearchResultsRendere
 import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
 import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
+import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
+import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 interface ToolPart {
   type: string;
@@ -197,6 +199,15 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 
   // Memoize formatted tool name
   const formattedToolName = useMemo(() => {
+    if (isIntegrationTool(toolName)) {
+      const parsed = parseIntegrationToolName(toolName);
+      if (parsed) {
+        const provider = getBuiltinProvider(parsed.providerSlug);
+        const tool = provider?.tools.find(t => t.id === parsed.toolId);
+        if (tool) return tool.name;
+        return parsed.toolId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      }
+    }
     return TOOL_NAME_MAP[toolName] || toolName
       .split('_')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -244,6 +255,17 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     // Drive rename - show current name
     if (toolName === 'rename_drive') {
       if (params.currentName) return `${formattedToolName}: "${params.currentName}"`;
+    }
+
+    if (params.owner && params.repo && typeof params.owner === 'string' && typeof params.repo === 'string') {
+      const suffix = params.path && typeof params.path === 'string' ? `/${params.path}` : '';
+      return `${formattedToolName}: ${params.owner}/${params.repo}${suffix}`;
+    }
+    if (params.channel && typeof params.channel === 'string') {
+      return `${formattedToolName}: ${params.channel}`;
+    }
+    if (params.repo && typeof params.repo === 'string') {
+      return `${formattedToolName}: ${params.repo}`;
     }
 
     return formattedToolName;
