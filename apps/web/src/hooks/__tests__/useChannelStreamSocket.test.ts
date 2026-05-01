@@ -93,6 +93,8 @@ import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
   ChatUserMessagePayload,
+  ChatMessageEditedPayload,
+  ChatMessageDeletedPayload,
 } from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
@@ -109,6 +111,22 @@ const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
 
 const USER_MESSAGE_PAYLOAD: ChatUserMessagePayload = {
   message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+  pageId: 'page-a',
+  conversationId: 'conv-1',
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+const MESSAGE_EDITED_PAYLOAD: ChatMessageEditedPayload = {
+  messageId: 'msg-1',
+  pageId: 'page-a',
+  conversationId: 'conv-1',
+  parts: [{ type: 'text', text: 'updated' }],
+  editedAt: '2026-05-01T00:00:00.000Z',
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+const MESSAGE_DELETED_PAYLOAD: ChatMessageDeletedPayload = {
+  messageId: 'msg-1',
   pageId: 'page-a',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
@@ -294,6 +312,103 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:user_message', USER_MESSAGE_PAYLOAD); });
 
       expect(onUserMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('chat:message_edited', () => {
+    it('given a chat:message_edited from another tab for the current channel, should call onMessageEdited with the payload', () => {
+      const onMessageEdited = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageEdited }));
+
+      act(() => { mockSocket._trigger('chat:message_edited', MESSAGE_EDITED_PAYLOAD); });
+
+      expect(onMessageEdited).toHaveBeenCalledTimes(1);
+      expect(onMessageEdited).toHaveBeenCalledWith(MESSAGE_EDITED_PAYLOAD);
+    });
+
+    it('given chat:message_edited with a different pageId, should NOT call onMessageEdited (stale-room guard)', () => {
+      const onMessageEdited = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageEdited }));
+
+      act(() => {
+        mockSocket._trigger('chat:message_edited', { ...MESSAGE_EDITED_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+    });
+
+    it('given chat:message_edited whose triggeredBy.browserSessionId matches the local session, should NOT call onMessageEdited (own-tab dedup)', () => {
+      const onMessageEdited = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageEdited }));
+
+      act(() => {
+        mockSocket._trigger('chat:message_edited', {
+          ...MESSAGE_EDITED_PAYLOAD,
+          triggeredBy: { ...MESSAGE_EDITED_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+    });
+
+    it('given onMessageEdited reference changes between renders, should invoke the latest callback', () => {
+      let callback = vi.fn();
+      const { rerender } = renderHook(() => useChannelStreamSocket('page-a', { onMessageEdited: callback }));
+
+      const second = vi.fn();
+      callback = second;
+      rerender();
+
+      act(() => { mockSocket._trigger('chat:message_edited', MESSAGE_EDITED_PAYLOAD); });
+
+      expect(second).toHaveBeenCalledWith(MESSAGE_EDITED_PAYLOAD);
+    });
+  });
+
+  describe('chat:message_deleted', () => {
+    it('given a chat:message_deleted from another tab for the current channel, should call onMessageDeleted with the payload', () => {
+      const onMessageDeleted = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageDeleted }));
+
+      act(() => { mockSocket._trigger('chat:message_deleted', MESSAGE_DELETED_PAYLOAD); });
+
+      expect(onMessageDeleted).toHaveBeenCalledTimes(1);
+      expect(onMessageDeleted).toHaveBeenCalledWith(MESSAGE_DELETED_PAYLOAD);
+    });
+
+    it('given chat:message_deleted with a different pageId, should NOT call onMessageDeleted (stale-room guard)', () => {
+      const onMessageDeleted = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageDeleted }));
+
+      act(() => {
+        mockSocket._trigger('chat:message_deleted', { ...MESSAGE_DELETED_PAYLOAD, pageId: 'page-b' });
+      });
+
+      expect(onMessageDeleted).not.toHaveBeenCalled();
+    });
+
+    it('given chat:message_deleted whose triggeredBy.browserSessionId matches the local session, should NOT call onMessageDeleted (own-tab dedup)', () => {
+      const onMessageDeleted = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onMessageDeleted }));
+
+      act(() => {
+        mockSocket._trigger('chat:message_deleted', {
+          ...MESSAGE_DELETED_PAYLOAD,
+          triggeredBy: { ...MESSAGE_DELETED_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onMessageDeleted).not.toHaveBeenCalled();
+    });
+
+    it('given the hook unmounts, should remove the chat:message_deleted listener', () => {
+      const onMessageDeleted = vi.fn();
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a', { onMessageDeleted }));
+
+      unmount();
+      act(() => { mockSocket._trigger('chat:message_deleted', MESSAGE_DELETED_PAYLOAD); });
+
+      expect(onMessageDeleted).not.toHaveBeenCalled();
     });
   });
 
