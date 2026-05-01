@@ -56,7 +56,7 @@ const makeStream = (overrides: Partial<PendingStream>): PendingStream => ({
   pageId: 'page-1',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'u-1', displayName: 'Alice' },
-  text: '',
+  parts: [],
   isOwn: false,
   ...overrides,
 });

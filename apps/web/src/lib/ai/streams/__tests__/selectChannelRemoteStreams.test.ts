@@ -7,7 +7,7 @@ const stream = (overrides: Partial<PendingStream>): PendingStream => ({
   pageId: 'channel-1',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'user-1', displayName: 'U' },
-  text: '',
+  parts: [],
   isOwn: false,
   ...overrides,
 });

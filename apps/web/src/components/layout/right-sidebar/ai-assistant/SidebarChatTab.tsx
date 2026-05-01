@@ -141,7 +141,7 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
       {inflightRemoteStreams.map((stream) => (
         <CompactMessageRenderer
           key={stream.messageId}
-          message={synthesizeAssistantMessage(stream.messageId, stream.text)}
+          message={synthesizeAssistantMessage(stream.messageId, stream.parts)}
           isStreaming
         />
       ))}

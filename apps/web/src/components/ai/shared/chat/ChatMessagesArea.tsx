@@ -243,7 +243,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
               message={{
                 id: stream.messageId,
                 role: 'assistant',
-                parts: [{ type: 'text', text: stream.text }],
+                parts: stream.parts,
                 messageType: 'standard',
               }}
               isStreaming

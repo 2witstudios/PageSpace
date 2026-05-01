@@ -13,7 +13,7 @@ const {
   mockSocket,
   mockUseAuth,
   mockAddStream,
-  mockAppendText,
+  mockAppendPart,
   mockRemoveStream,
   mockClearPageStreams,
   mockConsumeStreamJoin,
@@ -46,7 +46,7 @@ const {
     mockSocket: socket,
     mockUseAuth: vi.fn(),
     mockAddStream: vi.fn(),
-    mockAppendText: vi.fn(),
+    mockAppendPart: vi.fn(),
     mockRemoveStream: vi.fn(),
     mockClearPageStreams: vi.fn(),
     mockConsumeStreamJoin: vi.fn().mockResolvedValue(undefined),
@@ -71,7 +71,7 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
   usePendingStreamsStore: {
     getState: () => ({
       addStream: mockAddStream,
-      appendText: mockAppendText,
+      appendPart: mockAppendPart,
       removeStream: mockRemoveStream,
       clearPageStreams: mockClearPageStreams,
     }),

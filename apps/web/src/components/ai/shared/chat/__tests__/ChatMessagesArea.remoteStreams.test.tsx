@@ -62,10 +62,12 @@ const makeStream = (overrides: Partial<PendingStream>): PendingStream => ({
   pageId: 'page-1',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'u-1', displayName: 'Alice' },
-  text: '',
+  parts: [],
   isOwn: false,
   ...overrides,
 });
+
+const textPart = (text: string) => ({ type: 'text' as const, text });
 
 const makeMessage = (id: string, role: UIMessage['role'] = 'user', text = ''): UIMessage => ({
   id,
@@ -91,8 +93,8 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
 
   it('given a non-empty remoteStreams, renders one MessageRenderer per stream with synthesized assistant message and isStreaming=true', () => {
     const remoteStreams = [
-      makeStream({ messageId: 'remote-a', text: 'partial response' }),
-      makeStream({ messageId: 'remote-b', text: '' }),
+      makeStream({ messageId: 'remote-a', parts: [textPart('partial response')] }),
+      makeStream({ messageId: 'remote-b', parts: [] }),
     ];
 
     render(
@@ -119,13 +121,42 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
     expect(synthesizedCalls[0].onRetry).toBeUndefined();
 
     expect(synthesizedCalls[1].message.id).toBe('remote-b');
-    expect(synthesizedCalls[1].message.parts).toEqual([{ type: 'text', text: '' }]);
+    expect(synthesizedCalls[1].message.parts).toEqual([]);
+  });
+
+  it('given a remote stream whose parts include a tool part, forwards the full tool shape to MessageRenderer (no flattening to text)', () => {
+    const toolPart = {
+      type: 'tool-list_pages',
+      toolCallId: 'tc1',
+      toolName: 'list_pages',
+      state: 'output-available',
+      input: { driveId: 'd1' },
+      output: { pages: [{ id: 'p1' }] },
+    };
+    const remoteStreams = [
+      makeStream({
+        messageId: 'remote-tool',
+        parts: [textPart('let me check'), toolPart as never],
+      }),
+    ];
+
+    render(
+      <ChatMessagesArea
+        messages={[]}
+        isLoading={false}
+        isStreaming={false}
+        remoteStreams={remoteStreams}
+      />
+    );
+
+    const [call] = remoteRendererCalls();
+    expect(call.message.parts).toEqual([{ type: 'text', text: 'let me check' }, toolPart]);
   });
 
   it('given a remote stream whose messageId is already present in messages, does NOT render the duplicate', () => {
     const remoteStreams = [
-      makeStream({ messageId: 'msg-already-landed', text: 'finalised text' }),
-      makeStream({ messageId: 'msg-still-streaming', text: 'in progress' }),
+      makeStream({ messageId: 'msg-already-landed', parts: [textPart('finalised text')] }),
+      makeStream({ messageId: 'msg-still-streaming', parts: [textPart('in progress')] }),
     ];
 
     render(
@@ -173,7 +204,7 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
         messages={[]}
         isLoading={true}
         isStreaming={false}
-        remoteStreams={[makeStream({ messageId: 'remote-x', text: 'partial' })]}
+        remoteStreams={[makeStream({ messageId: 'remote-x', parts: [textPart('partial')] })]}
       />
     );
 

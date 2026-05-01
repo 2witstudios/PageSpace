@@ -7,7 +7,7 @@ const stream = (messageId: string): PendingStream => ({
   pageId: 'p',
   conversationId: 'c',
   triggeredBy: { userId: 'u', displayName: 'U' },
-  text: '',
+  parts: [],
   isOwn: false,
 });
 

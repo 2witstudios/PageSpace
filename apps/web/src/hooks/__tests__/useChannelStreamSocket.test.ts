@@ -10,7 +10,7 @@ const SESSION_ID_REMOTE = 'session-other';
 const {
   mockSocket,
   mockAddStream,
-  mockAppendText,
+  mockAppendPart,
   mockRemoveStream,
   mockClearPageStreams,
   mockConsumeStreamJoin,
@@ -39,7 +39,7 @@ const {
   };
 
   const mockAddStream = vi.fn();
-  const mockAppendText = vi.fn();
+  const mockAppendPart = vi.fn();
   const mockRemoveStream = vi.fn();
   const mockClearPageStreams = vi.fn();
   const mockConsumeStreamJoin = vi.fn().mockResolvedValue({ aborted: false });
@@ -52,7 +52,7 @@ const {
   return {
     mockSocket,
     mockAddStream,
-    mockAppendText,
+    mockAppendPart,
     mockRemoveStream,
     mockClearPageStreams,
     mockConsumeStreamJoin,
@@ -69,7 +69,7 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
   usePendingStreamsStore: {
     getState: () => ({
       addStream: mockAddStream,
-      appendText: mockAppendText,
+      appendPart: mockAppendPart,
       removeStream: mockRemoveStream,
       clearPageStreams: mockClearPageStreams,
     }),
@@ -139,10 +139,10 @@ describe('useChannelStreamSocket', () => {
       );
     });
 
-    it('should wire onChunk to appendText in the store', async () => {
-      let capturedOnChunk!: (text: string) => void;
+    it('should wire onChunk to appendPart in the store', async () => {
+      let capturedOnChunk!: (part: unknown) => void;
       mockConsumeStreamJoin.mockImplementation(
-        (_id: string, _signal: AbortSignal, onChunk: (text: string) => void) => {
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
           capturedOnChunk = onChunk;
           return new Promise(() => {}); // never resolves
         },
@@ -151,8 +151,9 @@ describe('useChannelStreamSocket', () => {
       renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
 
-      capturedOnChunk('hello');
-      expect(mockAppendText).toHaveBeenCalledWith('msg-1', 'hello');
+      const textPart = { type: 'text', text: 'hello' };
+      capturedOnChunk(textPart);
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-1', textPart);
     });
 
     it('should call removeStream and onStreamComplete after consumeStreamJoin resolves', async () => {
