@@ -199,8 +199,8 @@ export function TaskAgentTriggersDialog({
       toast.error('Pick an agent first');
       return;
     }
-    if (!section.prompt.trim()) {
-      toast.error('Enter a prompt for the agent');
+    if (!section.prompt.trim() && !section.instructionPageId) {
+      toast.error('Enter a prompt or pick an instruction page');
       return;
     }
     if (type === 'due_date' && !hasDueDate) {
@@ -331,6 +331,9 @@ export function TaskAgentTriggersDialog({
                           onChange={(e) => updateSection(ui, { prompt: e.target.value })}
                           rows={3}
                         />
+                        <p className="text-xs text-muted-foreground">
+                          Optional when an instruction page is set.
+                        </p>
                       </div>
 
                       <Collapsible>
