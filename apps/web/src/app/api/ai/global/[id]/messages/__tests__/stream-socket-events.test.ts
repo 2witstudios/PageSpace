@@ -12,10 +12,14 @@ const {
   mockCreateStreamLifecycle,
   mockLifecyclePushPart,
   mockLifecycleFinish,
+  mockBroadcastChatUserMessage,
+  mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
+  mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface MockUIStreamOptions {
@@ -39,6 +43,7 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastUsageEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -155,7 +160,7 @@ vi.mock('@/lib/ai/core', () => ({
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
-  saveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
   buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
@@ -393,6 +398,41 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
         expect.objectContaining({ displayName: 'Auth User' }),
       );
+    });
+  });
+
+  describe('user-message broadcast', () => {
+    it('given a POST with a user message, should broadcast chat:user_message routed to the per-user global channel', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+      // displayName resolution is covered by its own test; here we lock the
+      // routing fields and the saved-message passthrough.
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+          pageId: 'user:user-1:global',
+          conversationId: 'conv-1',
+          triggeredBy: expect.objectContaining({
+            userId: 'user-1',
+            browserSessionId: 'session-y',
+          }),
+        }),
+      );
+    });
+
+    it('given the user-message DB save rejects, should NOT broadcast chat:user_message', async () => {
+      mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('given broadcastChatUserMessage rejects, should not block the request', async () => {
+      mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
+
+      await expect(POST(makeRequest(), makeContext())).resolves.toBeDefined();
     });
   });
 
