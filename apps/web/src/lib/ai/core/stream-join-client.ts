@@ -1,7 +1,11 @@
+import type { UIMessage } from 'ai';
+
+type UIMessagePart = UIMessage['parts'][number];
+
 export async function consumeStreamJoin(
   messageId: string,
   signal: AbortSignal,
-  onChunk: (text: string) => void,
+  onChunk: (part: UIMessagePart) => void,
 ): Promise<{ aborted: boolean }> {
   let response: Response;
   try {
@@ -56,8 +60,8 @@ export async function consumeStreamJoin(
           if (parsed.done) {
             return { aborted: (parsed.aborted as boolean | undefined) ?? false };
           }
-          if (typeof parsed.text === 'string') {
-            onChunk(parsed.text);
+          if (parsed.part && typeof parsed.part === 'object') {
+            onChunk(parsed.part as UIMessagePart);
           }
         } catch {
           // skip malformed SSE lines
