@@ -7,6 +7,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import type { UIMessage } from 'ai';
 import { isEditingActive } from '@/stores/useEditingStore';
 import {
@@ -50,6 +51,13 @@ interface UseConversationsResult {
   deleteConversation: (conversationId: string) => Promise<void>;
   /** Refresh conversations list */
   refreshConversations: () => void;
+  /**
+   * Optimistically prepend a conversation to the SWR cache. Use when a
+   * remote tab created the conversation (chat:conversation_added broadcast)
+   * — the server row is materialized lazily on first message save, so a
+   * naive refetch would not surface it. Skips if the id is already present.
+   */
+  prependConversationOptimistic: (entry: { id: string; title: string; createdAt: string }) => void;
   /** SWR key for manual cache invalidation */
   swrKey: string | null;
 }
@@ -139,7 +147,10 @@ export function useConversations({
 
       const response = await fetchWithAuth(createUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Browser-Session-Id': getBrowserSessionId(),
+        },
         body: JSON.stringify(isAgentMode ? {} : { type: 'global' }),
       });
 
@@ -199,6 +210,31 @@ export function useConversations({
     }
   }, [swrKey]);
 
+  const prependConversationOptimistic = useCallback(
+    (entry: { id: string; title: string; createdAt: string }) => {
+      if (!swrKey) return;
+      mutate(
+        swrKey,
+        (current: { conversations?: RawConversationData[] } | undefined) => {
+          const existing = current?.conversations ?? [];
+          if (existing.some((c) => c.id === entry.id)) return current;
+          const optimisticEntry: RawConversationData = {
+            id: entry.id,
+            title: entry.title,
+            createdAt: entry.createdAt,
+            updatedAt: entry.createdAt,
+            preview: '',
+            messageCount: 0,
+            lastMessage: { role: '', timestamp: entry.createdAt },
+          };
+          return { ...current, conversations: [optimisticEntry, ...existing] };
+        },
+        { revalidate: false },
+      );
+    },
+    [swrKey],
+  );
+
   return {
     conversations,
     isLoading,
@@ -206,6 +242,7 @@ export function useConversations({
     createConversation,
     deleteConversation,
     refreshConversations,
+    prependConversationOptimistic,
     swrKey,
   };
 }

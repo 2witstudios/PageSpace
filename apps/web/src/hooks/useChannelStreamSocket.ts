@@ -13,6 +13,7 @@ import type {
   ChatMessageEditedPayload,
   ChatMessageDeletedPayload,
   ChatUndoAppliedPayload,
+  ChatConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
 
@@ -66,6 +67,13 @@ export interface UseChannelStreamSocketOptions {
    * cross-conversation undo doesn't disturb the active surface.
    */
   onUndoApplied?: (payload: ChatUndoAppliedPayload) => void;
+  /**
+   * Fires when a remote tab creates a new conversation in this agent room.
+   * Same stale-room (`agentId !== channelId`) + own-tab dedup as
+   * `onUserMessage`. Surfaces typically respond by prepending the
+   * conversation to their history list, gated by `shouldPrependConversation`.
+   */
+  onConversationAdded?: (payload: ChatConversationAddedPayload) => void;
 }
 
 /** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
@@ -82,6 +90,7 @@ export function useChannelStreamSocket(
   const onMessageEditedRef = useRef(options?.onMessageEdited);
   const onMessageDeletedRef = useRef(options?.onMessageDeleted);
   const onUndoAppliedRef = useRef(options?.onUndoApplied);
+  const onConversationAddedRef = useRef(options?.onConversationAdded);
   onStreamCompleteRef.current = options?.onStreamComplete;
   onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
   onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
@@ -89,6 +98,7 @@ export function useChannelStreamSocket(
   onMessageEditedRef.current = options?.onMessageEdited;
   onMessageDeletedRef.current = options?.onMessageDeleted;
   onUndoAppliedRef.current = options?.onUndoApplied;
+  onConversationAddedRef.current = options?.onConversationAdded;
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -242,12 +252,19 @@ export function useChannelStreamSocket(
       onUndoAppliedRef.current?.(payload);
     };
 
+    const handleConversationAdded = (payload: ChatConversationAddedPayload) => {
+      if (payload.agentId !== channelId) return;
+      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
+      onConversationAddedRef.current?.(payload);
+    };
+
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:stream_complete', handleStreamComplete);
     socket.on('chat:user_message', handleUserMessage);
     socket.on('chat:message_edited', handleMessageEdited);
     socket.on('chat:message_deleted', handleMessageDeleted);
     socket.on('chat:undo_applied', handleUndoApplied);
+    socket.on('chat:conversation_added', handleConversationAdded);
 
     return () => {
       cancelled = true;
@@ -257,6 +274,7 @@ export function useChannelStreamSocket(
       socket.off('chat:message_edited', handleMessageEdited);
       socket.off('chat:message_deleted', handleMessageDeleted);
       socket.off('chat:undo_applied', handleUndoApplied);
+      socket.off('chat:conversation_added', handleConversationAdded);
       for (const controller of controllers.values()) {
         controller.abort();
       }

@@ -96,6 +96,7 @@ import type {
   ChatMessageEditedPayload,
   ChatMessageDeletedPayload,
   ChatUndoAppliedPayload,
+  ChatConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
@@ -138,6 +139,16 @@ const UNDO_APPLIED_PAYLOAD: ChatUndoAppliedPayload = {
   pageId: 'page-a',
   mode: 'messages_and_changes',
   affectedMessageIds: ['msg-1', 'msg-2'],
+  triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+const CONVERSATION_ADDED_PAYLOAD: ChatConversationAddedPayload = {
+  agentId: 'page-a',
+  conversation: {
+    id: 'conv-new',
+    title: 'New conversation',
+    createdAt: '2026-05-01T00:00:00.000Z',
+  },
   triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
 };
 
@@ -455,6 +466,43 @@ describe('useChannelStreamSocket', () => {
       });
 
       expect(onUndoApplied).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('chat:conversation_added', () => {
+    it('given a chat:conversation_added from another tab for the current agent room, should call onConversationAdded with the payload', () => {
+      const onConversationAdded = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onConversationAdded }));
+
+      act(() => { mockSocket._trigger('chat:conversation_added', CONVERSATION_ADDED_PAYLOAD); });
+
+      expect(onConversationAdded).toHaveBeenCalledTimes(1);
+      expect(onConversationAdded).toHaveBeenCalledWith(CONVERSATION_ADDED_PAYLOAD);
+    });
+
+    it('given chat:conversation_added with a different agentId, should NOT call onConversationAdded (stale-room guard)', () => {
+      const onConversationAdded = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onConversationAdded }));
+
+      act(() => {
+        mockSocket._trigger('chat:conversation_added', { ...CONVERSATION_ADDED_PAYLOAD, agentId: 'page-b' });
+      });
+
+      expect(onConversationAdded).not.toHaveBeenCalled();
+    });
+
+    it('given chat:conversation_added whose triggeredBy.browserSessionId matches the local session, should NOT call onConversationAdded (own-tab dedup)', () => {
+      const onConversationAdded = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onConversationAdded }));
+
+      act(() => {
+        mockSocket._trigger('chat:conversation_added', {
+          ...CONVERSATION_ADDED_PAYLOAD,
+          triggeredBy: { ...CONVERSATION_ADDED_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onConversationAdded).not.toHaveBeenCalled();
     });
   });
 

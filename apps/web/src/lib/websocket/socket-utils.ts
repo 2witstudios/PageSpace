@@ -554,6 +554,16 @@ export interface ChatUndoAppliedPayload {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+export interface ChatConversationAddedPayload {
+  agentId: string;
+  conversation: {
+    id: string;
+    title: string;
+    createdAt: string;
+  };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -753,6 +763,40 @@ export async function broadcastAiUndoApplied(payload: ChatUndoAppliedPayload): P
       {
         event: 'chat:undo_applied',
         channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationAdded(payload: ChatConversationAddedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-added broadcast', {
+      event: 'chat:conversation_added',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_added',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-added',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_added',
+        channel: maskIdentifier(payload.agentId),
       }
     );
   }
