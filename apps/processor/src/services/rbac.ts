@@ -24,7 +24,7 @@ export class DeleteFileReferencedError extends Error {
 
 interface DeleteFileContext {
   links: FileLink[];
-  fileDriveId: string | null | undefined;
+  fileDriveId?: string;
   hasFilePageReferences: boolean;
   hasChannelReferences: boolean;
   hasPagePathReferences: boolean;
@@ -34,7 +34,7 @@ function isResourceBindingAllowed(
   auth: EnforcedAuthContext,
   contentHash: string,
   links: FileLink[],
-  fileDriveId: string | null | undefined
+  fileDriveId?: string
 ): boolean {
   const binding = auth.resourceBinding;
   if (!binding) {
@@ -94,7 +94,7 @@ async function getDeleteFileContext(contentHash: string): Promise<DeleteFileCont
 
   return {
     links,
-    fileDriveId: fileRecord?.driveId,
+    fileDriveId: fileRecord?.driveId ?? undefined,
     hasFilePageReferences: filePageRef !== undefined,
     hasChannelReferences: channelRef !== undefined,
     hasPagePathReferences: pagePathRef !== undefined,
