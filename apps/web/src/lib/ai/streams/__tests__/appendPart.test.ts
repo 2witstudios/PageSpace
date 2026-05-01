@@ -7,4 +7,15 @@ describe('appendPart', () => {
     const next = { type: 'text' as const, text: 'lo' };
     expect(appendPart(initial, next)).toEqual([{ type: 'text', text: 'hello' }]);
   });
+
+  it('given a tool part with a toolCallId not yet in parts, should append it', () => {
+    const initial = [{ type: 'text' as const, text: 'thinking' }];
+    const tool = {
+      type: 'tool-list_pages' as const,
+      toolCallId: 'tc1',
+      state: 'input-available' as const,
+      input: { driveId: 'd1' },
+    };
+    expect(appendPart(initial, tool)).toEqual([...initial, tool]);
+  });
 });
