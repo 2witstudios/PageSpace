@@ -1,0 +1,275 @@
+/**
+ * DM upload route tests.
+ *
+ * Mirrors the channel upload wrapper contract: auth → conversation lookup →
+ * email-verify gate → build target → delegate to processAttachmentUpload.
+ * The pipeline (quota, semaphore, dedup, participant check, audit) is exercised
+ * by the lib package's own tests; here we only verify the wrapper.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// --- Auth -----------------------------------------------------------------------
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(
+    (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
+  ),
+}));
+
+// --- Email verification gate ---------------------------------------------------
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  isEmailVerified: vi.fn(),
+}));
+
+// --- Database boundary mocks ---------------------------------------------------
+const mockDmConversationsFindFirst = vi.fn();
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      dmConversations: {
+        findFirst: (...args: unknown[]) => mockDmConversationsFindFirst(...args),
+      },
+    },
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/social', () => ({
+  dmConversations: { id: 'dm_conversations.id' },
+}));
+
+// --- Logger seam ---------------------------------------------------------------
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
+}));
+
+// --- Service seam --------------------------------------------------------------
+const mockProcessAttachmentUpload = vi.fn();
+vi.mock('@pagespace/lib/services/attachment-upload', () => ({
+  processAttachmentUpload: (...args: unknown[]) =>
+    mockProcessAttachmentUpload(...args),
+}));
+
+// --- Imports under test --------------------------------------------------------
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+
+const SUCCESS_RESPONSE_BODY = {
+  success: true,
+  file: { id: 'h', originalName: 'a.png', sanitizedName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'h' },
+  storageInfo: undefined,
+};
+
+function makeRequest(): Request {
+  return new Request('http://localhost/api/messages/conv-1/upload', {
+    method: 'POST',
+  });
+}
+
+function makeAuthSuccess(userId = 'user-1') {
+  return {
+    userId,
+    role: 'user' as const,
+    tokenVersion: 1,
+    adminRoleVersion: 1,
+    sessionId: 's',
+    tokenType: 'session' as const,
+  };
+}
+
+function successResponse(body: unknown = SUCCESS_RESPONSE_BODY): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuthSuccess());
+    vi.mocked(isEmailVerified).mockResolvedValue(true);
+    mockDmConversationsFindFirst.mockResolvedValue({
+      id: 'conv-1',
+      participant1Id: 'user-1',
+      participant2Id: 'user-2',
+    });
+    mockProcessAttachmentUpload.mockResolvedValue(successResponse());
+  });
+
+  it('POST_dmUpload_validParticipantWithVerifiedEmail_delegatesToProcessAttachmentUpload_withConversationTarget', async () => {
+    const request = makeRequest();
+    const res = await POST(request as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockProcessAttachmentUpload).toHaveBeenCalledTimes(1);
+    expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
+      request,
+      target: { type: 'conversation', conversationId: 'conv-1' },
+      userId: 'user-1',
+    });
+  });
+
+  it('POST_dmUpload_unverifiedEmail_returns403_withRequiresEmailVerificationFlag_andDoesNotCallPipeline', async () => {
+    vi.mocked(isEmailVerified).mockResolvedValue(false);
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.requiresEmailVerification).toBe(true);
+    expect(body.error).toMatch(/email/i);
+    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+  });
+
+  it('POST_dmUpload_missingConversation_returns404_withoutCallingPipeline', async () => {
+    mockDmConversationsFindFirst.mockResolvedValue(undefined);
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toMatch(/not found/i);
+    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+  });
+
+  it('POST_dmUpload_nonParticipant_returns403_viaPipeline_PermissionDeniedError', async () => {
+    // Wrapper does NOT duplicate the participant check — the pipeline owns it.
+    // Even when the caller is not a participant, the wrapper still delegates;
+    // the pipeline returns 403 via createAttachmentUploadServiceToken's
+    // PermissionDeniedError flow. This test pins that architectural decision.
+    mockDmConversationsFindFirst.mockResolvedValue({
+      id: 'conv-1',
+      participant1Id: 'someone-else',
+      participant2Id: 'another-person',
+    });
+    mockProcessAttachmentUpload.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Permission denied for file upload' }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/permission denied/i);
+    expect(mockProcessAttachmentUpload).toHaveBeenCalledTimes(1);
+    expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
+      request: expect.any(Request),
+      target: { type: 'conversation', conversationId: 'conv-1' },
+      userId: 'user-1',
+    });
+  });
+
+  it('POST_dmUpload_unauthenticated_returns401_fromAuthenticateRequestWithOptions_withoutCallingPipeline', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      error: new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      }),
+    } as never);
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockDmConversationsFindFirst).not.toHaveBeenCalled();
+    expect(vi.mocked(isEmailVerified)).not.toHaveBeenCalled();
+  });
+
+  it('POST_dmUpload_pipelineReturns413_quotaExceeded_routePropagatesAs413', async () => {
+    mockProcessAttachmentUpload.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Storage quota exceeded' }), {
+        status: 413,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(413);
+    expect(body.error).toMatch(/quota/i);
+  });
+
+  it('POST_dmUpload_pipelineReturns429_concurrentLimit_routePropagatesAs429', async () => {
+    mockProcessAttachmentUpload.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Too many concurrent uploads.' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(429);
+    expect(body.error).toMatch(/too many/i);
+  });
+
+  it('POST_dmUpload_pipelineThrowsUnexpected_returns500_withStructuredError', async () => {
+    mockProcessAttachmentUpload.mockRejectedValue(new Error('boom'));
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(typeof body.error).toBe('string');
+    expect(body.error.length).toBeGreaterThan(0);
+  });
+
+  it('POST_dmUpload_responseShape_matchesChannelRoute_onSuccess', async () => {
+    // The success body must keep the same top-level keys the channel route's
+    // pipeline emits — `success`, `file`, `storageInfo` — so useAttachmentUpload
+    // does not have to branch on target type.
+    const channelLikeBody = {
+      success: true,
+      file: {
+        id: 'hash-1',
+        originalName: 'photo.png',
+        sanitizedName: 'photo.png',
+        size: 1234,
+        mimeType: 'image/png',
+        contentHash: 'hash-1',
+      },
+      storageInfo: {
+        used: 100,
+        quota: 1000,
+        formattedUsed: '100 B',
+        formattedQuota: '1 KB',
+      },
+    };
+    mockProcessAttachmentUpload.mockResolvedValue(successResponse(channelLikeBody));
+
+    const res = await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(body).sort()).toEqual(['file', 'storageInfo', 'success']);
+    expect(body.file).toEqual(channelLikeBody.file);
+    expect(body.storageInfo).toEqual(channelLikeBody.storageInfo);
+  });
+});
