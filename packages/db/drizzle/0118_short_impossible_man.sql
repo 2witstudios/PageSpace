@@ -1,0 +1,2 @@
+ALTER TABLE "direct_messages" ADD COLUMN "isActive" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "direct_messages_conversation_active_created_idx" ON "direct_messages" USING btree ("conversationId","isActive","createdAt");

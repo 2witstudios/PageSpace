@@ -68,6 +68,7 @@ export const directMessages = pgTable('direct_messages', {
   readAt: timestamp('readAt', { mode: 'date' }),
   isEdited: boolean('isEdited').default(false).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
+  isActive: boolean('isActive').default(true).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => {
   return {
@@ -75,7 +76,10 @@ export const directMessages = pgTable('direct_messages', {
     senderIdx: index('direct_messages_sender_id_idx').on(table.senderId),
     createdAtIdx: index('direct_messages_created_at_idx').on(table.createdAt),
     fileIdx: index('direct_messages_file_id_idx').on(table.fileId),
-    // Composite index for fetching messages in a conversation
+    // Serves the conversation list query filtered by isActive — keeping isActive in the
+    // index lets the planner skip a heap fetch when soft-deleted messages must be excluded.
+    conversationActiveCreatedIdx: index('direct_messages_conversation_active_created_idx').on(table.conversationId, table.isActive, table.createdAt),
+    // Composite index for fetching messages in a conversation (kept for queries that don't filter isActive)
     conversationCreatedIdx: index('direct_messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     // Index for unread messages
     conversationIsReadIdx: index('direct_messages_conversation_is_read_idx').on(table.conversationId, table.isRead),
