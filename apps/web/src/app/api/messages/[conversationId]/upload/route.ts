@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -15,12 +15,14 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 /**
  * DM file upload endpoint.
  *
- * Thin wrapper that validates the conversation exists and the caller's email
- * is verified, then delegates to the polymorphic upload pipeline. Quota,
- * semaphore, dedup, audit, storage accounting, and participant authorization
- * live in @pagespace/lib/services/attachment-upload — the participant check is
- * intentionally NOT duplicated here so the pipeline remains the single source
- * of truth for DM access control.
+ * Thin wrapper that scopes the conversation lookup to the calling participant
+ * (mirroring `apps/web/src/app/api/messages/[conversationId]/route.ts`), enforces
+ * the email-verification gate, then delegates to the polymorphic upload pipeline.
+ * Quota, semaphore, dedup, audit, storage accounting, and authoritative
+ * participant authorization live in @pagespace/lib/services/attachment-upload —
+ * the wrapper's participant-scoped lookup is purely defensive (it both prevents
+ * existence enumeration via the 404/403 status split and avoids any pipeline
+ * work for non-participants); the pipeline still owns the canonical access check.
  *
  * Wrapper-stage awaits (auth, conversation lookup, email-verify) are wrapped in
  * try/catch so unexpected failures still return the structured `{ error }`
@@ -38,8 +40,17 @@ export async function POST(
       return auth.error;
     }
 
+    // Scope to participant so non-participants and non-existent conversations are
+    // indistinguishable from the outside (both return 404). This matches the
+    // existing DM message routes and prevents conversation-id enumeration.
     const conversation = await db.query.dmConversations.findFirst({
-      where: eq(dmConversations.id, conversationId),
+      where: and(
+        eq(dmConversations.id, conversationId),
+        or(
+          eq(dmConversations.participant1Id, auth.userId),
+          eq(dmConversations.participant2Id, auth.userId),
+        ),
+      ),
     });
 
     if (!conversation) {

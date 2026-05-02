@@ -33,7 +33,11 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(),
+  eq: vi.fn(),
+  or: vi.fn(),
+}));
 vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: { id: 'dm_conversations.id' },
 }));
@@ -142,36 +146,25 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
   });
 
-  it('POST_dmUpload_nonParticipant_returns403_viaPipeline_PermissionDeniedError', async () => {
-    // Wrapper does NOT duplicate the participant check — the pipeline owns it.
-    // Even when the caller is not a participant, the wrapper still delegates;
-    // the pipeline returns 403 via createAttachmentUploadServiceToken's
-    // PermissionDeniedError flow. This test pins that architectural decision.
-    mockDmConversationsFindFirst.mockResolvedValue({
-      id: 'conv-1',
-      participant1Id: 'someone-else',
-      participant2Id: 'another-person',
-    });
-    mockProcessAttachmentUpload.mockResolvedValue(
-      new Response(JSON.stringify({ error: 'Permission denied for file upload' }), {
-        status: 403,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
+  it('POST_dmUpload_nonParticipant_returns404_withoutCallingPipeline_toPreventExistenceLeak', async () => {
+    // The wrapper queries dmConversations scoped to the calling user (id AND
+    // participant), so a real DM the caller is not part of yields no row —
+    // indistinguishable from a missing conversation. This prevents id
+    // enumeration via a 404/403 status split. The pipeline's own participant
+    // check (PermissionDeniedError → 403) remains the canonical authority for
+    // any path that reaches it.
+    mockDmConversationsFindFirst.mockResolvedValue(undefined);
 
     const res = await POST(makeRequest() as never, {
       params: Promise.resolve({ conversationId: 'conv-1' }),
     });
     const body = await res.json();
 
-    expect(res.status).toBe(403);
-    expect(body.error).toMatch(/permission denied/i);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledTimes(1);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
-      request: expect.any(Request),
-      target: { type: 'conversation', conversationId: 'conv-1' },
-      userId: 'user-1',
-    });
+    expect(res.status).toBe(404);
+    expect(body.error).toMatch(/not found/i);
+    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    // Email-verify is not consulted once the lookup fails — short-circuit.
+    expect(vi.mocked(isEmailVerified)).not.toHaveBeenCalled();
   });
 
   it('POST_dmUpload_unauthenticated_returns401_fromAuthenticateRequestWithOptions_withoutCallingPipeline', async () => {
