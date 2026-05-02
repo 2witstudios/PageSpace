@@ -42,7 +42,6 @@ export async function createCalendarTriggerWorkflow(
     triggerType: 'cron',
     timezone,
     isEnabled: true,
-    lastRunStatus: 'never_run',
   }).returning({ id: workflows.id });
 
   const [createdTrigger] = await tx.insert(calendarTriggers).values({
@@ -50,7 +49,6 @@ export async function createCalendarTriggerWorkflow(
     calendarEventId,
     driveId,
     scheduledById,
-    status: 'pending',
     triggerAt,
   }).returning({ id: calendarTriggers.id });
 

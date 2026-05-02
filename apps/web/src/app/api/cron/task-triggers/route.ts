@@ -132,6 +132,7 @@ export async function POST(req: Request) {
             contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
             instructionPageId: workflow.instructionPageId,
             timezone: workflow.timezone,
+            source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
           };
 

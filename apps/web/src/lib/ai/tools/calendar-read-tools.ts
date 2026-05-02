@@ -1,9 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, desc } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, isNull, desc, sql } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { type ToolExecutionContext } from '../core';
@@ -126,7 +127,10 @@ function formatEventForResponse(event: {
 
 /**
  * Batch-fetch trigger info for events that have isTrigger metadata.
- * Returns a map from eventId -> trigger info.
+ * Returns a map from eventId -> trigger info. Per-fire status now lives on
+ * workflow_runs, so we LEFT JOIN the most recent run (by sourceTable +
+ * sourceId) and project its status. Triggers with no run yet report
+ * status='pending'.
  */
 async function fetchTriggerInfoForEvents(
   events: Array<{ id: string; metadata?: unknown }>
@@ -144,14 +148,21 @@ async function fetchTriggerInfoForEvents(
     .select({
       id: calendarTriggers.id,
       calendarEventId: calendarTriggers.calendarEventId,
-      status: calendarTriggers.status,
+      latestRunStatus: sql<string | null>`(
+        SELECT ${workflowRuns.status}
+        FROM ${workflowRuns}
+        WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+          AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        ORDER BY ${workflowRuns.startedAt} DESC
+        LIMIT 1
+      )`,
     })
     .from(calendarTriggers)
     .where(inArray(calendarTriggers.calendarEventId, triggerEventIds));
 
   const map = new Map<string, { status: string; triggerId: string }>();
   for (const t of triggers) {
-    map.set(t.calendarEventId, { status: t.status, triggerId: t.id });
+    map.set(t.calendarEventId, { status: t.latestRunStatus ?? 'pending', triggerId: t.id });
   }
   return map;
 }
