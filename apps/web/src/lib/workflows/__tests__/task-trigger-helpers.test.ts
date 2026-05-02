@@ -51,9 +51,10 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(),
-  and: vi.fn(),
-  inArray: vi.fn(),
+  eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
+  and: vi.fn((...conds) => ({ op: 'and', conds })),
+  inArray: vi.fn((field, values) => ({ op: 'inArray', field, values })),
+  isNull: vi.fn((field) => ({ op: 'isNull', field })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', type: 'type', isTrashed: 'isTrashed', driveId: 'driveId' },
@@ -110,6 +111,7 @@ import {
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
 import { db } from '@pagespace/db/db';
+import { isNull } from '@pagespace/db/operators';
 
 // Helper: build a fresh tx-shaped mock that records insert/update/select calls.
 // The real createTaskTriggerWorkflow runs all reads + writes inside one tx, so
@@ -260,6 +262,24 @@ describe('task-trigger-helpers', () => {
         agentPageId: 'agent-1',
         taskContext: { taskItemId: 'task-1', triggerType: 'completion' },
       }));
+    });
+
+    it('given the claim UPDATE, should gate on lastFiredAt IS NULL so concurrent callers cannot double-fire', async () => {
+      // SELECT(taskTriggers) → trigger row, then claim UPDATE, then SELECT(workflows)
+      mockFrom
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+        .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+      mockReturning.mockResolvedValueOnce([mockTrigger]);
+      vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+      await fireCompletionTrigger('task-1');
+
+      // The claim WHERE must include `isNull(taskTriggers.lastFiredAt)` —
+      // without it, two concurrent workers can both pass the SELECT (both
+      // see lastFiredAt=null) and both UPDATE successfully = duplicate fires.
+      const isNullCalls = vi.mocked(isNull).mock.calls;
+      const guardedFields = isNullCalls.map((call) => call[0]);
+      expect(guardedFields).toContain('lastFiredAt');
     });
 
     it('given the claim UPDATE returns 0 rows (race lost), should NOT execute the workflow', async () => {

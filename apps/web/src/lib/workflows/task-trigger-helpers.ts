@@ -243,12 +243,17 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
 
     if (!completionTrigger || completionTrigger.lastFiredAt !== null) return;
 
+    // Atomic claim: lastFiredAt IS NULL guard prevents double-fire under
+    // concurrent callers. Both might pass the SELECT above (both see
+    // lastFiredAt=null) but only the first UPDATE will match — the second
+    // sees the now-set lastFiredAt and updates 0 rows.
     const claimed = await db.update(taskTriggers).set({
       lastFiredAt: new Date(),
     }).where(
       and(
         eq(taskTriggers.id, completionTrigger.id),
         eq(taskTriggers.isEnabled, true),
+        isNull(taskTriggers.lastFiredAt),
       ),
     ).returning();
 
