@@ -309,6 +309,54 @@ describe('assertDeleteFileAccess', () => {
     await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
   });
 
+  it('allows system file-bound token to reap a null-driveId orphan (DM-only attachment)', async () => {
+    // PR 7: conversation-only files have no drive association. The cleanup cron
+    // mints a system file-bound delete token (resourceBinding type=file, id=hash)
+    // and the rbac assertion must accept it without requiring drive perms.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).resolves.toBeUndefined();
+    // Drive perms must NOT be consulted — there's no drive to consult against.
+    expect(mockGetUserDrivePermissions).not.toHaveBeenCalled();
+  });
+
+  it('denies non-system caller using a file-bound token against a null-driveId orphan', async () => {
+    // The system orphan-reap path is gated on userId='system'. A normal user
+    // holding a file-bound token must NOT be able to reap a null-drive orphan
+    // — the existing "no drive association" guard still applies for them.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'user-1',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
+  it('denies system caller when token binding does not match the requested contentHash', async () => {
+    // Defense-in-depth: even with userId='system', the token must be bound to
+    // the exact contentHash being deleted — a system token cannot be reused
+    // to reap a different blob.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: 'b'.repeat(64) },
+    });
+
+    // The file-binding fast-fail in isResourceBindingAllowed catches the mismatch.
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
+  });
+
   it('rejects with DeleteFileReferencedError when only pagePathReferences exist (lines 158-167)', async () => {
     mockGetLinksForFile.mockResolvedValue([
       { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },

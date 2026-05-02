@@ -1,6 +1,10 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { db } from '@pagespace/db/db';
-import { createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
+import {
+  createDriveServiceToken,
+  createSystemFileDeleteToken,
+} from '@pagespace/lib/services/validated-service-token';
+import { updateStorageUsage } from '@pagespace/lib/services/storage-limits';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
@@ -12,10 +16,14 @@ const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
 /**
  * Cron endpoint to detect and clean up orphaned files.
  *
- * An orphaned file is one with zero references across filePages, channelMessages,
- * and pages tables. For each orphan:
- * 1. Calls processor service to delete physical file + cache
- * 2. Deletes the DB record
+ * For each orphan returned by the detector:
+ *   1. Mint a delete token — drive-scoped if the file has a driveId, otherwise
+ *      a system file-bound token (covers DM-only attachments and any other
+ *      conversation-only blob with no live drive association).
+ *   2. Call the processor to delete the physical blob + cache.
+ *   3. On success, hard-delete the DB row and credit the uploader's storage
+ *      quota by exactly -sizeBytes. On failure, leave the row so the orphan
+ *      retries on the next scheduled run and the quota stays unchanged.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
@@ -41,22 +49,11 @@ export async function GET(request: Request) {
 
     let physicalFilesDeleted = 0;
     const failedPhysicalDeletes: string[] = [];
+    const reapedOrphans: typeof orphans = [];
 
-    // Delete physical files via processor service
     for (const orphan of orphans) {
       if (!orphan.storagePath) continue;
 
-      // Conversation-uploaded orphans (driveId === null) need a conversation-scoped
-      // token mint that lands with the polymorphic upload core PR. Skip them here so
-      // their DB rows aren't reaped before their physical blobs can be cleaned up.
-      // Dead at runtime today — no driveId-null orphans exist yet.
-      if (orphan.driveId === null) {
-        failedPhysicalDeletes.push(orphan.id);
-        console.warn(`[Cron] Orphan ${orphan.id} has null driveId; physical cleanup deferred until conversation-scoped token mint lands`);
-        continue;
-      }
-
-      // Extract content hash from storagePath (format: /storage/<contentHash>/original or just the hash)
       const contentHash = orphan.storagePath.split('/').filter(Boolean).find(segment =>
         /^[a-f0-9]{64}$/i.test(segment)
       );
@@ -68,12 +65,9 @@ export async function GET(request: Request) {
       }
 
       try {
-        const { token } = await createDriveServiceToken(
-          'system',
-          orphan.driveId,
-          FILE_DELETE_SCOPES,
-          '30s',
-        );
+        const { token } = orphan.driveId
+          ? await createDriveServiceToken('system', orphan.driveId, FILE_DELETE_SCOPES, '30s')
+          : await createSystemFileDeleteToken({ contentHash, expiresIn: '30s' });
 
         const response = await fetch(`${PROCESSOR_URL}/api/files/${contentHash}`, {
           method: 'DELETE',
@@ -85,6 +79,7 @@ export async function GET(request: Request) {
 
         if (response.ok) {
           physicalFilesDeleted++;
+          reapedOrphans.push(orphan);
         } else {
           failedPhysicalDeletes.push(orphan.id);
           console.warn(`[Cron] Failed to delete physical file for ${orphan.id}: ${response.status}`);
@@ -95,12 +90,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Only delete DB records for orphans whose physical files were successfully
-    // deleted (or had no storagePath). Failed physical deletes are skipped so
-    // they retry on the next scheduled run.
-    const safeToDelete = orphans
-      .filter(o => !failedPhysicalDeletes.includes(o.id))
-      .map(o => o.id);
+    const safeToDelete = reapedOrphans.map(o => o.id);
 
     const dbDeleted = safeToDelete.length > 0
       ? await deleteFileRecords(
@@ -108,6 +98,21 @@ export async function GET(request: Request) {
           safeToDelete,
         )
       : 0;
+
+    // Credit storage quota back for every successfully-reaped orphan. We attribute
+    // to the original uploader (createdBy). Orphans whose createdBy was nulled
+    // (cascade from user delete) skip the credit — there's no quota to refund.
+    for (const orphan of reapedOrphans) {
+      if (!orphan.createdBy) continue;
+      try {
+        await updateStorageUsage(orphan.createdBy, -orphan.sizeBytes, {
+          driveId: orphan.driveId ?? undefined,
+          eventType: 'delete',
+        });
+      } catch (error) {
+        console.warn(`[Cron] Failed to credit storage for ${orphan.createdBy} (-${orphan.sizeBytes}):`, error);
+      }
+    }
 
     console.log(
       `[Cron] Orphaned file cleanup: ${orphans.length} orphans found, ` +

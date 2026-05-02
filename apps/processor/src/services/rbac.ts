@@ -140,23 +140,44 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
       throw new DeleteFileAuthorizationError();
     }
   } else {
-    if (!context.fileDriveId) {
-      loggers.security.warn('delete-file denied: orphan file with no drive association', {
-        userId: auth.userId,
-        contentHash: normalizedHash,
-      });
-      throw new DeleteFileAuthorizationError();
-    }
+    // Orphan file (no live page/channel/conversation/dm linkages). Two trusted
+    // callers reach this branch:
+    //   1. A drive owner/admin via createDriveServiceToken (drive-bound token).
+    //   2. The orphan-reaping cron via createSystemFileDeleteToken — a system,
+    //      file-bound token whose binding.id MUST match the contentHash.
+    //
+    // The system path is the only way to delete a null-driveId orphan (e.g. a
+    // DM-only attachment whose conversation no longer references it). Without
+    // it, conversation-only orphans can never be reclaimed.
+    const isSystemFileBoundDelete =
+      auth.userId === 'system' &&
+      auth.resourceBinding?.type === 'file' &&
+      auth.resourceBinding.id.toLowerCase() === normalizedHash;
 
-    const drivePerms = await getUserDrivePermissions(auth.userId, context.fileDriveId);
-    if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
-      loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {
-        userId: auth.userId,
+    if (isSystemFileBoundDelete) {
+      loggers.security.info('delete-file authorized: system file-bound orphan reap', {
         contentHash: normalizedHash,
-        driveId: context.fileDriveId,
-        hasAccess: !!drivePerms,
+        fileDriveId: context.fileDriveId ?? null,
       });
-      throw new DeleteFileAuthorizationError();
+    } else {
+      if (!context.fileDriveId) {
+        loggers.security.warn('delete-file denied: orphan file with no drive association', {
+          userId: auth.userId,
+          contentHash: normalizedHash,
+        });
+        throw new DeleteFileAuthorizationError();
+      }
+
+      const drivePerms = await getUserDrivePermissions(auth.userId, context.fileDriveId);
+      if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
+        loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {
+          userId: auth.userId,
+          contentHash: normalizedHash,
+          driveId: context.fileDriveId,
+          hasAccess: !!drivePerms,
+        });
+        throw new DeleteFileAuthorizationError();
+      }
     }
   }
 

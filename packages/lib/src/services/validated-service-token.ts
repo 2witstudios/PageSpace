@@ -495,3 +495,55 @@ export async function createUploadServiceToken(
     grantedScopes: UPLOAD_SCOPES,
   };
 }
+
+/** Scopes granted for system orphan-reaping operations */
+const SYSTEM_FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
+
+/** Identity used to mint server-only system tokens (not a real user). */
+export const SYSTEM_SERVICE_USER_ID = 'system' as const;
+
+export interface SystemFileDeleteOptions {
+  /** Content hash of the orphaned blob to reap. */
+  contentHash: string;
+  /** Token expiration (default '30s'). */
+  expiresIn?: string;
+}
+
+/**
+ * Create a system file-bound delete token for orphan reaping.
+ *
+ * This token shape exists for the cleanup-orphaned-files cron, which needs to
+ * reclaim files that have no live drive association (e.g. DM-only attachments
+ * uploaded before drive provisioning, or whose drive was hard-deleted). The
+ * token is bound to the specific contentHash so it cannot be repurposed to
+ * delete a different file.
+ *
+ * SECURITY: This helper must only be invoked by trusted server-side code that
+ * has already verified the file is orphaned (no live linkages). The processor's
+ * delete handler enforces a defense-in-depth re-check before honoring the token.
+ */
+export async function createSystemFileDeleteToken(
+  options: SystemFileDeleteOptions
+): Promise<ValidatedTokenResult> {
+  const { contentHash, expiresIn = '30s' } = options;
+
+  loggers.api.info('System file delete token mint', {
+    contentHash,
+    scopes: SYSTEM_FILE_DELETE_SCOPES,
+  });
+
+  const token = await sessionService.createSession({
+    userId: SYSTEM_SERVICE_USER_ID,
+    type: 'service',
+    scopes: SYSTEM_FILE_DELETE_SCOPES as string[],
+    resourceType: 'file',
+    resourceId: contentHash,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
+  });
+
+  return {
+    token,
+    grantedScopes: SYSTEM_FILE_DELETE_SCOPES,
+  };
+}
