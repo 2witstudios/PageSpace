@@ -11,8 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Auth -----------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(
+  authenticateWithEnforcedContext: vi.fn(),
+  isEnforcedAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
   ),
 }));
@@ -65,8 +65,10 @@ vi.mock('@pagespace/lib/services/attachment-upload', () => ({
 
 // --- Imports under test --------------------------------------------------------
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateWithEnforcedContext } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
+import type { SessionClaims } from '@pagespace/lib/auth/session-service';
 
 const SUCCESS_RESPONSE_BODY = {
   success: true,
@@ -80,15 +82,23 @@ function makeRequest(): Request {
   });
 }
 
-function makeAuthSuccess(userId = 'user-1') {
-  return {
+function makeAuthContext(userId = 'user-1'): EnforcedAuthContext {
+  const claims: SessionClaims = {
+    sessionId: `session-${userId}`,
     userId,
-    role: 'user' as const,
+    userRole: 'user',
     tokenVersion: 1,
     adminRoleVersion: 1,
-    sessionId: 's',
-    tokenType: 'session' as const,
+    type: 'user',
+    scopes: ['*'],
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
   };
+
+  return EnforcedAuthContext.fromSession(claims);
+}
+
+function makeAuthSuccess(authContext: EnforcedAuthContext) {
+  return { ctx: authContext };
 }
 
 function successResponse(body: unknown = SUCCESS_RESPONSE_BODY): Response {
@@ -99,9 +109,12 @@ function successResponse(body: unknown = SUCCESS_RESPONSE_BODY): Response {
 }
 
 describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
+  let authContext: EnforcedAuthContext;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuthSuccess());
+    authContext = makeAuthContext();
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(makeAuthSuccess(authContext) as never);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
     mockDmConversationsFindFirst.mockResolvedValue({
       id: 'conv-1',
@@ -122,7 +135,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
       request,
       target: { type: 'conversation', conversationId: 'conv-1' },
-      userId: 'user-1',
+      authContext,
     });
   });
 
@@ -187,7 +200,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
   });
 
   it('POST_dmUpload_unauthenticated_returns401_fromAuthenticateRequestWithOptions_withoutCallingPipeline', async () => {
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue({
       error: new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { 'content-type': 'application/json' },

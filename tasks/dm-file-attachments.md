@@ -40,13 +40,18 @@ Pull drag-drop / paste / file-picker / optimistic-state / error-handling out of 
 
 ## Polymorphic attachment-upload core
 
-Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conversation'; conversationId }`, a single `createAttachmentUploadServiceToken({ userId, target })`, a single `processAttachmentUpload({ request, target })` in `packages/lib/src/services/attachment-upload.ts`, and a polymorphic dispatch in `apps/processor/src/api/upload.ts:124`. The channel upload route is rewritten as a thin wrapper.
+Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conversation'; conversationId }`, a single `createAttachmentUploadServiceToken({ userId, target })`, a single `processAttachmentUpload({ request, target, authContext })` in `packages/lib/src/services/attachment-upload.ts`, and a polymorphic dispatch in `apps/processor/src/api/upload.ts:124`. The `authContext` argument is required and must be an enforced/validated auth context produced by the route's authentication layer, not a raw caller-provided `userId`. The channel upload route is rewritten as a thin wrapper.
 
 **Requirements**:
 - Given a page target, channel upload should behave identically to today end-to-end.
 - Given a conversation target with a non-participant user, the service-token mint should fail before reaching the processor.
 - Given the polymorphic processor handler, an unknown target type should reject with 400 rather than crashing or defaulting.
 - Given a conversation-target upload, the processor should write the file with `driveId = NULL` and a `fileConversations` linkage instead of `filePages`.
+- Given an attachment upload processor response, should persist and link the file only when the returned content hash matches the bytes received by the web layer.
+- Given an attachment upload processor response, should reject the response before persistence when the returned size disagrees with the bytes received by the web layer.
+- Given `processAttachmentUpload`, should require a validated enforced auth context rather than a raw caller-provided user id.
+- Given a conversation-target upload, should clearly document that DM files pass upload-time content detection but do not enqueue post-storage ingest jobs until DM-safe processing exists.
+- Given cross-context content-addressable deduplication, should grant access only through a fresh authorized linkage and never by blob existence alone.
 
 ---
 

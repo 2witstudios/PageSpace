@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, eq, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
@@ -36,20 +36,21 @@ export async function POST(
   const { conversationId } = await context.params;
 
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) {
+    const auth = await authenticateWithEnforcedContext(request, AUTH_OPTIONS);
+    if (isEnforcedAuthError(auth)) {
       return auth.error;
     }
+    const { ctx } = auth;
 
     // Scope to participant so non-participants and non-existent conversations are
     // indistinguishable from the outside (both return 404). This matches the
     // existing DM message routes and prevents conversation-id enumeration.
     const conversation = await db.query.dmConversations.findFirst({
       where: and(
-        eq(dmConversations.id, conversationId),
+          eq(dmConversations.id, conversationId),
         or(
-          eq(dmConversations.participant1Id, auth.userId),
-          eq(dmConversations.participant2Id, auth.userId),
+          eq(dmConversations.participant1Id, ctx.userId),
+          eq(dmConversations.participant2Id, ctx.userId),
         ),
       ),
     });
@@ -58,11 +59,11 @@ export async function POST(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
-    const emailVerified = await isEmailVerified(auth.userId);
+    const emailVerified = await isEmailVerified(ctx.userId);
     if (!emailVerified) {
       auditRequest(request, {
         eventType: 'authz.access.denied',
-        userId: auth.userId,
+        userId: ctx.userId,
         resourceType: 'dm_upload',
         resourceId: conversationId,
         details: { reason: 'email_not_verified' },
@@ -81,7 +82,7 @@ export async function POST(
       conversationId,
     };
 
-    return await processAttachmentUpload({ request, target, userId: auth.userId });
+    return await processAttachmentUpload({ request, target, authContext: ctx });
   } catch (error) {
     loggers.api.error('DM upload wrapper error', error as Error, { conversationId });
     return NextResponse.json({ error: 'Failed to upload file' }, { status: 500 });

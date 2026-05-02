@@ -9,10 +9,12 @@
  * @module @pagespace/lib/services/attachment-upload
  */
 
+import { createHash } from 'node:crypto';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { sessionService } from '../auth/session-service';
+import type { EnforcedAuthContext } from '../permissions/enforced-context';
 import { loggers } from '../logging/logger-config';
 import {
   createUploadServiceToken,
@@ -152,19 +154,26 @@ export async function createAttachmentUploadServiceToken(
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const PROCESSOR_TIMEOUT_MS = 60_000;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 
 export interface ProcessAttachmentUploadArgs {
   request: Request;
   target: AttachmentTarget;
-  userId: string;
+  authContext: EnforcedAuthContext;
+}
+
+interface ProcessorUploadResult {
+  contentHash?: unknown;
+  size?: unknown;
 }
 
 /**
  * Owns the full attachment-upload pipeline shared by channel and DM uploads.
  *
- * The caller is responsible for authentication and any target-specific authorization
- * (e.g. canUserEditPage for channels). This function then enforces user-scoped
- * concerns — quota, semaphore, dedup, audit — that must be identical across targets.
+ * The caller is responsible for target-specific authorization (e.g. canUserEditPage
+ * for channels), but the user identity must come from a validated EnforcedAuthContext.
+ * This function then enforces user-scoped concerns — quota, semaphore, dedup, audit —
+ * that must be identical across targets.
  *
  * Returns a Response with a target-agnostic JSON shape so the client uploader
  * does not have to branch.
@@ -172,7 +181,8 @@ export interface ProcessAttachmentUploadArgs {
 export async function processAttachmentUpload(
   args: ProcessAttachmentUploadArgs
 ): Promise<Response> {
-  const { request, target, userId } = args;
+  const { request, target, authContext } = args;
+  const { userId } = authContext;
 
   let uploadSlot: string | null = null;
   let uploadSlotReleased = false;
@@ -222,6 +232,7 @@ export async function processAttachmentUpload(
 
     const mimeType = file.type || 'application/octet-stream';
     const sanitizedFileName = sanitizeFilenameForHeader(file.name);
+    const expectedContentHash = await computeFileSha256(file);
 
     let serviceToken: string;
     try {
@@ -257,10 +268,23 @@ export async function processAttachmentUpload(
       throw new Error(errorData?.error || 'Processor upload failed');
     }
 
-    const processorResult = await processorResponse.json();
-    const contentHash: string = processorResult.contentHash;
-    const resolvedSize: number =
-      typeof processorResult.size === 'number' ? processorResult.size : file.size;
+    const processorResult = (await processorResponse.json()) as ProcessorUploadResult;
+    const integrityCheck = validateProcessorResult(processorResult, {
+      expectedContentHash,
+      expectedSize: file.size,
+    });
+
+    if (!integrityCheck.valid) {
+      loggers.api.warn('Processor upload integrity check failed', {
+        reason: integrityCheck.reason,
+        targetType: target.type,
+        userId,
+      });
+      releaseSlot();
+      return jsonResponse({ error: 'Processor upload integrity check failed' }, 502);
+    }
+
+    const { contentHash, resolvedSize } = integrityCheck;
 
     const fileDriveId = target.type === 'page' ? target.driveId : null;
 
@@ -354,4 +378,41 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+async function computeFileSha256(file: File): Promise<string> {
+  return createHash('sha256')
+    .update(Buffer.from(await file.arrayBuffer()))
+    .digest('hex');
+}
+
+function validateProcessorResult(
+  processorResult: ProcessorUploadResult,
+  expected: { expectedContentHash: string; expectedSize: number }
+):
+  | { valid: true; contentHash: string; resolvedSize: number }
+  | { valid: false; reason: string } {
+  const contentHash =
+    typeof processorResult.contentHash === 'string' ? processorResult.contentHash : null;
+  if (!contentHash || !SHA256_HEX_PATTERN.test(contentHash)) {
+    return { valid: false, reason: 'invalid_content_hash' };
+  }
+
+  if (contentHash !== expected.expectedContentHash) {
+    return { valid: false, reason: 'content_hash_mismatch' };
+  }
+
+  if (typeof processorResult.size !== 'number') {
+    return { valid: false, reason: 'invalid_size' };
+  }
+
+  if (processorResult.size !== expected.expectedSize) {
+    return { valid: false, reason: 'size_mismatch' };
+  }
+
+  return {
+    valid: true,
+    contentHash,
+    resolvedSize: processorResult.size,
+  };
 }

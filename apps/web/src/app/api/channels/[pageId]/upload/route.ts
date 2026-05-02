@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -32,10 +32,11 @@ export async function POST(
   const { pageId } = await context.params;
 
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) {
+    const auth = await authenticateWithEnforcedContext(request, AUTH_OPTIONS);
+    if (isEnforcedAuthError(auth)) {
       return auth.error;
     }
+    const { ctx } = auth;
 
     const channelPage = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
@@ -51,11 +52,11 @@ export async function POST(
       return NextResponse.json({ error: 'Channel has no associated drive' }, { status: 400 });
     }
 
-    const canEdit = await canUserEditPage(auth.userId, pageId);
+    const canEdit = await canUserEditPage(ctx.userId, pageId);
     if (!canEdit) {
       auditRequest(request, {
         eventType: 'authz.access.denied',
-        userId: auth.userId,
+        userId: ctx.userId,
         resourceType: 'channel_upload',
         resourceId: pageId,
       });
@@ -71,7 +72,7 @@ export async function POST(
       driveId: channelPage.driveId,
     };
 
-    return processAttachmentUpload({ request, target, userId: auth.userId });
+    return processAttachmentUpload({ request, target, authContext: ctx });
   } catch (error) {
     loggers.api.error('Channel upload wrapper error', error as Error, { pageId });
     return NextResponse.json({ error: 'Failed to upload file' }, { status: 500 });
