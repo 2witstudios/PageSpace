@@ -46,11 +46,18 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   }
 
   const editedAt = new Date();
-  await dmMessageRepository.editActiveMessage({
+  const edited = await dmMessageRepository.editActiveMessage({
     messageId,
     content: content.trim(),
     editedAt,
   });
+
+  // A concurrent soft-delete between the lookup above and this update would
+  // leave us with 0 affected rows. Surface the same "Message not found" the
+  // caller would see if the soft-delete had landed first.
+  if (edited === 0) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
 
   auditRequest(req, {
     eventType: 'data.write',
@@ -102,7 +109,13 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'You can only delete your own messages' }, { status: 403 });
   }
 
-  await dmMessageRepository.softDeleteMessage(messageId);
+  const deleted = await dmMessageRepository.softDeleteMessage(messageId);
+
+  // Concurrent soft-delete between lookup and this update returns 0 affected
+  // rows. Surface the same 404 the second-DELETE caller would see.
+  if (deleted === 0) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
 
   auditRequest(req, {
     eventType: 'data.delete',

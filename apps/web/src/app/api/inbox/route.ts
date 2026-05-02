@@ -169,6 +169,7 @@ export async function GET(request: Request) {
           INNER JOIN dm_data dd ON dm."conversationId" = dd.id
           WHERE dm."senderId" = dd.other_user_id
             AND dm."isRead" = false
+            AND dm."isActive" = true
           GROUP BY dm."conversationId"
         )
         SELECT

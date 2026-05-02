@@ -138,6 +138,18 @@ describe('DELETE /api/messages/[conversationId]/[messageId]', () => {
     expect(mockSoftDeleteMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('DELETE_dmMessage_concurrentSoftDelete_returns404_evenAfterActiveLookupSucceeded', async () => {
+    // Race: lookup sees the active row, but another request soft-deletes it
+    // before the UPDATE lands. The repo returns 0 affected rows; the route
+    // must surface 404 instead of a stale 200.
+    mockSoftDeleteMessage.mockResolvedValue(0);
+
+    const res = await callDelete();
+
+    expect(res.status).toBe(404);
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
   it('DELETE_dmMessage_alreadySoftDeleted_returns404', async () => {
     // Repository signals "no active row found" for the lookup.
     mockFindActiveMessage.mockResolvedValue(null);
@@ -173,6 +185,16 @@ describe('DELETE /api/messages/[conversationId]/[messageId]', () => {
         }),
       })
     );
+  });
+
+  it('DELETE_dmMessage_routesThroughSoftDeleteRepoCall_whichAlsoClearsUnreadState', async () => {
+    // Boundary obligation: the route MUST call softDeleteMessage (which the
+    // repo implements as UPDATE isActive=false, isRead=true). Otherwise an
+    // unread soft-deleted DM keeps inflating the recipient's unread badge
+    // because mark-as-read is now isActive-filtered and can never see the row.
+    await callDelete();
+
+    expect(mockSoftDeleteMessage).toHaveBeenCalledWith(MESSAGE_ID);
   });
 
   it('DELETE_dmMessage_lookupSkipsSoftDeleted_byUsingFindActiveMessage', async () => {
@@ -240,6 +262,18 @@ describe('PATCH /api/messages/[conversationId]/[messageId]', () => {
       content: 'edited',
       isEdited: true,
     });
+  });
+
+  it('PATCH_concurrentSoftDelete_returns404_evenAfterActiveLookupSucceeded', async () => {
+    // Race mirror of the DELETE case: the active lookup sees the row, but a
+    // soft-delete lands before the UPDATE. Returning 200 here would falsely
+    // confirm an edit that never happened.
+    mockEditActiveMessage.mockResolvedValue(0);
+
+    const res = await callPatch({ content: 'edited' });
+
+    expect(res.status).toBe(404);
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
   it('PATCH_dmMessage_byNonOwner_returns403_andDoesNotEdit', async () => {

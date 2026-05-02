@@ -13,6 +13,9 @@ import {
 
 // Mock the database module
 const mockFindFirst = vi.fn();
+const mockOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+const mockInsertValues = vi.fn(() => ({ onConflictDoNothing: mockOnConflictDoNothing }));
+const mockInsert = vi.fn((_table: unknown) => ({ values: mockInsertValues }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -20,10 +23,14 @@ vi.mock('@pagespace/db/db', () => ({
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
       },
     },
+    insert: (table: unknown) => mockInsert(table),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
@@ -966,6 +973,27 @@ describe('createValidatedServiceToken', () => {
           scopes: ['files:delete'],
         })
       );
+    });
+
+    it('bootstraps the system principal user row before minting (FK satisfaction)', async () => {
+      // sessions.userId FKs users.id, so without an existing 'system' row the
+      // session insert would fail and orphan reaping would silently skip every
+      // file. The token mint must idempotently upsert the principal first.
+      mockInsert.mockClear();
+      mockInsertValues.mockClear();
+      mockOnConflictDoNothing.mockClear();
+
+      await createSystemFileDeleteToken({ contentHash: 'a'.repeat(64) });
+
+      expect(mockInsert).toHaveBeenCalledWith(expect.anything());
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: SYSTEM_SERVICE_USER_ID,
+          name: 'System',
+          email: 'system@pagespace.invalid',
+        })
+      );
+      expect(mockOnConflictDoNothing).toHaveBeenCalled();
     });
 
     it('defaults expiration to 30s (orphan reap is short-lived)', async () => {

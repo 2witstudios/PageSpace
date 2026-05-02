@@ -5,6 +5,7 @@ import { filePages, files } from '@pagespace/db/schema/storage';
 import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import { isFileOrphaned } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import type { EnforcedAuthContext } from '../middleware/auth';
 import { getLinksForFile, type FileLink } from './file-links';
 
@@ -140,21 +141,37 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
       throw new DeleteFileAuthorizationError();
     }
   } else {
-    // Orphan file (no live page/channel/conversation/dm linkages). Two trusted
-    // callers reach this branch:
+    // Orphan file (no file_pages link). Two trusted callers reach this branch:
     //   1. A drive owner/admin via createDriveServiceToken (drive-bound token).
     //   2. The orphan-reaping cron via createSystemFileDeleteToken — a system,
     //      file-bound token whose binding.id MUST match the contentHash.
     //
-    // The system path is the only way to delete a null-driveId orphan (e.g. a
-    // DM-only attachment whose conversation no longer references it). Without
-    // it, conversation-only orphans can never be reclaimed.
+    // The system path is the only way to delete a null-driveId orphan (e.g.
+    // a DM-only attachment with no conversation linkage left).
     const isSystemFileBoundDelete =
       auth.userId === 'system' &&
       auth.resourceBinding?.type === 'file' &&
       auth.resourceBinding.id.toLowerCase() === normalizedHash;
 
     if (isSystemFileBoundDelete) {
+      // Defense-in-depth: getLinksForFile only sees file_pages, so a file
+      // re-linked to an active DM, conversation, or channel between the
+      // cron's orphan scan and this delete would otherwise sneak through.
+      // isFileOrphaned uses the canonical 5-way predicate (file_pages,
+      // channel_messages, pages.filePath, file_conversations, and
+      // direct_messages with isActive=true) so a TOCTOU race during the
+      // cron window cannot reclaim a file that is no longer orphaned.
+      const stillOrphaned = await isFileOrphaned(
+        db as Parameters<typeof isFileOrphaned>[0],
+        normalizedHash,
+      );
+      if (!stillOrphaned) {
+        loggers.security.warn('delete-file denied: file re-linked between scan and delete', {
+          contentHash: normalizedHash,
+        });
+        throw new DeleteFileReferencedError();
+      }
+
       loggers.security.info('delete-file authorized: system file-bound orphan reap', {
         contentHash: normalizedHash,
         fileDriveId: context.fileDriveId ?? null,

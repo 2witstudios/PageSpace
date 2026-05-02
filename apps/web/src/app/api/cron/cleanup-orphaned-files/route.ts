@@ -1,31 +1,31 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { db } from '@pagespace/db/db';
-import {
-  createDriveServiceToken,
-  createSystemFileDeleteToken,
-} from '@pagespace/lib/services/validated-service-token';
+import { createSystemFileDeleteToken } from '@pagespace/lib/services/validated-service-token';
 import { updateStorageUsage } from '@pagespace/lib/services/storage-limits';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import type { ServiceScope } from '@pagespace/lib/services/validated-service-token';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
 
 /**
  * Cron endpoint to detect and clean up orphaned files.
  *
  * For each orphan returned by the detector:
- *   1. Mint a delete token — drive-scoped if the file has a driveId, otherwise
- *      a system file-bound token (covers DM-only attachments and any other
- *      conversation-only blob with no live drive association).
- *   2. Call the processor to delete the physical blob + cache.
- *   3. On success, hard-delete the DB row and credit the uploader's storage
- *      quota by exactly -sizeBytes. On failure, leave the row so the orphan
- *      retries on the next scheduled run and the quota stays unchanged.
+ *   1. If storagePath is null (DB row exists but no physical blob ever
+ *      materialized — e.g. failed upload), hard-delete the DB row only and
+ *      skip the storage credit.
+ *   2. Otherwise mint a system file-bound delete token (works for drive AND
+ *      null-drive orphans uniformly) and call the processor to delete the
+ *      physical blob + cache. The processor re-verifies orphan status before
+ *      honoring the request, so a re-link between scan and delete is safe.
+ *   3. On a successful physical delete, hard-delete the DB row and credit
+ *      the original uploader's storage quota by exactly -sizeBytes. On
+ *      failure, leave the row so the orphan retries next run and the quota
+ *      stays unchanged.
  *
- * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce,
+ * X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);
@@ -50,9 +50,16 @@ export async function GET(request: Request) {
     let physicalFilesDeleted = 0;
     const failedPhysicalDeletes: string[] = [];
     const reapedOrphans: typeof orphans = [];
+    const dbOnlyOrphans: typeof orphans = [];
 
     for (const orphan of orphans) {
-      if (!orphan.storagePath) continue;
+      // No physical blob to delete — just hard-delete the DB row. Skip the
+      // storage credit because the row claims sizeBytes but the bytes were
+      // never persisted (e.g. an aborted upload left a stub).
+      if (!orphan.storagePath) {
+        dbOnlyOrphans.push(orphan);
+        continue;
+      }
 
       const contentHash = orphan.storagePath.split('/').filter(Boolean).find(segment =>
         /^[a-f0-9]{64}$/i.test(segment)
@@ -65,9 +72,7 @@ export async function GET(request: Request) {
       }
 
       try {
-        const { token } = orphan.driveId
-          ? await createDriveServiceToken('system', orphan.driveId, FILE_DELETE_SCOPES, '30s')
-          : await createSystemFileDeleteToken({ contentHash, expiresIn: '30s' });
+        const { token } = await createSystemFileDeleteToken({ contentHash, expiresIn: '30s' });
 
         const response = await fetch(`${PROCESSOR_URL}/api/files/${contentHash}`, {
           method: 'DELETE',
@@ -90,7 +95,7 @@ export async function GET(request: Request) {
       }
     }
 
-    const safeToDelete = reapedOrphans.map(o => o.id);
+    const safeToDelete = [...reapedOrphans, ...dbOnlyOrphans].map(o => o.id);
 
     const dbDeleted = safeToDelete.length > 0
       ? await deleteFileRecords(
@@ -99,9 +104,11 @@ export async function GET(request: Request) {
         )
       : 0;
 
-    // Credit storage quota back for every successfully-reaped orphan. We attribute
+    // Credit storage quota back for every successfully-reaped orphan. Attribute
     // to the original uploader (createdBy). Orphans whose createdBy was nulled
     // (cascade from user delete) skip the credit — there's no quota to refund.
+    // DB-only orphans (null storagePath) also skip the credit because the
+    // bytes were never persisted.
     for (const orphan of reapedOrphans) {
       if (!orphan.createdBy) continue;
       try {

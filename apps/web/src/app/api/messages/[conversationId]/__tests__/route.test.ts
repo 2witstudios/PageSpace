@@ -635,6 +635,15 @@ describe('GET /api/messages/[conversationId]', () => {
     );
   });
 
+  it('GET_messages_withMalformedBefore_returns400_withoutQueryingRepo', async () => {
+    // Bad cursor turns into Invalid Date downstream and currently 500s. Reject
+    // early with a clean 400 — this is a client error, not a server failure.
+    const res = await callGet('?before=not-a-date');
+
+    expect(res.status).toBe(400);
+    expect(mockListActiveMessages).not.toHaveBeenCalled();
+  });
+
   it('GET_messages_softDeletedAreNotMarkedRead_byDelegatingToMarkActiveMessagesRead', async () => {
     // The mark-as-read pass must reuse the active-only seam so soft-deleted
     // rows are not silently flipped to isRead=true (which would corrupt unread

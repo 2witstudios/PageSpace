@@ -5,6 +5,7 @@ const VALID_HASH = 'a'.repeat(64);
 const mockGetLinksForFile = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
 const mockGetUserDrivePermissions = vi.fn();
+const mockIsFileOrphaned = vi.fn();
 const mockFilesFindFirst = vi.fn();
 const mockFilePagesFindFirst = vi.fn();
 const mockChannelMessagesFindFirst = vi.fn();
@@ -17,6 +18,10 @@ vi.mock('../file-links', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
+}));
+
+vi.mock('@pagespace/lib/compliance/file-cleanup/orphan-detector', () => ({
+  isFileOrphaned: (...args: unknown[]) => mockIsFileOrphaned(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -100,6 +105,9 @@ describe('assertDeleteFileAccess', () => {
       isMember: true,
       canEdit: true,
     });
+    // Default: file is genuinely orphaned (no live linkages anywhere). Tests
+    // exercising the re-link race override this to false.
+    mockIsFileOrphaned.mockResolvedValue(true);
   });
 
   it('denies when auth is undefined', async () => {
@@ -324,6 +332,26 @@ describe('assertDeleteFileAccess', () => {
     await expect(assertDeleteFileAccess(auth, VALID_HASH)).resolves.toBeUndefined();
     // Drive perms must NOT be consulted — there's no drive to consult against.
     expect(mockGetUserDrivePermissions).not.toHaveBeenCalled();
+    // The system path MUST consult the canonical 5-way orphan predicate so a
+    // re-link via DM/conversation/channel between scan and delete is caught.
+    expect(mockIsFileOrphaned).toHaveBeenCalledWith(expect.anything(), VALID_HASH);
+  });
+
+  it('denies system file-bound delete when file was re-linked between scan and delete (TOCTOU defense)', async () => {
+    // The cron may scan, mint a 30s token, and dispatch — but in that window
+    // a new active DM, conversation linkage, or channel message could attach
+    // to the same blob. getLinksForFile only sees file_pages, so without the
+    // canonical isFileOrphaned re-check the file would be wrongly deleted.
+    mockGetLinksForFile.mockResolvedValue([]);
+    mockFilesFindFirst.mockResolvedValue({ driveId: null });
+    mockIsFileOrphaned.mockResolvedValue(false);
+
+    const auth = createAuth({
+      userId: 'system',
+      resourceBinding: { type: 'file', id: VALID_HASH },
+    });
+
+    await expect(assertDeleteFileAccess(auth, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileReferencedError);
   });
 
   it('denies non-system caller using a file-bound token against a null-driveId orphan', async () => {

@@ -2,12 +2,17 @@
  * Contract tests for /api/cron/cleanup-orphaned-files
  *
  * After PR 7 (DM lifecycle + orphan GC) the cron now:
- *   1. Mints a system file-bound delete token for null-drive orphans
- *      (conversation-only files), so DM-attached files are reaped.
+ *   1. Mints a system file-bound delete token for ALL orphans (drive AND
+ *      null-drive). The dual-path that depended on createDriveServiceToken
+ *      has been collapsed because that path silently failed on the missing
+ *      'system' user — now both paths share the same self-bootstrapping mint.
  *   2. Decrements the uploader's storageUsedBytes by exactly -sizeBytes for
- *      every orphan that was physically deleted (drive AND null-drive).
- *   3. Skips storage credit for orphans whose physical delete failed; the
- *      DB row stays so the orphan is retried next run.
+ *      every orphan that was physically deleted.
+ *   3. Skips storage credit and DB-row deletion when the physical delete
+ *      fails; the orphan is retried next run.
+ *   4. DB-only reaps orphans with null storagePath (no physical blob to
+ *      delete, no storage credit, but the DB row is hard-deleted so it
+ *      doesn't accumulate forever).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -15,14 +20,12 @@ const {
   mockFindOrphans,
   mockDeleteRecords,
   mockAudit,
-  mockCreateDriveToken,
   mockCreateSystemFileDeleteToken,
   mockUpdateStorageUsage,
 } = vi.hoisted(() => ({
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
   mockAudit: vi.fn(),
-  mockCreateDriveToken: vi.fn(),
   mockCreateSystemFileDeleteToken: vi.fn(),
   mockUpdateStorageUsage: vi.fn(),
 }));
@@ -41,7 +44,6 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
-  createDriveServiceToken: mockCreateDriveToken,
   createSystemFileDeleteToken: mockCreateSystemFileDeleteToken,
 }));
 
@@ -102,8 +104,6 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockFindOrphans.mockResolvedValue([]);
-    // By default, both token mints succeed.
-    mockCreateDriveToken.mockResolvedValue({ token: 'drive-tok', grantedScopes: ['files:delete'] });
     mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok', grantedScopes: ['files:delete'] });
     mockDeleteRecords.mockResolvedValue(0);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
@@ -171,7 +171,10 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     vi.unstubAllGlobals();
   });
 
-  it('cron_driveOrphan_unchangedBehavior_stillReclaimed_andCreditsStorage', async () => {
+  it('cron_driveOrphan_reclaimedViaSystemToken_andCreditsStorage', async () => {
+    // After collapsing dual-path: drive orphans now mint a system file-bound
+    // token too, so both paths share the same self-bootstrapping mint and
+    // the same processor re-check.
     const orphan = driveOrphan({ sizeBytes: 1024, createdBy: 'user_drive_uploader' });
     mockFindOrphans.mockResolvedValue([orphan]);
     mockDeleteRecords.mockResolvedValue(1);
@@ -180,9 +183,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     await GET(makeRequest());
 
-    // Drive orphans still mint a drive-scoped token (existing behavior).
-    expect(mockCreateDriveToken).toHaveBeenCalledTimes(1);
-    expect(mockCreateSystemFileDeleteToken).not.toHaveBeenCalled();
+    expect(mockCreateSystemFileDeleteToken).toHaveBeenCalledTimes(1);
     expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith(
       'user_drive_uploader',
@@ -191,6 +192,22 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     );
 
     vi.unstubAllGlobals();
+  });
+
+  it('cron_nullStoragePathOrphan_dbDeletedWithoutStorageCredit_andNoTokenMint', async () => {
+    // Files with a DB row but no storagePath (e.g. aborted upload stub) have
+    // no physical blob to delete. The DB row must still be hard-deleted so it
+    // doesn't accumulate forever, and storage is NOT credited because the
+    // bytes were never persisted.
+    const orphan = { ...nullDriveOrphan(), storagePath: null as string | null };
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+
+    await GET(makeRequest());
+
+    expect(mockCreateSystemFileDeleteToken).not.toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
   });
 
   it('cron_orphanWithFailedPhysicalDelete_doesNotCreditStorage_andRetriesNextRun', async () => {

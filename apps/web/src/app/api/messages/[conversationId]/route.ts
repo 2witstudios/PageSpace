@@ -31,6 +31,16 @@ export async function GET(
       max: 100,
     });
     const beforeParam = searchParams.get('before');
+    let before: Date | undefined;
+    if (beforeParam) {
+      before = new Date(beforeParam);
+      if (Number.isNaN(before.getTime())) {
+        return NextResponse.json(
+          { error: 'Invalid before cursor' },
+          { status: 400 }
+        );
+      }
+    }
 
     const conversation = await dmMessageRepository.findConversationForParticipant(
       conversationId,
@@ -47,7 +57,7 @@ export async function GET(
     const messages = await dmMessageRepository.listActiveMessages({
       conversationId,
       limit,
-      before: beforeParam ? new Date(beforeParam) : undefined,
+      before,
     });
 
     const otherUserId = conversation.participant1Id === userId

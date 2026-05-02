@@ -157,9 +157,12 @@ async function findActiveMessage(
 }
 
 async function softDeleteMessage(messageId: string): Promise<number> {
+  // Also flip isRead=true so the row stops contributing to recipient unread
+  // counts. Otherwise a sender soft-deleting an unread DM would leave a phantom
+  // unread badge that mark-as-read (now isActive-filtered) cannot clear.
   const result = await db
     .update(directMessages)
-    .set({ isActive: false })
+    .set({ isActive: false, isRead: true, readAt: new Date() })
     .where(
       and(
         eq(directMessages.id, messageId),
