@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import type { PendingStream } from '@/stores/usePendingStreamsStore';
 
@@ -209,5 +209,44 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
     );
 
     expect(remoteRendererCalls()).toHaveLength(0);
+  });
+
+  it('given a non-own remote stream and isStreaming=false, renders the StreamingIndicator (observer "Thinking…" cue)', () => {
+    render(
+      <ChatMessagesArea
+        messages={[]}
+        isLoading={false}
+        isStreaming={false}
+        remoteStreams={[makeStream({ messageId: 'remote-x', parts: [textPart('partial')], isOwn: false })]}
+      />
+    );
+
+    expect(screen.getByTestId('streaming-indicator')).toBeInTheDocument();
+  });
+
+  it('given remoteStreams contains only own streams and isStreaming=false, does NOT render the StreamingIndicator', () => {
+    render(
+      <ChatMessagesArea
+        messages={[]}
+        isLoading={false}
+        isStreaming={false}
+        remoteStreams={[makeStream({ messageId: 'own-x', parts: [textPart('partial')], isOwn: true })]}
+      />
+    );
+
+    expect(screen.queryByTestId('streaming-indicator')).toBeNull();
+  });
+
+  it('given no remoteStreams and isStreaming=false, does NOT render the StreamingIndicator', () => {
+    render(
+      <ChatMessagesArea
+        messages={[makeMessage('m-1', 'user', 'hi')]}
+        isLoading={false}
+        isStreaming={false}
+        remoteStreams={[]}
+      />
+    );
+
+    expect(screen.queryByTestId('streaming-indicator')).toBeNull();
   });
 });
