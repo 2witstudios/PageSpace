@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, isNull, lt, or, type InferSelectModel } from '@pagespace/db/operators';
+import { and, desc, eq, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -160,9 +160,16 @@ async function softDeleteMessage(messageId: string): Promise<number> {
   // Also flip isRead=true so the row stops contributing to recipient unread
   // counts. Otherwise a sender soft-deleting an unread DM would leave a phantom
   // unread badge that mark-as-read (now isActive-filtered) cannot clear.
+  // COALESCE preserves the recipient's original readAt when the message had
+  // already been read — we only want to backfill readAt for rows that were
+  // still unread at delete time.
   const result = await db
     .update(directMessages)
-    .set({ isActive: false, isRead: true, readAt: new Date() })
+    .set({
+      isActive: false,
+      isRead: true,
+      readAt: sql`COALESCE(${directMessages.readAt}, NOW())`,
+    })
     .where(
       and(
         eq(directMessages.id, messageId),
