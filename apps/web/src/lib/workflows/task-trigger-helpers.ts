@@ -58,10 +58,16 @@ export async function recomputeTaskTriggerMetadata(
 
 /**
  * Create (or upsert) a task trigger.
- * Validates agent page, instruction page, and context pages, then atomically writes
- * one workflows row (execution payload) and one task_triggers row (the "when") in
- * a transaction. Uses onConflictDoUpdate on task_triggers (taskItemId, triggerType)
- * to handle duplicates — the matching workflows row is updated in-place.
+ *
+ * Validates agent page, instruction page, and context pages, then atomically
+ * writes one workflows row (execution payload) and one task_triggers row
+ * (the "when") in a single transaction. The transaction reads the existing
+ * task_triggers row (if any) by (taskItemId, triggerType) and either updates
+ * the linked workflow + trigger in place, or inserts a fresh pair. The
+ * select-then-branch shape is intentional: a single onConflictDoUpdate would
+ * orphan the previously-linked workflows row when the workflowId changes,
+ * and reusing the same workflowId across upserts means the workflow update
+ * targets a known id rather than a returned excluded.workflowId.
  */
 export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<void> {
   const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone } = params;
