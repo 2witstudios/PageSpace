@@ -59,24 +59,23 @@ Documents use a TipTap rich-text editor with:
 
 ## 4. Set Up AI
 
-PageSpace routes every model through the Vercel AI SDK across 12 providers:
+PageSpace routes every model through the Vercel AI SDK across 12 providers. Provider credentials are managed by the deployment operator (on pagespace.ai cloud, that's PageSpace; on self-hosted, that's whoever runs the server) — you don't need to supply API keys.
 
-| Provider | What it is | Key required |
-|----------|-----------|--------------|
-| PageSpace | Hosted GLM models (default — \`glm-4.7\` standard, \`glm-5\` pro) | No — included |
-| OpenRouter (Paid) | Any model in OpenRouter's catalog | Your OpenRouter key |
-| OpenRouter (Free) | Free-tier models curated in the config | Your OpenRouter key |
-| Google AI | Gemini 3 and 2.5 families | Your Google AI key |
-| OpenAI | GPT-5.4 / 5.3 / 5.2 families | Your OpenAI key |
-| Anthropic | Claude 4.6 / 4.5 / 4.1 families | Your Anthropic key |
-| xAI | Grok 4 family | Your xAI key |
-| Azure OpenAI | Models from your Azure deployment | Endpoint + key |
-| GLM | GLM-5, 4.7, 4.6, 4.5 Air | Your GLM key |
-| MiniMax | MiniMax M2.x models | Your MiniMax key |
-| Ollama | Models discovered from a local Ollama server | Local server URL |
-| LM Studio | Models discovered from a running LM Studio server | Local server URL |
+| Provider | What it is |
+|----------|-----------|
+| PageSpace | Hosted GLM models (default — \`glm-4.7\` on the standard tier, \`glm-5\` on the pro tier) |
+| OpenRouter | Paid and free-tier models from OpenRouter's catalog |
+| Google AI | Gemini 3 and 2.5 families |
+| OpenAI | GPT-5.4 / 5.3 / 5.2 families |
+| Anthropic | Claude 4.6 / 4.5 / 4.1 families |
+| xAI | Grok 4 family |
+| Azure OpenAI | Models from a configured Azure deployment |
+| GLM | GLM-5, 4.7, 4.6, 4.5 Air |
+| MiniMax | MiniMax M2.x models |
+| Ollama | Models discovered from a configured Ollama server |
+| LM Studio | Models discovered from a configured LM Studio server |
 
-To configure a provider, go to **Settings > AI** and enter your key. The provider and model default to your account-level choice, and any individual AI Chat page can override both. The full list of available models updates as providers publish new ones.
+Open **Settings > AI** to pick a provider and model. The picker only shows providers your deployment has enabled — anything unconfigured is hidden. The provider and model you pick become your account-level default; any individual AI Chat page can override both. Calls count against your plan's standard or pro daily AI quota depending on the model.
 
 ## 5. Create an AI Agent
 

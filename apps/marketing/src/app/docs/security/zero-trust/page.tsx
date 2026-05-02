@@ -105,9 +105,9 @@ Blocked:
 
 User-generated HTML is sanitized before render. Canvas pages render inside Shadow DOM, isolating arbitrary author styles and scripts from the rest of the app. Mentions and links are validated server-side before rendering.
 
-### API Key Encryption
+### Application Secret Encryption
 
-AI provider API keys are encrypted at rest with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Keys are decrypted only on the request path that makes the provider call, are never returned in API responses, and are deletable by the user at any time.
+OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Stored secrets are decrypted only on the request path that needs them and are never returned in API responses. AI provider credentials are held by the deployment operator at the infrastructure layer and are not stored per user.
 `;
 
 export default function ZeroTrustPage() {
