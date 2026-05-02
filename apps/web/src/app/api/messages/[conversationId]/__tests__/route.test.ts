@@ -442,6 +442,23 @@ describe('POST /api/messages/[conversationId]', () => {
       );
     });
 
+    it('normalizes whitespace-only caption to empty string before persistence and broadcast', async () => {
+      mockInsertDmMessage.mockImplementation(async (input) => mockInsertedRow(input));
+
+      await callRoute({
+        content: '   \t\n  ',
+        fileId: FILE_ID,
+        attachmentMeta: imageMeta,
+      });
+
+      expect(mockInsertDmMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ content: '' })
+      );
+      const broadcasts = captureRealtimeBroadcasts(fetchMock);
+      const payload = broadcasts[0].payload as Record<string, unknown>;
+      expect(payload.content).toBe('');
+    });
+
     it('prefers content over the attachment placeholder when both are present', async () => {
       await callRoute({
         content: 'caption',

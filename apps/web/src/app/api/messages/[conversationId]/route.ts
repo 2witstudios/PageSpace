@@ -179,11 +179,12 @@ export async function POST(
       attachmentMeta?: unknown;
     };
 
-    const content = typeof body.content === 'string' ? body.content : '';
+    const rawContent = typeof body.content === 'string' ? body.content : '';
+    const content = rawContent.trim().length > 0 ? rawContent : '';
     const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
     const rawAttachmentMeta = body.attachmentMeta ?? null;
 
-    if (content.trim().length === 0 && !fileId) {
+    if (content.length === 0 && !fileId) {
       return NextResponse.json(
         { error: 'Message content or file is required' },
         { status: 400 }

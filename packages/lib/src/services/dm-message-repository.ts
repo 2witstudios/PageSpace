@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, or, type InferSelectModel } from '@pagespace/db/operators';
+import { and, eq, isNull, lt, or, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -118,13 +118,24 @@ export interface UpdateConversationLastMessageInput {
 async function updateConversationLastMessage(
   input: UpdateConversationLastMessageInput
 ): Promise<void> {
+  // Guard against out-of-order writes: only apply when the stored timestamp
+  // is null or strictly older than the new row's createdAt. Two concurrent
+  // sends can otherwise let an older message overwrite the inbox preview.
   await db
     .update(dmConversations)
     .set({
       lastMessageAt: input.lastMessageAt,
       lastMessagePreview: input.lastMessagePreview,
     })
-    .where(eq(dmConversations.id, input.conversationId));
+    .where(
+      and(
+        eq(dmConversations.id, input.conversationId),
+        or(
+          isNull(dmConversations.lastMessageAt),
+          lt(dmConversations.lastMessageAt, input.lastMessageAt)
+        )
+      )
+    );
 }
 
 export const dmMessageRepository = {
