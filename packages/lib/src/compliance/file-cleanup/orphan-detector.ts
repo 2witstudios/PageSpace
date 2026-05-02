@@ -7,6 +7,7 @@ export interface OrphanedFile {
   storagePath: string | null;
   driveId: string | null;
   sizeBytes: number;
+  createdBy: string | null;
 }
 
 type DB = NodePgDatabase<Record<string, unknown>>;
@@ -19,7 +20,8 @@ type DB = NodePgDatabase<Record<string, unknown>>;
  * 2. No channelMessages reference it (via fileId)
  * 3. No pages reference it (via filePath = storagePath pattern)
  * 4. No fileConversations rows reference it by fileId (DM-attached files)
- * 5. No directMessages reference it (via fileId)
+ * 5. No live (isActive=true) directMessages reference it (via fileId) — soft-deleted
+ *    DM messages must not keep files alive, otherwise their storage never reclaims.
  * 6. No other live file record shares the same storagePath — protects content-addressed
  *    blobs that are still needed by a sibling file record referenced via any linkage path.
  *
@@ -29,13 +31,13 @@ type DB = NodePgDatabase<Record<string, unknown>>;
  */
 export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFile[]> {
   const result = await database.execute(sql`
-    SELECT f.id, f."storagePath", f."driveId", f."sizeBytes"
+    SELECT f.id, f."storagePath", f."driveId", f."sizeBytes", f."createdBy"
     FROM files f
     LEFT JOIN file_pages fp ON fp."fileId" = f.id
     LEFT JOIN channel_messages cm ON cm."fileId" = f.id
     LEFT JOIN pages p ON p."filePath" = f."storagePath" AND p."filePath" IS NOT NULL
     LEFT JOIN file_conversations fc ON fc."fileId" = f.id
-    LEFT JOIN direct_messages dm ON dm."fileId" = f.id
+    LEFT JOIN direct_messages dm ON dm."fileId" = f.id AND dm."isActive" = true
     WHERE fp."fileId" IS NULL
       AND cm."fileId" IS NULL
       AND p.id IS NULL
@@ -51,7 +53,7 @@ export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFil
               EXISTS (SELECT 1 FROM file_pages WHERE "fileId" = other_f.id)
               OR EXISTS (SELECT 1 FROM channel_messages WHERE "fileId" = other_f.id)
               OR EXISTS (SELECT 1 FROM file_conversations WHERE "fileId" = other_f.id)
-              OR EXISTS (SELECT 1 FROM direct_messages WHERE "fileId" = other_f.id)
+              OR EXISTS (SELECT 1 FROM direct_messages WHERE "fileId" = other_f.id AND "isActive" = true)
             )
         )
       )
@@ -62,11 +64,13 @@ export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFil
     storagePath: string | null;
     driveId: string | null;
     sizeBytes: string | number;
+    createdBy: string | null;
   }>).map(row => ({
     id: row.id,
     storagePath: row.storagePath,
     driveId: row.driveId,
     sizeBytes: typeof row.sizeBytes === 'string' ? parseInt(row.sizeBytes, 10) : row.sizeBytes,
+    createdBy: row.createdBy,
   }));
 }
 
@@ -81,7 +85,7 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
     LEFT JOIN channel_messages cm ON cm."fileId" = f.id
     LEFT JOIN pages p ON p."filePath" = f."storagePath" AND p."filePath" IS NOT NULL
     LEFT JOIN file_conversations fc ON fc."fileId" = f.id
-    LEFT JOIN direct_messages dm ON dm."fileId" = f.id
+    LEFT JOIN direct_messages dm ON dm."fileId" = f.id AND dm."isActive" = true
     WHERE f.id = ${fileId}
       AND fp."fileId" IS NULL
       AND cm."fileId" IS NULL

@@ -104,6 +104,44 @@ describe('findOrphanedFileRecords', () => {
     expect(fullSql).toContain('direct_messages');
   });
 
+  it('given_directMessagesJoin_filtersOnIsActiveTrue_soSoftDeletedMessagesDoNotKeepFilesAlive', async () => {
+    // After PR 7 added directMessages.isActive, a file linked only by soft-deleted
+    // DM messages must still surface as orphaned. Otherwise soft-deleted messages
+    // would keep their files alive forever and the storage quota would never reclaim.
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await findOrphanedFileRecords(db as never);
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    // Both the LEFT JOIN predicate (top-level) and the sibling-blob EXISTS subquery
+    // need the isActive filter, otherwise sibling files referenced by soft-deleted
+    // DMs would protect a shared blob that nothing live points at.
+    expect(fullSql).toMatch(/dm\."?isActive"?\s*=\s*true/i);
+    expect(fullSql).toMatch(/direct_messages.*"?isActive"?\s*=\s*true/is);
+  });
+
+  it('given_orphanCandidateRowReturned_includesCreatedByForStorageAttribution', async () => {
+    // Cleanup cron must credit the uploader's storage quota. Without createdBy in
+    // the row shape, conversation-only orphans would be reclaimed without ever
+    // reducing the uploader's storageUsedBytes.
+    const db = {
+      execute: vi.fn().mockResolvedValue({
+        rows: [
+          { id: 'f1', storagePath: '/p/abc/original', driveId: null, sizeBytes: 4096, createdBy: 'user_uploader' },
+        ],
+      }),
+    };
+
+    const result = await findOrphanedFileRecords(db as never);
+
+    expect(result[0]).toEqual(
+      expect.objectContaining({ id: 'f1', createdBy: 'user_uploader' })
+    );
+  });
+
   it('given_nullDriveId_preservesNullThroughMapper', async () => {
     // After files.driveId became nullable, conversation-uploaded files surface as null.
     const db = {
@@ -154,6 +192,18 @@ describe('isFileOrphaned', () => {
     const fullSql = sqlArg.strings.join('');
     expect(fullSql).toContain('file_conversations');
     expect(fullSql).toContain('direct_messages');
+  });
+
+  it('given_directMessagesJoin_filtersOnIsActiveTrue_soSoftDeletedMessagesDoNotKeepFilesAlive', async () => {
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await isFileOrphaned(db as never, 'file-1');
+
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
+    const fullSql = sqlArg.strings.join('');
+    expect(fullSql).toMatch(/dm\."?isActive"?\s*=\s*true/i);
   });
 });
 
