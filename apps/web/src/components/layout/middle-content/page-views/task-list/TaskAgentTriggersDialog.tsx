@@ -35,8 +35,7 @@ import { TriggerPagePicker } from './TriggerPagePicker';
 
 const MAX_CONTEXT_PAGES = 10;
 
-type ApiTriggerType = 'task_due_date' | 'task_completion';
-type UiTriggerType = 'due_date' | 'completion';
+type TriggerType = 'due_date' | 'completion';
 
 interface DriveAgent {
   id: string;
@@ -45,15 +44,24 @@ interface DriveAgent {
 
 interface TriggerRow {
   id: string;
-  triggerType: ApiTriggerType;
+  triggerType: TriggerType;
   agentPageId: string;
   prompt: string;
   isEnabled: boolean;
-  lastRunStatus: 'never_run' | 'success' | 'error' | 'running';
-  lastRunAt: string | null;
+  lastFiredAt: string | null;
+  lastFireError: string | null;
   instructionPageId: string | null;
   contextPageIds: string[] | null;
 }
+
+type LastRunStatus = 'never_run' | 'success' | 'error';
+
+const lastRunStatusFor = (row: TriggerRow): LastRunStatus =>
+  row.lastFiredAt === null
+    ? 'never_run'
+    : row.lastFireError
+      ? 'error'
+      : 'success';
 
 interface TaskAgentTriggersDialogProps {
   open: boolean;
@@ -66,22 +74,20 @@ interface TaskAgentTriggersDialogProps {
   onSaved?: () => void;
 }
 
-const TRIGGER_TYPES: { ui: UiTriggerType; api: ApiTriggerType; label: string; help: string }[] = [
+const TRIGGER_TYPES: { ui: TriggerType; label: string; help: string }[] = [
   {
     ui: 'due_date',
-    api: 'task_due_date',
     label: 'Run when due date arrives',
     help: 'Requires a due date on this task. The agent runs once at the scheduled time.',
   },
   {
     ui: 'completion',
-    api: 'task_completion',
     label: 'Run when task is completed',
     help: 'Fires the moment the task is moved to a status in the Done group.',
   },
 ];
 
-export const statusToneClass = (status: TriggerRow['lastRunStatus']) =>
+export const statusToneClass = (status: LastRunStatus) =>
   status === 'error' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground';
 
 const triggersFetcher = async (url: string): Promise<{ triggers: TriggerRow[] }> => {
@@ -158,12 +164,12 @@ export function TaskAgentTriggersDialog({
 
   const agents = agentsData?.agents ?? [];
 
-  const [sections, setSections] = useState<Record<UiTriggerType, SectionState>>({
+  const [sections, setSections] = useState<Record<TriggerType, SectionState>>({
     due_date: { ...EMPTY_SECTION },
     completion: { ...EMPTY_SECTION },
   });
-  const [savingType, setSavingType] = useState<UiTriggerType | null>(null);
-  const [removingType, setRemovingType] = useState<UiTriggerType | null>(null);
+  const [savingType, setSavingType] = useState<TriggerType | null>(null);
+  const [removingType, setRemovingType] = useState<TriggerType | null>(null);
 
   useEditingSession(`task-triggers:${taskId}`, open, 'form', {
     pageId,
@@ -172,12 +178,12 @@ export function TaskAgentTriggersDialog({
 
   useEffect(() => {
     if (!open) return;
-    const next: Record<UiTriggerType, SectionState> = {
+    const next: Record<TriggerType, SectionState> = {
       due_date: { ...EMPTY_SECTION },
       completion: { ...EMPTY_SECTION },
     };
     for (const row of triggersData?.triggers ?? []) {
-      const ui: UiTriggerType = row.triggerType === 'task_completion' ? 'completion' : 'due_date';
+      const ui: TriggerType = row.triggerType;
       next[ui] = {
         enabled: row.isEnabled,
         agentPageId: row.agentPageId,
@@ -189,11 +195,11 @@ export function TaskAgentTriggersDialog({
     setSections(next);
   }, [open, triggersData]);
 
-  const updateSection = (type: UiTriggerType, patch: Partial<SectionState>) => {
+  const updateSection = (type: TriggerType, patch: Partial<SectionState>) => {
     setSections((prev) => ({ ...prev, [type]: { ...prev[type], ...patch } }));
   };
 
-  const handleSave = async (type: UiTriggerType) => {
+  const handleSave = async (type: TriggerType) => {
     const section = sections[type];
     if (!section.agentPageId) {
       toast.error('Pick an agent first');
@@ -229,7 +235,7 @@ export function TaskAgentTriggersDialog({
     }
   };
 
-  const handleRemove = async (type: UiTriggerType) => {
+  const handleRemove = async (type: TriggerType) => {
     setRemovingType(type);
     try {
       await del(`/api/tasks/${taskId}/triggers/${type}`);
@@ -273,8 +279,9 @@ export function TaskAgentTriggersDialog({
             {TRIGGER_TYPES.map(({ ui, label, help }) => {
               const section = sections[ui];
               const existing = (triggersData?.triggers ?? []).find(
-                (t) => t.triggerType === (ui === 'completion' ? 'task_completion' : 'task_due_date'),
+                (t) => t.triggerType === ui,
               );
+              const existingStatus: LastRunStatus | null = existing ? lastRunStatusFor(existing) : null;
               const disabled = noAgents || (ui === 'due_date' && !hasDueDate);
               return (
                 <div key={ui} className="space-y-3 rounded-md border p-3">
@@ -385,14 +392,14 @@ export function TaskAgentTriggersDialog({
                         </CollapsibleContent>
                       </Collapsible>
 
-                      {existing?.lastRunStatus && existing.lastRunStatus !== 'never_run' && (
-                        <p className={statusToneClass(existing.lastRunStatus)}>
-                          {existing.lastRunStatus === 'error' && (
+                      {existingStatus && existingStatus !== 'never_run' && (
+                        <p className={statusToneClass(existingStatus)}>
+                          {existingStatus === 'error' && (
                             <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
                           )}
-                          Last run: <span className="font-medium">{existing.lastRunStatus}</span>
-                          {existing.lastRunAt
-                            ? ` • ${new Date(existing.lastRunAt).toLocaleString()}`
+                          Last run: <span className="font-medium">{existingStatus}</span>
+                          {existing?.lastFiredAt
+                            ? ` • ${new Date(existing.lastFiredAt).toLocaleString()}`
                             : ''}
                         </p>
                       )}

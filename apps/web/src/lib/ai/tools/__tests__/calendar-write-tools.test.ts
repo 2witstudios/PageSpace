@@ -186,6 +186,13 @@ const createAuthContext = (userId = 'user-123') => ({
 describe('calendar-write-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default transaction: invoke the callback with `mockDb` so existing
+    // chains (insert/values/returning) keep working without per-test setup.
+    // Tests that need fine-grained tx control (e.g. agentTrigger paths)
+    // override this with their own mockImplementation.
+    (mockDb.transaction as ReturnType<typeof vi.fn>).mockImplementation(
+      async (fn: (tx: unknown) => unknown) => fn(mockDb),
+    );
   });
 
   describe('create_calendar_event', () => {
@@ -765,26 +772,32 @@ describe('calendar-write-tools', () => {
           }),
         });
 
-        // Event creation
+        // The full create flow runs inside one db.transaction now (event +
+        // attendees + helper-driven trigger pair + metadata update). Build a
+        // tx mock whose insert chain returns event-then-workflow-then-trigger
+        // returning rows in that order, and supports update().set().where().
         const newEvent = createMockEvent({ id: 'event-new' });
-        (mockDb.insert as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-          values: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([newEvent]),
-          }),
-        });
-
-        // Creator attendee insertion
-        (mockDb.insert as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-          values: vi.fn().mockResolvedValue(undefined),
-        });
-
-        // Transaction: trigger creation + metadata update
+        let insertCount = 0;
         (mockDb.transaction as ReturnType<typeof vi.fn>).mockImplementation(async (fn: (tx: unknown) => unknown) => {
           const mockTx = {
-            insert: vi.fn().mockReturnValue({
-              values: vi.fn().mockReturnValue({
-                returning: vi.fn().mockResolvedValue([{ id: 'trg-1' }]),
-              }),
+            insert: vi.fn().mockImplementation(() => {
+              insertCount += 1;
+              // Order:
+              //   1: calendarEvents (returning [event])
+              //   2: eventAttendees (creator) — no returning
+              //   3: eventAttendees (others) — only when otherAttendees > 0
+              //   workflows + calendar_triggers via helper, with returning
+              const isOtherAttendeesPresent = false; // this fixture has no otherAttendees
+              const valuesReturn = (() => {
+                if (insertCount === 1) return { returning: vi.fn().mockResolvedValue([newEvent]) };
+                if (insertCount === 2) return undefined; // creator attendee, no .returning
+                // From here on, helper inserts workflows then calendar_triggers, both with returning.
+                const helperStep = isOtherAttendeesPresent ? insertCount - 3 : insertCount - 2;
+                if (helperStep === 1) return { returning: vi.fn().mockResolvedValue([{ id: 'wf-1' }]) };
+                if (helperStep === 2) return { returning: vi.fn().mockResolvedValue([{ id: 'trg-1' }]) };
+                return undefined;
+              })();
+              return { values: vi.fn().mockReturnValue(valuesReturn) };
             }),
             update: vi.fn().mockReturnValue({
               set: vi.fn().mockReturnValue({
