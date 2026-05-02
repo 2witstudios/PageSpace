@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -29,8 +29,10 @@ export interface ChannelInputProps {
   crossDrive?: boolean;
   /** Whether attachments are enabled */
   attachmentsEnabled?: boolean;
-  /** Channel page ID for uploads */
+  /** Channel page ID for uploads (mutually exclusive with conversationId; channelId wins if both set) */
   channelId?: string;
+  /** DM conversation ID for uploads (used when this input is rendered in a DM context) */
+  conversationId?: string;
   /** Additional class names */
   className?: string;
 }
@@ -70,6 +72,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       crossDrive = false,
       attachmentsEnabled = false,
       channelId,
+      conversationId,
       className,
     },
     ref
@@ -79,8 +82,15 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const shouldReduceMotion = useReducedMotion();
     const [isFocused, setIsFocused] = useState(false);
 
+    const uploadUrl = channelId
+      ? `/api/channels/${channelId}/upload`
+      : conversationId
+        ? `/api/messages/${conversationId}/upload`
+        : null;
+    const hasUploadTarget = !!uploadUrl;
+
     const { attachment, isUploading, uploadFile, clearAttachment } = useAttachmentUpload({
-      uploadUrl: channelId ? `/api/channels/${channelId}/upload` : null,
+      uploadUrl,
       onUploaded: () => textareaRef.current?.focus(),
     });
 
@@ -113,6 +123,28 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
 
     const handleAttachmentClick = () => {
       fileInputRef.current?.click();
+    };
+
+    const canUpload = attachmentsEnabled && hasUploadTarget && !isUploading;
+
+    const handlePasteFiles = (files: File[]) => {
+      if (!canUpload) return;
+      const first = files[0];
+      if (first) void uploadFile(first);
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+      if (!canUpload) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+      if (!canUpload) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const file = Array.from(e.dataTransfer?.files ?? [])[0];
+      if (file) void uploadFile(file);
     };
 
     const getFileIcon = (mimeType: string) => {
@@ -174,7 +206,12 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     );
 
     return (
-      <div className={cn('w-full', className)}>
+      <div
+        className={cn('w-full', className)}
+        data-testid="channel-input-root"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -254,6 +291,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
               disabled={disabled}
               variant="main"
               popupPlacement="top"
+              onPasteFiles={canUpload ? handlePasteFiles : undefined}
             />
 
             {/* Send button with press animation */}
@@ -276,7 +314,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             onMentionClick={handleMentionClick}
             onEmojiSelect={handleEmojiSelect}
             onAttachmentClick={handleAttachmentClick}
-            attachmentsEnabled={attachmentsEnabled && !!channelId}
+            attachmentsEnabled={attachmentsEnabled && hasUploadTarget}
             disabled={disabled || isUploading}
           />
         </InputCard>
