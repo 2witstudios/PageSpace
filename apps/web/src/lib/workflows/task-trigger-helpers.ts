@@ -333,30 +333,30 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
 
 /**
  * Disable all task triggers for a given task and delete their linked workflows
- * rows. Used when a task is deleted or trashed. The workflows row is the
- * execution definition; once no trigger references it, it's garbage — explicit
- * cleanup keeps the workflows table free of orphans (cascade goes the other
- * way: deleting a workflow cascades to its task_triggers row, but the inverse
- * is what we need here).
+ * rows. MUST be called BEFORE the task is hard-deleted: task_triggers.taskItemId
+ * has ON DELETE CASCADE, so deleting taskItems first wipes task_triggers and
+ * the SELECT here returns empty, leaking orphan workflows rows.
+ *
+ * The function deletes the workflows rows; cascade wipes the task_triggers
+ * rows via task_triggers.workflowId FK. No bookkeeping UPDATE is needed —
+ * that earlier UPDATE was wasted work since the rows were about to be gone.
+ *
+ * The reason parameter is logged on failure but is not persisted (the rows
+ * are deleted, not flagged).
  */
 export async function disableTaskTriggers(taskId: string, reason: string): Promise<void> {
   try {
     const triggerRows = await db
-      .select({ id: taskTriggers.id, workflowId: taskTriggers.workflowId })
+      .select({ workflowId: taskTriggers.workflowId })
       .from(taskTriggers)
       .where(eq(taskTriggers.taskItemId, taskId));
 
     if (triggerRows.length === 0) return;
 
-    await db.update(taskTriggers).set({
-      isEnabled: false,
-      lastFireError: reason,
-    }).where(eq(taskTriggers.taskItemId, taskId));
-
     const workflowIds = triggerRows.map(r => r.workflowId);
     await db.delete(workflows).where(inArray(workflows.id, workflowIds));
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    logger.error('Failed to disable task triggers', { taskItemId: taskId, error: errorMsg });
+    logger.error('Failed to disable task triggers', { taskItemId: taskId, reason, error: errorMsg });
   }
 }

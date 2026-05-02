@@ -322,19 +322,14 @@ describe('task-trigger-helpers', () => {
   });
 
   describe('disableTaskTriggers', () => {
-    it('given a task ID with active triggers, should disable triggers and delete linked workflow rows', async () => {
-      // First select returns trigger rows with workflow IDs
+    it('given a task ID with active triggers, should delete linked workflow rows (cascade wipes task_triggers)', async () => {
       mockFrom.mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([
-        { id: 'trg-1', workflowId: 'wf-1' },
-        { id: 'trg-2', workflowId: 'wf-2' },
+        { workflowId: 'wf-1' },
+        { workflowId: 'wf-2' },
       ]) }));
 
       await disableTaskTriggers('task-1', 'Task deleted');
 
-      expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({
-        isEnabled: false,
-        lastFireError: 'Task deleted',
-      }));
       expect(mockDelete).toHaveBeenCalled();
     });
 
@@ -343,8 +338,21 @@ describe('task-trigger-helpers', () => {
 
       await disableTaskTriggers('task-1', 'Task deleted');
 
-      expect(mockUpdate).not.toHaveBeenCalled();
       expect(mockDelete).not.toHaveBeenCalled();
+    });
+
+    it('drops the redundant UPDATE-then-delete bookkeeping (Nit 1)', async () => {
+      // The pre-fix code did SELECT → UPDATE(isEnabled=false) → DELETE workflows.
+      // The UPDATE is wasted: deleting the workflows row cascade-deletes the
+      // task_triggers row via task_triggers.workflowId FK, so the UPDATE never
+      // observably happens. Assert there is no top-level db.update call.
+      mockFrom.mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([
+        { workflowId: 'wf-1' },
+      ]) }));
+
+      await disableTaskTriggers('task-1', 'Task deleted');
+
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
 
     it('given a DB error, should not throw (internal try/catch)', async () => {
