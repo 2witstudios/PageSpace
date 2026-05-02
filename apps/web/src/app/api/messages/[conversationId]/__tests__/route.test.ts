@@ -406,6 +406,26 @@ describe('POST /api/messages/[conversationId]', () => {
       );
     });
 
+    it('falls back to the attachment placeholder when caption is whitespace-only', async () => {
+      await callRoute({
+        content: '   ',
+        fileId: FILE_ID,
+        attachmentMeta: imageMeta,
+      });
+
+      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastMessagePreview: `[image: ${imageMeta.originalName}]`,
+        })
+      );
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        `[image: ${imageMeta.originalName}]`,
+        SENDER_ID
+      );
+    });
+
     it('prefers content over the attachment placeholder when both are present', async () => {
       await callRoute({
         content: 'caption',

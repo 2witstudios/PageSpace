@@ -138,8 +138,9 @@ function buildLastMessagePreview(
   content: string,
   attachmentMeta: AttachmentMeta | null
 ): string {
-  if (content.length > 0) {
-    return content.length > 100 ? content.substring(0, 100) + '...' : content;
+  const trimmed = content.trim();
+  if (trimmed.length > 0) {
+    return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
   }
   if (attachmentMeta) {
     const isImage = attachmentMeta.mimeType.startsWith('image/');
