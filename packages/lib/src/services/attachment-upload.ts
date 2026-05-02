@@ -16,9 +16,22 @@ import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
 import {
   createUploadServiceToken,
+  isPermissionDeniedError,
   PermissionDeniedError,
   type ServiceScope,
 } from './validated-service-token';
+import { attachmentUploadRepository } from './attachment-upload-repository';
+import {
+  checkStorageQuota,
+  formatBytes,
+  getUserStorageQuota,
+  updateStorageUsage,
+} from './storage-limits';
+import { uploadSemaphore } from './upload-semaphore';
+import { checkMemoryMiddleware } from './memory-monitor';
+import { sanitizeFilenameForHeader } from '../utils/file-security';
+import { auditRequest } from '../audit/audit-log';
+import { getActorInfo, logFileActivity } from '../monitoring/activity-logger';
 
 /**
  * Upload destination — discriminated by target type.
@@ -135,4 +148,212 @@ export async function createAttachmentUploadServiceToken(
       );
     }
   }
+}
+
+const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+const PROCESSOR_TIMEOUT_MS = 60_000;
+
+export interface ProcessAttachmentUploadArgs {
+  request: Request;
+  target: AttachmentTarget;
+  userId: string;
+}
+
+/**
+ * Owns the full attachment-upload pipeline shared by channel and DM uploads.
+ *
+ * The caller is responsible for authentication and any target-specific authorization
+ * (e.g. canUserEditPage for channels). This function then enforces user-scoped
+ * concerns — quota, semaphore, dedup, audit — that must be identical across targets.
+ *
+ * Returns a Response with a target-agnostic JSON shape so the client uploader
+ * does not have to branch.
+ */
+export async function processAttachmentUpload(
+  args: ProcessAttachmentUploadArgs
+): Promise<Response> {
+  const { request, target, userId } = args;
+
+  let uploadSlot: string | null = null;
+  let uploadSlotReleased = false;
+
+  const releaseSlot = () => {
+    if (uploadSlot && !uploadSlotReleased) {
+      uploadSemaphore.releaseUploadSlot(uploadSlot);
+      uploadSlotReleased = true;
+    }
+  };
+
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file');
+    if (!(file instanceof File)) {
+      return jsonResponse({ error: 'No file provided' }, 400);
+    }
+
+    const memCheck = await checkMemoryMiddleware();
+    if (!memCheck.allowed) {
+      return jsonResponse(
+        { error: memCheck.reason || 'Server is busy. Please try again later.' },
+        503
+      );
+    }
+
+    const quotaCheck = await checkStorageQuota(userId, file.size);
+    if (!quotaCheck.allowed) {
+      return jsonResponse(
+        { error: quotaCheck.reason, storageInfo: quotaCheck.quota },
+        413
+      );
+    }
+
+    const userQuota = await getUserStorageQuota(userId);
+    if (!userQuota) {
+      return jsonResponse({ error: 'Could not retrieve storage quota' }, 500);
+    }
+
+    uploadSlot = await uploadSemaphore.acquireUploadSlot(userId, userQuota.tier, file.size);
+    if (!uploadSlot) {
+      return jsonResponse(
+        { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+        429
+      );
+    }
+
+    const mimeType = file.type || 'application/octet-stream';
+    const sanitizedFileName = sanitizeFilenameForHeader(file.name);
+
+    let serviceToken: string;
+    try {
+      const tok = await createAttachmentUploadServiceToken({ userId, target });
+      serviceToken = tok.token;
+    } catch (error) {
+      if (isPermissionDeniedError(error)) {
+        releaseSlot();
+        return jsonResponse({ error: 'Permission denied for file upload' }, 403);
+      }
+      throw error;
+    }
+
+    const processorFormData = new FormData();
+    processorFormData.append('file', file);
+    processorFormData.append('userId', userId);
+    if (target.type === 'page') {
+      processorFormData.append('pageId', target.pageId);
+      processorFormData.append('driveId', target.driveId);
+    } else {
+      processorFormData.append('conversationId', target.conversationId);
+    }
+
+    const processorResponse = await fetch(`${PROCESSOR_URL}/api/upload/single`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${serviceToken}` },
+      body: processorFormData,
+      signal: AbortSignal.timeout(PROCESSOR_TIMEOUT_MS),
+    });
+
+    if (!processorResponse.ok) {
+      const errorData = await processorResponse.json().catch(() => ({}));
+      throw new Error(errorData?.error || 'Processor upload failed');
+    }
+
+    const processorResult = await processorResponse.json();
+    const contentHash: string = processorResult.contentHash;
+    const resolvedSize: number =
+      typeof processorResult.size === 'number' ? processorResult.size : file.size;
+
+    const fileDriveId = target.type === 'page' ? target.driveId : null;
+
+    await attachmentUploadRepository.saveFileRecord({
+      id: contentHash,
+      driveId: fileDriveId,
+      sizeBytes: resolvedSize,
+      mimeType,
+      storagePath: contentHash,
+      createdBy: userId,
+    });
+
+    await attachmentUploadRepository.linkFileToTarget({
+      target,
+      fileId: contentHash,
+      userId,
+    });
+
+    await updateStorageUsage(userId, file.size, {
+      driveId: target.type === 'page' ? target.driveId : undefined,
+      pageId: target.type === 'page' ? target.pageId : undefined,
+      eventType: 'upload',
+    });
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: target.type === 'page' ? 'channel_upload' : 'dm_upload',
+      resourceId: contentHash,
+    });
+
+    const actorInfo = await getActorInfo(userId);
+    logFileActivity(
+      userId,
+      'upload',
+      {
+        fileId: contentHash,
+        fileName: file.name,
+        fileType: mimeType,
+        fileSize: resolvedSize,
+        driveId: fileDriveId,
+        pageId: target.type === 'page' ? target.pageId : undefined,
+      },
+      actorInfo
+    );
+
+    releaseSlot();
+
+    const updatedQuota = await getUserStorageQuota(userId);
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'file',
+      resourceId: contentHash,
+      details: {
+        source: target.type === 'page' ? 'channel-upload' : 'dm-upload',
+        targetType: target.type,
+      },
+    });
+
+    return jsonResponse({
+      success: true,
+      file: {
+        id: contentHash,
+        originalName: file.name,
+        sanitizedName: sanitizedFileName,
+        size: resolvedSize,
+        mimeType,
+        contentHash,
+      },
+      storageInfo: updatedQuota
+        ? {
+            used: updatedQuota.usedBytes,
+            quota: updatedQuota.quotaBytes,
+            formattedUsed: formatBytes(updatedQuota.usedBytes),
+            formattedQuota: formatBytes(updatedQuota.quotaBytes),
+          }
+        : undefined,
+    });
+  } catch (error) {
+    loggers.api.error('Attachment upload error', error as Error);
+    releaseSlot();
+    return jsonResponse({ error: 'Failed to upload file' }, 500);
+  } finally {
+    // Defense-in-depth: ensure the slot is released on any unexpected exit path.
+    releaseSlot();
+  }
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
