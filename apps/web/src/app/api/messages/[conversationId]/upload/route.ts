@@ -4,6 +4,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   processAttachmentUpload,
@@ -59,6 +60,13 @@ export async function POST(
 
     const emailVerified = await isEmailVerified(auth.userId);
     if (!emailVerified) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'dm_upload',
+        resourceId: conversationId,
+        details: { reason: 'email_not_verified' },
+      });
       return NextResponse.json(
         {
           error: 'Email verification required. Please verify your email to perform this action.',

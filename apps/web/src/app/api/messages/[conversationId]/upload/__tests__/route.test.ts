@@ -45,11 +45,15 @@ vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: { id: 'dm_conversations.id' },
 }));
 
-// --- Logger seam ---------------------------------------------------------------
+// --- Logger + audit seams ------------------------------------------------------
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   },
+}));
+const mockAuditRequest = vi.fn();
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 
 // --- Service seam --------------------------------------------------------------
@@ -134,6 +138,18 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(body.requiresEmailVerification).toBe(true);
     expect(body.error).toMatch(/email/i);
     expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    // SIEM-visible denial: emit authz.access.denied with a discriminator so
+    // the email-verification denial path is observable downstream.
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        userId: 'user-1',
+        resourceType: 'dm_upload',
+        resourceId: 'conv-1',
+        details: expect.objectContaining({ reason: 'email_not_verified' }),
+      }),
+    );
   });
 
   it('POST_dmUpload_missingConversation_returns404_withoutCallingPipeline', async () => {
