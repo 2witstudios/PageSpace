@@ -31,7 +31,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Secure Cloud Storage:</strong> Your data is stored in our cloud infrastructure with access controls and security logging</li>
               <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links, with sessions managed using opaque tokens</li>
-              <li><strong>Data Protection:</strong> Sensitive information like API keys is encrypted using AES-256-GCM encryption. Note that document content and chat messages are stored as plain text to enable search functionality</li>
+              <li><strong>Data Protection:</strong> Sensitive secrets like OAuth tokens for connected integrations are encrypted using AES-256-GCM encryption. Note that document content and chat messages are stored as plain text to enable search functionality</li>
               <li><strong>Transparency:</strong> Clear information about how we handle your data and what security measures we implement</li>
             </ul>
           </section>
@@ -49,7 +49,7 @@ export default function PrivacyPolicy() {
               <li>Application settings and preferences</li>
               <li>Chat messages and AI conversation history (stored as plain text in our database)</li>
               <li>Usage analytics and subscription billing information (via Stripe)</li>
-              <li>Your personal API keys for AI services (encrypted using AES-256-GCM)</li>
+              <li>OAuth tokens for connected integrations such as Google Calendar and Google Drive (encrypted using AES-256-GCM)</li>
             </ul>
 
             <h3 className="text-xl font-semibold mb-3">3.2 Technical Information</h3>
@@ -68,17 +68,12 @@ export default function PrivacyPolicy() {
           <section className="mb-8">
             <h2 className="text-2xl font-semibold mb-4">4. Third-Party AI Services</h2>
             <p className="mb-4">
-              When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Supported providers include:
+              When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Provider routing is managed by PageSpace at the deployment level — you no longer supply or store provider API keys yourself. Supported providers include:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>PageSpace-hosted (default):</strong> included free tier, backed by a GLM inference provider</li>
-              <li><strong>OpenRouter:</strong> paid and free-tier model catalogs</li>
-              <li><strong>Anthropic (Claude):</strong> direct API access with your key</li>
-              <li><strong>OpenAI:</strong> direct API access with your key</li>
-              <li><strong>Google AI (Gemini):</strong> direct API access with your key</li>
-              <li><strong>xAI (Grok):</strong> direct API access with your key</li>
-              <li><strong>Azure OpenAI, GLM, MiniMax:</strong> direct API access with your key</li>
-              <li><strong>Ollama and LM Studio:</strong> self-managed endpoints you configure; prompts and selected context are sent only to that configured server. When the endpoint is a local process, content stays on the machine running it — verify your deployment to confirm</li>
+              <li><strong>PageSpace-hosted (default):</strong> included on every plan, currently backed by GLM inference. Standard and pro models are metered separately against your plan&#39;s daily AI call quotas</li>
+              <li><strong>OpenRouter, Google AI (Gemini), Anthropic (Claude), OpenAI, xAI (Grok), Azure OpenAI, GLM, MiniMax:</strong> routed through provider credentials managed by PageSpace. Availability of any individual provider depends on whether it is configured for your deployment</li>
+              <li><strong>Ollama and LM Studio (self-hosted deployments only):</strong> the deployment operator configures the endpoint; prompts and selected context are sent only to that configured server. When the endpoint is a local process, content stays on the machine running it</li>
             </ul>
             <p className="mb-4">
               <strong>Important:</strong> When using AI services, we send your prompts and relevant context to AI providers to generate responses. We do not share your personal information or unrelated workspace data with AI providers.
@@ -106,7 +101,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Access Controls:</strong> Database access is restricted to authorized services and personnel, with all operations logged for security analysis</li>
               <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links</li>
-              <li><strong>API Key Encryption:</strong> Personal AI service API keys are encrypted using AES-256-GCM</li>
+              <li><strong>Secret Encryption:</strong> OAuth tokens for connected integrations and other application secrets are encrypted using AES-256-GCM</li>
               <li><strong>Connection Security:</strong> Database connections use secure protocols</li>
               <li><strong>Content Storage:</strong> Document content and chat messages are stored as plain text in our database to enable full-text search and collaboration features. This means content is not encrypted at rest in the database</li>
             </ul>
@@ -138,7 +133,7 @@ export default function PrivacyPolicy() {
               <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
               <li><strong>Authentication Security:</strong> Passwordless authentication eliminates credential-based attack vectors</li>
               <li><strong>Session Management:</strong> Opaque session tokens with proper expiration and validation</li>
-              <li><strong>API Key Protection:</strong> AES-256-GCM encryption for user-provided AI service keys</li>
+              <li><strong>Secret Protection:</strong> AES-256-GCM encryption for OAuth tokens and stored integration credentials</li>
               <li><strong>Database Access:</strong> Restricted access controls with comprehensive logging of operations, errors, and security events</li>
               <li><strong>Input Validation:</strong> Comprehensive sanitization and validation of user inputs</li>
               <li><strong>Rate Limiting:</strong> Protection against abuse and excessive API usage</li>
