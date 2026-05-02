@@ -229,7 +229,15 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(body.success).toBe(true);
     expect(body.responseText).toBe('Report generated');
     expect(body.toolCallCount).toBe(3);
-    expect(executeWorkflow).toHaveBeenCalledWith(mockWorkflow);
+    expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: mockWorkflow.id,
+      workflowName: mockWorkflow.name,
+      driveId: mockWorkflow.driveId,
+      createdBy: mockWorkflow.createdBy,
+      agentPageId: mockWorkflow.agentPageId,
+      prompt: mockWorkflow.prompt,
+      timezone: mockWorkflow.timezone,
+    }));
   });
 
   test('non-scheduled workflow is treated as not found', async () => {
