@@ -244,8 +244,9 @@ export async function PATCH(
         .returning();
 
       if (adjustedStartAt) {
-        // Only sync triggerAt for triggers that haven't fired yet — i.e. no
-        // workflow_runs row exists for them in running/success state.
+        // Only re-aim triggers that haven't been processed yet — any
+        // workflow_runs row (running, success, error, cancelled) is a
+        // terminal-or-in-flight outcome we shouldn't disturb.
         await tx
           .update(calendarTriggers)
           .set({ triggerAt: adjustedStartAt })
@@ -255,7 +256,6 @@ export async function PATCH(
               SELECT 1 FROM ${workflowRuns}
               WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
                 AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-                AND ${workflowRuns.status} IN ('running', 'success')
             )`,
           ));
       }

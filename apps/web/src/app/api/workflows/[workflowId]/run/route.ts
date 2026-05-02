@@ -79,5 +79,6 @@ export async function POST(
     toolCallCount: result.toolCallCount,
     durationMs: result.durationMs,
     error: result.error,
+    finalizeError: result.finalizeError,
   });
 }

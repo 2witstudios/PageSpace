@@ -39,6 +39,13 @@ export interface WorkflowExecutionResult {
   runId?: string;
   /** True iff the partial unique index rejected the claim (another in-flight run). */
   claimConflict?: boolean;
+  /**
+   * Set when execution itself completed but the end-of-run UPDATE on
+   * workflow_runs failed. The row is left in 'running' state and the
+   * stuck-run sweeper will mark it as 'error' after the timeout. Callers
+   * should surface this so persisted state divergence is observable.
+   */
+  finalizeError?: string;
 }
 
 /**
@@ -110,12 +117,21 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
     };
   }
 
-  await finalizeRun(runId, result);
+  const finalizeError = await finalizeRun(runId, result);
 
-  return { ...result, runId };
+  return finalizeError
+    ? { ...result, runId, finalizeError }
+    : { ...result, runId };
 }
 
-async function finalizeRun(runId: string, result: WorkflowExecutionResult): Promise<void> {
+/**
+ * Update the workflow_runs row with the end-of-run state. Returns the error
+ * message string if the UPDATE failed (caller surfaces it on the result so
+ * persisted-state divergence is observable); returns null on success. The
+ * row is left in 'running' if this fails — the stuck-run sweeper marks it
+ * 'error' after STUCK_RUN_TIMEOUT_MS.
+ */
+async function finalizeRun(runId: string, result: WorkflowExecutionResult): Promise<string | null> {
   try {
     await db
       .update(workflowRuns)
@@ -127,13 +143,14 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
         conversationId: result.conversationId ?? null,
       })
       .where(eq(workflowRuns.id, runId));
+    return null;
   } catch (err) {
-    // The run row stays in 'running' if this fails; the stuck-run sweeper
-    // will reap it after STUCK_RUN_TIMEOUT. Log so the failure isn't silent.
+    const errorMessage = err instanceof Error ? err.message : String(err);
     loggers.api.error('Failed to finalize workflow_run', {
       runId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage,
     });
+    return errorMessage;
   }
 }
 

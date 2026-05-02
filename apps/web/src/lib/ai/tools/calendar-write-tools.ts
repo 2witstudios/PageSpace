@@ -524,8 +524,9 @@ export const calendarWriteTools = {
           .returning();
 
         // Sync trigger row if this is a trigger-linked event and startAt changed.
-        // Only triggers with no in-flight or successful run get re-aimed —
-        // anything already fired keeps its original triggerAt for audit.
+        // Only re-aim triggers that haven't been processed yet — any
+        // workflow_runs row (running/success/error/cancelled) is a terminal-
+        // or-in-flight outcome we shouldn't disturb.
         const meta = updatedEvent.metadata as CalendarTriggerMetadata | null;
         if (meta?.isTrigger && parsedStartAt) {
           await db
@@ -537,7 +538,6 @@ export const calendarWriteTools = {
                 SELECT 1 FROM ${workflowRuns}
                 WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
                   AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-                  AND ${workflowRuns.status} IN ('running', 'success')
               )`,
             ));
         }
@@ -634,21 +634,29 @@ export const calendarWriteTools = {
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
-        // Record a cancelled run for each trigger so the audit trail captures
-        // the deletion. The cron's discovery query (NOT EXISTS over running/
-        // success runs) is what actually prevents re-firing — the cancelled
-        // row is purely informational. If a cron run is already in-flight,
-        // we leave it alone; both rows end up in workflow_runs.
+        // Write a cancelled audit row for each trigger that has not yet been
+        // processed. Skip triggers that already have any workflow_runs row —
+        // appending 'cancelled' alongside an existing success/error/running
+        // row would pollute history and contradict the recorded outcome.
+        // The NOT EXISTS subquery uses workflow_runs_source_lookup_idx for
+        // an index-only check.
         const eventMeta = event.metadata as CalendarTriggerMetadata | null;
         if (eventMeta?.isTrigger) {
-          const triggers = await db
+          const unfiredTriggers = await db
             .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId, triggerAt: calendarTriggers.triggerAt })
             .from(calendarTriggers)
-            .where(eq(calendarTriggers.calendarEventId, eventId));
+            .where(and(
+              eq(calendarTriggers.calendarEventId, eventId),
+              sql`NOT EXISTS (
+                SELECT 1 FROM ${workflowRuns}
+                WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+                  AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+              )`,
+            ));
 
-          if (triggers.length > 0) {
+          if (unfiredTriggers.length > 0) {
             await db.insert(workflowRuns).values(
-              triggers.map(t => ({
+              unfiredTriggers.map(t => ({
                 workflowId: t.workflowId,
                 sourceTable: 'calendarTriggers' as const,
                 sourceId: t.id,

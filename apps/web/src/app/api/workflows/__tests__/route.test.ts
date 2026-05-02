@@ -145,7 +145,9 @@ describe('GET /api/workflows', () => {
     mockValues.mockReturnValue({ returning: mockReturning });
     mockInsert.mockReturnValue({ values: mockValues });
     mockSelect.mockReturnValue({ from: mockFrom });
-    mockFrom.mockReturnValue({ where: mockWhere });
+    // GET path: select(...).from(workflows).leftJoin(LATERAL ...).where(...).orderBy(...)
+    // POST path: select(...).from(pages).where(...) — terminates on where()
+    mockFrom.mockReturnValue({ leftJoin: vi.fn().mockReturnValue({ where: mockWhere }), where: mockWhere });
     mockWhere.mockReturnValue({ orderBy: mockOrderBy });
   });
 

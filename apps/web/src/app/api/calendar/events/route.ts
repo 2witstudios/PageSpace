@@ -117,8 +117,11 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
     triggerType?: string;
   }> = [];
 
-  // Past actual runs come from workflow_runs (joined to enabled workflows in the
-  // requested drives). One row per fire — covers every source domain.
+  // Past actual runs come from workflow_runs (joined to enabled workflows in
+  // the requested drives). One row per fire — covers every source domain.
+  // Skip 'cancelled' rows: those are audit-only markers for triggers that
+  // never executed (event trashed, event deleted), so they shouldn't render
+  // as workflow events on the calendar.
   if (enabledWorkflows.length > 0) {
     const workflowIds = enabledWorkflows.map(w => w.id);
     const workflowMap = new Map(enabledWorkflows.map(w => [w.id, w]));
@@ -132,6 +135,7 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
       .from(workflowRuns)
       .where(and(
         inArray(workflowRuns.workflowId, workflowIds),
+        inArray(workflowRuns.status, ['running', 'success', 'error']),
         gte(workflowRuns.startedAt, startDate),
         lte(workflowRuns.startedAt, endDate),
       ))
@@ -156,15 +160,19 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
     }
   }
 
-  // Future occurrences come from cron expansion.
+  // Future occurrences come from cron expansion. Anchor at max(now, startDate)
+  // so completed runs in the requested window aren't double-emitted (once as
+  // a real run above, once as a scheduled occurrence here). When the window
+  // is fully in the future, this is a no-op vs the original behavior.
+  const expansionAnchor = new Date(Math.max(Date.now(), startDate.getTime()));
   for (const wf of enabledWorkflows) {
     if (wf.triggerType !== 'cron' || !wf.cronExpression) continue;
     try {
       // cron-parser next() is exclusive of currentDate, so back up 1ms
-      // to include occurrences exactly at the range start
+      // to include occurrences exactly at the anchor.
       const interval = CronExpressionParser.parse(wf.cronExpression, {
         tz: wf.timezone,
-        currentDate: new Date(startDate.getTime() - 1),
+        currentDate: new Date(expansionAnchor.getTime() - 1),
         endDate: endDate,
       });
 

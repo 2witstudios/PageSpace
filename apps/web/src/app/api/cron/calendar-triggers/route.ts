@@ -52,8 +52,14 @@ export async function POST(req: Request) {
       ));
 
     // 2. Find pending calendar triggers — those with triggerAt due AND no workflow_runs
-    //    row already running or successful for them. The NOT EXISTS subquery uses
+    //    row in any terminal-or-active state for them. The NOT EXISTS subquery uses
     //    the (sourceTable, sourceId, status) index for a fast lookup.
+    //
+    //    Calendar triggers are one-shot (one row per occurrence); any terminal
+    //    status — success, error, cancelled, or in-flight running — means we
+    //    don't re-fire. This matches the original `status='pending'` semantics
+    //    on the dropped column. Without 'cancelled' here, every cron tick
+    //    re-discovered trashed-event triggers and accumulated audit rows.
     const dueTriggers = await db
       .select()
       .from(calendarTriggers)
@@ -63,7 +69,6 @@ export async function POST(req: Request) {
           SELECT 1 FROM ${workflowRuns}
           WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
             AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-            AND ${workflowRuns.status} IN ('running', 'success')
         )`,
       ))
       .orderBy(asc(calendarTriggers.triggerAt))

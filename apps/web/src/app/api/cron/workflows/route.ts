@@ -74,14 +74,14 @@ export async function POST(req: Request) {
       source: { table: 'cron', id: null, triggerAt: workflow.nextRunAt },
     });
 
+    // advanceNextRunAt throws on failure so the surrounding Promise.allSettled
+    // turns the failure into a recorded error in the response, instead of
+    // leaving a stale nextRunAt in the past — which would make the next
+    // cron tick re-fire the same workflow.
     const advanceNextRunAt = async (workflow: WorkflowRow) => {
       if (!workflow.cronExpression) return;
-      try {
-        const nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
-        await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, workflow.id));
-      } catch {
-        loggers.api.error(`Workflow cron: Failed to compute nextRunAt for ${workflow.id}`);
-      }
+      const nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
+      await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, workflow.id));
     };
 
     let executed = 0;
@@ -116,13 +116,24 @@ export async function POST(req: Request) {
           } else {
             errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
           }
+          if (settled.value.result.finalizeError) {
+            errors.push(`${settled.value.workflow.name}: finalize failed: ${settled.value.result.finalizeError}`);
+          }
         } else {
           totalAttempted++;
           const workflow = batch[j];
           const errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
           loggers.api.error(`Workflow cron: Failed for workflow ${workflow.id}`, { error: errorMsg });
           errors.push(`${workflow.name}: ${errorMsg}`);
-          await advanceNextRunAt(workflow);
+          // Best-effort schedule advance after a fire-or-advance crash —
+          // if this also fails we just log; the next sweep will catch any
+          // workflow that ends up stuck.
+          try {
+            await advanceNextRunAt(workflow);
+          } catch (advanceErr) {
+            const advanceErrorMsg = advanceErr instanceof Error ? advanceErr.message : String(advanceErr);
+            loggers.api.error(`Workflow cron: Failed to advance nextRunAt for ${workflow.id}`, { error: advanceErrorMsg });
+          }
         }
       }
     }

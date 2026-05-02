@@ -51,38 +51,35 @@ export async function GET(request: Request) {
   // for the executor but have no cron expression). Without this gate the
   // backing rows leak into the management UI and become user-editable.
   //
-  // The lastRun* projection joins workflow_runs in a correlated subquery so
-  // each row carries its most recent fire's status/timing for the dashboard.
+  // The lastRun projection uses a single LATERAL subquery so every projected
+  // field comes from the same row — no risk of stitching together different
+  // runs when two share a startedAt — and we make one trip to workflow_runs
+  // per workflow rather than five. Tie-breaker: id DESC for determinism
+  // when two runs share a startedAt timestamp.
   const rows = await db
     .select({
       workflow: workflows,
-      lastRunStatus: sql<string | null>`(
-        SELECT ${workflowRuns.status} FROM ${workflowRuns}
-        WHERE ${workflowRuns.workflowId} = ${workflows.id}
-        ORDER BY ${workflowRuns.startedAt} DESC LIMIT 1
-      )`,
-      lastRunStartedAt: sql<Date | null>`(
-        SELECT ${workflowRuns.startedAt} FROM ${workflowRuns}
-        WHERE ${workflowRuns.workflowId} = ${workflows.id}
-        ORDER BY ${workflowRuns.startedAt} DESC LIMIT 1
-      )`,
-      lastRunEndedAt: sql<Date | null>`(
-        SELECT ${workflowRuns.endedAt} FROM ${workflowRuns}
-        WHERE ${workflowRuns.workflowId} = ${workflows.id}
-        ORDER BY ${workflowRuns.startedAt} DESC LIMIT 1
-      )`,
-      lastRunError: sql<string | null>`(
-        SELECT ${workflowRuns.error} FROM ${workflowRuns}
-        WHERE ${workflowRuns.workflowId} = ${workflows.id}
-        ORDER BY ${workflowRuns.startedAt} DESC LIMIT 1
-      )`,
-      lastRunDurationMs: sql<number | null>`(
-        SELECT ${workflowRuns.durationMs} FROM ${workflowRuns}
-        WHERE ${workflowRuns.workflowId} = ${workflows.id}
-        ORDER BY ${workflowRuns.startedAt} DESC LIMIT 1
-      )`,
+      lastRunStatus: sql<string | null>`"latest_run"."status"`,
+      lastRunStartedAt: sql<Date | null>`"latest_run"."startedAt"`,
+      lastRunEndedAt: sql<Date | null>`"latest_run"."endedAt"`,
+      lastRunError: sql<string | null>`"latest_run"."error"`,
+      lastRunDurationMs: sql<number | null>`"latest_run"."durationMs"`,
     })
     .from(workflows)
+    .leftJoin(
+      sql`LATERAL (
+        SELECT ${workflowRuns.status} AS "status",
+               ${workflowRuns.startedAt} AS "startedAt",
+               ${workflowRuns.endedAt} AS "endedAt",
+               ${workflowRuns.error} AS "error",
+               ${workflowRuns.durationMs} AS "durationMs"
+        FROM ${workflowRuns}
+        WHERE ${workflowRuns.workflowId} = ${workflows.id}
+        ORDER BY ${workflowRuns.startedAt} DESC, ${workflowRuns.id} DESC
+        LIMIT 1
+      ) AS "latest_run"`,
+      sql`TRUE`,
+    )
     .where(and(
       eq(workflows.driveId, driveId),
       eq(workflows.triggerType, MANAGEABLE_TRIGGER_TYPE),
