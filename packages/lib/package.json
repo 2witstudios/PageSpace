@@ -176,6 +176,16 @@
       "import": "./dist/services/validated-service-token.js",
       "require": "./dist/services/validated-service-token.js"
     },
+    "./services/attachment-upload": {
+      "types": "./dist/services/attachment-upload.d.ts",
+      "import": "./dist/services/attachment-upload.js",
+      "require": "./dist/services/attachment-upload.js"
+    },
+    "./services/attachment-upload-repository": {
+      "types": "./dist/services/attachment-upload-repository.d.ts",
+      "import": "./dist/services/attachment-upload-repository.js",
+      "require": "./dist/services/attachment-upload-repository.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
@@ -724,6 +734,12 @@
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"
+      ],
+      "services/attachment-upload": [
+        "./dist/services/attachment-upload.d.ts"
+      ],
+      "services/attachment-upload-repository": [
+        "./dist/services/attachment-upload-repository.d.ts"
       ],
       "services/date-utils": [
         "./dist/services/date-utils.d.ts"

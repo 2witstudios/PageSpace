@@ -1075,7 +1075,7 @@ export function logFileActivity(
     fileName?: string;
     fileType?: string;
     fileSize?: number;
-    driveId: string;
+    driveId: string | null;
     pageId?: string;
   },
   options?: {
