@@ -1,9 +1,10 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, sql } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -243,15 +244,20 @@ export async function PATCH(
         .returning();
 
       if (adjustedStartAt) {
+        // Only re-aim triggers that haven't been processed yet — any
+        // workflow_runs row (running, success, error, cancelled) is a
+        // terminal-or-in-flight outcome we shouldn't disturb.
         await tx
           .update(calendarTriggers)
           .set({ triggerAt: adjustedStartAt })
-          .where(
-            and(
-              eq(calendarTriggers.calendarEventId, eventId),
-              eq(calendarTriggers.status, 'pending'),
-            )
-          );
+          .where(and(
+            eq(calendarTriggers.calendarEventId, eventId),
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${workflowRuns}
+              WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+                AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+            )`,
+          ));
       }
 
       return result;

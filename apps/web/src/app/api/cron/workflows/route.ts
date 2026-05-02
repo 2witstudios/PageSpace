@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, lte, ne, inArray } from '@pagespace/db/operators'
+import { eq, and, lte, sql } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
-const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const STUCK_RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_WORKFLOWS = 5;
 
 export async function POST(req: Request) {
@@ -18,42 +19,38 @@ export async function POST(req: Request) {
   try {
     const now = new Date();
 
-    // Reset stuck cron workflows (running for >10 min) and advance nextRunAt
-    // so they aren't immediately re-claimed in the same cron invocation.
-    const stuckCutoff = new Date(now.getTime() - STUCK_WORKFLOW_TIMEOUT_MS);
-    const stuckWorkflows = await db
-      .update(workflows)
-      .set({ lastRunStatus: 'error', lastRunError: 'Workflow timed out (stuck in running state)' })
-      .where(
-        and(
-          eq(workflows.triggerType, 'cron'),
-          eq(workflows.lastRunStatus, 'running'),
-          lte(workflows.lastRunAt, stuckCutoff)
-        )
-      )
-      .returning();
+    // 1. Reset stuck workflow_runs (running > 10 min). Operates on workflow_runs
+    //    only — trigger / workflow tables no longer carry per-fire state, so the
+    //    sweeper has one place to look across every workflow domain.
+    const stuckCutoff = new Date(now.getTime() - STUCK_RUN_TIMEOUT_MS);
+    await db
+      .update(workflowRuns)
+      .set({
+        status: 'error',
+        endedAt: now,
+        error: 'Workflow run timed out (stuck in running state)',
+      })
+      .where(and(
+        eq(workflowRuns.status, 'running'),
+        lte(workflowRuns.startedAt, stuckCutoff),
+      ));
 
-    for (const wf of stuckWorkflows) {
-      if (wf.cronExpression) {
-        try {
-          const nextRunAt = getNextRunDate(wf.cronExpression, wf.timezone);
-          await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, wf.id));
-        } catch { /* invalid cron — leave nextRunAt as-is */ }
-      }
-    }
-
-    // Discover which cron workflows are due
+    // 2. Discover cron workflows that are due AND don't have an in-flight run.
+    //    The NOT EXISTS subquery uses the running_claim partial unique index for
+    //    a fast lookup — no scan of historical workflow_runs rows.
     const dueWorkflows = await db
       .select()
       .from(workflows)
-      .where(
-        and(
-          eq(workflows.isEnabled, true),
-          eq(workflows.triggerType, 'cron'),
-          lte(workflows.nextRunAt, now),
-          ne(workflows.lastRunStatus, 'running')
-        )
-      );
+      .where(and(
+        eq(workflows.isEnabled, true),
+        eq(workflows.triggerType, 'cron'),
+        lte(workflows.nextRunAt, now),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.workflowId} = ${workflows.id}
+            AND ${workflowRuns.status} = 'running'
+        )`,
+      ));
 
     if (dueWorkflows.length === 0) {
       audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed: 0, failed: 0 } });
@@ -74,104 +71,81 @@ export async function POST(req: Request) {
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
       instructionPageId: workflow.instructionPageId,
       timezone: workflow.timezone,
+      source: { table: 'cron', id: null, triggerAt: workflow.nextRunAt },
     });
 
-    const executeOne = async (workflow: WorkflowRow) => {
-      const result = await executeWorkflow(toExecutionInput(workflow));
-
-      let nextRunAt: Date | undefined;
-      if (workflow.cronExpression) {
-        try {
-          nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
-        } catch {
-          loggers.api.error(`Workflow cron: Failed to compute nextRunAt for ${workflow.id}`);
-        }
-      }
-
-      await db
-        .update(workflows)
-        .set({
-          lastRunAt: new Date(),
-          lastRunStatus: result.success ? 'success' : 'error',
-          lastRunError: result.error || null,
-          lastRunDurationMs: result.durationMs,
-          ...(nextRunAt ? { nextRunAt } : {}),
-        })
-        .where(eq(workflows.id, workflow.id));
-
-      return { workflow, result };
+    // advanceNextRunAt throws on failure so the surrounding Promise.allSettled
+    // turns the failure into a recorded error in the response, instead of
+    // leaving a stale nextRunAt in the past — which would make the next
+    // cron tick re-fire the same workflow.
+    const advanceNextRunAt = async (workflow: WorkflowRow) => {
+      if (!workflow.cronExpression) return;
+      const nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
+      await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, workflow.id));
     };
 
     let executed = 0;
-    let totalClaimed = 0;
+    let totalAttempted = 0;
     const errors: string[] = [];
 
     for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
       const batch = dueWorkflows.slice(i, i + MAX_CONCURRENT_WORKFLOWS);
-      const batchIds = batch.map(w => w.id);
 
-      // Atomically claim this batch (UPDATE...RETURNING prevents double-execution).
-      // Re-check eligibility predicates to guard against state changes between discovery and claim.
-      const claimed = await db
-        .update(workflows)
-        .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-        .where(
-          and(
-            inArray(workflows.id, batchIds),
-            eq(workflows.isEnabled, true),
-            eq(workflows.triggerType, 'cron'),
-            lte(workflows.nextRunAt, now),
-            ne(workflows.lastRunStatus, 'running')
-          )
-        )
-        .returning();
-
-      if (claimed.length === 0) continue;
-      totalClaimed += claimed.length;
-
-      const batchResults = await Promise.allSettled(claimed.map(executeOne));
+      const batchResults = await Promise.allSettled(
+        batch.map(async (workflow) => {
+          // The atomic claim is the workflow_runs partial unique index inside
+          // the executor. If a peer cron invocation already claimed this
+          // workflow, claimConflict comes back true — we leave nextRunAt
+          // alone so the running fire's natural completion governs the
+          // next schedule advance.
+          const result = await executeWorkflow(toExecutionInput(workflow));
+          if (!result.claimConflict) {
+            await advanceNextRunAt(workflow);
+          }
+          return { workflow, result };
+        }),
+      );
 
       for (let j = 0; j < batchResults.length; j++) {
         const settled = batchResults[j];
         if (settled.status === 'fulfilled') {
+          if (settled.value.result.claimConflict) continue;
+          totalAttempted++;
           if (settled.value.result.success) {
             executed++;
           } else {
             errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
           }
+          if (settled.value.result.finalizeError) {
+            errors.push(`${settled.value.workflow.name}: finalize failed: ${settled.value.result.finalizeError}`);
+          }
         } else {
-          const workflow = claimed[j];
+          totalAttempted++;
+          const workflow = batch[j];
           const errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
           loggers.api.error(`Workflow cron: Failed for workflow ${workflow.id}`, { error: errorMsg });
           errors.push(`${workflow.name}: ${errorMsg}`);
-
-          let nextRunAt: Date | undefined;
-          if (workflow.cronExpression) {
-            try {
-              nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
-            } catch { /* invalid cron — leave nextRunAt as-is */ }
+          // Best-effort schedule advance after a fire-or-advance crash —
+          // if this also fails we just log; the next sweep will catch any
+          // workflow that ends up stuck.
+          try {
+            await advanceNextRunAt(workflow);
+          } catch (advanceErr) {
+            const advanceErrorMsg = advanceErr instanceof Error ? advanceErr.message : String(advanceErr);
+            loggers.api.error(`Workflow cron: Failed to advance nextRunAt for ${workflow.id}`, { error: advanceErrorMsg });
           }
-
-          await db
-            .update(workflows)
-            .set({
-              lastRunStatus: 'error',
-              lastRunError: errorMsg,
-              ...(nextRunAt ? { nextRunAt } : {}),
-            })
-            .where(eq(workflows.id, workflow.id));
         }
       }
     }
 
-    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalClaimed}`);
+    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}`);
 
     audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
-      total: totalClaimed,
+      total: totalAttempted,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {

@@ -63,12 +63,30 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
   and: vi.fn((...conds) => ({ op: 'and', conds })),
   isNotNull: vi.fn((field) => ({ op: 'isNotNull', field })),
+  sql: vi.fn(() => ({ sql: 'last-run-subquery' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
-  workflows: { driveId: 'driveId', createdAt: 'createdAt', triggerType: 'triggerType', cronExpression: 'cronExpression' },
+  workflows: {
+    id: 'id',
+    driveId: 'driveId',
+    createdAt: 'createdAt',
+    triggerType: 'triggerType',
+    cronExpression: 'cronExpression',
+  },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    status: 'status',
+    startedAt: 'startedAt',
+    endedAt: 'endedAt',
+    error: 'error',
+    durationMs: 'durationMs',
+  },
 }));
 
 import { GET, POST } from '../route';
@@ -127,7 +145,9 @@ describe('GET /api/workflows', () => {
     mockValues.mockReturnValue({ returning: mockReturning });
     mockInsert.mockReturnValue({ values: mockValues });
     mockSelect.mockReturnValue({ from: mockFrom });
-    mockFrom.mockReturnValue({ where: mockWhere });
+    // GET path: select(...).from(workflows).leftJoin(LATERAL ...).where(...).orderBy(...)
+    // POST path: select(...).from(pages).where(...) — terminates on where()
+    mockFrom.mockReturnValue({ leftJoin: vi.fn().mockReturnValue({ where: mockWhere }), where: mockWhere });
     mockWhere.mockReturnValue({ orderBy: mockOrderBy });
   });
 
@@ -175,9 +195,28 @@ describe('GET /api/workflows', () => {
     expect(body.error).toBe('Only drive owners and admins can manage workflows');
   });
 
-  it('should return workflow list on success', async () => {
-    const mockWorkflows = [{ id: 'wf_1', name: 'Daily Report' }];
-    mockOrderBy.mockResolvedValue(mockWorkflows);
+  it('should return workflow list with denormalized lastRun on success', async () => {
+    const startedAt = new Date('2026-04-01T09:00:00Z');
+    const endedAt = new Date('2026-04-01T09:00:05Z');
+    // Each row from the projection: { workflow, lastRunStatus, lastRunStartedAt, ... }
+    mockOrderBy.mockResolvedValue([
+      {
+        workflow: { id: 'wf_1', name: 'Daily Report', driveId: mockDriveId },
+        lastRunStatus: 'success',
+        lastRunStartedAt: startedAt,
+        lastRunEndedAt: endedAt,
+        lastRunError: null,
+        lastRunDurationMs: 5000,
+      },
+      {
+        workflow: { id: 'wf_2', name: 'Weekly Sweep', driveId: mockDriveId },
+        lastRunStatus: null,
+        lastRunStartedAt: null,
+        lastRunEndedAt: null,
+        lastRunError: null,
+        lastRunDurationMs: null,
+      },
+    ]);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isOwner: true,
       isMember: true,
@@ -189,7 +228,21 @@ describe('GET /api/workflows', () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual(mockWorkflows);
+    expect(body).toHaveLength(2);
+    expect(body[0]).toEqual({
+      id: 'wf_1',
+      name: 'Daily Report',
+      driveId: mockDriveId,
+      lastRun: {
+        status: 'success',
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        error: null,
+        durationMs: 5000,
+      },
+    });
+    // Workflow with no runs surfaces lastRun: null rather than a sentinel row.
+    expect(body[1].lastRun).toBeNull();
   });
 
   it('should filter out backing workflows (cronExpression IS NOT NULL guard)', async () => {

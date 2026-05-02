@@ -80,7 +80,9 @@ describe('createCalendarTriggerWorkflow', () => {
     expect(trgValues.calendarEventId).toBe('evt-1');
     expect(trgValues.workflowId).toBe('wf-1');
     expect(trgValues.scheduledById).toBe('user-1');
-    expect(trgValues.status).toBe('pending');
+    // calendar_triggers no longer carries a per-fire status column — that
+    // state lives on workflow_runs and gets written by the executor.
+    expect(trgValues.status).toBeUndefined();
   });
 
   it('falls back to a stock prompt when the caller passes none', async () => {

@@ -5,7 +5,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
+import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
@@ -99,7 +99,8 @@ export async function POST(req: Request) {
               isEnabled: false,
               lastFireError: 'Linked workflow not found',
             }).where(eq(taskTriggers.id, trigger.id));
-            return { trigger, result: { success: false, durationMs: 0, error: 'Linked workflow not found' } as const };
+            const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: 'Linked workflow not found' };
+            return { trigger, result: skippedResult };
           }
 
           // Pre-execution skip for due_date triggers whose task became ineligible
@@ -118,7 +119,8 @@ export async function POST(req: Request) {
                 isEnabled: false,
                 lastFireError: skipReason,
               }).where(eq(taskTriggers.id, trigger.id));
-              return { trigger, result: { success: false, durationMs: 0, error: skipReason } as const };
+              const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
+              return { trigger, result: skippedResult };
             }
           }
 
@@ -132,6 +134,7 @@ export async function POST(req: Request) {
             contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
             instructionPageId: workflow.instructionPageId,
             timezone: workflow.timezone,
+            source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
           };
 
@@ -153,6 +156,9 @@ export async function POST(req: Request) {
             executed++;
           } else {
             errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
+          }
+          if (settled.value.result.finalizeError) {
+            errors.push(`task-trigger-${settled.value.trigger.id}: finalize failed: ${settled.value.result.finalizeError}`);
           }
         } else {
           const trigger = claimed[j];
