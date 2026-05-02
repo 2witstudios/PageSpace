@@ -149,6 +149,10 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       () => (remoteStreams ?? []).filter((s) => !messageIds.has(s.messageId)),
       [remoteStreams, messageIds]
     );
+    const hasRemoteStream = useMemo(
+      () => (remoteStreams ?? []).some((s) => !s.isOwn),
+      [remoteStreams]
+    );
 
     // Memoized render function for virtualized list
     const renderMessage = useCallback((message: UIMessage, _idx: number) => (
@@ -250,7 +254,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             />
           ))}
 
-          {isStreaming && !isLoading && (
+          {(isStreaming || hasRemoteStream) && !isLoading && (
             <StreamingIndicator />
           )}
         </ConversationContent>
