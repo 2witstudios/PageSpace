@@ -6,6 +6,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { isFileOrphaned } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
+import { SYSTEM_SERVICE_USER_ID } from '@pagespace/lib/services/validated-service-token';
 import type { EnforcedAuthContext } from '../middleware/auth';
 import { getLinksForFile, type FileLink } from './file-links';
 
@@ -149,7 +150,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     // The system path is the only way to delete a null-driveId orphan (e.g.
     // a DM-only attachment with no conversation linkage left).
     const isSystemFileBoundDelete =
-      auth.userId === 'system' &&
+      auth.userId === SYSTEM_SERVICE_USER_ID &&
       auth.resourceBinding?.type === 'file' &&
       auth.resourceBinding.id.toLowerCase() === normalizedHash;
 
@@ -176,15 +177,13 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
         contentHash: normalizedHash,
         fileDriveId: context.fileDriveId ?? null,
       });
+    } else if (!context.fileDriveId) {
+      loggers.security.warn('delete-file denied: orphan file with no drive association', {
+        userId: auth.userId,
+        contentHash: normalizedHash,
+      });
+      throw new DeleteFileAuthorizationError();
     } else {
-      if (!context.fileDriveId) {
-        loggers.security.warn('delete-file denied: orphan file with no drive association', {
-          userId: auth.userId,
-          contentHash: normalizedHash,
-        });
-        throw new DeleteFileAuthorizationError();
-      }
-
       const drivePerms = await getUserDrivePermissions(auth.userId, context.fileDriveId);
       if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
         loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {

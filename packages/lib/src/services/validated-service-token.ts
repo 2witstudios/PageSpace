@@ -510,6 +510,11 @@ export const SYSTEM_SERVICE_USER_ID = 'system' as const;
  * `.invalid` TLD so it can never be delivered to or registered through any
  * external auth flow. This user has no passkeys, no OAuth IDs, and no magic
  * link path, so even though the row exists nobody can authenticate as it.
+ *
+ * Idempotent on every call (ON CONFLICT DO NOTHING is a sub-millisecond
+ * no-op when the row exists). Not cached at module scope so the bootstrap
+ * always re-runs in-process — keeps the truth source in PostgreSQL rather
+ * than in-memory state that could disagree with the DB across deploys.
  */
 async function ensureSystemPrincipal(): Promise<void> {
   await db

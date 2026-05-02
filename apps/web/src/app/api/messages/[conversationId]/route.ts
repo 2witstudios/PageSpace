@@ -65,17 +65,18 @@ export async function GET(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await dmMessageRepository.markActiveMessagesRead({
-      conversationId,
-      otherUserId,
-      readAt,
-    });
-
-    await dmMessageRepository.updateConversationLastRead({
-      conversationId,
-      participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
-      readAt,
-    });
+    await Promise.all([
+      dmMessageRepository.markActiveMessagesRead({
+        conversationId,
+        otherUserId,
+        readAt,
+      }),
+      dmMessageRepository.updateConversationLastRead({
+        conversationId,
+        participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
+        readAt,
+      }),
+    ]);
 
     // Show oldest first in the response payload.
     messages.reverse();
@@ -335,17 +336,18 @@ export async function PATCH(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await dmMessageRepository.markActiveMessagesRead({
-      conversationId,
-      otherUserId,
-      readAt,
-    });
-
-    await dmMessageRepository.updateConversationLastRead({
-      conversationId,
-      participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
-      readAt,
-    });
+    await Promise.all([
+      dmMessageRepository.markActiveMessagesRead({
+        conversationId,
+        otherUserId,
+        readAt,
+      }),
+      dmMessageRepository.updateConversationLastRead({
+        conversationId,
+        participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
+        readAt,
+      }),
+    ]);
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
