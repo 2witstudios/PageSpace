@@ -30,6 +30,17 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: vi.fn(),
 }));
 
+// --- Audit + logger seams -------------------------------------------------------
+const mockAuditRequest = vi.fn();
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
+}));
+
 // --- Service seam (the single function the wrapper must delegate to) ------------
 const mockProcessAttachmentUpload = vi.fn();
 vi.mock('@pagespace/lib/services/attachment-upload', () => ({
@@ -121,12 +132,35 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
   });
 
-  it('returns 403 when the caller lacks edit permission (without calling the service)', async () => {
+  it('returns 403 and emits authz.access.denied audit when the caller lacks edit permission', async () => {
     vi.mocked(canUserEditPage).mockResolvedValue(false);
 
     const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
 
     expect(res.status).toBe(403);
+    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        userId: 'user-1',
+        resourceType: 'channel_upload',
+        resourceId: 'page-1',
+      })
+    );
+  });
+
+  it('returns 500 JSON when an unexpected wrapper-stage error is thrown', async () => {
+    // Simulate an unexpected DB failure during the page lookup. The wrapper must
+    // catch it and return the structured `{ error }` JSON contract — not bubble
+    // a Next.js framework HTML error.
+    mockPagesFindFirst.mockRejectedValue(new Error('boom'));
+
+    const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toBe('Failed to upload file');
     expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
   });
 

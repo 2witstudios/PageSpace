@@ -281,7 +281,6 @@ export async function processAttachmentUpload(
 
     await updateStorageUsage(userId, file.size, {
       driveId: target.type === 'page' ? target.driveId : undefined,
-      pageId: target.type === 'page' ? target.pageId : undefined,
       eventType: 'upload',
     });
 
@@ -315,10 +314,9 @@ export async function processAttachmentUpload(
       eventType: 'data.write',
       userId,
       resourceType: 'file',
-      resourceId: contentHash,
+      resourceId: target.type === 'page' ? target.pageId : target.conversationId,
       details: {
         source: target.type === 'page' ? 'channel-upload' : 'dm-upload',
-        targetType: target.type,
       },
     });
 
