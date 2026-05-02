@@ -29,6 +29,9 @@ const mockFindConversationForParticipant = vi.fn();
 const mockValidateAttachmentForDm = vi.fn();
 const mockInsertDmMessage = vi.fn();
 const mockUpdateConversationLastMessage = vi.fn();
+const mockListActiveMessages = vi.fn();
+const mockMarkActiveMessagesRead = vi.fn();
+const mockUpdateConversationLastRead = vi.fn();
 vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) =>
@@ -38,6 +41,11 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
     insertDmMessage: (...args: unknown[]) => mockInsertDmMessage(...args),
     updateConversationLastMessage: (...args: unknown[]) =>
       mockUpdateConversationLastMessage(...args),
+    listActiveMessages: (...args: unknown[]) => mockListActiveMessages(...args),
+    markActiveMessagesRead: (...args: unknown[]) =>
+      mockMarkActiveMessagesRead(...args),
+    updateConversationLastRead: (...args: unknown[]) =>
+      mockUpdateConversationLastRead(...args),
   },
 }));
 
@@ -71,7 +79,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 }));
 
 // --- Imports under test (must come after vi.mock blocks) -----------------------
-import { POST } from '../route';
+import { POST, GET, PATCH } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -544,5 +552,162 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(401);
       expect(mockInsertDmMessage).not.toHaveBeenCalled();
     });
+  });
+});
+
+// =====================================================================
+// GET / PATCH (mark-as-read) — soft-delete filtering (PR 7)
+// =====================================================================
+
+function makeGetRequest(qs = ''): Request {
+  return new Request(
+    `http://localhost/api/messages/${CONVERSATION_ID}${qs}`,
+    { method: 'GET' }
+  );
+}
+
+function makePatchRequest(): Request {
+  return new Request(
+    `http://localhost/api/messages/${CONVERSATION_ID}`,
+    { method: 'PATCH' }
+  );
+}
+
+const callGet = (qs = '') =>
+  GET(makeGetRequest(qs), {
+    params: Promise.resolve({ conversationId: CONVERSATION_ID }),
+  });
+
+const callPatch = () =>
+  PATCH(makePatchRequest(), {
+    params: Promise.resolve({ conversationId: CONVERSATION_ID }),
+  });
+
+const liveMessage = (overrides: Partial<{
+  id: string;
+  senderId: string;
+  content: string;
+}> = {}) => mockInsertedRow({
+  id: overrides.id ?? 'msg_live',
+  senderId: overrides.senderId ?? RECIPIENT_ID,
+  content: overrides.content ?? 'still here',
+});
+
+describe('GET /api/messages/[conversationId]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+    mockListActiveMessages.mockResolvedValue([]);
+    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    mockUpdateConversationLastRead.mockResolvedValue(undefined);
+  });
+
+  it('GET_messages_filtersOutSoftDeleted_byDelegatingToListActiveMessages', async () => {
+    // Boundary obligation: the route MUST call the active-only seam, so
+    // soft-deleted rows never enter the response payload. The repo is the
+    // single point that enforces isActive=true at the SQL layer.
+    const live = liveMessage();
+    mockListActiveMessages.mockResolvedValue([live]);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockListActiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        limit: 50,
+      })
+    );
+    const body = await res.json();
+    expect(body.messages.map((m: { id: string }) => m.id)).toEqual([live.id]);
+  });
+
+  it('GET_messages_withBeforeQuery_passesParsedDate_toListActiveMessages', async () => {
+    const before = '2026-04-30T00:00:00.000Z';
+    await callGet(`?before=${encodeURIComponent(before)}`);
+
+    expect(mockListActiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        before: new Date(before),
+      })
+    );
+  });
+
+  it('GET_messages_softDeletedAreNotMarkedRead_byDelegatingToMarkActiveMessagesRead', async () => {
+    // The mark-as-read pass must reuse the active-only seam so soft-deleted
+    // rows are not silently flipped to isRead=true (which would corrupt unread
+    // counts and make a soft-deleted message look like it was acknowledged).
+    await callGet();
+
+    expect(mockMarkActiveMessagesRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        otherUserId: RECIPIENT_ID,
+      })
+    );
+  });
+
+  it('GET_messages_updatesParticipantLastReadTimestamp_forCallerSide', async () => {
+    await callGet();
+
+    expect(mockUpdateConversationLastRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        participantSide: 'participant1',
+      })
+    );
+  });
+
+  it('GET_messages_whenNotParticipant_returns404', async () => {
+    mockFindConversationForParticipant.mockResolvedValue(null);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(404);
+    expect(mockListActiveMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    mockUpdateConversationLastRead.mockResolvedValue(undefined);
+  });
+
+  it('PATCH_markAsRead_skipsSoftDeleted_byDelegatingToMarkActiveMessagesRead', async () => {
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkActiveMessagesRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        otherUserId: RECIPIENT_ID,
+      })
+    );
+  });
+
+  it('PATCH_markAsRead_updatesCallerLastReadTimestamp', async () => {
+    await callPatch();
+
+    expect(mockUpdateConversationLastRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        participantSide: 'participant1',
+      })
+    );
+  });
+
+  it('PATCH_markAsRead_whenNotParticipant_returns404', async () => {
+    mockFindConversationForParticipant.mockResolvedValue(null);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(404);
+    expect(mockMarkActiveMessagesRead).not.toHaveBeenCalled();
   });
 });

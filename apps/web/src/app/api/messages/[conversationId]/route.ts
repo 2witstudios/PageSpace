@@ -1,7 +1,4 @@
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, lt } from '@pagespace/db/operators'
-import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -33,22 +30,12 @@ export async function GET(
       min: 1,
       max: 100,
     });
-    const before = searchParams.get('before'); // For pagination
+    const beforeParam = searchParams.get('before');
 
-    // Verify user is participant in conversation
-    const [conversation] = await db
-      .select()
-      .from(dmConversations)
-      .where(
-        and(
-          eq(dmConversations.id, conversationId),
-          or(
-            eq(dmConversations.participant1Id, userId),
-            eq(dmConversations.participant2Id, userId)
-          )
-        )
-      )
-      .limit(1);
+    const conversation = await dmMessageRepository.findConversationForParticipant(
+      conversationId,
+      userId
+    );
 
     if (!conversation) {
       return NextResponse.json(
@@ -57,58 +44,30 @@ export async function GET(
       );
     }
 
-    // Build query for messages
-    const messagesQuery = before
-      ? db
-          .select()
-          .from(directMessages)
-          .where(
-            and(
-              eq(directMessages.conversationId, conversationId),
-              lt(directMessages.createdAt, new Date(before))
-            )
-          )
-          .orderBy(desc(directMessages.createdAt))
-          .limit(limit)
-      : db
-          .select()
-          .from(directMessages)
-          .where(eq(directMessages.conversationId, conversationId))
-          .orderBy(desc(directMessages.createdAt))
-          .limit(limit);
+    const messages = await dmMessageRepository.listActiveMessages({
+      conversationId,
+      limit,
+      before: beforeParam ? new Date(beforeParam) : undefined,
+    });
 
-    const messages = await messagesQuery;
-
-    // Mark messages as read
     const otherUserId = conversation.participant1Id === userId
       ? conversation.participant2Id
       : conversation.participant1Id;
 
-    await db
-      .update(directMessages)
-      .set({
-        isRead: true,
-        readAt: new Date(),
-      })
-      .where(
-        and(
-          eq(directMessages.conversationId, conversationId),
-          eq(directMessages.senderId, otherUserId),
-          eq(directMessages.isRead, false)
-        )
-      );
+    const readAt = new Date();
+    await dmMessageRepository.markActiveMessagesRead({
+      conversationId,
+      otherUserId,
+      readAt,
+    });
 
-    // Update last read timestamp for conversation
-    const updateField = conversation.participant1Id === userId
-      ? { participant1LastRead: new Date() }
-      : { participant2LastRead: new Date() };
+    await dmMessageRepository.updateConversationLastRead({
+      conversationId,
+      participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
+      readAt,
+    });
 
-    await db
-      .update(dmConversations)
-      .set(updateField)
-      .where(eq(dmConversations.id, conversationId));
-
-    // Reverse messages to show oldest first
+    // Show oldest first in the response payload.
     messages.reverse();
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
@@ -349,20 +308,10 @@ export async function PATCH(
 
     const { conversationId } = await context.params;
 
-    // Verify user is participant in conversation
-    const [conversation] = await db
-      .select()
-      .from(dmConversations)
-      .where(
-        and(
-          eq(dmConversations.id, conversationId),
-          or(
-            eq(dmConversations.participant1Id, userId),
-            eq(dmConversations.participant2Id, userId)
-          )
-        )
-      )
-      .limit(1);
+    const conversation = await dmMessageRepository.findConversationForParticipant(
+      conversationId,
+      userId
+    );
 
     if (!conversation) {
       return NextResponse.json(
@@ -375,30 +324,18 @@ export async function PATCH(
       ? conversation.participant2Id
       : conversation.participant1Id;
 
-    // Mark all unread messages from other user as read
-    await db
-      .update(directMessages)
-      .set({
-        isRead: true,
-        readAt: new Date(),
-      })
-      .where(
-        and(
-          eq(directMessages.conversationId, conversationId),
-          eq(directMessages.senderId, otherUserId),
-          eq(directMessages.isRead, false)
-        )
-      );
+    const readAt = new Date();
+    await dmMessageRepository.markActiveMessagesRead({
+      conversationId,
+      otherUserId,
+      readAt,
+    });
 
-    // Update last read timestamp for conversation
-    const updateField = conversation.participant1Id === userId
-      ? { participant1LastRead: new Date() }
-      : { participant2LastRead: new Date() };
-
-    await db
-      .update(dmConversations)
-      .set(updateField)
-      .where(eq(dmConversations.id, conversationId));
+    await dmMessageRepository.updateConversationLastRead({
+      conversationId,
+      participantSide: conversation.participant1Id === userId ? 'participant1' : 'participant2',
+      readAt,
+    });
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
