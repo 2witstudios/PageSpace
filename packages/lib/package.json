@@ -186,6 +186,11 @@
       "import": "./dist/services/attachment-upload-repository.js",
       "require": "./dist/services/attachment-upload-repository.js"
     },
+    "./services/dm-message-repository": {
+      "types": "./dist/services/dm-message-repository.d.ts",
+      "import": "./dist/services/dm-message-repository.js",
+      "require": "./dist/services/dm-message-repository.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
@@ -740,6 +745,9 @@
       ],
       "services/attachment-upload-repository": [
         "./dist/services/attachment-upload-repository.d.ts"
+      ],
+      "services/dm-message-repository": [
+        "./dist/services/dm-message-repository.d.ts"
       ],
       "services/date-utils": [
         "./dist/services/date-utils.d.ts"

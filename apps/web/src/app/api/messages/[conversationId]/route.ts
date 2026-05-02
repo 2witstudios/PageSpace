@@ -8,8 +8,10 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import type { AttachmentMeta } from '@pagespace/lib/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -121,6 +123,34 @@ export async function GET(
   }
 }
 
+function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
+  if (typeof value !== 'object' || value === null) return false;
+  const m = value as Record<string, unknown>;
+  return (
+    typeof m.originalName === 'string' &&
+    typeof m.size === 'number' &&
+    typeof m.mimeType === 'string' &&
+    typeof m.contentHash === 'string'
+  );
+}
+
+function buildLastMessagePreview(
+  content: string,
+  attachmentMeta: AttachmentMeta | null
+): string {
+  const trimmed = content.trim();
+  if (trimmed.length > 0) {
+    return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
+  }
+  if (attachmentMeta) {
+    const isImage = attachmentMeta.mimeType.startsWith('image/');
+    return isImage
+      ? `[image: ${attachmentMeta.originalName}]`
+      : `[file: ${attachmentMeta.originalName}]`;
+  }
+  return '';
+}
+
 // POST /api/messages/[conversationId] - Send a message
 export async function POST(
   request: Request,
@@ -131,7 +161,6 @@ export async function POST(
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Check email verification
     const emailVerified = await isEmailVerified(userId);
     if (!emailVerified) {
       return NextResponse.json(
@@ -144,30 +173,46 @@ export async function POST(
     }
 
     const { conversationId } = await context.params;
-    const body = await request.json();
-    const { content } = body;
+    const body = await request.json() as {
+      content?: unknown;
+      fileId?: unknown;
+      attachmentMeta?: unknown;
+    };
 
-    if (!content || content.trim().length === 0) {
+    const rawContent = typeof body.content === 'string' ? body.content : '';
+    const content = rawContent.trim().length > 0 ? rawContent : '';
+    const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
+    const rawAttachmentMeta = body.attachmentMeta ?? null;
+
+    if (content.length === 0 && !fileId) {
       return NextResponse.json(
-        { error: 'Message content is required' },
+        { error: 'Message content or file is required' },
         { status: 400 }
       );
     }
 
-    // Verify user is participant in conversation
-    const [conversation] = await db
-      .select()
-      .from(dmConversations)
-      .where(
-        and(
-          eq(dmConversations.id, conversationId),
-          or(
-            eq(dmConversations.participant1Id, userId),
-            eq(dmConversations.participant2Id, userId)
-          )
-        )
-      )
-      .limit(1);
+    if (fileId && rawAttachmentMeta === null) {
+      return NextResponse.json(
+        { error: 'attachmentMeta required when fileId is provided' },
+        { status: 400 }
+      );
+    }
+
+    let attachmentMeta: AttachmentMeta | null = null;
+    if (fileId) {
+      if (!isValidAttachmentMeta(rawAttachmentMeta)) {
+        return NextResponse.json(
+          { error: 'Invalid attachmentMeta shape' },
+          { status: 400 }
+        );
+      }
+      attachmentMeta = rawAttachmentMeta;
+    }
+
+    const conversation = await dmMessageRepository.findConversationForParticipant(
+      conversationId,
+      userId
+    );
 
     if (!conversation) {
       return NextResponse.json(
@@ -176,32 +221,67 @@ export async function POST(
       );
     }
 
-    // Create the message
-    const [newMessage] = await db
-      .insert(directMessages)
-      .values({
+    if (fileId) {
+      const validation = await dmMessageRepository.validateAttachmentForDm({
+        fileId,
         conversationId,
         senderId: userId,
-        content,
-      })
-      .returning();
+      });
 
-    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: newMessage.id });
+      if (validation.kind === 'not_found') {
+        return NextResponse.json({ error: 'File not found' }, { status: 404 });
+      }
+      if (validation.kind === 'wrong_owner') {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'dm_message',
+          resourceId: fileId,
+          details: { reason: 'file_owner_mismatch', conversationId },
+        });
+        return NextResponse.json(
+          { error: 'You do not own this file' },
+          { status: 403 }
+        );
+      }
+      if (validation.kind === 'not_linked') {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'dm_message',
+          resourceId: fileId,
+          details: { reason: 'file_not_linked_to_conversation', conversationId },
+        });
+        return NextResponse.json(
+          { error: 'File is not linked to this conversation' },
+          { status: 403 }
+        );
+      }
+    }
 
-    // Update conversation's last message info
-    const messagePreview = content.length > 100
-      ? content.substring(0, 100) + '...'
-      : content;
+    const newMessage = await dmMessageRepository.insertDmMessage({
+      conversationId,
+      senderId: userId,
+      content,
+      fileId,
+      attachmentMeta,
+    });
 
-    await db
-      .update(dmConversations)
-      .set({
-        lastMessageAt: new Date(),
-        lastMessagePreview: messagePreview,
-      })
-      .where(eq(dmConversations.id, conversationId));
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'message',
+      resourceId: newMessage.id,
+    });
 
-    // Send notification to recipient
+    const messagePreview = buildLastMessagePreview(content, attachmentMeta);
+
+    await dmMessageRepository.updateConversationLastMessage({
+      conversationId,
+      lastMessageAt: newMessage.createdAt,
+      lastMessagePreview: messagePreview,
+    });
+
     const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id
       : conversation.participant1Id;
@@ -213,7 +293,6 @@ export async function POST(
       userId
     );
 
-    // Broadcast the new message to the DM room for realtime updates
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
         const requestBody = JSON.stringify({
@@ -232,16 +311,21 @@ export async function POST(
       }
     }
 
-    // Broadcast inbox update to recipient for real-time inbox refresh
     await broadcastInboxEvent(recipientId, {
       operation: 'dm_updated',
       type: 'dm',
       id: conversationId,
       lastMessageAt: newMessage.createdAt.toISOString(),
       lastMessagePreview: messagePreview,
+      attachmentMeta,
     });
 
-    auditRequest(request, { eventType: 'data.write', userId, resourceType: 'conversation', resourceId: conversationId });
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'conversation',
+      resourceId: conversationId,
+    });
 
     return NextResponse.json({ message: newMessage });
   } catch (error) {
