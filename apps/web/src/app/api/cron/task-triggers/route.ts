@@ -155,6 +155,9 @@ export async function POST(req: Request) {
           } else {
             errors.push(`task-trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
           }
+          if (settled.value.result.finalizeError) {
+            errors.push(`task-trigger-${settled.value.trigger.id}: finalize failed: ${settled.value.result.finalizeError}`);
+          }
         } else {
           const trigger = claimed[j];
           const errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);

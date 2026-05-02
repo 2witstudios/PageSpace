@@ -20,12 +20,13 @@ const logger = loggers.api.child({ module: 'cron-calendar-triggers' });
  * POST /api/cron/calendar-triggers — fire due calendar triggers (one-shot).
  *
  * Discovery: calendar_triggers rows where triggerAt <= NOW() AND no
- * workflow_runs row exists with sourceTable='calendarTriggers',
- * sourceId=trigger.id, status IN ('running','success'). Per-fire state
- * (status, timings, error, durationMs, conversationId) lives on
- * workflow_runs — calendar_triggers no longer carries any per-fire
- * columns. Atomic claim is the workflow_runs partial unique index
- * inside the executor, not state on the trigger row.
+ * workflow_runs row exists at all for them. Calendar triggers are
+ * one-shot per occurrence, so any prior outcome (running / success /
+ * error / cancelled) is terminal. Per-fire state (status, timings,
+ * error, durationMs, conversationId) lives on workflow_runs —
+ * calendar_triggers no longer carries any per-fire columns. Atomic
+ * claim is the workflow_runs partial unique index inside the executor,
+ * not state on the trigger row.
  *
  * Stuck-run sweep now targets workflow_runs.status='running' rows older
  * than STUCK_RUN_TIMEOUT_MS — one place to look for any workflow domain.
@@ -134,6 +135,9 @@ export async function POST(req: Request) {
             executed++;
           } else if (!settled.value.result.claimConflict) {
             errors.push(`trigger-${settled.value.trigger.id}: ${settled.value.result.error}`);
+          }
+          if (settled.value.result.finalizeError) {
+            errors.push(`trigger-${settled.value.trigger.id}: finalize failed: ${settled.value.result.finalizeError}`);
           }
         } else {
           totalAttempted++;
