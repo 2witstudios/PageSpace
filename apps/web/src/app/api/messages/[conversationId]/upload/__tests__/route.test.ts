@@ -33,10 +33,13 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
+// Tagged tokens so the test can introspect the structure of the where clause
+// the route builds. This pins the participant-scoped lookup against regression
+// (a security fix; see Codex P2 review on PR #1215).
 vi.mock('@pagespace/db/operators', () => ({
-  and: vi.fn(),
-  eq: vi.fn(),
-  or: vi.fn(),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  eq: vi.fn((column: unknown, value: unknown) => ({ op: 'eq', column, value })),
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: { id: 'dm_conversations.id' },
@@ -230,6 +233,35 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(res.status).toBe(500);
     expect(typeof body.error).toBe('string');
     expect(body.error.length).toBeGreaterThan(0);
+  });
+
+  it('POST_dmUpload_dbLookup_isScopedToConversationIdAndCallingParticipant_pinningCodexP2Fix', async () => {
+    // Regression guard for the Codex P2 fix (50d6029e7): the wrapper must scope
+    // findFirst to (id AND (participant1=user OR participant2=user)) so a
+    // non-participant cannot distinguish "conversation does not exist" from
+    // "you are not in this conversation". If a future change drops the
+    // participant clauses, this test fails before the enumeration vector reopens.
+    await POST(makeRequest() as never, {
+      params: Promise.resolve({ conversationId: 'conv-1' }),
+    });
+
+    expect(mockDmConversationsFindFirst).toHaveBeenCalledTimes(1);
+    const callArg = mockDmConversationsFindFirst.mock.calls[0][0] as {
+      where: { op: string; args: unknown[] };
+    };
+
+    expect(callArg.where.op).toBe('and');
+    const andArgs = callArg.where.args as Array<{ op: string; column?: unknown; value?: unknown; args?: unknown[] }>;
+
+    // First clause: id == conversationId
+    expect(andArgs[0]).toMatchObject({ op: 'eq', value: 'conv-1' });
+
+    // Second clause: participant1Id == userId OR participant2Id == userId
+    const orClause = andArgs[1];
+    expect(orClause.op).toBe('or');
+    const orArgs = orClause.args as Array<{ op: string; value: unknown }>;
+    expect(orArgs).toHaveLength(2);
+    expect(orArgs.every((c) => c.op === 'eq' && c.value === 'user-1')).toBe(true);
   });
 
   it('POST_dmUpload_responseShape_matchesChannelRoute_onSuccess', async () => {
