@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Security",
-  description: "PageSpace security overview: opaque session tokens, direct-permission RBAC, account lockout, OAuth PKCE, encrypted API keys, rate limiting, continuously verified audit logs, SSRF and path-traversal hardening.",
+  description: "PageSpace security overview: opaque session tokens, direct-permission RBAC, account lockout, OAuth PKCE, encrypted secrets, rate limiting, continuously verified audit logs, SSRF and path-traversal hardening.",
   path: "/docs/security",
   keywords: ["security", "authentication", "permissions", "encryption", "audit log", "account lockout", "PKCE", "SSRF", "path traversal", "HMAC cron"],
 });
@@ -37,7 +37,7 @@ This section documents PageSpace's authentication system, permission model, and 
 
 ### Data Protection
 
-- **Encrypted API keys** — AI provider keys are encrypted at rest with AES-256-GCM (scrypt KDF, unique salt+IV per write).
+- **Encrypted secrets** — OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM (scrypt KDF, unique salt+IV per write). AI provider credentials are held by the deployment operator, not stored per user.
 - **HTTP-only cookies** — session cookies are inaccessible to JavaScript.
 - **SameSite cookies** — \`strict\` by default; relaxed to \`lax\` only for multi-subdomain deployments.
 - **CSRF tokens** — HMAC-signed, bound to the session, required on state-changing requests.
@@ -56,7 +56,7 @@ This section documents PageSpace's authentication system, permission model, and 
 
 Page content, conversation messages, and file metadata live in PostgreSQL, encrypted at rest via volume-level encryption and delivered over TLS in transit. Content is stored queryable so full-text search, regex tools, and AI agents can operate on it directly — the alternative (searchable-encryption schemes or decrypt-on-every-query) trades significant latency and capability for protection the volume layer already provides.
 
-Secrets are a different story: API keys, OAuth tokens, and stored credentials are encrypted at the application layer with a key PageSpace holds, so losing a disk or leaking a DB dump doesn't leak them.
+Secrets are a different story: OAuth tokens and stored integration credentials are encrypted at the application layer with a key PageSpace holds, so losing a disk or leaking a DB dump doesn't leak them.
 
 **What protects page content**:
 

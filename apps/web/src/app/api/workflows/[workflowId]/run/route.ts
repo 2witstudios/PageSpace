@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
@@ -41,17 +41,6 @@ export async function POST(
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
-  // Atomically claim: only mark as running if not already running
-  const [claimed] = await db
-    .update(workflows)
-    .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-    .where(and(eq(workflows.id, workflowId), ne(workflows.lastRunStatus, 'running')))
-    .returning({ id: workflows.id });
-
-  if (!claimed) {
-    return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
-  }
-
   const executionInput: WorkflowExecutionInput = {
     workflowId: workflow.id,
     workflowName: workflow.name,
@@ -62,36 +51,25 @@ export async function POST(
     contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
     instructionPageId: workflow.instructionPageId,
     timezone: workflow.timezone,
+    source: { table: 'manual', id: null, triggerAt: null },
   };
 
-  // Execute
-  let result;
-  try {
-    result = await executeWorkflow(executionInput);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    await db
-      .update(workflows)
-      .set({ lastRunStatus: 'error', lastRunError: errorMsg })
-      .where(eq(workflows.id, workflowId));
-    return NextResponse.json({ success: false, error: errorMsg }, { status: 500 });
+  // Atomic claim is enforced by the workflow_runs partial unique index inside
+  // the executor — any concurrent fire (cron / manual) for the same workflow
+  // returns claimConflict and we surface a 409.
+  const result = await executeWorkflow(executionInput);
+
+  if (result.claimConflict) {
+    return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
   }
 
-  // Update status — only compute nextRunAt for cron workflows
-  const nextRunAt = (workflow.isEnabled && workflow.cronExpression)
-    ? getNextRunDate(workflow.cronExpression, workflow.timezone)
-    : null;
-
-  await db
-    .update(workflows)
-    .set({
-      lastRunAt: new Date(),
-      lastRunStatus: result.success ? 'success' : 'error',
-      lastRunError: result.error || null,
-      lastRunDurationMs: result.durationMs,
-      nextRunAt,
-    })
-    .where(eq(workflows.id, workflowId));
+  // Advance the schedule so the next cron tick doesn't re-fire immediately.
+  if (workflow.isEnabled && workflow.cronExpression) {
+    try {
+      const nextRunAt = getNextRunDate(workflow.cronExpression, workflow.timezone);
+      await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, workflowId));
+    } catch { /* invalid cron — leave nextRunAt as-is */ }
+  }
 
   auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { action: 'run', trigger: 'manual' } });
 
@@ -101,5 +79,6 @@ export async function POST(
     toolCallCount: result.toolCallCount,
     durationMs: result.durationMs,
     error: result.error,
+    finalizeError: result.finalizeError,
   });
 }

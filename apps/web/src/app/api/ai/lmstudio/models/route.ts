@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getUserLMStudioSettings } from '@/lib/ai/core';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 
 /**
@@ -14,15 +14,15 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 
-    // Get user's LM Studio settings
-    const lmstudioSettings = await getUserLMStudioSettings(userId);
+    // Get managed LM Studio base URL
+    const lmstudioSettings = getManagedProviderKey('lmstudio');
 
     if (!lmstudioSettings || !lmstudioSettings.baseUrl) {
       return NextResponse.json({
         success: false,
-        error: 'LM Studio not configured. Please configure your LM Studio base URL first.',
+        error: 'LM Studio is not configured on this deployment.',
         models: {}
-      }, { status: 400 });
+      }, { status: 503 });
     }
 
     // Check if desktop bridge is available for local AI

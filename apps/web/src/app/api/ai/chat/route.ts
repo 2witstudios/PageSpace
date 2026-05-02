@@ -11,7 +11,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
@@ -32,15 +33,7 @@ import {
   createProviderErrorResponse,
   isProviderError,
   type ProviderRequest,
-  getUserOpenRouterSettings,
-  getUserGoogleSettings,
-  getDefaultPageSpaceSettings,
-  getUserOpenAISettings,
-  getUserAnthropicSettings,
-  getUserXAISettings,
-  getUserOllamaSettings,
-  getUserLMStudioSettings,
-  getUserGLMSettings,
+  buildProviderAvailabilityMap,
   pageSpaceTools,
   extractMessageContent,
   extractToolCalls,
@@ -137,8 +130,6 @@ export async function POST(request: Request) {
       chatId: requestBody.chatId,
       selectedProvider: requestBody.selectedProvider,
       selectedModel: requestBody.selectedModel,
-      hasOpenRouterKey: !!requestBody.openRouterApiKey,
-      hasGoogleKey: !!requestBody.googleApiKey
     });
     
     const {
@@ -147,13 +138,6 @@ export async function POST(request: Request) {
       conversationId: requestConversationId, // Conversation session ID (auto-generated if not provided)
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
-      openRouterApiKey,
-      googleApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
       pageContext,
       mcpTools, // MCP tool schemas from desktop client (optional)
       isReadOnly, // Optional read-only mode toggle
@@ -164,13 +148,6 @@ export async function POST(request: Request) {
       conversationId?: string, // Optional - will be auto-generated if not provided
       selectedProvider?: string,
       selectedModel?: string,
-      openRouterApiKey?: string,
-      googleApiKey?: string,
-      openAIApiKey?: string,
-      anthropicApiKey?: string,
-      xaiApiKey?: string,
-      ollamaBaseUrl?: string,
-      glmApiKey?: string,
       mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
       isReadOnly?: boolean, // Optional read-only mode toggle
       webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
@@ -471,13 +448,6 @@ export async function POST(request: Request) {
     const providerRequest: ProviderRequest = {
       selectedProvider,
       selectedModel,
-      googleApiKey,
-      openRouterApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
     };
 
     const providerResult = await createAIProvider(userId, providerRequest);
@@ -491,10 +461,12 @@ export async function POST(request: Request) {
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
-    // This prevents users from exceeding their daily AI call limits
-    if (currentProvider === 'pagespace') {
-      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
+    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming.
+    // Per-tier daily quota applies to every managed provider; getUsageLimits
+    // already returns -1 (unlimited) when !isBillingEnabled(), so onprem/tenant
+    // bypass enforcement automatically.
+    {
+      const providerType = getProviderTier(currentProvider, currentModel);
 
       loggers.ai.debug('AI Chat API: Checking rate limit before streaming', {
         userId: maskIdentifier(userId),
@@ -980,72 +952,62 @@ export async function POST(request: Request) {
               
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
 
-              // Track usage for PageSpace providers only (rate limiting/quota tracking)
-              const isPageSpaceProvider = currentProvider === 'pagespace';
-
+              // Track usage for every managed provider against the per-tier daily quota.
               const maskedUserId = maskIdentifier(userId);
               const maskedMessageId = maskIdentifier(messageId);
 
-              if (isPageSpaceProvider) {
-                try {
-                  const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
+              try {
+                const providerType = getProviderTier(currentProvider, currentModel);
 
-                  usageLogger.debug('Incrementing usage for Page AI response', {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    providerType,
-                    messageId: maskedMessageId,
-                  });
-
-                  const usageResult = await incrementUsage(userId!, providerType);
-
-                  usageLogger.info('Page AI usage incremented', {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    providerType,
-                    messageId: maskedMessageId,
-                    currentCount: usageResult.currentCount,
-                    limit: usageResult.limit,
-                    remaining: usageResult.remainingCalls,
-                    success: usageResult.success,
-                  });
-
-                  // Broadcast usage event for real-time updates
-                  try {
-                    const currentUsageSummary = await getUserUsageSummary(userId!);
-
-                    await broadcastUsageEvent({
-                      userId: userId!,
-                      operation: 'updated',
-                      subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                      standard: currentUsageSummary.standard,
-                      pro: currentUsageSummary.pro
-                    });
-
-                    usageLogger.debug('Page AI usage broadcast sent', {
-                      userId: maskedUserId,
-                    });
-                  } catch (broadcastError) {
-                    usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                      userId: maskedUserId,
-                    });
-                  }
-
-                } catch (usageError) {
-                  usageLogger.error('Page AI usage tracking failed', usageError as Error, {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    messageId: maskedMessageId,
-                  });
-
-                  // Don't fail the request - usage tracking errors shouldn't break the chat
-                }
-              } else {
-                usageLogger.debug('Skipping usage tracking for non-PageSpace provider', {
-                  provider: currentProvider,
+                usageLogger.debug('Incrementing usage for Page AI response', {
                   userId: maskedUserId,
+                  provider: currentProvider,
+                  providerType,
                   messageId: maskedMessageId,
                 });
+
+                const usageResult = await incrementUsage(userId!, providerType);
+
+                usageLogger.info('Page AI usage incremented', {
+                  userId: maskedUserId,
+                  provider: currentProvider,
+                  providerType,
+                  messageId: maskedMessageId,
+                  currentCount: usageResult.currentCount,
+                  limit: usageResult.limit,
+                  remaining: usageResult.remainingCalls,
+                  success: usageResult.success,
+                });
+
+                // Broadcast usage event for real-time updates
+                try {
+                  const currentUsageSummary = await getUserUsageSummary(userId!);
+
+                  await broadcastUsageEvent({
+                    userId: userId!,
+                    operation: 'updated',
+                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
+                    standard: currentUsageSummary.standard,
+                    pro: currentUsageSummary.pro
+                  });
+
+                  usageLogger.debug('Page AI usage broadcast sent', {
+                    userId: maskedUserId,
+                  });
+                } catch (broadcastError) {
+                  usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
+                    userId: maskedUserId,
+                  });
+                }
+
+              } catch (usageError) {
+                usageLogger.error('Page AI usage tracking failed', usageError as Error, {
+                  userId: maskedUserId,
+                  provider: currentProvider,
+                  messageId: maskedMessageId,
+                });
+
+                // Don't fail the request - usage tracking errors shouldn't break the chat
               }
 
               // Track enhanced AI usage with token counting and cost calculation
@@ -1216,32 +1178,10 @@ export async function GET(request: Request) {
       }
     }
     
-    // Check PageSpace default settings
-    const pageSpaceSettings = await getDefaultPageSpaceSettings();
-
-    // Check OpenRouter settings
-    const openRouterSettings = await getUserOpenRouterSettings(userId);
-
-    // Check Google AI settings
-    const googleSettings = await getUserGoogleSettings(userId);
-
-    // Check OpenAI settings
-    const openAISettings = await getUserOpenAISettings(userId);
-
-    // Check Anthropic settings
-    const anthropicSettings = await getUserAnthropicSettings(userId);
-
-    // Check xAI settings
-    const xaiSettings = await getUserXAISettings(userId);
-
-    // Check Ollama settings
-    const ollamaSettings = await getUserOllamaSettings(userId);
-
-    // Check LM Studio settings
-    const lmstudioSettings = await getUserLMStudioSettings(userId);
-
-    // Check GLM settings
-    const glmSettings = await getUserGLMSettings(userId);
+    const providers = buildProviderAvailabilityMap({
+      isOnPrem: isOnPrem(),
+      onPremAllowed: ONPREM_ALLOWED_PROVIDERS,
+    });
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_chat_settings', resourceId: pageId || userId, details: {
       action: 'get_provider_settings',
@@ -1250,45 +1190,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       currentProvider,
       currentModel,
-      providers: {
-        pagespace: {
-          isConfigured: !!pageSpaceSettings?.isConfigured,
-          hasApiKey: !!pageSpaceSettings?.apiKey,
-        },
-        openrouter: {
-          isConfigured: !!openRouterSettings?.isConfigured,
-          hasApiKey: !!openRouterSettings?.apiKey,
-        },
-        google: {
-          isConfigured: !!googleSettings?.isConfigured,
-          hasApiKey: !!googleSettings?.apiKey,
-        },
-        openai: {
-          isConfigured: !!openAISettings?.isConfigured,
-          hasApiKey: !!openAISettings?.apiKey,
-        },
-        anthropic: {
-          isConfigured: !!anthropicSettings?.isConfigured,
-          hasApiKey: !!anthropicSettings?.apiKey,
-        },
-        xai: {
-          isConfigured: !!xaiSettings?.isConfigured,
-          hasApiKey: !!xaiSettings?.apiKey,
-        },
-        ollama: {
-          isConfigured: !!ollamaSettings?.isConfigured,
-          hasBaseUrl: !!ollamaSettings?.baseUrl,
-        },
-        lmstudio: {
-          isConfigured: !!lmstudioSettings?.isConfigured,
-          hasBaseUrl: !!lmstudioSettings?.baseUrl,
-        },
-        glm: {
-          isConfigured: !!glmSettings?.isConfigured,
-          hasApiKey: !!glmSettings?.apiKey,
-        },
-      },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured || !!lmstudioSettings?.isConfigured || !!glmSettings?.isConfigured,
+      providers,
+      isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
     });
 
   } catch (error) {

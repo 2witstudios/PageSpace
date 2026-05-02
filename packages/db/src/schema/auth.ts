@@ -166,14 +166,12 @@ export const socketTokens = pgTable('socket_tokens', {
   };
 });
 
-import { userAiSettings } from './ai';
 import { subscriptions } from './subscriptions';
 import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   deviceTokens: many(deviceTokens),
   chatMessages: many(chatMessages),
-  aiSettings: many(userAiSettings),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   socketTokens: many(socketTokens),

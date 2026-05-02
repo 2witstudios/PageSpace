@@ -15,10 +15,6 @@
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"
     },
-    "./schema/ai": {
-      "types": "./dist/schema/ai.d.ts",
-      "default": "./dist/schema/ai.js"
-    },
     "./schema/ai-streams": {
       "types": "./dist/schema/ai-streams.d.ts",
       "default": "./dist/schema/ai-streams.js"
@@ -150,6 +146,10 @@
     "./schema/workflows": {
       "types": "./dist/schema/workflows.d.ts",
       "default": "./dist/schema/workflows.js"
+    },
+    "./schema/workflow-runs": {
+      "types": "./dist/schema/workflow-runs.d.ts",
+      "default": "./dist/schema/workflow-runs.js"
     },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",

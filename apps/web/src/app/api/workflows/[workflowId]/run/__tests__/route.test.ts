@@ -33,11 +33,9 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
-  and: vi.fn(),
-  ne: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
-  workflows: { id: 'id', driveId: 'driveId', lastRunStatus: 'lastRunStatus' },
+  workflows: { id: 'id', driveId: 'driveId' },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -125,10 +123,7 @@ const mockWorkflow = {
   eventTriggers: null,
   watchedFolderIds: null,
   eventDebounceSecs: null,
-  lastRunStatus: 'never_run',
-  lastRunAt: null,
-  lastRunError: null,
-  lastRunDurationMs: null,
+  instructionPageId: null,
   nextRunAt: null,
   createdBy: 'user_123',
   createdAt: new Date('2024-01-01'),
@@ -158,14 +153,15 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     }));
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    // mockUpdateWhere must serve as both thenable (for post-execution updates)
-    // and have .returning() (for atomic claim)
-    mockUpdateWhere.mockImplementation(() => {
-      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
-      p.returning = mockReturning;
-      return p;
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockReturning.mockResolvedValue([]);
+    // Default executor result: success. Conflict tests override with claimConflict.
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: true,
+      responseText: 'OK',
+      toolCallCount: 0,
+      durationMs: 1,
     });
-    mockReturning.mockResolvedValue([{ id: 'wf_1' }]);
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
   });
 
@@ -200,9 +196,15 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(response.status).toBe(403);
   });
 
-  test('returns 409 when workflow is already running', async () => {
-    // Atomic claim returns empty array = workflow was already running
-    mockReturning.mockResolvedValue([]);
+  test('returns 409 when executor reports a claim conflict', async () => {
+    // The atomic claim is now the workflow_runs partial unique index inside
+    // the executor. A peer fire holding the lock surfaces as claimConflict.
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'Workflow already running',
+      claimConflict: true,
+    });
 
     const request = new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' });
     const response = await POST(request, createContext('wf_1'));
@@ -210,7 +212,6 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(response.status).toBe(409);
     const body = await response.json();
     expect(body.error).toBe('Workflow is already running');
-    expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
   test('executes workflow and returns success result', async () => {

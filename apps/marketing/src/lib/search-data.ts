@@ -131,14 +131,6 @@ const faqEntries: SearchEntry[] = [
     keywords: "daily limit ai calls reset quota",
   },
   {
-    title: "Can I use my own OpenAI or Anthropic API key?",
-    description:
-      "Yes — paste your key in Settings to bypass daily limits. Available on every plan including Free.",
-    href: "/faq#bring-your-own-key",
-    category: "FAQ",
-    keywords: "byok bring your own key api anthropic openai google openrouter",
-  },
-  {
     title: "How do I sign up?",
     description:
       "Passkey (Touch ID, Face ID, Windows Hello), magic link, or Google/Apple sign-in. No passwords.",

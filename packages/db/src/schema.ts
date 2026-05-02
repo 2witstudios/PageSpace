@@ -4,7 +4,6 @@ export * from './schema/core';
 export * from './schema/permissions';
 export * from './schema/members';
 export * from './schema/chat';
-export * from './schema/ai';
 export * from './schema/dashboard';
 export * from './schema/conversations';
 export * from './schema/notifications';
@@ -27,6 +26,7 @@ export * from './schema/personalization';
 export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
+export * from './schema/workflow-runs';
 export * from './schema/task-triggers';
 export * from './schema/rate-limit-buckets';
 export * from './schema/revoked-service-tokens';
@@ -39,7 +39,6 @@ import * as core from './schema/core';
 import * as permissions from './schema/permissions';
 import * as members from './schema/members';
 import * as chat from './schema/chat';
-import * as ai from './schema/ai';
 import * as dashboard from './schema/dashboard';
 import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
@@ -62,6 +61,7 @@ import * as personalization from './schema/personalization';
 import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
+import * as workflowRuns from './schema/workflow-runs';
 import * as taskTriggers from './schema/task-triggers';
 import * as rateLimitBuckets from './schema/rate-limit-buckets';
 import * as revokedServiceTokens from './schema/revoked-service-tokens';
@@ -75,7 +75,6 @@ export const schema = {
   ...permissions,
   ...members,
   ...chat,
-  ...ai,
   ...dashboard,
   ...conversations,
   ...notifications,
@@ -98,6 +97,7 @@ export const schema = {
   ...calendar,
   ...calendarTriggers,
   ...workflows,
+  ...workflowRuns,
   ...taskTriggers,
   ...rateLimitBuckets,
   ...revokedServiceTokens,

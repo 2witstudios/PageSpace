@@ -18,7 +18,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 - @mention an AI Chat page from a document, channel, sheet cell, or another AI Chat to pull that agent into the thread.
 - Use the **global assistant** in the right-hand sidebar to work across every drive you can see.
 - Ask one agent to consult another by name — the called agent runs under its own prompt and tools, then returns a single response.
-- Pick your provider and model in **Settings > AI**. Bring your own key for any supported provider, or use the built-in PageSpace provider with no key at all.
+- Pick your provider and model in **Settings > AI**. The list shows whichever providers your deployment has enabled — your account-level pick sets the default and any individual AI Chat page can override it.
 - Restrict any agent to a specific toolset by editing its AI Chat page's allow-list.
 - Toggle **Read-only mode** on any AI Chat page to guarantee it cannot create, edit, or delete anything.
 - Toggle **Web search** on any AI Chat page to let that agent look things up outside your workspace.
@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Providers.** PageSpace routes your conversation to one of several AI providers through a single underlying pipe. You pick the provider in settings; models show up once the provider is configured. Keys are encrypted at rest and scoped to your account — they are never shared with teammates, so each user configures their own.
+**Providers.** PageSpace routes your conversation to one of several AI providers through a single underlying pipe. Provider credentials are held by the deployment operator — on cloud, that's PageSpace; on a self-hosted install, it's whoever runs the server. The model picker only lists providers the operator has enabled, so anything unconfigured is hidden rather than failing at call time. Calls count against your plan's standard or pro daily AI quota depending on the model you pick.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 

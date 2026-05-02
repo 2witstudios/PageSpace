@@ -1,11 +1,13 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, not, isNull, asc } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
+import { desc } from '@pagespace/db/operators';
 import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -59,26 +61,28 @@ const createEventSchema = z.object({
 });
 
 /**
- * Returns the set of calendarEventIds that have an active (non-cancelled, non-failed) agent trigger.
+ * Returns the set of calendarEventIds that have an agent trigger row.
+ *
+ * Cancellation is now expressed as a workflow_runs row with
+ * status='cancelled' rather than a column on calendarTriggers, so
+ * "has an active trigger" simplifies to "has a calendar_triggers row".
+ * If the trigger row is removed (event hard-deleted, cascade) it stops
+ * appearing here.
  */
 async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
   if (eventIds.length === 0) return new Set();
   const rows = await db
     .select({ calendarEventId: calendarTriggers.calendarEventId })
     .from(calendarTriggers)
-    .where(
-      and(
-        inArray(calendarTriggers.calendarEventId, eventIds),
-        not(inArray(calendarTriggers.status, ['cancelled', 'failed'])),
-      )
-    );
+    .where(inArray(calendarTriggers.calendarEventId, eventIds));
   return new Set(rows.map(r => r.calendarEventId).filter((id): id is string => id !== null));
 }
 
 /**
  * Expand workflow schedules into virtual calendar events within a date range.
  * - Cron workflows: expand cron expression into future occurrences
- * - Event-triggered workflows: show actual past runs (lastRunAt) within the range
+ * - Past actual runs (any source): join workflow_runs and surface each fire
+ *   that landed inside the requested window.
  */
 async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, endDate: Date) {
   if (driveIds.length === 0) return [];
@@ -91,8 +95,6 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
       timezone: workflows.timezone,
       driveId: workflows.driveId,
       triggerType: workflows.triggerType,
-      lastRunAt: workflows.lastRunAt,
-      lastRunStatus: workflows.lastRunStatus,
     })
     .from(workflows)
     .where(
@@ -115,56 +117,85 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
     triggerType?: string;
   }> = [];
 
+  // Past actual runs come from workflow_runs (joined to enabled workflows in
+  // the requested drives). One row per fire — covers every source domain.
+  // Skip 'cancelled' rows: those are audit-only markers for triggers that
+  // never executed (event trashed, event deleted), so they shouldn't render
+  // as workflow events on the calendar.
+  if (enabledWorkflows.length > 0) {
+    const workflowIds = enabledWorkflows.map(w => w.id);
+    const workflowMap = new Map(enabledWorkflows.map(w => [w.id, w]));
+
+    const recentRuns = await db
+      .select({
+        runId: workflowRuns.id,
+        workflowId: workflowRuns.workflowId,
+        startedAt: workflowRuns.startedAt,
+      })
+      .from(workflowRuns)
+      .where(and(
+        inArray(workflowRuns.workflowId, workflowIds),
+        inArray(workflowRuns.status, ['running', 'success', 'error']),
+        gte(workflowRuns.startedAt, startDate),
+        lte(workflowRuns.startedAt, endDate),
+      ))
+      .orderBy(desc(workflowRuns.startedAt))
+      .limit(500);
+
+    for (const run of recentRuns) {
+      const wf = workflowMap.get(run.workflowId);
+      if (!wf) continue;
+      virtualEvents.push({
+        id: `workflow-run-${run.runId}`,
+        title: `Workflow: ${wf.name}`,
+        startAt: run.startedAt,
+        endAt: new Date(run.startedAt.getTime() + 5 * 60 * 1000),
+        allDay: false,
+        source: 'workflow',
+        workflowId: wf.id,
+        driveId: wf.driveId,
+        color: 'amber',
+        triggerType: wf.triggerType,
+      });
+    }
+  }
+
+  // Future occurrences come from cron expansion. Anchor at max(now, startDate)
+  // so completed runs in the requested window aren't double-emitted (once as
+  // a real run above, once as a scheduled occurrence here). When the window
+  // is fully in the future, this is a no-op vs the original behavior.
+  const expansionAnchor = new Date(Math.max(Date.now(), startDate.getTime()));
   for (const wf of enabledWorkflows) {
-    if (wf.triggerType === 'event') {
-      // Event-triggered workflows: show past runs as point-in-time events
-      if (wf.lastRunAt && wf.lastRunAt >= startDate && wf.lastRunAt <= endDate) {
+    if (wf.triggerType !== 'cron' || !wf.cronExpression) continue;
+    try {
+      // cron-parser next() is exclusive of currentDate, so back up 1ms
+      // to include occurrences exactly at the anchor.
+      const interval = CronExpressionParser.parse(wf.cronExpression, {
+        tz: wf.timezone,
+        currentDate: new Date(expansionAnchor.getTime() - 1),
+        endDate: endDate,
+      });
+
+      let count = 0;
+      while (interval.hasNext() && count < 100) {
+        const next = interval.next().toDate();
+        if (next > endDate) break;
         virtualEvents.push({
-          id: `workflow-event-${wf.id}-${wf.lastRunAt.getTime()}`,
+          id: `workflow-${wf.id}-${next.getTime()}`,
           title: `Workflow: ${wf.name}`,
-          startAt: wf.lastRunAt,
-          endAt: new Date(wf.lastRunAt.getTime() + 5 * 60 * 1000),
+          startAt: next,
+          endAt: new Date(next.getTime() + 5 * 60 * 1000),
           allDay: false,
           source: 'workflow',
           workflowId: wf.id,
           driveId: wf.driveId,
-          color: 'amber',
-          triggerType: 'event',
+          color: 'purple',
+          triggerType: 'cron',
         });
+        count++;
       }
-    } else {
-      // Cron workflows: expand cron schedule into future occurrences
-      if (!wf.cronExpression) continue;
-      try {
-        // cron-parser next() is exclusive of currentDate, so back up 1ms
-        // to include occurrences exactly at the range start
-        const interval = CronExpressionParser.parse(wf.cronExpression, {
-          tz: wf.timezone,
-          currentDate: new Date(startDate.getTime() - 1),
-          endDate: endDate,
-        });
-
-        let count = 0;
-        while (interval.hasNext() && count < 100) {
-          const next = interval.next().toDate();
-          if (next > endDate) break;
-          virtualEvents.push({
-            id: `workflow-${wf.id}-${next.getTime()}`,
-            title: `Workflow: ${wf.name}`,
-            startAt: next,
-            endAt: new Date(next.getTime() + 5 * 60 * 1000),
-            allDay: false,
-            source: 'workflow',
-            workflowId: wf.id,
-            driveId: wf.driveId,
-            color: 'purple',
-            triggerType: 'cron',
-          });
-          count++;
-        }
-      } catch (err) {
-        loggers.api.warn(`Failed to parse cron for workflow ${wf.id}:`, { error: err instanceof Error ? err.message : String(err) });
-      }
+    } catch (err) {
+      loggers.api.warn(`Failed to parse cron for workflow ${wf.id}:`, { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

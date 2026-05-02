@@ -131,8 +131,6 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         contextPageIds,
         timezone,
         isEnabled: true,
-        lastRunStatus: 'never_run',
-        lastRunError: null,
       }).where(eq(workflows.id, workflowId));
 
       await tx.update(taskTriggers).set({
@@ -156,7 +154,6 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         triggerType: 'cron',
         timezone,
         isEnabled: true,
-        lastRunStatus: 'never_run',
       }).returning({ id: workflows.id });
 
       await tx.insert(taskTriggers).values({
@@ -288,6 +285,7 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
       instructionPageId: workflow.instructionPageId,
       timezone: workflow.timezone,
+      source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: null },
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
     };
 

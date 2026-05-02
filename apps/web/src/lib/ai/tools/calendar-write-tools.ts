@@ -1,10 +1,11 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, inArray } from '@pagespace/db/operators'
+import { eq, and, ne, inArray, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
@@ -522,7 +523,10 @@ export const calendarWriteTools = {
           .where(eq(calendarEvents.id, eventId))
           .returning();
 
-        // Sync trigger row if this is a trigger-linked event and startAt changed
+        // Sync trigger row if this is a trigger-linked event and startAt changed.
+        // Only re-aim triggers that haven't been processed yet — any
+        // workflow_runs row (running/success/error/cancelled) is a terminal-
+        // or-in-flight outcome we shouldn't disturb.
         const meta = updatedEvent.metadata as CalendarTriggerMetadata | null;
         if (meta?.isTrigger && parsedStartAt) {
           await db
@@ -530,7 +534,11 @@ export const calendarWriteTools = {
             .set({ triggerAt: parsedStartAt })
             .where(and(
               eq(calendarTriggers.calendarEventId, eventId),
-              eq(calendarTriggers.status, 'pending')
+              sql`NOT EXISTS (
+                SELECT 1 FROM ${workflowRuns}
+                WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+                  AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+              )`,
             ));
         }
 
@@ -626,16 +634,39 @@ export const calendarWriteTools = {
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
-        // Cancel any pending/claimed/running triggers linked to this event
+        // Write a cancelled audit row for each trigger that has not yet been
+        // processed. Skip triggers that already have any workflow_runs row —
+        // appending 'cancelled' alongside an existing success/error/running
+        // row would pollute history and contradict the recorded outcome.
+        // The NOT EXISTS subquery uses workflow_runs_source_lookup_idx for
+        // an index-only check.
         const eventMeta = event.metadata as CalendarTriggerMetadata | null;
         if (eventMeta?.isTrigger) {
-          await db
-            .update(calendarTriggers)
-            .set({ status: 'cancelled', completedAt: new Date() })
+          const unfiredTriggers = await db
+            .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId, triggerAt: calendarTriggers.triggerAt })
+            .from(calendarTriggers)
             .where(and(
               eq(calendarTriggers.calendarEventId, eventId),
-              inArray(calendarTriggers.status, ['pending', 'claimed', 'running'])
+              sql`NOT EXISTS (
+                SELECT 1 FROM ${workflowRuns}
+                WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+                  AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+              )`,
             ));
+
+          if (unfiredTriggers.length > 0) {
+            await db.insert(workflowRuns).values(
+              unfiredTriggers.map(t => ({
+                workflowId: t.workflowId,
+                sourceTable: 'calendarTriggers' as const,
+                sourceId: t.id,
+                triggerAt: t.triggerAt,
+                status: 'cancelled' as const,
+                endedAt: new Date(),
+                error: 'Calendar event deleted',
+              }))
+            );
+          }
         }
 
         // Soft delete the event

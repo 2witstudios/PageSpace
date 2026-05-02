@@ -19,7 +19,6 @@ import TerminalView from './page-views/terminal/TerminalView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
-import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
@@ -62,10 +61,6 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   }, [isLoading, timerKey]);
 
   // Handle special routes
-  if (pathname.endsWith('/settings')) {
-    return <AiSettingsView />;
-  }
-
   if (pathname.endsWith('/settings/mcp')) {
     return <MCPSettingsView />;
   }

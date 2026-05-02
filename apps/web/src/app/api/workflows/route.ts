@@ -4,9 +4,10 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and, isNotNull, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -49,15 +50,55 @@ export async function GET(request: Request) {
   // owned by task_triggers / calendar_triggers (which use triggerType='cron'
   // for the executor but have no cron expression). Without this gate the
   // backing rows leak into the management UI and become user-editable.
-  const results = await db
-    .select()
+  //
+  // The lastRun projection uses a single LATERAL subquery so every projected
+  // field comes from the same row — no risk of stitching together different
+  // runs when two share a startedAt — and we make one trip to workflow_runs
+  // per workflow rather than five. Tie-breaker: id DESC for determinism
+  // when two runs share a startedAt timestamp.
+  const rows = await db
+    .select({
+      workflow: workflows,
+      lastRunStatus: sql<string | null>`"latest_run"."status"`,
+      lastRunStartedAt: sql<Date | null>`"latest_run"."startedAt"`,
+      lastRunEndedAt: sql<Date | null>`"latest_run"."endedAt"`,
+      lastRunError: sql<string | null>`"latest_run"."error"`,
+      lastRunDurationMs: sql<number | null>`"latest_run"."durationMs"`,
+    })
     .from(workflows)
+    .leftJoin(
+      sql`LATERAL (
+        SELECT ${workflowRuns.status} AS "status",
+               ${workflowRuns.startedAt} AS "startedAt",
+               ${workflowRuns.endedAt} AS "endedAt",
+               ${workflowRuns.error} AS "error",
+               ${workflowRuns.durationMs} AS "durationMs"
+        FROM ${workflowRuns}
+        WHERE ${workflowRuns.workflowId} = ${workflows.id}
+        ORDER BY ${workflowRuns.startedAt} DESC, ${workflowRuns.id} DESC
+        LIMIT 1
+      ) AS "latest_run"`,
+      sql`TRUE`,
+    )
     .where(and(
       eq(workflows.driveId, driveId),
       eq(workflows.triggerType, MANAGEABLE_TRIGGER_TYPE),
       isNotNull(workflows.cronExpression),
     ))
     .orderBy(workflows.createdAt);
+
+  const results = rows.map(({ workflow, lastRunStatus, lastRunStartedAt, lastRunEndedAt, lastRunError, lastRunDurationMs }) => ({
+    ...workflow,
+    lastRun: lastRunStatus
+      ? {
+          status: lastRunStatus,
+          startedAt: lastRunStartedAt,
+          endedAt: lastRunEndedAt,
+          error: lastRunError,
+          durationMs: lastRunDurationMs,
+        }
+      : null,
+  }));
 
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'workflow', resourceId: driveId, details: { count: results.length } });
 
