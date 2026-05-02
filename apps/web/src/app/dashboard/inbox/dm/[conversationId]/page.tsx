@@ -6,7 +6,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelInput, type ChannelInputRef } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
+import type { FileAttachment } from '@/hooks/useAttachmentUpload';
+import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
@@ -38,6 +41,8 @@ interface Message {
   isEdited: boolean;
   editedAt: string | null;
   createdAt: string;
+  fileId?: string | null;
+  attachmentMeta?: AttachmentMeta | null;
 }
 
 interface Conversation {
@@ -146,17 +151,51 @@ export default function InboxDMPage() {
     }
   }, [conversationId]);
 
-  const handleSendMessage = async () => {
-    if (!user || !conversationId || !inputValue.trim()) return;
-
+  const handleSendMessage = async (attachment?: FileAttachment) => {
+    if (!user || !conversationId) return;
     const content = inputValue;
+    if (!content.trim() && !attachment) return;
+
     setInputValue('');
 
+    const attachmentMeta: AttachmentMeta | null = attachment
+      ? {
+          originalName: attachment.originalName,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+          contentHash: attachment.contentHash,
+        }
+      : null;
+
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      conversationId,
+      senderId: user.id,
+      content,
+      isRead: false,
+      readAt: null,
+      isEdited: false,
+      editedAt: null,
+      createdAt: new Date().toISOString(),
+      fileId: attachment?.id ?? null,
+      attachmentMeta,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+
     try {
-      await post(`/api/messages/${conversationId}`, { content });
+      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta } = {
+        content,
+      };
+      if (attachment) {
+        body.fileId = attachment.id;
+        body.attachmentMeta = attachmentMeta!;
+      }
+      await post(`/api/messages/${conversationId}`, body);
     } catch (error) {
       toast.error('Failed to send message');
       console.error('Error sending message:', error);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInputValue(content);
     }
   };
@@ -301,9 +340,12 @@ export default function InboxDMPage() {
                           ? 'bg-primary/5 dark:bg-primary/10 ml-8'
                           : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
                       }`}>
-                        <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
-                          {renderMessageParts(convertToMessageParts(message.content))}
-                        </div>
+                        {message.content && (
+                          <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
+                            {renderMessageParts(convertToMessageParts(message.content))}
+                          </div>
+                        )}
+                        <MessageAttachment message={message} />
                       </div>
                     )}
                   </div>
@@ -323,6 +365,8 @@ export default function InboxDMPage() {
             onChange={setInputValue}
             onSend={handleSendMessage}
             placeholder="Type a message... (use @ to mention, supports **markdown**)"
+            conversationId={conversationId}
+            attachmentsEnabled
           />
         </div>
       </div>
