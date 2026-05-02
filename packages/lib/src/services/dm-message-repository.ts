@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, or } from '@pagespace/db/operators';
+import { and, eq, or, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -93,19 +93,7 @@ export interface InsertDmMessageInput {
   attachmentMeta: AttachmentMeta | null;
 }
 
-export interface DmMessageRow {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string;
-  fileId: string | null;
-  attachmentMeta: AttachmentMeta | null;
-  isRead: boolean;
-  readAt: Date | null;
-  isEdited: boolean;
-  editedAt: Date | null;
-  createdAt: Date;
-}
+export type DmMessageRow = InferSelectModel<typeof directMessages>;
 
 async function insertDmMessage(input: InsertDmMessageInput): Promise<DmMessageRow> {
   const [row] = await db
@@ -118,7 +106,7 @@ async function insertDmMessage(input: InsertDmMessageInput): Promise<DmMessageRo
       attachmentMeta: input.attachmentMeta,
     })
     .returning();
-  return row as DmMessageRow;
+  return row;
 }
 
 export interface UpdateConversationLastMessageInput {
