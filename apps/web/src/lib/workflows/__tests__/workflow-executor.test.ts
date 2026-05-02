@@ -424,4 +424,18 @@ describe('executeWorkflow', () => {
     // No finalize update happens because no run was claimed.
     expect(mockUpdate).not.toHaveBeenCalled();
   });
+
+  test('surfaces a finalizeError on the result when the end-of-run UPDATE fails', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    // Simulate a transient DB failure on the finalize UPDATE.
+    mockUpdateWhere.mockRejectedValueOnce(new Error('connection terminated'));
+
+    const result = await executeWorkflow(createInputFixture());
+
+    // Execution itself completed successfully — the run text is there —
+    // but persisted state diverges (row stuck in 'running'), so callers
+    // see finalizeError.
+    expect(result.success).toBe(true);
+    expect(result.finalizeError).toBe('connection terminated');
+  });
 });
