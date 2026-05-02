@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, index, unique, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -6,22 +6,17 @@ import { drives } from './core';
 import { calendarEvents } from './calendar';
 import { workflows } from './workflows';
 
-export const calendarTriggerStatus = pgEnum('CalendarTriggerStatus', [
-  'pending',
-  'claimed',   // Reserved for future two-phase claim in recurring trigger support
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-]);
-
 /**
  * Calendar Triggers
  *
  * The "when" half of a calendar-driven workflow. The execution payload
  * (prompt, agent, instruction page, context pages) lives on the linked
- * workflows row referenced by `workflowId`. The cron calendar-triggers
- * poller claims these rows and delegates to the workflow executor.
+ * workflows row referenced by `workflowId`. Per-fire state (status,
+ * timestamps, error, durationMs, conversationId) lives on workflow_runs —
+ * one row per fire, joined back via (sourceTable='calendarTriggers',
+ * sourceId=calendarTriggers.id). The cron calendar-triggers poller picks
+ * rows where triggerAt <= NOW() AND no workflow_runs row already exists
+ * with status IN ('running','success').
  */
 export const calendarTriggers = pgTable('calendar_triggers', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -37,19 +32,7 @@ export const calendarTriggers = pgTable('calendar_triggers', {
   // Human responsible for cost (rate-limit / API key resolution)
   scheduledById: text('scheduledById').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
-  // Execution state
-  status: calendarTriggerStatus('status').notNull().default('pending'),
   triggerAt: timestamp('triggerAt', { mode: 'date', withTimezone: true }).notNull(),
-
-  claimedAt: timestamp('claimedAt', { mode: 'date', withTimezone: true }),
-  startedAt: timestamp('startedAt', { mode: 'date', withTimezone: true }),
-  completedAt: timestamp('completedAt', { mode: 'date', withTimezone: true }),
-
-  error: text('error'),
-  durationMs: integer('durationMs'),
-
-  // Links to saved chat messages for inspection
-  conversationId: text('conversationId'),
 
   // For recurring events: one trigger row per occurrence.
   // One-shot events use the epoch sentinel (1970-01-01) so the unique constraint works
@@ -61,7 +44,7 @@ export const calendarTriggers = pgTable('calendar_triggers', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {
   return {
-    statusTriggerAtIdx: index('calendar_triggers_status_trigger_at_idx').on(table.status, table.triggerAt),
+    triggerAtIdx: index('calendar_triggers_trigger_at_idx').on(table.triggerAt),
     scheduledByIdx: index('calendar_triggers_scheduled_by_idx').on(table.scheduledById),
     calendarEventIdx: index('calendar_triggers_calendar_event_idx').on(table.calendarEventId),
     workflowIdx: index('calendar_triggers_workflow_id_idx').on(table.workflowId),
