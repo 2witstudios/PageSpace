@@ -67,6 +67,8 @@ vi.mock('@pagespace/lib/services/attachment-upload', () => ({
 import { POST } from '../route';
 import { authenticateWithEnforcedContext } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
+import type { SessionClaims } from '@pagespace/lib/auth/session-service';
 
 const SUCCESS_RESPONSE_BODY = {
   success: true,
@@ -80,10 +82,23 @@ function makeRequest(): Request {
   });
 }
 
-function makeAuthSuccess(userId = 'user-1') {
-  return {
-    ctx: { userId },
+function makeAuthContext(userId = 'user-1'): EnforcedAuthContext {
+  const claims: SessionClaims = {
+    sessionId: `session-${userId}`,
+    userId,
+    userRole: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 1,
+    type: 'user',
+    scopes: ['*'],
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
   };
+
+  return EnforcedAuthContext.fromSession(claims);
+}
+
+function makeAuthSuccess(authContext: EnforcedAuthContext) {
+  return { ctx: authContext };
 }
 
 function successResponse(body: unknown = SUCCESS_RESPONSE_BODY): Response {
@@ -94,9 +109,12 @@ function successResponse(body: unknown = SUCCESS_RESPONSE_BODY): Response {
 }
 
 describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
+  let authContext: EnforcedAuthContext;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(makeAuthSuccess() as never);
+    authContext = makeAuthContext();
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(makeAuthSuccess(authContext) as never);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
     mockDmConversationsFindFirst.mockResolvedValue({
       id: 'conv-1',
@@ -117,7 +135,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
       request,
       target: { type: 'conversation', conversationId: 'conv-1' },
-      authContext: { userId: 'user-1' },
+      authContext,
     });
   });
 

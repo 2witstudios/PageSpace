@@ -40,7 +40,7 @@ Pull drag-drop / paste / file-picker / optimistic-state / error-handling out of 
 
 ## Polymorphic attachment-upload core
 
-Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conversation'; conversationId }`, a single `createAttachmentUploadServiceToken({ userId, target })`, a single `processAttachmentUpload({ request, target })` in `packages/lib/src/services/attachment-upload.ts`, and a polymorphic dispatch in `apps/processor/src/api/upload.ts:124`. The channel upload route is rewritten as a thin wrapper.
+Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conversation'; conversationId }`, a single `createAttachmentUploadServiceToken({ userId, target })`, a single `processAttachmentUpload({ request, target, authContext })` in `packages/lib/src/services/attachment-upload.ts`, and a polymorphic dispatch in `apps/processor/src/api/upload.ts:124`. The `authContext` argument is required and must be an enforced/validated auth context produced by the route's authentication layer, not a raw caller-provided `userId`. The channel upload route is rewritten as a thin wrapper.
 
 **Requirements**:
 - Given a page target, channel upload should behave identically to today end-to-end.

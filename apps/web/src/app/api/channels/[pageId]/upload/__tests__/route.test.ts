@@ -51,6 +51,8 @@ vi.mock('@pagespace/lib/services/attachment-upload', () => ({
 import { POST } from '../route';
 import { authenticateWithEnforcedContext } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
+import type { SessionClaims } from '@pagespace/lib/auth/session-service';
 
 const SUCCESS_RESPONSE_BODY = { success: true, file: { id: 'h' }, storageInfo: undefined };
 
@@ -60,14 +62,32 @@ function makeRequest(): Request {
   return new Request('http://localhost/api/channels/page-1/upload', { method: 'POST' });
 }
 
-function makeAuthSuccess(userId = 'user-1') {
-  return { ctx: { userId } };
+function makeAuthContext(userId = 'user-1'): EnforcedAuthContext {
+  const claims: SessionClaims = {
+    sessionId: `session-${userId}`,
+    userId,
+    userRole: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 1,
+    type: 'user',
+    scopes: ['*'],
+    expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+  };
+
+  return EnforcedAuthContext.fromSession(claims);
+}
+
+function makeAuthSuccess(authContext: EnforcedAuthContext) {
+  return { ctx: authContext };
 }
 
 describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
+  let authContext: EnforcedAuthContext;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(makeAuthSuccess() as never);
+    authContext = makeAuthContext();
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(makeAuthSuccess(authContext) as never);
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     mockPagesFindFirst.mockResolvedValue({
       id: 'page-1',
@@ -91,7 +111,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
       request,
       target: { type: 'page', pageId: 'page-1', driveId: 'drive-1' },
-      authContext: { userId: 'user-1' },
+      authContext,
     });
   });
 
