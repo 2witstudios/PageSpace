@@ -67,7 +67,7 @@ interface UseConversationsResult {
    * lazily on first message save and would not yet appear in a server fetch.
    * The store entry is auto-pruned once the SWR fetch confirms the row.
    */
-  prependConversationOptimistic: (entry: { id: string; title: string; createdAt: string }) => void;
+  prependConversationOptimistic: (entry: OptimisticConversationEntry) => void;
   /** SWR key for manual cache invalidation */
   swrKey: string | null;
 }
@@ -258,7 +258,7 @@ export function useConversations({
 
   const addOptimistic = useOptimisticConversationsStore((state) => state.add);
   const prependConversationOptimistic = useCallback(
-    (entry: { id: string; title: string; createdAt: string }) => {
+    (entry: OptimisticConversationEntry) => {
       addOptimistic(cacheKey, entry);
     },
     [cacheKey, addOptimistic],

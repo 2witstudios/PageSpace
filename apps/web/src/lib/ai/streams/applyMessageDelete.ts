@@ -9,7 +9,6 @@ export const applyMessageDelete = <T extends UIMessage>(
   messages: T[],
   messageId: string,
 ): T[] => {
-  const idx = messages.findIndex((m) => m.id === messageId);
-  if (idx < 0) return messages;
-  return messages.filter((m) => m.id !== messageId);
+  const next = messages.filter((m) => m.id !== messageId);
+  return next.length === messages.length ? messages : next;
 };

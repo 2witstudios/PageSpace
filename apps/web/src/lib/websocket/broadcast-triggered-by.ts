@@ -2,7 +2,10 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
+import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
+
+const triggeredByLogger = browserLoggers.realtime.child({ module: 'broadcast-triggered-by' });
 
 export interface TriggeredBy {
   userId: string;
@@ -31,7 +34,10 @@ export async function resolveTriggeredBy(
     .from(userProfiles)
     .where(eq(userProfiles.userId, userId))
     .limit(1)
-    .catch(() => [] as { displayName: string | null }[]);
+    .catch((err: unknown) => {
+      triggeredByLogger.debug({ err, query: 'userProfiles', userId }, 'displayName query failed; falling back');
+      return [] as { displayName: string | null }[];
+    });
 
   let displayName = profile?.displayName ?? null;
   if (!displayName) {
@@ -40,7 +46,10 @@ export async function resolveTriggeredBy(
       .from(users)
       .where(eq(users.id, userId))
       .limit(1)
-      .catch(() => [] as { name: string | null }[]);
+      .catch((err: unknown) => {
+        triggeredByLogger.debug({ err, query: 'users', userId }, 'displayName query failed; falling back');
+        return [] as { name: string | null }[];
+      });
     displayName = user?.name ?? 'Someone';
   }
 
