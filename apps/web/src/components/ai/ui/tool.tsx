@@ -63,13 +63,16 @@ export const ToolHeader = ({
     )}
     {...props}
   >
-    <div className="flex items-center gap-2">
-      {getStatusIcon(state)}
-      <span className="font-medium text-sm">
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <span className="flex-shrink-0">{getStatusIcon(state)}</span>
+      <span
+        className="min-w-0 flex-1 truncate font-medium text-sm text-left"
+        title={title ?? type.split("-").slice(1).join("-")}
+      >
         {title ?? type.split("-").slice(1).join("-")}
       </span>
     </div>
-    <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+    <ChevronDownIcon className="size-4 flex-shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
   </CollapsibleTrigger>
 );
 

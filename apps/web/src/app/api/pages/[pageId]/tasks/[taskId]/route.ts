@@ -459,11 +459,12 @@ export async function DELETE(
   const linkedPageId = existingTask.pageId;
 
   if (!linkedPageId) {
-    // Task without a page (conversation-based) - delete the task record directly
+    // Task without a page (conversation-based) - hard-delete the task row.
+    // disableTaskTriggers MUST run BEFORE the task delete: task_triggers
+    // has ON DELETE CASCADE on taskItemId, so deleting the task first wipes
+    // the trigger rows and leaves orphan workflows rows behind.
+    await disableTaskTriggers(taskId, 'Task deleted');
     await db.delete(taskItems).where(eq(taskItems.id, taskId));
-
-    // Disable triggers only after successful deletion
-    void disableTaskTriggers(taskId, 'Task deleted');
 
     await broadcastTaskEvent({
       type: 'task_deleted',

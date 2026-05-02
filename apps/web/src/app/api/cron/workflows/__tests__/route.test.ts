@@ -170,7 +170,15 @@ describe('POST /api/cron/workflows', () => {
     const body = await response.json();
     expect(body.executed).toBe(1);
     expect(body.total).toBe(1);
-    expect(executeWorkflow).toHaveBeenCalledWith(MOCK_WORKFLOW);
+    expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: MOCK_WORKFLOW.id,
+      workflowName: MOCK_WORKFLOW.name,
+      driveId: MOCK_WORKFLOW.driveId,
+      createdBy: MOCK_WORKFLOW.createdBy,
+      agentPageId: MOCK_WORKFLOW.agentPageId,
+      prompt: MOCK_WORKFLOW.prompt,
+      timezone: MOCK_WORKFLOW.timezone,
+    }));
   });
 
   it('should handle workflow execution errors gracefully', async () => {

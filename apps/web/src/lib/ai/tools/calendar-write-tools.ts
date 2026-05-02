@@ -6,6 +6,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
+import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -259,69 +260,69 @@ export const calendarWriteTools = {
           }
         }
 
-        // Create the event
-        const [event] = await db
-          .insert(calendarEvents)
-          .values({
-            driveId: driveId ?? null,
-            createdById: userId,
-            pageId: pageId ?? null,
-            title,
-            description: description ?? null,
-            location: location ?? null,
-            startAt: parsedStartAt,
-            endAt: parsedEndAt,
-            allDay,
-            timezone,
-            recurrenceRule: recurrence ?? null,
-            visibility,
-            color,
-            updatedAt: new Date(),
-          })
-          .returning();
+        // Event + attendees + (optional) agent trigger setup are written
+        // atomically. Aligns with the REST POST path (apps/web/src/app/api/
+        // calendar/events/route.ts): a failure during trigger creation must
+        // roll back the event so we never leave an orphan event in the
+        // calendar without its scheduled fire.
+        const scheduledByAgentPageId = (ctx as ToolExecutionContext)?.chatSource?.agentPageId;
 
-        // Add creator as organizer attendee
-        await db.insert(eventAttendees).values({
-          eventId: event.id,
-          userId: userId,
-          status: 'ACCEPTED',
-          isOrganizer: true,
-          respondedAt: new Date(),
-        });
+        const { event, triggerId: createdTriggerIdInTx } = await db.transaction(async (tx) => {
+          const [createdEvent] = await tx
+            .insert(calendarEvents)
+            .values({
+              driveId: driveId ?? null,
+              createdById: userId,
+              pageId: pageId ?? null,
+              title,
+              description: description ?? null,
+              location: location ?? null,
+              startAt: parsedStartAt,
+              endAt: parsedEndAt,
+              allDay,
+              timezone,
+              recurrenceRule: recurrence ?? null,
+              visibility,
+              color,
+              updatedAt: new Date(),
+            })
+            .returning();
 
-        // Add other attendees if provided
-        if (otherAttendees.length > 0) {
-          await db.insert(eventAttendees).values(
-            otherAttendees.map((attendeeId) => ({
-              eventId: event.id,
-              userId: attendeeId,
-              status: 'PENDING' as const,
-              isOrganizer: false,
-            }))
-          );
-        }
+          await tx.insert(eventAttendees).values({
+            eventId: createdEvent.id,
+            userId: userId,
+            status: 'ACCEPTED',
+            isOrganizer: true,
+            respondedAt: new Date(),
+          });
 
-        // Create agent trigger if requested (atomically with event metadata)
-        let triggerId: string | null = null;
-        if (agentTrigger && driveId && validatedAgent) {
-          const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
-          const scheduledByAgentPageId = (ctx as ToolExecutionContext)?.chatSource?.agentPageId;
+          if (otherAttendees.length > 0) {
+            await tx.insert(eventAttendees).values(
+              otherAttendees.map((attendeeId) => ({
+                eventId: createdEvent.id,
+                userId: attendeeId,
+                status: 'PENDING' as const,
+                isOrganizer: false,
+              }))
+            );
+          }
 
-          const { trigger } = await db.transaction(async (tx) => {
-            const [trg] = await tx
-              .insert(calendarTriggers)
-              .values({
-                calendarEventId: event.id,
+          let createdTriggerIdLocal: string | null = null;
+          if (agentTrigger && driveId && validatedAgent) {
+            const { triggerId: newTriggerId } = await createCalendarTriggerWorkflow({
+              tx,
+              driveId,
+              scheduledById: userId,
+              calendarEventId: createdEvent.id,
+              triggerAt: parsedStartAt,
+              timezone,
+              agentTrigger: {
                 agentPageId: agentTrigger.agentPageId,
-                driveId,
-                scheduledById: userId,
-                prompt: triggerPrompt,
+                prompt: agentTrigger.prompt,
                 instructionPageId: agentTrigger.instructionPageId ?? null,
                 contextPageIds: agentTrigger.contextPageIds ?? [],
-                status: 'pending',
-                triggerAt: parsedStartAt,
-              })
-              .returning();
+              },
+            });
 
             await tx
               .update(calendarEvents)
@@ -329,17 +330,19 @@ export const calendarWriteTools = {
                 metadata: {
                   isTrigger: true,
                   triggerType: 'agent_execution',
-                  triggerId: trg.id,
+                  triggerId: newTriggerId,
                   scheduledByAgentPageId,
                 } satisfies CalendarTriggerMetadata,
               })
-              .where(eq(calendarEvents.id, event.id));
+              .where(eq(calendarEvents.id, createdEvent.id));
 
-            return { trigger: trg };
-          });
+            createdTriggerIdLocal = newTriggerId;
+          }
 
-          triggerId = trigger.id;
-        }
+          return { event: createdEvent, triggerId: createdTriggerIdLocal };
+        });
+
+        const triggerId: string | null = createdTriggerIdInTx;
 
         // Broadcast event creation (best-effort)
         try {

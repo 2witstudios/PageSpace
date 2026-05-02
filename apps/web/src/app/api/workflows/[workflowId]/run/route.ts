@@ -5,7 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
-import { executeWorkflow } from '@/lib/workflows/workflow-executor';
+import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -26,7 +26,10 @@ export async function POST(
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE) {
+  // Backing workflows (those owned by task_triggers / calendar_triggers)
+  // share triggerType='cron' but have cronExpression=null. They are not
+  // user-runnable through this surface — fire them via their own trigger.
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE || !workflow.cronExpression) {
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
@@ -49,10 +52,22 @@ export async function POST(
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
   }
 
+  const executionInput: WorkflowExecutionInput = {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    driveId: workflow.driveId,
+    createdBy: workflow.createdBy,
+    agentPageId: workflow.agentPageId,
+    prompt: workflow.prompt,
+    contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
+    instructionPageId: workflow.instructionPageId,
+    timezone: workflow.timezone,
+  };
+
   // Execute
   let result;
   try {
-    result = await executeWorkflow(workflow);
+    result = await executeWorkflow(executionInput);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     await db

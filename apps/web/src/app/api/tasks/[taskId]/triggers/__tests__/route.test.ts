@@ -38,6 +38,7 @@ vi.mock('@pagespace/db/db', () => ({
     },
     select: vi.fn(() => ({
       from: vi.fn(() => ({
+        innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
         where: vi.fn().mockResolvedValue([]),
       })),
     })),
@@ -57,7 +58,8 @@ vi.mock('@pagespace/db/operators', () => ({
 
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
-vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { taskItemId: 't', triggerType: 'tt' } }));
+vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id', agentPageId: 'agentPageId', prompt: 'prompt', instructionPageId: 'instructionPageId', contextPageIds: 'contextPageIds' } }));
+vi.mock('@pagespace/db/schema/task-triggers', () => ({ taskTriggers: { id: 'id', taskItemId: 'taskItemId', triggerType: 'triggerType', workflowId: 'workflowId', isEnabled: 'isEnabled', nextRunAt: 'nextRunAt', lastFiredAt: 'lastFiredAt', lastFireError: 'lastFireError', createdAt: 'createdAt', updatedAt: 'updatedAt' } }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
@@ -92,7 +94,10 @@ describe('Task triggers API', () => {
       set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
     } as never);
     vi.mocked(db.select).mockReturnValue({
-      from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+      from: vi.fn(() => ({
+        innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        where: vi.fn().mockResolvedValue([]),
+      })),
     } as never);
   });
 
@@ -131,16 +136,18 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
-      const triggerRow = { id: 'wf-1', triggerType: 'task_completion', agentPageId, prompt: 'do it', isEnabled: true };
+      const triggerRow = { id: 'trg-1', triggerType: 'completion', agentPageId, prompt: 'do it', isEnabled: true, workflowId: 'wf-1' };
       vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([triggerRow]) })),
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([triggerRow]) })),
+        })),
       } as never);
 
       const res = await GET(mkRequest('GET'), { params: mkParams() });
       const body = await res.json();
       expect(res.status).toBe(200);
       expect(body.triggers).toHaveLength(1);
-      expect(body.triggers[0].id).toBe('wf-1');
+      expect(body.triggers[0].id).toBe('trg-1');
     });
   });
 
@@ -190,7 +197,9 @@ describe('Task triggers API', () => {
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([{ id: 'wf-2', triggerType: 'task_completion' }]),
+          innerJoin: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([{ id: 'trg-2', triggerType: 'completion', workflowId: 'wf-2' }]),
+          })),
         })),
       } as never);
 
@@ -210,7 +219,9 @@ describe('Task triggers API', () => {
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       // Simulate the post-upsert re-query coming back empty (race / constraint loss)
       vi.mocked(db.select).mockReturnValueOnce({
-        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        })),
       } as never);
 
       const res = await PUT(
@@ -234,7 +245,7 @@ describe('Task triggers API', () => {
 
     it('disables trigger and delegates metadata recompute to the helper', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      const taskMetadata = { hasTrigger: true, triggerTypes: ['task_completion', 'task_due_date'] };
+      const taskMetadata = { hasTrigger: true, triggerTypes: ['completion', 'due_date'] };
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
         id: taskId,
         taskListId,

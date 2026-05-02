@@ -7,7 +7,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
-import { workflows } from '@pagespace/db/schema/workflows';
+import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
@@ -30,7 +30,7 @@ export async function DELETE(
   if (!parsedType.success) {
     return NextResponse.json({ error: 'Invalid trigger type' }, { status: 400 });
   }
-  const triggerTypeDb = parsedType.data === 'completion' ? 'task_completion' as const : 'task_due_date' as const;
+  const triggerTypeValue = parsedType.data;
 
   const task = await db.query.taskItems.findFirst({ where: eq(taskItems.id, taskId) });
   if (!task) {
@@ -56,9 +56,9 @@ export async function DELETE(
   }
 
   await db
-    .update(workflows)
-    .set({ isEnabled: false, lastRunError: 'Disabled by user', nextRunAt: null })
-    .where(and(eq(workflows.taskItemId, taskId), eq(workflows.triggerType, triggerTypeDb)));
+    .update(taskTriggers)
+    .set({ isEnabled: false, lastFireError: 'Disabled by user', nextRunAt: null })
+    .where(and(eq(taskTriggers.taskItemId, taskId), eq(taskTriggers.triggerType, triggerTypeValue)));
 
   await recomputeTaskTriggerMetadata(db, taskId, task.metadata as Record<string, unknown> | null);
 
@@ -67,7 +67,7 @@ export async function DELETE(
     userId,
     resourceType: 'task_triggers',
     resourceId: taskId,
-    details: { triggerType: triggerTypeDb },
+    details: { triggerType: triggerTypeValue },
   });
 
   void broadcastTaskEvent({
@@ -76,7 +76,7 @@ export async function DELETE(
     taskListId: task.taskListId,
     userId,
     pageId: taskList.pageId,
-    data: { id: taskId, removedTriggerType: triggerTypeDb },
+    data: { id: taskId, removedTriggerType: triggerTypeValue },
   });
 
   return NextResponse.json({ success: true });

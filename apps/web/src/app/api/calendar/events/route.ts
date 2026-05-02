@@ -6,6 +6,7 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -558,14 +559,19 @@ export async function POST(request: Request) {
       }
 
       if (data.agentTrigger && agentPageId && data.driveId) {
-        await tx.insert(calendarTriggers).values({
-          calendarEventId: created.id,
-          agentPageId,
+        await createCalendarTriggerWorkflow({
+          tx,
           driveId: data.driveId,
           scheduledById: userId,
-          prompt: data.agentTrigger.prompt,
+          calendarEventId: created.id,
           triggerAt: startAt,
-          contextPageIds: [],
+          timezone: data.timezone,
+          agentTrigger: {
+            agentPageId,
+            prompt: data.agentTrigger.prompt,
+            instructionPageId: null,
+            contextPageIds: [],
+          },
         });
       }
 

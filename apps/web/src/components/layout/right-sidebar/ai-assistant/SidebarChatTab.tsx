@@ -283,6 +283,10 @@ const SidebarChatTab: React.FC = () => {
     ),
   );
 
+  const remoteStreamingUser = !displayIsStreaming
+    ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
+    : null;
+
   // Agent-mode wiring (Tasks 4 + 5 + 6 for the sidebar). No-op when
   // selectedAgent is null. Joins the agent socket room, bootstrap-replays
   // in-flight streams, claims the dashboard stop slot under co-mount safety,
@@ -925,6 +929,7 @@ const SidebarChatTab: React.FC = () => {
           hasVision={hasVisionCapability(
             (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
           )}
+          remoteStreamingUser={remoteStreamingUser}
         />
       </div>
 

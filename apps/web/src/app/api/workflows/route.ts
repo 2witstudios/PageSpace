@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
@@ -44,10 +44,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
+  // The cronExpression IS NOT NULL guard distinguishes user-managed cron
+  // workflows (which always carry a cron expression) from backing workflows
+  // owned by task_triggers / calendar_triggers (which use triggerType='cron'
+  // for the executor but have no cron expression). Without this gate the
+  // backing rows leak into the management UI and become user-editable.
   const results = await db
     .select()
     .from(workflows)
-    .where(and(eq(workflows.driveId, driveId), eq(workflows.triggerType, MANAGEABLE_TRIGGER_TYPE)))
+    .where(and(
+      eq(workflows.driveId, driveId),
+      eq(workflows.triggerType, MANAGEABLE_TRIGGER_TYPE),
+      isNotNull(workflows.cronExpression),
+    ))
     .orderBy(workflows.createdAt);
 
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'workflow', resourceId: driveId, details: { count: results.length } });

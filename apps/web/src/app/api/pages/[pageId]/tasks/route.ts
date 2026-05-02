@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, inArray, count } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
-import { workflows } from '@pagespace/db/schema/workflows';
+import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
@@ -208,22 +208,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     );
   }
 
-  // Ground-truth active trigger count from the workflows table so badges don't
-  // go stale when an agent page is trashed and the workflow row cascade-deletes.
+  // Ground-truth active trigger count from task_triggers so badges don't go
+  // stale when an agent page is trashed: the workflows row cascade-deletes,
+  // which in turn cascade-deletes the task_triggers row.
   const triggerCountByTaskId = new Map<string, number>();
   if (tasks.length > 0) {
     const taskIdList = tasks.map((t) => t.id);
     const triggerRows = await db
-      .select({ taskItemId: workflows.taskItemId, total: count() })
-      .from(workflows)
+      .select({ taskItemId: taskTriggers.taskItemId, total: count() })
+      .from(taskTriggers)
       .where(and(
-        inArray(workflows.taskItemId, taskIdList),
-        eq(workflows.isEnabled, true),
-        inArray(workflows.triggerType, ['task_due_date', 'task_completion']),
+        inArray(taskTriggers.taskItemId, taskIdList),
+        eq(taskTriggers.isEnabled, true),
       ))
-      .groupBy(workflows.taskItemId);
+      .groupBy(taskTriggers.taskItemId);
     for (const row of triggerRows) {
-      if (row.taskItemId) triggerCountByTaskId.set(row.taskItemId, Number(row.total));
+      triggerCountByTaskId.set(row.taskItemId, Number(row.total));
     }
   }
 

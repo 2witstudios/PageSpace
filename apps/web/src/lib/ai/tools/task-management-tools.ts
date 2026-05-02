@@ -200,6 +200,12 @@ Agent Triggers:
             const linkedPageId = existingTask.pageId;
             const actorInfo = await getActorInfo(userId);
 
+            // disableTaskTriggers MUST run BEFORE the taskItems delete:
+            // task_triggers has ON DELETE CASCADE on taskItemId, so deleting
+            // the task first wipes the trigger rows and the helper's SELECT
+            // returns empty — leaking orphan workflows rows.
+            await disableTaskTriggers(taskId, 'Task deleted via update_task');
+
             // Trash linked DOCUMENT page (if any) and hard-delete the task row in one transaction.
             // taskAssignees rows cascade-delete via FK on taskItems.
             // applyPageMutation returns a deferredTrigger that callers passing their own tx
@@ -250,8 +256,6 @@ Agent Triggers:
               }
               throw error;
             }
-
-            void disableTaskTriggers(taskId, 'Task deleted via update_task');
 
             // Look up driveId for the page-trashed broadcast (best-effort)
             let deletedDriveId: string | undefined;

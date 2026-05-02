@@ -367,6 +367,10 @@ const GlobalAssistantView: React.FC = () => {
     contextIsStreaming,
     contextStopStreaming,
   });
+
+  const remoteStreamingUser = !effectiveIsStreaming
+    ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
+    : null;
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -952,6 +956,7 @@ const GlobalAssistantView: React.FC = () => {
               hasVision={hasVisionCapability(
                 (selectedAgent ? agentSelectedModel : currentModel) || ''
               )}
+              remoteStreamingUser={remoteStreamingUser}
             />
           </>
         )}

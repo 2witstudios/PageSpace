@@ -7,6 +7,10 @@ import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
+import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
@@ -277,6 +281,24 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    },
+    onMessageEdited: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) =>
+        applyMessageEdit(prev, {
+          messageId: payload.messageId,
+          parts: payload.parts,
+          editedAt: new Date(payload.editedAt),
+        }),
+      );
+    },
+    onMessageDeleted: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) => applyMessageDelete(prev, payload.messageId));
+    },
+    onUndoApplied: (payload) => {
+      if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
+      refreshConversationRef.current();
     },
     onStreamComplete: () => {
       refreshConversationRef.current();

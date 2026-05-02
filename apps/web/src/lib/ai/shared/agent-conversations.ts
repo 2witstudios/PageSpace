@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 
 export interface AgentConversationSummary {
   id: string;
@@ -105,7 +106,10 @@ export async function fetchMostRecentAgentConversation(
 export async function createAgentConversation(agentId: string): Promise<string> {
   const response = await fetchWithAuth(`/api/ai/page-agents/${agentId}/conversations`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Browser-Session-Id': getBrowserSessionId(),
+    },
     body: JSON.stringify({}),
   });
   if (!response.ok) {

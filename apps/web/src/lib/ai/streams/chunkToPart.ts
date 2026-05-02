@@ -6,9 +6,10 @@ interface ToolPart {
   type: `tool-${string}`;
   toolCallId: string;
   toolName: string;
-  state: 'input-available' | 'output-available';
+  state: 'input-available' | 'output-available' | 'output-error';
   input: unknown;
   output?: unknown;
+  errorText?: string;
 }
 
 interface AISDKChunk {
@@ -18,8 +19,19 @@ interface AISDKChunk {
   toolCallId?: string;
   input?: unknown;
   output?: unknown;
+  error?: unknown;
   [key: string]: unknown;
 }
+
+const errorTextFor = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Tool execution failed';
+  }
+};
 
 const toolPart = (
   state: ToolPart['state'],
@@ -31,6 +43,7 @@ const toolPart = (
   state,
   input: chunk.input,
   ...(state === 'output-available' ? { output: chunk.output } : {}),
+  ...(state === 'output-error' ? { errorText: errorTextFor(chunk.error) } : {}),
 });
 
 /**
@@ -46,11 +59,16 @@ export const chunkToPart = (chunk: AISDKChunk): AnyPart | null => {
     return { type: 'text', text: chunk.text };
   }
   if (
-    (chunk.type === 'tool-call' || chunk.type === 'tool-result') &&
+    (chunk.type === 'tool-call' || chunk.type === 'tool-result' || chunk.type === 'tool-error') &&
     typeof chunk.toolName === 'string' &&
     typeof chunk.toolCallId === 'string'
   ) {
-    const state = chunk.type === 'tool-call' ? 'input-available' : 'output-available';
+    const state =
+      chunk.type === 'tool-call'
+        ? 'input-available'
+        : chunk.type === 'tool-result'
+        ? 'output-available'
+        : 'output-error';
     return toolPart(state, { ...chunk, toolName: chunk.toolName, toolCallId: chunk.toolCallId }) as unknown as AnyPart;
   }
   return null;

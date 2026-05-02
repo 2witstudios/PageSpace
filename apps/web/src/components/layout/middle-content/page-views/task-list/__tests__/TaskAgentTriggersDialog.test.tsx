@@ -25,12 +25,12 @@ const TRIGGERS_URL = `/api/tasks/${TASK_ID}/triggers`;
 
 const remoteTrigger = () => ({
   id: 'trig-1',
-  triggerType: 'task_due_date' as const,
+  triggerType: 'due_date' as const,
   agentPageId: 'agent-1',
   prompt: 'remote-prompt',
   isEnabled: true,
-  lastRunStatus: 'never_run' as const,
-  lastRunAt: null,
+  lastFiredAt: null,
+  lastFireError: null,
 });
 
 const remoteAgent = () => ({ id: 'agent-1', title: 'Triage Bot' });
@@ -71,7 +71,7 @@ const renderDialog = () =>
 describe('statusToneClass', () => {
   test('error status maps to destructive tone', () => {
     assert({
-      given: 'lastRunStatus = "error"',
+      given: 'last-run status = "error"',
       should: 'return the destructive tone class',
       actual: statusToneClass('error'),
       expected: 'text-xs text-destructive',
@@ -80,11 +80,10 @@ describe('statusToneClass', () => {
 
   test('non-error statuses map to muted tone', () => {
     assert({
-      given: 'lastRunStatus values that are not "error"',
+      given: 'last-run status values that are not "error"',
       should: 'return the muted-foreground tone class',
-      actual: (['success', 'running', 'never_run'] as const).map(statusToneClass),
+      actual: (['success', 'never_run'] as const).map(statusToneClass),
       expected: [
-        'text-xs text-muted-foreground',
         'text-xs text-muted-foreground',
         'text-xs text-muted-foreground',
       ],

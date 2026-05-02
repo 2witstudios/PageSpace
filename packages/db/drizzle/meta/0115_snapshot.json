@@ -1,5 +1,5 @@
 {
-  "id": "614b9792-c9c9-4c08-9f29-38d4dcea0d5d",
+  "id": "85b543c7-3482-4def-9265-6a010b7046e2",
   "prevId": "57ff0f4b-bcd3-478e-9680-3261a55d732b",
   "version": "7",
   "dialect": "postgresql",
@@ -3782,6 +3782,83 @@
         }
       },
       "uniqueConstraints": {}
+    },
+    "public.user_ai_settings": {
+      "name": "user_ai_settings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encryptedApiKey": {
+          "name": "encryptedApiKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "baseUrl": {
+          "name": "baseUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "user_ai_settings_userId_users_id_fk": {
+          "name": "user_ai_settings_userId_users_id_fk",
+          "tableFrom": "user_ai_settings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_provider_unique": {
+          "name": "user_provider_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "userId",
+            "provider"
+          ]
+        }
+      }
     },
     "public.pulse_summaries": {
       "name": "pulse_summaries",
@@ -12174,14 +12251,14 @@
           "primaryKey": true,
           "notNull": true
         },
-        "calendarEventId": {
-          "name": "calendarEventId",
+        "workflowId": {
+          "name": "workflowId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "agentPageId": {
-          "name": "agentPageId",
+        "calendarEventId": {
+          "name": "calendarEventId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -12197,25 +12274,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "prompt": {
-          "name": "prompt",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "instructionPageId": {
-          "name": "instructionPageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contextPageIds": {
-          "name": "contextPageIds",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'[]'::jsonb"
         },
         "status": {
           "name": "status",
@@ -12325,21 +12383,6 @@
           "method": "btree",
           "with": {}
         },
-        "calendar_triggers_agent_page_idx": {
-          "name": "calendar_triggers_agent_page_idx",
-          "columns": [
-            {
-              "expression": "agentPageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "calendar_triggers_calendar_event_idx": {
           "name": "calendar_triggers_calendar_event_idx",
           "columns": [
@@ -12354,15 +12397,30 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "calendar_triggers_workflow_id_idx": {
+          "name": "calendar_triggers_workflow_id_idx",
+          "columns": [
+            {
+              "expression": "workflowId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "calendar_triggers_calendarEventId_calendar_events_id_fk": {
-          "name": "calendar_triggers_calendarEventId_calendar_events_id_fk",
+        "calendar_triggers_workflowId_workflows_id_fk": {
+          "name": "calendar_triggers_workflowId_workflows_id_fk",
           "tableFrom": "calendar_triggers",
-          "tableTo": "calendar_events",
+          "tableTo": "workflows",
           "columnsFrom": [
-            "calendarEventId"
+            "workflowId"
           ],
           "columnsTo": [
             "id"
@@ -12370,12 +12428,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "calendar_triggers_agentPageId_pages_id_fk": {
-          "name": "calendar_triggers_agentPageId_pages_id_fk",
+        "calendar_triggers_calendarEventId_calendar_events_id_fk": {
+          "name": "calendar_triggers_calendarEventId_calendar_events_id_fk",
           "tableFrom": "calendar_triggers",
-          "tableTo": "pages",
+          "tableTo": "calendar_events",
           "columnsFrom": [
-            "agentPageId"
+            "calendarEventId"
           ],
           "columnsTo": [
             "id"
@@ -12407,19 +12465,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_triggers_instructionPageId_pages_id_fk": {
-          "name": "calendar_triggers_instructionPageId_pages_id_fk",
-          "tableFrom": "calendar_triggers",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "instructionPageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -12521,12 +12566,6 @@
           "primaryKey": false,
           "notNull": false,
           "default": 30
-        },
-        "taskItemId": {
-          "name": "taskItemId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "instructionPageId": {
           "name": "instructionPageId",
@@ -12674,21 +12713,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "workflows_task_item_id_idx": {
-          "name": "workflows_task_item_id_idx",
-          "columns": [
-            {
-              "expression": "taskItemId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -12731,19 +12755,6 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "workflows_taskItemId_task_items_id_fk": {
-          "name": "workflows_taskItemId_task_items_id_fk",
-          "tableFrom": "workflows",
-          "tableTo": "task_items",
-          "columnsFrom": [
-            "taskItemId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "workflows_instructionPageId_pages_id_fk": {
           "name": "workflows_instructionPageId_pages_id_fk",
           "tableFrom": "workflows",
@@ -12759,9 +12770,161 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.task_triggers": {
+      "name": "task_triggers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workflowId": {
+          "name": "workflowId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "taskItemId": {
+          "name": "taskItemId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "triggerType": {
+          "name": "triggerType",
+          "type": "TaskTriggerType",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nextRunAt": {
+          "name": "nextRunAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastFiredAt": {
+          "name": "lastFiredAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastFireError": {
+          "name": "lastFireError",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "isEnabled": {
+          "name": "isEnabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "task_triggers_workflow_id_idx": {
+          "name": "task_triggers_workflow_id_idx",
+          "columns": [
+            {
+              "expression": "workflowId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_triggers_task_item_id_idx": {
+          "name": "task_triggers_task_item_id_idx",
+          "columns": [
+            {
+              "expression": "taskItemId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_triggers_enabled_next_run_idx": {
+          "name": "task_triggers_enabled_next_run_idx",
+          "columns": [
+            {
+              "expression": "isEnabled",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "nextRunAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "task_triggers_workflowId_workflows_id_fk": {
+          "name": "task_triggers_workflowId_workflows_id_fk",
+          "tableFrom": "task_triggers",
+          "tableTo": "workflows",
+          "columnsFrom": [
+            "workflowId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "task_triggers_taskItemId_task_items_id_fk": {
+          "name": "task_triggers_taskItemId_task_items_id_fk",
+          "tableFrom": "task_triggers",
+          "tableTo": "task_items",
+          "columnsFrom": [
+            "taskItemId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "workflows_task_item_trigger_type_key": {
-          "name": "workflows_task_item_trigger_type_key",
+        "task_triggers_task_item_trigger_type_key": {
+          "name": "task_triggers_task_item_trigger_type_key",
           "nullsNotDistinct": false,
           "columns": [
             "taskItemId",
@@ -13376,9 +13539,15 @@
       "schema": "public",
       "values": [
         "cron",
-        "event",
-        "task_due_date",
-        "task_completion"
+        "event"
+      ]
+    },
+    "public.TaskTriggerType": {
+      "name": "TaskTriggerType",
+      "schema": "public",
+      "values": [
+        "due_date",
+        "completion"
       ]
     }
   },
