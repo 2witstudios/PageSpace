@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray } from '@pagespace/db/operators'
+import { eq, and, inArray, isNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
@@ -178,6 +178,7 @@ export async function syncTaskDueDateTrigger(taskId: string, newDueDate: Date | 
           eq(taskTriggers.taskItemId, taskId),
           eq(taskTriggers.triggerType, 'due_date'),
           eq(taskTriggers.isEnabled, true),
+          isNull(taskTriggers.lastFiredAt),
         ),
       );
     } else {
@@ -190,6 +191,7 @@ export async function syncTaskDueDateTrigger(taskId: string, newDueDate: Date | 
           eq(taskTriggers.taskItemId, taskId),
           eq(taskTriggers.triggerType, 'due_date'),
           eq(taskTriggers.isEnabled, true),
+          isNull(taskTriggers.lastFiredAt),
         ),
       );
     }
@@ -212,6 +214,7 @@ export async function cancelTaskDueDateTrigger(taskId: string, reason: string): 
         eq(taskTriggers.taskItemId, taskId),
         eq(taskTriggers.triggerType, 'due_date'),
         eq(taskTriggers.isEnabled, true),
+        isNull(taskTriggers.lastFiredAt),
       ),
     );
   } catch (err) {
