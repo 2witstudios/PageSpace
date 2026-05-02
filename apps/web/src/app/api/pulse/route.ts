@@ -186,7 +186,8 @@ export async function GET(req: Request) {
               and(
                 inArray(directMessages.conversationId, conversationIds),
                 ne(directMessages.senderId, userId),
-                eq(directMessages.isRead, false)
+                eq(directMessages.isRead, false),
+                eq(directMessages.isActive, true)
               )
             )
         : Promise.resolve([{ count: 0 }]),

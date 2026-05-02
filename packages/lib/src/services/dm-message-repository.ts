@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
+import { and, desc, eq, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -157,18 +157,11 @@ async function findActiveMessage(
 }
 
 async function softDeleteMessage(messageId: string): Promise<number> {
-  // Also flip isRead=true so the row stops contributing to recipient unread
-  // counts. Otherwise a sender soft-deleting an unread DM would leave a phantom
-  // unread badge that mark-as-read (now isActive-filtered) cannot clear.
-  // COALESCE preserves the recipient's original readAt when the message had
-  // already been read — we only want to backfill readAt for rows that were
-  // still unread at delete time.
   const result = await db
     .update(directMessages)
     .set({
       isActive: false,
-      isRead: true,
-      readAt: sql`COALESCE(${directMessages.readAt}, NOW())`,
+      deletedAt: new Date(),
     })
     .where(
       and(
@@ -178,6 +171,54 @@ async function softDeleteMessage(messageId: string): Promise<number> {
     )
     .returning({ id: directMessages.id });
   return result.length;
+}
+
+async function purgeInactiveMessages(olderThan: Date): Promise<number> {
+  return db.transaction(async (tx) => {
+    const purgedMessages = await tx
+      .delete(directMessages)
+      .where(
+        and(
+          eq(directMessages.isActive, false),
+          isNotNull(directMessages.deletedAt),
+          lt(directMessages.deletedAt, olderThan)
+        )
+      )
+      .returning({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+        fileId: directMessages.fileId,
+      });
+
+    const purgedAttachmentPairs = purgedMessages.flatMap((message) =>
+      message.fileId
+        ? [{ fileId: message.fileId, conversationId: message.conversationId }]
+        : []
+    );
+
+    if (purgedAttachmentPairs.length > 0) {
+      await tx.execute(sql`
+        WITH purged_pairs("fileId", "conversationId") AS (
+          VALUES ${sql.join(
+            purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+            sql`, `
+          )}
+        )
+        DELETE FROM file_conversations fc
+        USING purged_pairs pp
+        WHERE fc."fileId" = pp."fileId"
+          AND fc."conversationId" = pp."conversationId"
+          AND NOT EXISTS (
+            SELECT 1
+            FROM direct_messages dm
+            WHERE dm."fileId" = fc."fileId"
+              AND dm."conversationId" = fc."conversationId"
+          )
+      `);
+    }
+
+    return purgedMessages.length;
+  });
 }
 
 export interface EditActiveMessageInput {
@@ -274,6 +315,7 @@ export const dmMessageRepository = {
   updateConversationLastMessage,
   findActiveMessage,
   softDeleteMessage,
+  purgeInactiveMessages,
   editActiveMessage,
   listActiveMessages,
   markActiveMessagesRead,

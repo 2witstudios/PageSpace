@@ -132,6 +132,8 @@ const mockInsertedRow = (overrides: Partial<{
   readAt: null,
   isEdited: false,
   editedAt: null,
+  isActive: true,
+  deletedAt: null,
   createdAt: new Date('2026-05-02T00:00:00Z'),
 });
 

@@ -4,9 +4,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockChatRepo, mockGlobalRepo, mockAudit } = vi.hoisted(() => ({
+const { mockChatRepo, mockGlobalRepo, mockDmRepo, mockAudit } = vi.hoisted(() => ({
   mockChatRepo: { purgeInactiveMessages: vi.fn() },
   mockGlobalRepo: { purgeInactiveMessages: vi.fn(), purgeInactiveConversations: vi.fn() },
+  mockDmRepo: { purgeInactiveMessages: vi.fn() },
   mockAudit: vi.fn(),
 }));
 
@@ -20,6 +21,10 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: mockGlobalRepo,
+}));
+
+vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
+  dmMessageRepository: mockDmRepo,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -50,13 +55,37 @@ describe('/api/cron/purge-deleted-messages', () => {
     mockChatRepo.purgeInactiveMessages.mockResolvedValue(5);
     mockGlobalRepo.purgeInactiveMessages.mockResolvedValue(3);
     mockGlobalRepo.purgeInactiveConversations.mockResolvedValue(2);
+    mockDmRepo.purgeInactiveMessages.mockResolvedValue(4);
   });
 
   it('logs audit event on successful purge', async () => {
     await GET(makeRequest());
 
     expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged: 5, globalMessagesPurged: 3, conversationsPurged: 2 } })
+      expect.objectContaining({
+        eventType: 'data.delete',
+        resourceType: 'cron_job',
+        resourceId: 'purge_deleted_messages',
+        details: {
+          chatMessagesPurged: 5,
+          globalMessagesPurged: 3,
+          directMessagesPurged: 4,
+          conversationsPurged: 2,
+        },
+      })
+    );
+  });
+
+  it('returns direct message purge count in the retention response', async () => {
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(mockDmRepo.purgeInactiveMessages).toHaveBeenCalledTimes(1);
+    expect(body).toEqual(
+      expect.objectContaining({
+        success: true,
+        directMessagesPurged: 4,
+      })
     );
   });
 

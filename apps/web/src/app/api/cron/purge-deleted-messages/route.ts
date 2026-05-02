@@ -3,6 +3,7 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
 
 /**
  * Cron endpoint to hard-delete soft-deleted messages and conversations.
@@ -24,18 +25,25 @@ export async function GET(request: Request) {
 
     const chatMessagesPurged = await chatMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const globalMessagesPurged = await globalConversationRepository.purgeInactiveMessages(thirtyDaysAgo);
+    const directMessagesPurged = await dmMessageRepository.purgeInactiveMessages(thirtyDaysAgo);
     const conversationsPurged = await globalConversationRepository.purgeInactiveConversations(thirtyDaysAgo);
 
     console.log(
-      `[Cron] Purged deleted messages: chat=${chatMessagesPurged}, global=${globalMessagesPurged}, conversations=${conversationsPurged}`
+      `[Cron] Purged deleted messages: chat=${chatMessagesPurged}, global=${globalMessagesPurged}, direct=${directMessagesPurged}, conversations=${conversationsPurged}`
     );
 
-    audit({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'purge_deleted_messages', details: { chatMessagesPurged, globalMessagesPurged, conversationsPurged } });
+    audit({
+      eventType: 'data.delete',
+      resourceType: 'cron_job',
+      resourceId: 'purge_deleted_messages',
+      details: { chatMessagesPurged, globalMessagesPurged, directMessagesPurged, conversationsPurged },
+    });
 
     return NextResponse.json({
       success: true,
       chatMessagesPurged,
       globalMessagesPurged,
+      directMessagesPurged,
       conversationsPurged,
       timestamp: now.toISOString(),
     });

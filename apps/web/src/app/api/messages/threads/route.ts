@@ -69,6 +69,7 @@ async function fetchDMConversations(userId: string) {
       INNER JOIN conversation_data cd ON dm."conversationId" = cd.id
       WHERE dm."senderId" = cd.other_user_id
         AND dm."isRead" = false
+        AND dm."isActive" = true
       GROUP BY dm."conversationId"
     )
     SELECT

@@ -115,7 +115,8 @@ export async function GET(req: Request) {
           and(
             sql`${directMessages.conversationId} IN (${sql.join(conversationIds.map(id => sql`${id}`), sql`, `)})`,
             ne(directMessages.senderId, userId),
-            eq(directMessages.isRead, false)
+            eq(directMessages.isRead, false),
+            eq(directMessages.isActive, true)
           )
         );
       unreadCount = unreadResult?.count ?? 0;
