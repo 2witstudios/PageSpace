@@ -35,7 +35,11 @@ export async function resolveTriggeredBy(
     .where(eq(userProfiles.userId, userId))
     .limit(1)
     .catch((err: unknown) => {
-      triggeredByLogger.debug({ err, query: 'userProfiles', userId }, 'displayName query failed; falling back');
+      triggeredByLogger.debug('displayName query failed; falling back', {
+        err,
+        query: 'userProfiles',
+        userId,
+      });
       return [] as { displayName: string | null }[];
     });
 
@@ -47,7 +51,11 @@ export async function resolveTriggeredBy(
       .where(eq(users.id, userId))
       .limit(1)
       .catch((err: unknown) => {
-        triggeredByLogger.debug({ err, query: 'users', userId }, 'displayName query failed; falling back');
+        triggeredByLogger.debug('displayName query failed; falling back', {
+          err,
+          query: 'users',
+          userId,
+        });
         return [] as { name: string | null }[];
       });
     displayName = user?.name ?? 'Someone';
