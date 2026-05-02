@@ -134,8 +134,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     },
     ref
   ) => {
-    const isRemoteLocked = remoteStreamingUser !== null;
-    const effectiveDisabled = disabled || isRemoteLocked;
+    const effectiveDisabled = disabled || remoteStreamingUser !== null;
     const textareaRef = useRef<ChatTextareaRef>(null);
 
     // Get settings from centralized store
@@ -230,7 +229,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           />
         )}
 
-        {isRemoteLocked && remoteStreamingUser && (
+        {remoteStreamingUser && (
           <div
             className="flex items-center gap-2 px-3 pt-2 pb-1 text-xs text-muted-foreground"
             role="status"
