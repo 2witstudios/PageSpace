@@ -78,6 +78,11 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
     status: 'status',
   },
 }));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: {
+    id: 'id',
+  },
+}));
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
@@ -112,13 +117,10 @@ import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 
 const createTrigger = (overrides: Partial<CalendarTrigger> = {}): CalendarTrigger => ({
   id: 'trg-1',
+  workflowId: 'wf-1',
   calendarEventId: 'evt-1',
-  agentPageId: 'agent-1',
   driveId: 'drive-1',
   scheduledById: 'user-123',
-  prompt: 'Check deploy status',
-  instructionPageId: null,
-  contextPageIds: [],
   status: 'running',
   triggerAt: new Date('2026-01-15T10:00:00Z'),
   claimedAt: new Date(),
@@ -132,6 +134,32 @@ const createTrigger = (overrides: Partial<CalendarTrigger> = {}): CalendarTrigge
   updatedAt: new Date(),
   ...overrides,
 } as CalendarTrigger);
+
+const createWorkflowRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'wf-1',
+  driveId: 'drive-1',
+  createdBy: 'user-123',
+  name: 'wf-1',
+  agentPageId: 'agent-1',
+  prompt: 'Check deploy status',
+  contextPageIds: [],
+  cronExpression: null,
+  timezone: 'UTC',
+  triggerType: 'cron',
+  eventTriggers: null,
+  watchedFolderIds: null,
+  eventDebounceSecs: null,
+  instructionPageId: null,
+  isEnabled: true,
+  lastRunAt: null,
+  nextRunAt: null,
+  lastRunStatus: 'never_run',
+  lastRunError: null,
+  lastRunDurationMs: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+});
 
 const createEvent = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => ({
   id: 'evt-1',
@@ -168,31 +196,26 @@ describe('executeCalendarTrigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default: scheduling user still has drive access
     mockIsUserDriveMember.mockResolvedValue(true);
-
-    // Default: rate limit passes
     mockIncrementUsage.mockResolvedValue({ success: true });
 
-    // Default select chain: agent page preflight → attendees → etc.
+    // Default select chain.
+    // Call order in executor: 1=workflow load, 2=agent preflight, 3=attendees
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({
       innerJoin: mockInnerJoin,
       where: mockSelectWhere,
     });
     mockInnerJoin.mockReturnValue({ where: mockSelectWhere });
-    // First call: agent page preflight (exists, not trashed)
-    // Subsequent calls: empty (no attendees, etc.)
     mockSelectWhere
-      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
-      .mockResolvedValue([]);
+      .mockResolvedValueOnce([createWorkflowRow()])                    // workflow load
+      .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])    // agent preflight
+      .mockResolvedValue([]);                                           // attendees + anything else
 
-    // Default: update succeeds
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
 
-    // Default: workflow execution succeeds
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
       durationMs: 500,
@@ -207,23 +230,30 @@ describe('executeCalendarTrigger', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('passes a synthetic workflow to executeWorkflow with correct fields', async () => {
-    const trigger = createTrigger({ prompt: 'Do the thing' });
+  it('passes a WorkflowExecutionInput composed from the linked workflow row', async () => {
+    const workflow = createWorkflowRow({ prompt: 'Do the thing', agentPageId: 'agent-9' });
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([workflow])
+      .mockResolvedValueOnce([{ id: 'agent-9', isTrashed: false }])
+      .mockResolvedValue([]);
+    const trigger = createTrigger();
     const event = createEvent({ timezone: 'America/New_York' });
 
     await executeCalendarTrigger(trigger, event);
 
     expect(mockExecuteWorkflow).toHaveBeenCalledOnce();
-    const syntheticWorkflow = mockExecuteWorkflow.mock.calls[0][0];
-    expect(syntheticWorkflow.id).toBe(trigger.id);
-    expect(syntheticWorkflow.driveId).toBe(trigger.driveId);
-    expect(syntheticWorkflow.createdBy).toBe(trigger.scheduledById);
-    expect(syntheticWorkflow.agentPageId).toBe(trigger.agentPageId);
-    expect(syntheticWorkflow.timezone).toBe('America/New_York');
-    expect(syntheticWorkflow.prompt).toContain('Do the thing');
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    expect(input.workflowId).toBe('wf-1');
+    expect(input.driveId).toBe(workflow.driveId);
+    expect(input.createdBy).toBe(trigger.scheduledById);
+    expect(input.agentPageId).toBe('agent-9');
+    expect(input.timezone).toBe('America/New_York');
+    expect(input.eventContext?.promptOverride).toContain('Do the thing');
+    expect(input.prompt).toBe('Do the thing');
   });
 
-  it('includes event context in the prompt', async () => {
+  it('includes event context in the prompt override', async () => {
     const event = createEvent({
       title: 'Weekly standup',
       description: 'Team sync',
@@ -232,16 +262,17 @@ describe('executeCalendarTrigger', () => {
 
     await executeCalendarTrigger(createTrigger(), event);
 
-    const syntheticWorkflow = mockExecuteWorkflow.mock.calls[0][0];
-    expect(syntheticWorkflow.prompt).toContain('Weekly standup');
-    expect(syntheticWorkflow.prompt).toContain('Team sync');
-    expect(syntheticWorkflow.prompt).toContain('Room 42');
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    const promptOverride = input.eventContext?.promptOverride ?? '';
+    expect(promptOverride).toContain('Weekly standup');
+    expect(promptOverride).toContain('Team sync');
+    expect(promptOverride).toContain('Room 42');
   });
 
-  it('includes attendees in the prompt when present', async () => {
-    // Reset beforeEach chain, set up: agent preflight → attendees
+  it('includes attendees in the prompt override when present', async () => {
     mockSelectWhere.mockReset();
     mockSelectWhere
+      .mockResolvedValueOnce([createWorkflowRow()])
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
       .mockResolvedValueOnce([
         { name: 'Alice', email: 'alice@test.com' },
@@ -251,9 +282,9 @@ describe('executeCalendarTrigger', () => {
 
     await executeCalendarTrigger(createTrigger(), createEvent());
 
-    const syntheticWorkflow = mockExecuteWorkflow.mock.calls[0][0];
-    expect(syntheticWorkflow.prompt).toContain('Alice');
-    expect(syntheticWorkflow.prompt).toContain('bob@test.com');
+    const promptOverride = mockExecuteWorkflow.mock.calls[0][0].eventContext?.promptOverride ?? '';
+    expect(promptOverride).toContain('Alice');
+    expect(promptOverride).toContain('bob@test.com');
   });
 
   it('fails when daily AI call limit is reached', async () => {
@@ -269,7 +300,6 @@ describe('executeCalendarTrigger', () => {
   it('updates trigger status to completed on success', async () => {
     await executeCalendarTrigger(createTrigger(), createEvent());
 
-    // The update call that writes completed status
     expect(mockUpdate).toHaveBeenCalled();
     const setCalls = mockUpdateSet.mock.calls;
     const completionCall = setCalls.find(
@@ -303,60 +333,6 @@ describe('executeCalendarTrigger', () => {
     expect(result.error).toBe('Unexpected explosion');
   });
 
-  it('re-checks instruction page access at execution time', async () => {
-    const trigger = createTrigger({ instructionPageId: 'instr-page-1' });
-
-    // Call order: 1=agent preflight, 2=attendees, 3=instruction page
-    mockSelectWhere.mockReset();
-    let callCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) return Promise.resolve([{ id: 'agent-1', isTrashed: false }]); // agent preflight
-      if (callCount === 2) return Promise.resolve([]); // attendees
-      // instruction page — belongs to a different drive
-      return Promise.resolve([{
-        title: 'Instructions',
-        content: 'Do X then Y',
-        driveId: 'other-drive',
-      }]);
-    });
-
-    // First call: drive access check (pass), second call: instruction page drive (deny)
-    mockIsUserDriveMember.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-
-    await executeCalendarTrigger(trigger, createEvent());
-
-    // Workflow should still run — instruction page content is just omitted
-    expect(mockExecuteWorkflow).toHaveBeenCalledOnce();
-    const prompt = mockExecuteWorkflow.mock.calls[0][0].prompt;
-    expect(prompt).not.toContain('Do X then Y');
-  });
-
-  it('includes instruction page content when access is valid', async () => {
-    const trigger = createTrigger({ instructionPageId: 'instr-page-1' });
-
-    mockSelectWhere.mockReset();
-    let callCount = 0;
-    mockSelectWhere.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) return Promise.resolve([{ id: 'agent-1', isTrashed: false }]); // agent preflight
-      if (callCount === 2) return Promise.resolve([]); // attendees
-      return Promise.resolve([{
-        title: 'Instructions',
-        content: 'Do X then Y',
-        driveId: 'drive-1', // same drive as trigger
-      }]);
-    });
-
-    mockIsUserDriveMember.mockResolvedValue(true);
-
-    await executeCalendarTrigger(trigger, createEvent());
-
-    const prompt = mockExecuteWorkflow.mock.calls[0][0].prompt;
-    expect(prompt).toContain('Do X then Y');
-    expect(prompt).toContain('Instructions');
-  });
-
   it('saves conversationId when workflow returns one', async () => {
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
@@ -383,10 +359,23 @@ describe('executeCalendarTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('fails without consuming usage when agent page is missing', async () => {
-    // Override default: agent page preflight returns empty (deleted since scheduling)
+  it('fails when the linked workflow row is missing', async () => {
     mockSelectWhere.mockReset();
-    mockSelectWhere.mockResolvedValue([]);
+    mockSelectWhere.mockResolvedValueOnce([]); // workflow load returns nothing
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('workflow');
+    expect(mockIncrementUsage).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fails without consuming usage when agent page is missing', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere
+      .mockResolvedValueOnce([createWorkflowRow()])
+      .mockResolvedValueOnce([]); // agent preflight returns empty
 
     const result = await executeCalendarTrigger(createTrigger(), createEvent());
 

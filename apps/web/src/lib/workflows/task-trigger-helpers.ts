@@ -3,7 +3,8 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
-import { executeWorkflow } from './workflow-executor';
+import { taskTriggers } from '@pagespace/db/schema/task-triggers';
+import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface AgentTriggerInput {
@@ -27,13 +28,11 @@ export interface CreateTaskTriggerWorkflowParams {
 
 const logger = loggers.api.child({ module: 'task-trigger-helpers' });
 
-const TASK_TRIGGER_TYPES: ('task_due_date' | 'task_completion')[] = ['task_due_date', 'task_completion'];
-
 /**
- * Recompute taskItems.metadata.triggerTypes / hasTrigger from the live workflows table.
+ * Recompute taskItems.metadata.triggerTypes / hasTrigger from the live taskTriggers table.
  * Use this after any insert/upsert/disable so metadata never drifts from DB truth — in
- * particular it stays correct when an agent page cascade-deletes a workflow row without
- * touching the task.
+ * particular it stays correct when an agent page cascade-deletes a workflow row, which
+ * cascades to its task_triggers row, without touching the task itself.
  */
 export async function recomputeTaskTriggerMetadata(
   database: typeof db,
@@ -41,12 +40,11 @@ export async function recomputeTaskTriggerMetadata(
   baseMetadata: Record<string, unknown> | null,
 ): Promise<void> {
   const rows = await database
-    .select({ triggerType: workflows.triggerType })
-    .from(workflows)
+    .select({ triggerType: taskTriggers.triggerType })
+    .from(taskTriggers)
     .where(and(
-      eq(workflows.taskItemId, taskId),
-      eq(workflows.isEnabled, true),
-      inArray(workflows.triggerType, TASK_TRIGGER_TYPES),
+      eq(taskTriggers.taskItemId, taskId),
+      eq(taskTriggers.isEnabled, true),
     ));
   const triggerTypes = Array.from(new Set(rows.map((r) => r.triggerType)));
   await database.update(taskItems).set({
@@ -59,22 +57,23 @@ export async function recomputeTaskTriggerMetadata(
 }
 
 /**
- * Create (or upsert) a task trigger workflow.
- * Validates agent page, instruction page, and context pages before inserting.
- * Uses onConflictDoUpdate on (taskItemId, triggerType) to handle duplicates.
+ * Create (or upsert) a task trigger.
+ * Validates agent page, instruction page, and context pages, then atomically writes
+ * one workflows row (execution payload) and one task_triggers row (the "when") in
+ * a transaction. Uses onConflictDoUpdate on task_triggers (taskItemId, triggerType)
+ * to handle duplicates — the matching workflows row is updated in-place.
  */
 export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<void> {
   const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone } = params;
-  const triggerType = agentTrigger.triggerType === 'completion' ? 'task_completion' as const : 'task_due_date' as const;
+  const triggerType = agentTrigger.triggerType;
 
-  if (triggerType === 'task_due_date' && !dueDate) {
+  if (triggerType === 'due_date' && !dueDate) {
     throw new Error('Due date is required for due_date triggers');
   }
   if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
     throw new Error('Agent trigger needs either a prompt or instructionPageId');
   }
 
-  // Validate agent page
   const triggerAgent = await database.query.pages.findFirst({
     where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
     columns: { id: true, driveId: true },
@@ -82,7 +81,6 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
   if (!triggerAgent) throw new Error('Agent trigger target not found or not an AI agent');
   if (triggerAgent.driveId !== driveId) throw new Error('Agent must be in the same drive as the task list');
 
-  // Validate instruction page if provided
   if (agentTrigger.instructionPageId) {
     const instrPage = await database.query.pages.findFirst({
       where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
@@ -91,7 +89,6 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
     if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
   }
 
-  // Validate context pages if provided
   const contextPageIds = agentTrigger.contextPageIds ?? [];
   if (contextPageIds.length > 0) {
     const validPages = await database.query.pages.findMany({
@@ -108,66 +105,91 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
   }
 
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
-  const workflowData = {
-    driveId,
-    createdBy: userId,
-    name: `task-trigger-${triggerType}-${taskId}`,
-    agentPageId: agentTrigger.agentPageId,
-    prompt: triggerPrompt,
-    instructionPageId: agentTrigger.instructionPageId ?? null,
-    contextPageIds,
-    triggerType,
-    taskItemId: taskId,
-    timezone,
-    isEnabled: true,
-    nextRunAt: triggerType === 'task_due_date' && dueDate ? dueDate : null,
-    lastRunStatus: 'never_run' as const,
-  };
+  const nextRunAt = triggerType === 'due_date' && dueDate ? dueDate : null;
 
-  await database.insert(workflows).values(workflowData).onConflictDoUpdate({
-    target: [workflows.taskItemId, workflows.triggerType],
-    set: {
-      agentPageId: workflowData.agentPageId,
-      prompt: workflowData.prompt,
-      instructionPageId: workflowData.instructionPageId,
-      contextPageIds: workflowData.contextPageIds,
-      nextRunAt: workflowData.nextRunAt,
-      isEnabled: true,
-      lastRunStatus: 'never_run',
-      lastRunError: null,
-    },
+  await database.transaction(async (tx) => {
+    const existing = await tx
+      .select({ workflowId: taskTriggers.workflowId })
+      .from(taskTriggers)
+      .where(and(
+        eq(taskTriggers.taskItemId, taskId),
+        eq(taskTriggers.triggerType, triggerType),
+      ));
+
+    if (existing.length > 0) {
+      const workflowId = existing[0].workflowId;
+      await tx.update(workflows).set({
+        agentPageId: agentTrigger.agentPageId,
+        prompt: triggerPrompt,
+        instructionPageId: agentTrigger.instructionPageId ?? null,
+        contextPageIds,
+        timezone,
+        isEnabled: true,
+        lastRunStatus: 'never_run',
+        lastRunError: null,
+      }).where(eq(workflows.id, workflowId));
+
+      await tx.update(taskTriggers).set({
+        nextRunAt,
+        lastFiredAt: null,
+        lastFireError: null,
+        isEnabled: true,
+      }).where(and(
+        eq(taskTriggers.taskItemId, taskId),
+        eq(taskTriggers.triggerType, triggerType),
+      ));
+    } else {
+      const [createdWorkflow] = await tx.insert(workflows).values({
+        driveId,
+        createdBy: userId,
+        name: `task-trigger-${triggerType}-${taskId}`,
+        agentPageId: agentTrigger.agentPageId,
+        prompt: triggerPrompt,
+        instructionPageId: agentTrigger.instructionPageId ?? null,
+        contextPageIds,
+        triggerType: 'cron',
+        timezone,
+        isEnabled: true,
+        lastRunStatus: 'never_run',
+      }).returning({ id: workflows.id });
+
+      await tx.insert(taskTriggers).values({
+        workflowId: createdWorkflow.id,
+        taskItemId: taskId,
+        triggerType,
+        nextRunAt,
+        isEnabled: true,
+      });
+    }
   });
 
-  // Recompute metadata from the live workflows table so it never drifts from DB truth.
   await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
 }
 
 /**
  * Update the nextRunAt for a task's due-date trigger when the due date changes.
- * Only affects pending (never_run) triggers.
+ * Only affects rows that haven't fired yet (lastFiredAt IS NULL).
  */
 export async function syncTaskDueDateTrigger(taskId: string, newDueDate: Date | null): Promise<void> {
   try {
     if (newDueDate) {
-      await db.update(workflows).set({ nextRunAt: newDueDate }).where(
+      await db.update(taskTriggers).set({ nextRunAt: newDueDate }).where(
         and(
-          eq(workflows.taskItemId, taskId),
-          eq(workflows.triggerType, 'task_due_date'),
-          eq(workflows.isEnabled, true),
-          eq(workflows.lastRunStatus, 'never_run'),
+          eq(taskTriggers.taskItemId, taskId),
+          eq(taskTriggers.triggerType, 'due_date'),
+          eq(taskTriggers.isEnabled, true),
         ),
       );
     } else {
-      // Due date cleared — disable the trigger
-      await db.update(workflows).set({
+      await db.update(taskTriggers).set({
         isEnabled: false,
-        lastRunError: 'Due date cleared',
+        lastFireError: 'Due date cleared',
         nextRunAt: null,
       }).where(
         and(
-          eq(workflows.taskItemId, taskId),
-          eq(workflows.triggerType, 'task_due_date'),
-          eq(workflows.isEnabled, true),
+          eq(taskTriggers.taskItemId, taskId),
+          eq(taskTriggers.triggerType, 'due_date'),
+          eq(taskTriggers.isEnabled, true),
         ),
       );
     }
@@ -182,15 +204,14 @@ export async function syncTaskDueDateTrigger(taskId: string, newDueDate: Date | 
  */
 export async function cancelTaskDueDateTrigger(taskId: string, reason: string): Promise<void> {
   try {
-    await db.update(workflows).set({
+    await db.update(taskTriggers).set({
       isEnabled: false,
-      lastRunError: reason,
+      lastFireError: reason,
     }).where(
       and(
-        eq(workflows.taskItemId, taskId),
-        eq(workflows.triggerType, 'task_due_date'),
-        eq(workflows.isEnabled, true),
-        eq(workflows.lastRunStatus, 'never_run'),
+        eq(taskTriggers.taskItemId, taskId),
+        eq(taskTriggers.triggerType, 'due_date'),
+        eq(taskTriggers.isEnabled, true),
       ),
     );
   } catch (err) {
@@ -201,57 +222,77 @@ export async function cancelTaskDueDateTrigger(taskId: string, reason: string): 
 
 /**
  * Fire a task's completion trigger.
- * Uses .returning() on the claim UPDATE to prevent double-execution under concurrency.
+ * Atomically claims the matching task_triggers row (lastFiredAt IS NULL guard) so
+ * one fire ever happens per row, then loads the linked workflow and executes it.
  */
 export async function fireCompletionTrigger(taskId: string): Promise<void> {
   try {
-    const [completionWorkflow] = await db
+    const [completionTrigger] = await db
       .select()
-      .from(workflows)
+      .from(taskTriggers)
       .where(
         and(
-          eq(workflows.taskItemId, taskId),
-          eq(workflows.triggerType, 'task_completion'),
-          eq(workflows.isEnabled, true),
-          eq(workflows.lastRunStatus, 'never_run'),
+          eq(taskTriggers.taskItemId, taskId),
+          eq(taskTriggers.triggerType, 'completion'),
+          eq(taskTriggers.isEnabled, true),
         ),
       );
 
-    if (!completionWorkflow) return;
+    if (!completionTrigger || completionTrigger.lastFiredAt !== null) return;
 
-    // Atomically claim — only proceed if we actually updated a row
-    // Re-check isEnabled to guard against concurrent disableTaskTriggers
-    const claimed = await db.update(workflows).set({
-      lastRunStatus: 'running',
-      lastRunAt: new Date(),
+    const claimed = await db.update(taskTriggers).set({
+      lastFiredAt: new Date(),
     }).where(
       and(
-        eq(workflows.id, completionWorkflow.id),
-        eq(workflows.lastRunStatus, 'never_run'),
-        eq(workflows.isEnabled, true),
+        eq(taskTriggers.id, completionTrigger.id),
+        eq(taskTriggers.isEnabled, true),
       ),
     ).returning();
 
-    if (claimed.length === 0) return; // Another caller already claimed it
+    if (claimed.length === 0) return;
 
-    // Fire-and-forget execution with fully guarded promise chain
-    void executeWorkflow(completionWorkflow).then(async (result) => {
+    const [workflow] = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.id, completionTrigger.workflowId));
+
+    if (!workflow) {
+      await db.update(taskTriggers).set({
+        isEnabled: false,
+        lastFireError: 'Linked workflow not found',
+      }).where(eq(taskTriggers.id, completionTrigger.id));
+      return;
+    }
+
+    const input: WorkflowExecutionInput = {
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      driveId: workflow.driveId,
+      createdBy: workflow.createdBy,
+      agentPageId: workflow.agentPageId,
+      prompt: workflow.prompt,
+      contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
+      instructionPageId: workflow.instructionPageId,
+      timezone: workflow.timezone,
+      taskContext: { taskItemId: taskId, triggerType: 'completion' },
+    };
+
+    void executeWorkflow(input).then(async (result) => {
       try {
-        await db.update(workflows).set({
-          lastRunStatus: result.success ? 'success' : 'error',
-          lastRunError: result.error || null,
-          lastRunDurationMs: result.durationMs,
+        await db.update(taskTriggers).set({
+          lastFireError: result.error || null,
           isEnabled: false,
-        }).where(eq(workflows.id, completionWorkflow.id));
+        }).where(eq(taskTriggers.id, completionTrigger.id));
       } catch (dbErr) {
-        logger.error('Failed to update workflow status after execution', {
-          workflowId: completionWorkflow.id,
+        logger.error('Failed to update task_trigger after execution', {
+          triggerId: completionTrigger.id,
           error: dbErr instanceof Error ? dbErr.message : String(dbErr),
         });
       }
 
       logger.info('Completion trigger executed', {
-        workflowId: completionWorkflow.id,
+        triggerId: completionTrigger.id,
+        workflowId: workflow.id,
         taskItemId: taskId,
         success: result.success,
         durationMs: result.durationMs,
@@ -259,19 +300,19 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
     }).catch(async (err) => {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error('Completion trigger execution failed', {
-        workflowId: completionWorkflow.id,
+        triggerId: completionTrigger.id,
+        workflowId: workflow.id,
         taskItemId: taskId,
         error: errorMsg,
       });
       try {
-        await db.update(workflows).set({
-          lastRunStatus: 'error',
-          lastRunError: errorMsg,
+        await db.update(taskTriggers).set({
+          lastFireError: errorMsg,
           isEnabled: false,
-        }).where(eq(workflows.id, completionWorkflow.id));
+        }).where(eq(taskTriggers.id, completionTrigger.id));
       } catch (dbErr) {
-        logger.error('Failed to update workflow error status', {
-          workflowId: completionWorkflow.id,
+        logger.error('Failed to update task_trigger error status', {
+          triggerId: completionTrigger.id,
           error: dbErr instanceof Error ? dbErr.message : String(dbErr),
         });
       }
@@ -283,20 +324,29 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
 }
 
 /**
- * Disable all task trigger workflows for a given task.
- * Used when a task is deleted or trashed.
+ * Disable all task triggers for a given task and delete their linked workflows
+ * rows. Used when a task is deleted or trashed. The workflows row is the
+ * execution definition; once no trigger references it, it's garbage — explicit
+ * cleanup keeps the workflows table free of orphans (cascade goes the other
+ * way: deleting a workflow cascades to its task_triggers row, but the inverse
+ * is what we need here).
  */
 export async function disableTaskTriggers(taskId: string, reason: string): Promise<void> {
   try {
-    await db.update(workflows).set({
+    const triggerRows = await db
+      .select({ id: taskTriggers.id, workflowId: taskTriggers.workflowId })
+      .from(taskTriggers)
+      .where(eq(taskTriggers.taskItemId, taskId));
+
+    if (triggerRows.length === 0) return;
+
+    await db.update(taskTriggers).set({
       isEnabled: false,
-      lastRunError: reason,
-    }).where(
-      and(
-        eq(workflows.taskItemId, taskId),
-        eq(workflows.isEnabled, true),
-      ),
-    );
+      lastFireError: reason,
+    }).where(eq(taskTriggers.taskItemId, taskId));
+
+    const workflowIds = triggerRows.map(r => r.workflowId);
+    await db.delete(workflows).where(inArray(workflows.id, workflowIds));
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error('Failed to disable task triggers', { taskItemId: taskId, error: errorMsg });

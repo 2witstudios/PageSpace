@@ -17,7 +17,6 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { taskItems, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
-import { workflows as workflowsTable } from '@pagespace/db/schema/workflows';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -31,9 +30,32 @@ export interface WorkflowExecutionResult {
   conversationId?: string;
 }
 
-type WorkflowRow = typeof workflowsTable.$inferSelect;
+/**
+ * Minimum execution-relevant shape consumed by executeWorkflow().
+ *
+ * Decoupled from the workflows table row so callers (cron pollers,
+ * task-trigger fires, calendar-trigger fires, manual /run) can compose
+ * input from their own source of truth without forging fake rows.
+ *
+ * `taskContext` and `eventContext` are optional, mutually exclusive
+ * augmentations injected by the trigger-fire path so executeWorkflow
+ * doesn't need to know which kind of trigger it serves.
+ */
+export interface WorkflowExecutionInput {
+  workflowId: string;
+  workflowName: string;
+  driveId: string;
+  createdBy: string;
+  agentPageId: string;
+  prompt: string;
+  contextPageIds: string[];
+  instructionPageId: string | null;
+  timezone: string;
+  taskContext?: { taskItemId: string; triggerType: 'due_date' | 'completion' };
+  eventContext?: { promptOverride: string };
+}
 
-export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowExecutionResult> {
+export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
   try {
@@ -41,7 +63,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
     const [agent] = await db
       .select()
       .from(pages)
-      .where(eq(pages.id, workflow.agentPageId));
+      .where(eq(pages.id, input.agentPageId));
 
     if (!agent) {
       return { success: false, durationMs: Date.now() - startTime, error: 'Agent page not found' };
@@ -57,7 +79,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
     const [drive] = await db
       .select()
       .from(drives)
-      .where(eq(drives.id, workflow.driveId));
+      .where(eq(drives.id, input.driveId));
 
     if (!drive) {
       return { success: false, durationMs: Date.now() - startTime, error: 'Drive not found' };
@@ -71,7 +93,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       enhancedSystemPrompt += `\n\n${drive.drivePrompt}`;
     }
 
-    enhancedSystemPrompt += `\n\n${buildTimestampSystemPrompt(workflow.timezone)}`;
+    enhancedSystemPrompt += `\n\n${buildTimestampSystemPrompt(input.timezone)}`;
 
     enhancedSystemPrompt += `\n\nCONTEXT AWARENESS:\n`;
     enhancedSystemPrompt += `- Current Drive: ${drive.name} (${drive.slug})\n`;
@@ -79,10 +101,10 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
     enhancedSystemPrompt += `\nYou are operating within this drive. Use this drive ID (${drive.id}) as the default when using tools like list_pages, create_page, etc. unless explicitly told otherwise.`;
     enhancedSystemPrompt += `\n\nThis is an automated workflow execution. Execute the requested task thoroughly and completely.`;
 
-    // 4. Build user message with context documents
-    let userMessage = workflow.prompt;
+    // 4. Build user message — start from event override (if any) or workflow prompt
+    let userMessage = input.eventContext?.promptOverride ?? input.prompt;
 
-    const contextPageIds = (workflow.contextPageIds as string[] | null) ?? [];
+    const contextPageIds = input.contextPageIds ?? [];
     if (contextPageIds.length > 0) {
       const validContextPages = await db
         .select({ id: pages.id, title: pages.title, content: pages.content })
@@ -90,7 +112,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
         .where(
           and(
             inArray(pages.id, contextPageIds),
-            eq(pages.driveId, workflow.driveId),
+            eq(pages.driveId, input.driveId),
             eq(pages.isTrashed, false)
           )
         );
@@ -103,17 +125,17 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       }
     }
 
-    // 4b. Inject task context when this is a task trigger workflow
-    if (workflow.taskItemId) {
-      const taskContext = await buildTaskContext(workflow.taskItemId, workflow.triggerType);
+    // 4b. Inject task context when this fire was triggered by a task event
+    if (input.taskContext) {
+      const taskContext = await buildTaskContext(input.taskContext.taskItemId, input.taskContext.triggerType);
       if (taskContext) {
         userMessage = taskContext + '\n\n' + userMessage;
       }
     }
 
     // 4c. Load instruction page content if present
-    if (workflow.instructionPageId) {
-      const instrContent = await loadInstructionPage(workflow.instructionPageId, workflow.createdBy);
+    if (input.instructionPageId) {
+      const instrContent = await loadInstructionPage(input.instructionPageId, input.createdBy);
       if (instrContent) {
         userMessage += '\n\n--- Detailed Instructions ---\n' + instrContent;
       }
@@ -128,7 +150,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(workflow.createdBy, providerRequest);
+    const providerResult = await createAIProvider(input.createdBy, providerRequest);
 
     if (isProviderError(providerResult)) {
       return { success: false, durationMs: Date.now() - startTime, error: `AI provider error: ${providerResult.error}` };
@@ -150,14 +172,14 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
       const integrationTools = await resolvePageAgentIntegrationTools({
         agentId: agent.id,
-        userId: workflow.createdBy,
-        driveId: workflow.driveId,
+        userId: input.createdBy,
+        driveId: input.driveId,
       });
 
       if (Object.keys(integrationTools).length > 0) {
         availableTools = mergeToolSets(availableTools, integrationTools);
         loggers.api.info('Workflow executor: merged integration tools', {
-          workflowId: workflow.id,
+          workflowId: input.workflowId,
           agentId: agent.id,
           integrationToolCount: Object.keys(integrationTools).length,
           totalTools: Object.keys(availableTools).length,
@@ -165,16 +187,16 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       }
     } catch (error) {
       loggers.api.error('Workflow executor: failed to resolve integration tools', error as Error, {
-        workflowId: workflow.id,
+        workflowId: input.workflowId,
         agentId: agent.id,
       });
     }
 
     // 7. Build execution context
-    const conversationId = `workflow-${workflow.id}-${Date.now()}`;
+    const conversationId = `workflow-${input.workflowId}-${Date.now()}`;
     const executionContext: ToolExecutionContext = {
-      userId: workflow.createdBy,
-      timezone: workflow.timezone,
+      userId: input.createdBy,
+      timezone: input.timezone,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId,
@@ -242,7 +264,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
       messageId: userMessageId,
       pageId: agent.id,
       conversationId,
-      userId: workflow.createdBy,
+      userId: input.createdBy,
       role: 'user',
       content: userMessage,
     });
@@ -259,22 +281,22 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
     // 10. Track usage
     const usage = result.usage;
     AIMonitoring.trackUsage({
-      userId: workflow.createdBy,
+      userId: input.createdBy,
       provider: providerResult.provider,
       model: providerResult.modelName,
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
       pageId: agent.id,
-      driveId: workflow.driveId,
+      driveId: input.driveId,
       success: true,
     });
 
     const durationMs = Date.now() - startTime;
 
     loggers.api.info('Workflow executed successfully', {
-      workflowId: workflow.id,
-      workflowName: workflow.name,
+      workflowId: input.workflowId,
+      workflowName: input.workflowName,
       agentId: agent.id,
       agentTitle: agent.title,
       responseLength: responseText.length,
@@ -296,7 +318,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     loggers.api.error('Workflow execution failed', {
-      workflowId: workflow.id,
+      workflowId: input.workflowId,
       error: errorMessage,
       durationMs,
     });
@@ -312,7 +334,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
 /**
  * Build a task context block for task trigger workflows.
  */
-async function buildTaskContext(taskItemId: string, triggerType: string): Promise<string | null> {
+async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'completion'): Promise<string | null> {
   const task = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, taskItemId),
     with: {
@@ -363,10 +385,9 @@ async function buildTaskContext(taskItemId: string, triggerType: string): Promis
     parts.push(`Assignees: ${names.join(', ')}`);
   }
 
-  // Trigger type context
-  if (triggerType === 'task_due_date') {
+  if (triggerType === 'due_date') {
     parts.push('Trigger: This task\'s due date has arrived.');
-  } else if (triggerType === 'task_completion') {
+  } else if (triggerType === 'completion') {
     parts.push('Trigger: This task was just completed.');
   }
 
@@ -374,9 +395,6 @@ async function buildTaskContext(taskItemId: string, triggerType: string): Promis
   return parts.join('\n');
 }
 
-/**
- * Load instruction page content for a workflow, re-checking drive access at execution time.
- */
 async function loadInstructionPage(pageId: string, userId: string): Promise<string | null> {
   const [instrPage] = await db
     .select({ title: pages.title, content: pages.content, driveId: pages.driveId, isTrashed: pages.isTrashed })
@@ -385,12 +403,11 @@ async function loadInstructionPage(pageId: string, userId: string): Promise<stri
 
   if (!instrPage || instrPage.isTrashed || !instrPage.content) return null;
 
-  // Re-check drive access at execution time
   if (instrPage.driveId) {
     const hasAccess = await isUserDriveMember(userId, instrPage.driveId);
     if (!hasAccess) return null;
   } else {
-    return null; // Personal pages not allowed
+    return null;
   }
 
   return `## ${instrPage.title}\n${instrPage.content}`;
