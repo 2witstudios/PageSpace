@@ -48,6 +48,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
@@ -121,14 +122,7 @@ const createTrigger = (overrides: Partial<CalendarTrigger> = {}): CalendarTrigge
   calendarEventId: 'evt-1',
   driveId: 'drive-1',
   scheduledById: 'user-123',
-  status: 'running',
   triggerAt: new Date('2026-01-15T10:00:00Z'),
-  claimedAt: new Date(),
-  startedAt: new Date(),
-  completedAt: null,
-  error: null,
-  durationMs: null,
-  conversationId: null,
   occurrenceDate: new Date(0),
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -151,11 +145,7 @@ const createWorkflowRow = (overrides: Record<string, unknown> = {}) => ({
   eventDebounceSecs: null,
   instructionPageId: null,
   isEnabled: true,
-  lastRunAt: null,
   nextRunAt: null,
-  lastRunStatus: 'never_run',
-  lastRunError: null,
-  lastRunDurationMs: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   ...overrides,
@@ -297,56 +287,48 @@ describe('executeCalendarTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('updates trigger status to completed on success', async () => {
+  it('does not write per-fire state to calendar_triggers — executor handles workflow_runs', async () => {
     await executeCalendarTrigger(createTrigger(), createEvent());
 
-    expect(mockUpdate).toHaveBeenCalled();
-    const setCalls = mockUpdateSet.mock.calls;
-    const completionCall = setCalls.find(
-      (call) => call[0]?.status === 'completed'
-    );
-    expect(completionCall).toBeDefined();
+    // Per-fire state lives on workflow_runs, written by the (mocked) executor.
+    // executeCalendarTrigger itself never updates calendar_triggers anymore.
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it('updates trigger status to failed on workflow failure', async () => {
+  it('passes calendar trigger coordinates as the source field to executeWorkflow', async () => {
+    const trigger = createTrigger({ id: 'trg-9', triggerAt: new Date('2026-01-15T10:00:00Z') });
+
+    await executeCalendarTrigger(trigger, createEvent());
+
+    const input = mockExecuteWorkflow.mock.calls[0][0];
+    expect(input.source).toEqual({
+      table: 'calendarTriggers',
+      id: 'trg-9',
+      triggerAt: trigger.triggerAt,
+    });
+  });
+
+  it('returns the failure result from executeWorkflow without touching the trigger row', async () => {
     mockExecuteWorkflow.mockResolvedValue({
       success: false,
       durationMs: 100,
       error: 'Agent crashed',
     });
 
-    await executeCalendarTrigger(createTrigger(), createEvent());
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
 
-    const setCalls = mockUpdateSet.mock.calls;
-    const failureCall = setCalls.find(
-      (call) => call[0]?.status === 'failed'
-    );
-    expect(failureCall).toBeDefined();
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Agent crashed');
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it('marks trigger as failed when executeWorkflow throws', async () => {
+  it('returns failure when executeWorkflow throws', async () => {
     mockExecuteWorkflow.mockRejectedValue(new Error('Unexpected explosion'));
 
     const result = await executeCalendarTrigger(createTrigger(), createEvent());
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('Unexpected explosion');
-  });
-
-  it('saves conversationId when workflow returns one', async () => {
-    mockExecuteWorkflow.mockResolvedValue({
-      success: true,
-      durationMs: 200,
-      conversationId: 'conv-abc',
-    });
-
-    await executeCalendarTrigger(createTrigger(), createEvent());
-
-    const setCalls = mockUpdateSet.mock.calls;
-    const completionCall = setCalls.find(
-      (call) => call[0]?.status === 'completed'
-    );
-    expect(completionCall?.[0]?.conversationId).toBe('conv-abc');
   });
 
   it('fails when scheduling user no longer has drive access', async () => {

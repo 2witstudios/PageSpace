@@ -9,15 +9,37 @@ const {
   mockSelectFrom,
   mockSelect,
   mockResolvePageAgentIntegrationTools,
+  mockInsert,
+  mockInsertValues,
+  mockOnConflictDoNothing,
+  mockInsertReturning,
+  mockUpdate,
+  mockUpdateSet,
+  mockUpdateWhere,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
   mockSelect: vi.fn(),
   mockResolvePageAgentIntegrationTools: vi.fn(),
+  mockInsert: vi.fn(),
+  mockInsertValues: vi.fn(),
+  mockOnConflictDoNothing: vi.fn(),
+  mockInsertReturning: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockUpdateSet: vi.fn(),
+  mockUpdateWhere: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: mockSelect, query: { taskItems: { findFirst: vi.fn() } } },
+  db: {
+    select: mockSelect,
+    insert: mockInsert,
+    update: mockUpdate,
+    query: { taskItems: { findFirst: vi.fn() } },
+  },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: { id: 'id', workflowId: 'workflowId', status: 'status' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
@@ -99,6 +121,7 @@ const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): Wo
   contextPageIds: [],
   instructionPageId: null,
   timezone: 'UTC',
+  source: { table: 'cron', id: null, triggerAt: null },
   ...overrides,
 });
 
@@ -150,6 +173,17 @@ describe('executeWorkflow', () => {
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
       usage: { inputTokens: 100, outputTokens: 50 },
     } as never);
+
+    // Default workflow_runs claim: succeeds with a fake run id.
+    // Tests that exercise claim-conflict reset mockInsertReturning explicitly.
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
+    mockOnConflictDoNothing.mockReturnValue({ returning: mockInsertReturning });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_1' }]);
+
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
   });
 
   test('missing agent page returns error', async () => {
@@ -323,5 +357,71 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('Network timeout');
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // ==========================================================================
+  // workflow_runs lifecycle (TDD: Riteway-style assertions on the new claim
+  // and finalize behavior — every fire writes one row at start, one update
+  // at end, and a partial unique index loses its claim with claimConflict.)
+  // ==========================================================================
+
+  test('inserts a workflow_runs row at execute-start with the source coordinates', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const triggerAt = new Date('2026-04-15T09:00:00Z');
+    await executeWorkflow(createInputFixture({
+      source: { table: 'calendarTriggers', id: 'trg-42', triggerAt },
+    }));
+
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf_1',
+      sourceTable: 'calendarTriggers',
+      sourceId: 'trg-42',
+      triggerAt,
+      status: 'running',
+    }));
+    expect(mockOnConflictDoNothing).toHaveBeenCalled();
+  });
+
+  test('updates the workflow_runs row with success status, endedAt, and conversationId on finish', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.success).toBe(true);
+    expect(result.runId).toBe('run_1');
+    // The finalize update writes status, endedAt, durationMs, error, conversationId
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'success',
+      endedAt: expect.any(Date),
+      durationMs: expect.any(Number),
+      error: null,
+    }));
+  });
+
+  test('finalizes workflow_runs with status=error when execution fails', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    vi.mocked(generateText).mockRejectedValue(new Error('Agent crashed'));
+
+    await executeWorkflow(createInputFixture());
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: 'Agent crashed',
+    }));
+  });
+
+  test('returns claimConflict and skips execution when the partial unique index rejects the insert', async () => {
+    // ON CONFLICT DO NOTHING returning [] means the (workflowId) WHERE
+    // status='running' partial unique index already has a row for this workflow.
+    mockInsertReturning.mockResolvedValueOnce([]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.claimConflict).toBe(true);
+    expect(result.success).toBe(false);
+    expect(generateText).not.toHaveBeenCalled();
+    // No finalize update happens because no run was claimed.
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

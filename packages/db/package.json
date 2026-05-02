@@ -151,6 +151,10 @@
       "types": "./dist/schema/workflows.d.ts",
       "default": "./dist/schema/workflows.js"
     },
+    "./schema/workflow-runs": {
+      "types": "./dist/schema/workflow-runs.d.ts",
+      "default": "./dist/schema/workflow-runs.js"
+    },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"

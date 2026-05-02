@@ -6,6 +6,7 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
+import type { WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 
@@ -109,7 +110,12 @@ export async function POST(req: Request) {
               endedAt: new Date(),
               error: event ? 'Calendar event was trashed' : 'Calendar event not found',
             }).onConflictDoNothing();
-            return { trigger, result: { success: false, durationMs: 0, error: 'Calendar event unavailable' } as const };
+            const cancelledResult: WorkflowExecutionResult = {
+              success: false,
+              durationMs: 0,
+              error: 'Calendar event unavailable',
+            };
+            return { trigger, result: cancelledResult };
           }
           return { trigger, result: await executeCalendarTrigger(trigger, event) };
         })

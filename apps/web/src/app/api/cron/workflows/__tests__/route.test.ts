@@ -6,7 +6,6 @@ import { NextResponse } from 'next/server';
 // ============================================================================
 
 const {
-  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
@@ -14,7 +13,6 @@ const {
   mockSelectFrom,
   mockSelect,
 } = vi.hoisted(() => ({
-  mockReturning: vi.fn().mockResolvedValue([]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -58,17 +56,22 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   lte: vi.fn(),
-  ne: vi.fn(),
-  inArray: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     isEnabled: 'isEnabled',
     nextRunAt: 'nextRunAt',
-    lastRunStatus: 'lastRunStatus',
-    lastRunAt: 'lastRunAt',
     triggerType: 'triggerType',
+  },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    status: 'status',
+    startedAt: 'startedAt',
   },
 }));
 
@@ -95,10 +98,7 @@ const MOCK_WORKFLOW = {
   eventTriggers: null,
   watchedFolderIds: null,
   eventDebounceSecs: null,
-  lastRunStatus: 'never_run',
-  lastRunAt: null,
-  lastRunError: null,
-  lastRunDurationMs: null,
+  instructionPageId: null,
   nextRunAt: new Date('2025-01-01T09:00:00Z'),
   createdBy: 'user_123',
   createdAt: new Date('2024-01-01'),
@@ -119,15 +119,10 @@ describe('POST /api/cron/workflows', () => {
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([]);
 
-    // db.update(workflows).set(...).where(...).returning() — atomic claim + post-exec update
+    // db.update(workflows | workflowRuns).set(...).where(...) — stuck-run sweep + advance nextRunAt
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockImplementation(() => {
-      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
-      p.returning = mockReturning;
-      return p;
-    });
-    mockReturning.mockResolvedValue([]);
+    mockUpdateWhere.mockResolvedValue(undefined);
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -154,7 +149,6 @@ describe('POST /api/cron/workflows', () => {
 
   it('should execute due workflows and return counts', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
       responseText: 'Report generated',
@@ -178,12 +172,32 @@ describe('POST /api/cron/workflows', () => {
       agentPageId: MOCK_WORKFLOW.agentPageId,
       prompt: MOCK_WORKFLOW.prompt,
       timezone: MOCK_WORKFLOW.timezone,
+      source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
     }));
+  });
+
+  it('should not advance nextRunAt when the executor reports a claim conflict', async () => {
+    mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
+    vi.mocked(executeWorkflow).mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'Workflow already running',
+      claimConflict: true,
+    });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
+
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    const response = await POST(request);
+
+    const body = await response.json();
+    expect(body.executed).toBe(0);
+    expect(body.total).toBe(0);
+    // Stuck-run sweep is the only update call; no nextRunAt advancement.
+    expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
   it('should handle workflow execution errors gracefully', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
       durationMs: 1000,
@@ -203,7 +217,6 @@ describe('POST /api/cron/workflows', () => {
 
   it('should log audit event after workflow execution', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
       responseText: 'Report generated',
@@ -231,9 +244,21 @@ describe('POST /api/cron/workflows', () => {
     expect(mockAudit).not.toHaveBeenCalledWith(expect.objectContaining({ userId: expect.anything() }));
   });
 
+  it('sweeps stuck workflow_runs (status=running, startedAt < cutoff) before discovery', async () => {
+    // Stuck-run sweep is the very first thing the route does on each tick.
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+
+    // First update call is the sweep — set status='error' with the timeout error message.
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      endedAt: expect.any(Date),
+      error: expect.stringContaining('timed out'),
+    }));
+  });
+
   it('should handle thrown exceptions during execution', async () => {
     mockSelectWhere.mockResolvedValue([MOCK_WORKFLOW]);
-    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockRejectedValue(new Error('Network error'));
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
 

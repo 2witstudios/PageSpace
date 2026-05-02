@@ -25,6 +25,16 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   ne: vi.fn(),
   inArray: vi.fn(),
+  sql: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    sourceTable: 'sourceTable',
+    sourceId: 'sourceId',
+    status: 'status',
+  },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: {
@@ -148,7 +158,6 @@ vi.mock('chrono-node', () => ({
 
 import { calendarWriteTools } from '../calendar-write-tools';
 import { db } from '@pagespace/db/db'
-import { inArray } from '@pagespace/db/operators';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -1261,7 +1270,7 @@ describe('calendar-write-tools', () => {
       });
     });
 
-    it('cancels pending, claimed, and running triggers when deleting a trigger-linked event', async () => {
+    it('writes a cancelled workflow_run for each trigger when deleting a trigger-linked event', async () => {
       const triggerMeta = { isTrigger: true, triggerType: 'agent_execution', triggerId: 'trg-1' };
       const triggerEvent = createMockEvent({
         createdById: 'user-123',
@@ -1269,32 +1278,39 @@ describe('calendar-write-tools', () => {
       });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(triggerEvent);
 
-      // Attendees for broadcast
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ userId: 'user-123' }]),
-        }),
-      });
-
-      // Track update calls: first = cancel trigger, second = soft delete event
-      const cancelSetSpy = vi.fn();
-      let updateIdx = 0;
-      (mockDb.update as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        updateIdx++;
-        if (updateIdx === 1) {
-          // Cancel trigger
+      // Two select calls fire under this path, in order:
+      //   1) attendee lookup for broadcast
+      //   2) load triggers for the event so we can write cancelled runs
+      let selectCallCount = 0;
+      (mockDb.select as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
           return {
-            set: cancelSetSpy.mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ userId: 'user-123' }]),
             }),
           };
         }
-        // Soft delete event
         return {
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([
+              { id: 'trg-1', workflowId: 'wf-1', triggerAt: new Date('2026-01-01T09:00:00Z') },
+            ]),
           }),
         };
+      });
+
+      // Capture the cancellation insert
+      const cancelValuesSpy = vi.fn().mockReturnValue({
+        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      });
+      (mockDb.insert as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue({ values: cancelValuesSpy });
+
+      // Soft-delete update path (no trigger writes anymore)
+      (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(undefined),
+        }),
       });
 
       const input = { eventId: 'event-1' };
@@ -1311,14 +1327,17 @@ describe('calendar-write-tools', () => {
         expected: true,
       });
 
-      // Verify trigger cancellation happened with multi-status match
-      expect(cancelSetSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'cancelled' })
+      // Cancellation insert was called with status='cancelled' rows, one per trigger
+      expect(cancelValuesSpy).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceTable: 'calendarTriggers',
+            sourceId: 'trg-1',
+            workflowId: 'wf-1',
+            status: 'cancelled',
+          }),
+        ])
       );
-
-      // Should use inArray for status (pending + claimed + running), not just eq(pending)
-      const mockInArray = vi.mocked(inArray);
-      expect(mockInArray).toHaveBeenCalled();
     });
   });
 
