@@ -338,6 +338,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
 
+  const remoteStreamingUser = !effectiveIsStreaming
+    ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
+    : null;
+
   const effectiveStop = useCallback(() => {
     if (isStreaming) {
       stop();
@@ -815,6 +819,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   onAddFiles={addFiles}
                   onRemoveFile={removeFile}
                   hasVision={hasVision}
+                  remoteStreamingUser={remoteStreamingUser}
                 />
               </>
             )}

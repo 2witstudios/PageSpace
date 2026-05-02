@@ -1,6 +1,7 @@
 'use client';
 
 import React, { forwardRef, useRef, useImperativeHandle, useEffect, useCallback } from 'react';
+import { Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
@@ -71,6 +72,11 @@ export interface ChatInputProps {
   onRemoveFile?: (id: string) => void;
   /** Whether the current model supports vision */
   hasVision?: boolean;
+  /** When set, another user (or another tab/device for the same user) is currently
+   * streaming an AI reply on this surface. Locks the textarea + send button and
+   * shows a banner naming the active streamer. The Stop button is gated separately
+   * on `isStreaming` so observers never see a Stop button. */
+  remoteStreamingUser?: { userId: string; displayName: string } | null;
 }
 
 export interface ChatInputRef {
@@ -124,9 +130,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onAddFiles,
       onRemoveFile,
       hasVision = false,
+      remoteStreamingUser = null,
     },
     ref
   ) => {
+    const isRemoteLocked = remoteStreamingUser !== null;
+    const effectiveDisabled = disabled || isRemoteLocked;
     const textareaRef = useRef<ChatTextareaRef>(null);
 
     // Get settings from centralized store
@@ -181,13 +190,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const handleSend = () => {
       const hasText = value.trim().length > 0;
       const hasImages = (attachments?.length ?? 0) > 0;
-      if ((hasText || hasImages) && !disabled && !isStreaming) {
+      if ((hasText || hasImages) && !effectiveDisabled && !isStreaming) {
         keyboard.dismiss();
         onSend();
       }
     };
 
-    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !disabled && !isStreaming;
+    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !effectiveDisabled && !isStreaming;
 
     // Drag-and-drop handler for images
     const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -221,13 +230,26 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           />
         )}
 
+        {isRemoteLocked && remoteStreamingUser && (
+          <div
+            className="flex items-center gap-2 px-3 pt-2 pb-1 text-xs text-muted-foreground"
+            role="status"
+            aria-live="polite"
+          >
+            <Lock className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              {remoteStreamingUser.displayName} is chatting with the AI…
+            </span>
+          </div>
+        )}
+
         {/* Input row */}
         <div className="flex items-start gap-2 p-3 min-w-0">
           {/* Attach button (shown when model supports vision) */}
           {hasVision && onAddFiles && (
             <AttachButton
               onFiles={onAddFiles}
-              disabled={isStreaming || disabled}
+              disabled={isStreaming || effectiveDisabled}
             />
           )}
 
@@ -239,7 +261,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             placeholder={placeholder}
             driveId={driveId}
             crossDrive={crossDrive}
-            disabled={disabled}
+            disabled={effectiveDisabled}
             variant={variant}
             popupPlacement={popupPlacement}
             onPasteFiles={hasVision && onAddFiles ? onAddFiles : undefined}
@@ -280,7 +302,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}
           hideModelSelector={hideModelSelector}
-          disabled={isStreaming || disabled}
+          disabled={isStreaming || effectiveDisabled}
         />
       </div>
     );
