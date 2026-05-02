@@ -5,6 +5,7 @@
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
+import type { AttachmentMeta } from '@pagespace/lib/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 // Use browser-safe logger for all environments
@@ -110,6 +111,7 @@ export interface InboxEventPayload {
   lastMessagePreview?: string;
   lastMessageSender?: string;
   unreadCount?: number;
+  attachmentMeta?: AttachmentMeta | null;
 }
 
 // Presence types - re-export from shared lib
