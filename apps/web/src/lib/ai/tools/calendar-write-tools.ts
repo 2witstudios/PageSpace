@@ -6,6 +6,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
+import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -304,24 +305,23 @@ export const calendarWriteTools = {
         // Create agent trigger if requested (atomically with event metadata)
         let triggerId: string | null = null;
         if (agentTrigger && driveId && validatedAgent) {
-          const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
           const scheduledByAgentPageId = (ctx as ToolExecutionContext)?.chatSource?.agentPageId;
 
-          const { trigger } = await db.transaction(async (tx) => {
-            const [trg] = await tx
-              .insert(calendarTriggers)
-              .values({
-                calendarEventId: event.id,
+          triggerId = await db.transaction(async (tx) => {
+            const { triggerId: createdTriggerId } = await createCalendarTriggerWorkflow({
+              tx,
+              driveId,
+              scheduledById: userId,
+              calendarEventId: event.id,
+              triggerAt: parsedStartAt,
+              timezone,
+              agentTrigger: {
                 agentPageId: agentTrigger.agentPageId,
-                driveId,
-                scheduledById: userId,
-                prompt: triggerPrompt,
+                prompt: agentTrigger.prompt,
                 instructionPageId: agentTrigger.instructionPageId ?? null,
                 contextPageIds: agentTrigger.contextPageIds ?? [],
-                status: 'pending',
-                triggerAt: parsedStartAt,
-              })
-              .returning();
+              },
+            });
 
             await tx
               .update(calendarEvents)
@@ -329,16 +329,14 @@ export const calendarWriteTools = {
                 metadata: {
                   isTrigger: true,
                   triggerType: 'agent_execution',
-                  triggerId: trg.id,
+                  triggerId: createdTriggerId,
                   scheduledByAgentPageId,
                 } satisfies CalendarTriggerMetadata,
               })
               .where(eq(calendarEvents.id, event.id));
 
-            return { trigger: trg };
+            return createdTriggerId;
           });
-
-          triggerId = trigger.id;
         }
 
         // Broadcast event creation (best-effort)
