@@ -1,6 +1,6 @@
 {
-  "id": "9a6f254a-8ce2-459f-9ad5-2df266ab7e65",
-  "prevId": "85b543c7-3482-4def-9265-6a010b7046e2",
+  "id": "e23795d9-955e-4bf2-9480-3bd2398e74eb",
+  "prevId": "9a6f254a-8ce2-459f-9ad5-2df266ab7e65",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3782,83 +3782,6 @@
         }
       },
       "uniqueConstraints": {}
-    },
-    "public.user_ai_settings": {
-      "name": "user_ai_settings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "encryptedApiKey": {
-          "name": "encryptedApiKey",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "baseUrl": {
-          "name": "baseUrl",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "user_ai_settings_userId_users_id_fk": {
-          "name": "user_ai_settings_userId_users_id_fk",
-          "tableFrom": "user_ai_settings",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "user_provider_unique": {
-          "name": "user_provider_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "userId",
-            "provider"
-          ]
-        }
-      }
     },
     "public.pulse_summaries": {
       "name": "pulse_summaries",

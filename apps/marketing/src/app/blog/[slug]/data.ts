@@ -21,6 +21,44 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
+  "managed-provider-keys": {
+    slug: "managed-provider-keys",
+    title: "PageSpace now manages AI provider keys for you",
+    description:
+      "Per-user API keys (\"BYOK\") are gone. Provider credentials and quotas are now handled at the platform level — your AI chats keep working without any setup. Here's what changes for existing users.",
+    content: `
+## What changed
+
+If you ever pasted an API key into **Settings > AI** to use Claude, GPT, Gemini, or any non-default provider, that flow is retired. The settings page no longer asks for a key, and every key you'd stored has been deleted from our database.
+
+In practice nothing breaks. Open an AI Chat, pick a model, send a message. The model picker shows whichever providers PageSpace has enabled for your deployment — you don't manage credentials for any of them.
+
+## What this means in practice
+
+- **Your AI conversations keep working.** No setup, no key to paste, no encryption details to think about.
+- **Your previously-stored keys are gone from our side.** We've deleted them. Your accounts at OpenAI, Anthropic, Google AI, and the other providers are untouched — those keys still exist with the upstream provider. Revoke them there if you want, but you don't have to.
+- **Provider availability is now a deployment-level concern.** On pagespace.ai cloud, that's whatever PageSpace has enabled. On a self-hosted install, it's whatever your operator has configured via environment variables.
+
+## Standard vs pro tier
+
+Every paid plan has a daily AI quota split into two tiers:
+
+- **Standard** covers smaller and mid-tier models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7, and similar.
+- **Pro** covers frontier flagships — Claude Opus, the GPT-5 family, OpenAI o3, and GLM-5.
+
+If you regularly hit the pro daily limit, [upgrade to a higher plan](/pricing) for more pro capacity.
+
+## Why we did this
+
+Two reasons. Key management was the biggest setup hurdle for new users — most never finished configuring providers, and the experience suffered. Holding encrypted keys for every user was also a meaningful security surface area we didn't need to own. Operators provision once at the deployment level; there's nothing per-user to leak.
+
+If a provider you used regularly has disappeared from your model picker, or a model isn't behaving the way you expect, reach out on Discord or email hello@pagespace.ai.
+    `,
+    author: "Jono",
+    date: "2026-05-01",
+    readTime: "3 min read",
+    category: "Product",
+  },
   "your-workspace-is-the-context": {
     slug: "your-workspace-is-the-context",
     title:

@@ -6,7 +6,6 @@ import { NextResponse } from 'next/server';
 // ============================================================================
 
 const {
-  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
@@ -16,8 +15,10 @@ const {
   mockSelectOrderBy,
   mockSelectLimit,
   mockExecuteCalendarTrigger,
+  mockInsert,
+  mockInsertValues,
+  mockOnConflictDoNothing,
 } = vi.hoisted(() => ({
-  mockReturning: vi.fn().mockResolvedValue([]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -27,6 +28,9 @@ const {
   mockSelectOrderBy: vi.fn(),
   mockSelectLimit: vi.fn(),
   mockExecuteCalendarTrigger: vi.fn(),
+  mockInsert: vi.fn(),
+  mockInsertValues: vi.fn(),
+  mockOnConflictDoNothing: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -57,6 +61,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
+    insert: mockInsert,
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -65,6 +70,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lte: vi.fn(),
   inArray: vi.fn(),
   asc: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
@@ -74,10 +80,18 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   calendarTriggers: {
     id: 'id',
-    status: 'status',
     triggerAt: 'triggerAt',
-    startedAt: 'startedAt',
     calendarEventId: 'calendarEventId',
+  },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: {
+    id: 'id',
+    workflowId: 'workflowId',
+    sourceTable: 'sourceTable',
+    sourceId: 'sourceId',
+    status: 'status',
+    startedAt: 'startedAt',
   },
 }));
 
@@ -90,13 +104,12 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 const MOCK_TRIGGER = {
   id: 'trg-1',
+  workflowId: 'wf-1',
   calendarEventId: 'evt-1',
-  agentPageId: 'agent-1',
   driveId: 'drive-1',
   scheduledById: 'user-123',
-  prompt: 'Check status',
-  status: 'pending',
   triggerAt: new Date('2026-01-01T09:00:00Z'),
+  occurrenceDate: new Date(0),
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -116,17 +129,17 @@ describe('POST /api/cron/calendar-triggers', () => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
 
-    // Default: stuck trigger reset (update returns nothing special)
+    // Default: stuck-run sweeper update returns nothing special
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockImplementation(() => {
-      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
-      p.returning = mockReturning;
-      return p;
-    });
-    mockReturning.mockResolvedValue([]);
+    mockUpdateWhere.mockResolvedValue(undefined);
 
-    // Default: no due triggers found (select chain)
+    // Default: cancellation insert chain (used when event is trashed/missing)
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
+    mockOnConflictDoNothing.mockResolvedValue(undefined);
+
+    // Default: no due triggers found (select chain — discovery query)
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockReturnValue({ orderBy: mockSelectOrderBy });
@@ -155,34 +168,22 @@ describe('POST /api/cron/calendar-triggers', () => {
   });
 
   it('executes due triggers and returns counts', async () => {
-    // Step 1: due triggers found
-    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
-
-    // Step 2: atomic claim returns the trigger
-    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
-
-    // Step 3: load events
-    // Need a fresh select chain for the events query
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
       selectCallCount++;
       return { from: mockSelectFrom };
     });
     mockSelectFrom.mockImplementation(() => {
-      if (selectCallCount <= 1) {
-        // First: due triggers query
+      if (selectCallCount === 1) {
+        // discovery: chained .where().orderBy().limit()
         return { where: mockSelectWhere };
       }
-      // Second: events query
-      return {
-        where: vi.fn().mockResolvedValue([MOCK_EVENT]),
-      };
+      // events query: select(...).from(events).where()
+      return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
     });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
 
-    mockExecuteCalendarTrigger.mockResolvedValue({
-      success: true,
-      durationMs: 500,
-    });
+    mockExecuteCalendarTrigger.mockResolvedValue({ success: true, durationMs: 500 });
 
     const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
     const response = await POST(request);
@@ -193,52 +194,45 @@ describe('POST /api/cron/calendar-triggers', () => {
     expect(body.total).toBe(1);
   });
 
-  it('cancels triggers whose calendar events are trashed', async () => {
-    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
-    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
-
+  it('writes a cancelled run when calendar events are trashed', async () => {
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
       selectCallCount++;
       return { from: mockSelectFrom };
     });
     mockSelectFrom.mockImplementation(() => {
-      if (selectCallCount <= 1) {
-        return { where: mockSelectWhere };
-      }
-      return {
-        where: vi.fn().mockResolvedValue([{ ...MOCK_EVENT, isTrashed: true }]),
-      };
+      if (selectCallCount === 1) return { where: mockSelectWhere };
+      return { where: vi.fn().mockResolvedValue([{ ...MOCK_EVENT, isTrashed: true }]) };
     });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
 
     const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
     const response = await POST(request);
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    // Trashed event trigger should not count as executed
     expect(body.executed).toBe(0);
-    // Should not call executeCalendarTrigger
     expect(mockExecuteCalendarTrigger).not.toHaveBeenCalled();
+    // The cancellation insert was attempted
+    expect(mockInsert).toHaveBeenCalled();
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      sourceTable: 'calendarTriggers',
+      sourceId: MOCK_TRIGGER.id,
+      status: 'cancelled',
+    }));
   });
 
   it('handles execution errors gracefully', async () => {
-    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
-    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
-
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
       selectCallCount++;
       return { from: mockSelectFrom };
     });
     mockSelectFrom.mockImplementation(() => {
-      if (selectCallCount <= 1) {
-        return { where: mockSelectWhere };
-      }
-      return {
-        where: vi.fn().mockResolvedValue([MOCK_EVENT]),
-      };
+      if (selectCallCount === 1) return { where: mockSelectWhere };
+      return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
     });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
 
     mockExecuteCalendarTrigger.mockResolvedValue({
       success: false,
@@ -256,23 +250,44 @@ describe('POST /api/cron/calendar-triggers', () => {
     expect(body.errors[0]).toContain('Rate limited');
   });
 
-  it('handles thrown exceptions during trigger execution', async () => {
-    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
-    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
-
+  it('skips claim-conflict results without recording an error', async () => {
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
       selectCallCount++;
       return { from: mockSelectFrom };
     });
     mockSelectFrom.mockImplementation(() => {
-      if (selectCallCount <= 1) {
-        return { where: mockSelectWhere };
-      }
-      return {
-        where: vi.fn().mockResolvedValue([MOCK_EVENT]),
-      };
+      if (selectCallCount === 1) return { where: mockSelectWhere };
+      return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
     });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
+
+    mockExecuteCalendarTrigger.mockResolvedValue({
+      success: false,
+      durationMs: 0,
+      error: 'Workflow already running',
+      claimConflict: true,
+    });
+
+    const request = new Request('https://example.com/api/cron/calendar-triggers', { method: 'POST' });
+    const response = await POST(request);
+
+    const body = await response.json();
+    expect(body.executed).toBe(0);
+    expect(body.errors).toBeUndefined();
+  });
+
+  it('handles thrown exceptions during trigger execution', async () => {
+    let selectCallCount = 0;
+    mockSelect.mockImplementation(() => {
+      selectCallCount++;
+      return { from: mockSelectFrom };
+    });
+    mockSelectFrom.mockImplementation(() => {
+      if (selectCallCount === 1) return { where: mockSelectWhere };
+      return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
+    });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
 
     mockExecuteCalendarTrigger.mockRejectedValue(new Error('Unexpected crash'));
 
@@ -287,22 +302,16 @@ describe('POST /api/cron/calendar-triggers', () => {
   });
 
   it('logs audit event after trigger execution', async () => {
-    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
-    mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
-
     let selectCallCount = 0;
     mockSelect.mockImplementation(() => {
       selectCallCount++;
       return { from: mockSelectFrom };
     });
     mockSelectFrom.mockImplementation(() => {
-      if (selectCallCount <= 1) {
-        return { where: mockSelectWhere };
-      }
-      return {
-        where: vi.fn().mockResolvedValue([MOCK_EVENT]),
-      };
+      if (selectCallCount === 1) return { where: mockSelectWhere };
+      return { where: vi.fn().mockResolvedValue([MOCK_EVENT]) };
     });
+    mockSelectLimit.mockResolvedValue([MOCK_TRIGGER]);
 
     mockExecuteCalendarTrigger.mockResolvedValue({ success: true, durationMs: 500 });
 
@@ -324,7 +333,6 @@ describe('POST /api/cron/calendar-triggers', () => {
   });
 
   it('returns 500 on catastrophic error', async () => {
-    // Make the entire pipeline blow up before any trigger processing
     mockUpdate.mockImplementation(() => {
       throw new Error('Database connection lost');
     });

@@ -17,8 +17,15 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { taskItems, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+
+export type WorkflowRunSource =
+  | { table: 'cron'; id: null; triggerAt: Date | null }
+  | { table: 'manual'; id: null; triggerAt: null }
+  | { table: 'taskTriggers'; id: string; triggerAt: Date | null }
+  | { table: 'calendarTriggers'; id: string; triggerAt: Date };
 
 export interface WorkflowExecutionResult {
   success: boolean;
@@ -28,6 +35,17 @@ export interface WorkflowExecutionResult {
   error?: string;
   usage?: { inputTokens?: number; outputTokens?: number };
   conversationId?: string;
+  /** ID of the workflow_runs row written for this fire, when one was claimed. */
+  runId?: string;
+  /** True iff the partial unique index rejected the claim (another in-flight run). */
+  claimConflict?: boolean;
+  /**
+   * Set when execution itself completed but the end-of-run UPDATE on
+   * workflow_runs failed. The row is left in 'running' state and the
+   * stuck-run sweeper will mark it as 'error' after the timeout. Callers
+   * should surface this so persisted state divergence is observable.
+   */
+  finalizeError?: string;
 }
 
 /**
@@ -51,6 +69,8 @@ export interface WorkflowExecutionInput {
   contextPageIds: string[];
   instructionPageId: string | null;
   timezone: string;
+  /** Identifies the originating trigger so workflow_runs can be joined back to it. */
+  source: WorkflowRunSource;
   taskContext?: { taskItemId: string; triggerType: 'due_date' | 'completion' };
   eventContext?: { promptOverride: string };
 }
@@ -58,6 +78,83 @@ export interface WorkflowExecutionInput {
 export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
   const startTime = Date.now();
 
+  // 0. Atomic claim via workflow_runs partial unique index. The
+  //    workflow_runs_running_claim_idx ensures only one row with
+  //    status='running' exists per workflowId; ON CONFLICT DO NOTHING
+  //    means a concurrent caller losing the race gets zero rows back.
+  const [runRow] = await db
+    .insert(workflowRuns)
+    .values({
+      workflowId: input.workflowId,
+      sourceTable: input.source.table,
+      sourceId: input.source.id,
+      triggerAt: input.source.triggerAt,
+      status: 'running',
+    })
+    .onConflictDoNothing()
+    .returning({ id: workflowRuns.id });
+
+  if (!runRow) {
+    return {
+      success: false,
+      durationMs: Date.now() - startTime,
+      error: 'Workflow already running',
+      claimConflict: true,
+    };
+  }
+
+  const runId = runRow.id;
+  let result: WorkflowExecutionResult;
+
+  try {
+    result = await runExecution(input, startTime);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    result = {
+      success: false,
+      durationMs: Date.now() - startTime,
+      error: errorMessage,
+    };
+  }
+
+  const finalizeError = await finalizeRun(runId, result);
+
+  return finalizeError
+    ? { ...result, runId, finalizeError }
+    : { ...result, runId };
+}
+
+/**
+ * Update the workflow_runs row with the end-of-run state. Returns the error
+ * message string if the UPDATE failed (caller surfaces it on the result so
+ * persisted-state divergence is observable); returns null on success. The
+ * row is left in 'running' if this fails — the stuck-run sweeper marks it
+ * 'error' after STUCK_RUN_TIMEOUT_MS.
+ */
+async function finalizeRun(runId: string, result: WorkflowExecutionResult): Promise<string | null> {
+  try {
+    await db
+      .update(workflowRuns)
+      .set({
+        status: result.success ? 'success' : 'error',
+        endedAt: new Date(),
+        durationMs: result.durationMs,
+        error: result.error ?? null,
+        conversationId: result.conversationId ?? null,
+      })
+      .where(eq(workflowRuns.id, runId));
+    return null;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    loggers.api.error('Failed to finalize workflow_run', {
+      runId,
+      error: errorMessage,
+    });
+    return errorMessage;
+  }
+}
+
+async function runExecution(input: WorkflowExecutionInput, startTime: number): Promise<WorkflowExecutionResult> {
   try {
     // 1. Load agent page
     const [agent] = await db

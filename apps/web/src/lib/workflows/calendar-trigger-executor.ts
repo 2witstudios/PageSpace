@@ -3,7 +3,6 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { eventAttendees } from '@pagespace/db/schema/calendar'
-import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
@@ -19,8 +18,10 @@ const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
  *
  * Loads the linked workflows row by trigger.workflowId, composes a
  * WorkflowExecutionInput with the calendar event prompt as override,
- * and delegates to the workflow executor. The executor never sees a
- * synthetic row — input is built from authoritative state.
+ * and delegates to the workflow executor. Per-fire state (status,
+ * timings, error, durationMs, conversationId) is written by the
+ * executor to workflow_runs — calendar_triggers no longer carries any
+ * per-fire columns.
  */
 export async function executeCalendarTrigger(
   trigger: CalendarTrigger,
@@ -33,7 +34,6 @@ export async function executeCalendarTrigger(
     const hasDriveAccess = await isUserDriveMember(trigger.scheduledById, trigger.driveId);
     if (!hasDriveAccess) {
       const error = 'Scheduling user no longer has access to the drive';
-      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -45,7 +45,6 @@ export async function executeCalendarTrigger(
 
     if (!workflow) {
       const error = `Linked workflow ${trigger.workflowId} not found`;
-      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -57,7 +56,6 @@ export async function executeCalendarTrigger(
 
     if (!agentPage || agentPage.isTrashed) {
       const error = `Trigger agent page ${workflow.agentPageId} not found or trashed`;
-      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -65,7 +63,6 @@ export async function executeCalendarTrigger(
     const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
     if (!usageResult.success) {
       const error = 'Daily AI call limit reached for scheduling user';
-      await markTriggerFailed(trigger.id, error, Date.now() - startTime);
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
@@ -74,7 +71,8 @@ export async function executeCalendarTrigger(
     //    so we don't double-inject it here.
     const promptOverride = await buildTriggerPrompt(workflow.prompt, event);
 
-    // 6. Compose execution input — no synthetic WorkflowRow
+    // 6. Compose execution input — the executor writes workflow_runs and
+    //    handles per-fire bookkeeping; we just pass the source coordinates.
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: `calendar-trigger-${trigger.id}`,
@@ -85,22 +83,11 @@ export async function executeCalendarTrigger(
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
       instructionPageId: workflow.instructionPageId,
       timezone: event.timezone,
+      source: { table: 'calendarTriggers', id: trigger.id, triggerAt: trigger.triggerAt },
       eventContext: { promptOverride },
     };
 
     const result = await executeWorkflow(input);
-
-    // 7. Update trigger with execution results
-    await db
-      .update(calendarTriggers)
-      .set({
-        status: result.success ? 'completed' : 'failed',
-        completedAt: new Date(),
-        error: result.error || null,
-        durationMs: result.durationMs,
-        conversationId: result.conversationId || null,
-      })
-      .where(eq(calendarTriggers.id, trigger.id));
 
     logger.info('Calendar trigger executed', {
       triggerId: trigger.id,
@@ -122,7 +109,6 @@ export async function executeCalendarTrigger(
       durationMs,
     });
 
-    await markTriggerFailed(trigger.id, errorMessage, durationMs);
     return { success: false, durationMs, error: errorMessage };
   }
 }
@@ -154,23 +140,3 @@ async function buildTriggerPrompt(workflowPrompt: string, event: CalendarEvent):
 
   return parts.join('\n');
 }
-
-async function markTriggerFailed(triggerId: string, error: string, durationMs: number): Promise<void> {
-  try {
-    await db
-      .update(calendarTriggers)
-      .set({
-        status: 'failed',
-        completedAt: new Date(),
-        error,
-        durationMs,
-      })
-      .where(eq(calendarTriggers.id, triggerId));
-  } catch (updateError) {
-    logger.error('Failed to mark trigger as failed', {
-      triggerId,
-      error: updateError instanceof Error ? updateError.message : String(updateError),
-    });
-  }
-}
-

@@ -90,17 +90,17 @@ export function WorkflowList({ workflows, onRun, onToggle, onEdit, onDelete }: W
               <TableCell>
                 <Tooltip>
                   <TooltipTrigger>
-                    <WorkflowStatusBadge status={workflow.lastRunStatus} />
+                    <WorkflowStatusBadge status={workflow.lastRun?.status ?? 'never_run'} />
                   </TooltipTrigger>
-                  {workflow.lastRunError && (
+                  {workflow.lastRun?.error && (
                     <TooltipContent className="max-w-xs">
-                      <p className="text-xs">{workflow.lastRunError}</p>
+                      <p className="text-xs">{workflow.lastRun.error}</p>
                     </TooltipContent>
                   )}
                 </Tooltip>
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
-                {formatDate(workflow.lastRunAt)}
+                {formatDate(workflow.lastRun?.startedAt ?? null)}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {formatDate(workflow.nextRunAt)}

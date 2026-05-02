@@ -4,13 +4,6 @@ import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
 
-export const workflowRunStatus = pgEnum('WorkflowRunStatus', [
-  'never_run',
-  'success',
-  'error',
-  'running',
-]);
-
 export const workflowTriggerType = pgEnum('WorkflowTriggerType', ['cron', 'event']);
 
 export type EventTrigger = {
@@ -36,11 +29,7 @@ export const workflows = pgTable('workflows', {
   instructionPageId: text('instructionPageId').references(() => pages.id, { onDelete: 'set null' }),
 
   isEnabled: boolean('isEnabled').default(true).notNull(),
-  lastRunAt: timestamp('lastRunAt', { mode: 'date' }),
   nextRunAt: timestamp('nextRunAt', { mode: 'date' }),
-  lastRunStatus: workflowRunStatus('lastRunStatus').notNull().default('never_run'),
-  lastRunError: text('lastRunError'),
-  lastRunDurationMs: integer('lastRunDurationMs'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {

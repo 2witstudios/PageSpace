@@ -62,6 +62,7 @@ import * as personalization from '../personalization';
 import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
+import * as workflowRuns from '../workflow-runs';
 
 describe('Schema definitions', () => {
   describe('auth schema', () => {
@@ -493,7 +494,6 @@ describe('Schema definitions', () => {
 
   describe('workflows schema', () => {
     it('exports enums', () => {
-      expect(workflows.workflowRunStatus).toBeDefined();
       expect(workflows.workflowTriggerType).toBeDefined();
     });
 
@@ -503,6 +503,21 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflows.workflowsRelations).toBeDefined();
+    });
+  });
+
+  describe('workflow_runs schema', () => {
+    it('exports enums', () => {
+      expect(workflowRuns.workflowRunStatus).toBeDefined();
+      expect(workflowRuns.workflowRunSourceTable).toBeDefined();
+    });
+
+    it('exports tables', () => {
+      expect(workflowRuns.workflowRuns).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(workflowRuns.workflowRunsRelations).toBeDefined();
     });
   });
 });
