@@ -294,6 +294,22 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(400);
       expect(mockInsertDmMessage).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { label: 'missing originalName', meta: { size: 1, mimeType: 'image/png', contentHash: 'h' } },
+      { label: 'missing size', meta: { originalName: 'x', mimeType: 'image/png', contentHash: 'h' } },
+      { label: 'missing mimeType', meta: { originalName: 'x', size: 1, contentHash: 'h' } },
+      { label: 'missing contentHash', meta: { originalName: 'x', size: 1, mimeType: 'image/png' } },
+      { label: 'size as string', meta: { originalName: 'x', size: '1', mimeType: 'image/png', contentHash: 'h' } },
+      { label: 'attachmentMeta is array', meta: ['not', 'an', 'object'] },
+      { label: 'attachmentMeta is string', meta: 'definitely-not-an-object' },
+      { label: 'attachmentMeta is number', meta: 42 },
+    ])('returns 400 when attachmentMeta is malformed ($label)', async ({ meta }) => {
+      const res = await callRoute({ fileId: FILE_ID, attachmentMeta: meta });
+
+      expect(res.status).toBe(400);
+      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+    });
   });
 
   // ===== 2. Ownership + linkage =====
