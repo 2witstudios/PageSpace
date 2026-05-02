@@ -8,6 +8,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { workflows } from '@pagespace/db/schema/workflows';
+import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -81,9 +82,25 @@ export async function GET(request: Request, context: { params: Promise<{ taskId:
   }
 
   const rows = await db
-    .select()
-    .from(workflows)
-    .where(and(eq(workflows.taskItemId, taskId)));
+    .select({
+      id: taskTriggers.id,
+      taskItemId: taskTriggers.taskItemId,
+      triggerType: taskTriggers.triggerType,
+      nextRunAt: taskTriggers.nextRunAt,
+      lastFiredAt: taskTriggers.lastFiredAt,
+      lastFireError: taskTriggers.lastFireError,
+      isEnabled: taskTriggers.isEnabled,
+      createdAt: taskTriggers.createdAt,
+      updatedAt: taskTriggers.updatedAt,
+      workflowId: workflows.id,
+      agentPageId: workflows.agentPageId,
+      prompt: workflows.prompt,
+      instructionPageId: workflows.instructionPageId,
+      contextPageIds: workflows.contextPageIds,
+    })
+    .from(taskTriggers)
+    .innerJoin(workflows, eq(taskTriggers.workflowId, workflows.id))
+    .where(eq(taskTriggers.taskItemId, taskId));
 
   auditRequest(request, {
     eventType: 'data.read',
@@ -159,14 +176,30 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     return NextResponse.json({ error: message }, { status: 400 });
   }
 
-  const triggerTypeDb = parsed.data.triggerType === 'completion' ? 'task_completion' : 'task_due_date';
+  const triggerType = parsed.data.triggerType;
   const [saved] = await db
-    .select()
-    .from(workflows)
-    .where(and(eq(workflows.taskItemId, taskId), eq(workflows.triggerType, triggerTypeDb)));
+    .select({
+      id: taskTriggers.id,
+      taskItemId: taskTriggers.taskItemId,
+      triggerType: taskTriggers.triggerType,
+      nextRunAt: taskTriggers.nextRunAt,
+      lastFiredAt: taskTriggers.lastFiredAt,
+      lastFireError: taskTriggers.lastFireError,
+      isEnabled: taskTriggers.isEnabled,
+      createdAt: taskTriggers.createdAt,
+      updatedAt: taskTriggers.updatedAt,
+      workflowId: workflows.id,
+      agentPageId: workflows.agentPageId,
+      prompt: workflows.prompt,
+      instructionPageId: workflows.instructionPageId,
+      contextPageIds: workflows.contextPageIds,
+    })
+    .from(taskTriggers)
+    .innerJoin(workflows, eq(taskTriggers.workflowId, workflows.id))
+    .where(and(eq(taskTriggers.taskItemId, taskId), eq(taskTriggers.triggerType, triggerType)));
 
   if (!saved) {
-    logger.error('Trigger row missing after upsert', { taskId, triggerType: triggerTypeDb });
+    logger.error('Trigger row missing after upsert', { taskId, triggerType });
     return NextResponse.json({ error: 'Failed to retrieve saved trigger' }, { status: 500 });
   }
 
@@ -175,7 +208,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     userId,
     resourceType: 'task_triggers',
     resourceId: taskId,
-    details: { triggerType: triggerTypeDb },
+    details: { triggerType },
   });
 
   void broadcastTaskEvent({
@@ -184,7 +217,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     taskListId: ctx.task.taskListId,
     userId,
     pageId: ctx.taskListPageId,
-    data: { id: taskId, triggerType: triggerTypeDb },
+    data: { id: taskId, triggerType },
   });
 
   return NextResponse.json({ trigger: saved }, { status: 200 });
