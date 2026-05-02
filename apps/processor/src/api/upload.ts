@@ -120,28 +120,51 @@ router.post('/single', upload.single('file'), async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    // Get resource binding (pageId) from session
-    const resourcePageId = auth.resourceBinding?.type === 'page' ? auth.resourceBinding.id : undefined;
-    if (!resourcePageId) {
-      return res.status(403).json({ error: 'Token missing page resource binding' });
+    // Resource binding may be either a page (channel uploads) or a conversation (DM uploads).
+    // Conversation-bound tokens have no driveId — DM files live outside any drive.
+    const binding = auth.resourceBinding;
+    if (!binding || (binding.type !== 'page' && binding.type !== 'conversation')) {
+      return res.status(403).json({ error: 'Token missing valid resource binding' });
     }
 
-    const driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
-    if (!driveId) {
-      return res.status(400).json({ error: 'driveId is required' });
-    }
+    let driveId: string | undefined;
+    let pageId: string | undefined;
+    let conversationId: string | undefined;
 
-    if (!auth.driveId || auth.driveId !== driveId) {
-      return res.status(403).json({ error: 'Token drive does not match requested drive' });
-    }
+    if (binding.type === 'page') {
+      driveId = typeof req.body?.driveId === 'string' ? req.body.driveId : undefined;
+      if (!driveId) {
+        return res.status(400).json({ error: 'driveId is required' });
+      }
+      if (!auth.driveId || auth.driveId !== driveId) {
+        return res.status(403).json({ error: 'Token drive does not match requested drive' });
+      }
 
-    const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
-    if (!pageId) {
-      return res.status(400).json({ error: 'pageId is required' });
-    }
-
-    if (resourcePageId && resourcePageId !== pageId) {
-      return res.status(403).json({ error: 'Token resource does not match requested page' });
+      pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : undefined;
+      if (!pageId) {
+        return res.status(400).json({ error: 'pageId is required' });
+      }
+      if (binding.id !== pageId) {
+        return res.status(403).json({ error: 'Token resource does not match requested page' });
+      }
+    } else {
+      // conversation
+      conversationId =
+        typeof req.body?.conversationId === 'string' ? req.body.conversationId : undefined;
+      if (!conversationId) {
+        return res.status(400).json({ error: 'conversationId is required' });
+      }
+      if (binding.id !== conversationId) {
+        return res
+          .status(403)
+          .json({ error: 'Token resource does not match requested conversation' });
+      }
+      // Defense-in-depth: a conversation token must never carry a driveId in the body.
+      // The web layer never sends one; rejecting here prevents a forged token from
+      // claiming drive scope.
+      if (typeof req.body?.driveId === 'string' && req.body.driveId.length > 0) {
+        return res.status(403).json({ error: 'Conversation token cannot carry a driveId' });
+      }
     }
 
     const providedUserId = typeof req.body?.userId === 'string' ? req.body.userId : undefined;
@@ -231,13 +254,18 @@ router.post('/single', upload.single('file'), async (req, res) => {
         });
       }
 
-      const jobs = await queueProcessingJobs(
-        contentHash,
-        originalname,
-        verifiedMimeType,
-        pageId,
-        detectedLabel
-      );
+      // Conversation uploads have no Page row, so the ingest-file worker (which
+      // calls setPageProcessing(fileId)) cannot run against them. Image optimization
+      // for DMs is a follow-up; for this PR we just persist the file.
+      const jobs = pageId
+        ? await queueProcessingJobs(
+            contentHash,
+            originalname,
+            verifiedMimeType,
+            pageId,
+            detectedLabel
+          )
+        : [];
 
       return res.json({
         success: true,
@@ -277,14 +305,17 @@ router.post('/single', upload.single('file'), async (req, res) => {
       });
     }
 
-    // Queue processing jobs based on file type
-    const jobs = await queueProcessingJobs(
-      contentHash,
-      originalname,
-      verifiedMimeType,
-      pageId,
-      detectedLabel
-    );
+    // Queue processing jobs based on file type. Skip for conversation uploads —
+    // the ingest worker requires fileId (a Page row), which DMs don't have.
+    const jobs = pageId
+      ? await queueProcessingJobs(
+          contentHash,
+          originalname,
+          verifiedMimeType,
+          pageId,
+          detectedLabel
+        )
+      : [];
 
     res.json({
       success: true,

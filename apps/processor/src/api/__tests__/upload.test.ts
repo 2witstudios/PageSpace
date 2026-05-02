@@ -264,7 +264,7 @@ describe('upload router - single upload handler', () => {
     mockSanitizeExtension.mockReturnValue('.jpg');
   });
 
-  it('handles missing resource page binding', async () => {
+  it('handles missing resource binding', async () => {
     const app = express();
     app.use(express.json());
     app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -278,9 +278,9 @@ describe('upload router - single upload handler', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    // Should be 403 - missing page resource binding
+    // Should be 403 - missing valid resource binding (page or conversation)
     expect(response.status).toBe(403);
-    expect(response.body.error).toContain('page resource binding');
+    expect(response.body.error).toContain('resource binding');
   });
 
   it('handles missing driveId', async () => {
@@ -1162,5 +1162,156 @@ describe('upload router - magika content-type detection', () => {
     // Both temp files should be unlinked: one from rejection, one from batch cleanup
     expect(mockFsUnlink).toHaveBeenCalledWith(`${UPLOAD_TEMP_DIR}/temp-file-2.jpg`);
     expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+  });
+});
+
+// =============================================================================
+// /single — polymorphic resource binding (page OR conversation)
+// Added in PR 3 (epic item 7) to support DM file attachments. Conversation tokens
+// have no driveId and must reject any driveId in the body (defense-in-depth).
+// =============================================================================
+
+describe('upload router - /single conversation-target binding', () => {
+  const TEMP_PATH = `${UPLOAD_TEMP_DIR}/temp-file.jpg`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
+      if (segs.some(s => s.includes('..'))) return null;
+      return `${base}/${segs.join('/')}`;
+    });
+    mockOriginalExists.mockResolvedValue(false);
+    mockSaveOriginalFromFile.mockResolvedValue({
+      contentHash: 'a'.repeat(64),
+      path: '/storage/hash/original',
+    });
+    mockAppendUploadMetadata.mockResolvedValue(undefined);
+    mockAddJob.mockResolvedValue('job-conv');
+    mockFsUnlink.mockResolvedValue(undefined);
+    mockSanitizeExtension.mockReturnValue('.jpg');
+    mockDetectContentType.mockResolvedValue({
+      label: 'jpeg',
+      mimeType: 'image/jpeg',
+      group: 'image',
+      score: 0.99,
+      source: 'magika',
+    });
+  });
+
+  function makeApp(auth: MockAuth) {
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = auth as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+    return app;
+  }
+
+  it('accepts a conversation-bound token with conversationId in body and saves the file', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'conversation', id: 'conv-1' },
+      // No driveId on conversation tokens
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-1' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    // File saved to content store without a driveId tenant
+    expect(mockSaveOriginalFromFile).toHaveBeenCalledWith(
+      TEMP_PATH,
+      'test.jpg',
+      'a'.repeat(64),
+      expect.objectContaining({ service: 'processor' })
+    );
+    const saveCallMeta = mockSaveOriginalFromFile.mock.calls[0][3] as { driveId?: unknown };
+    expect(saveCallMeta.driveId).toBeUndefined();
+  });
+
+  it('returns 400 when conversation token is used without conversationId in body', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'conversation', id: 'conv-1' },
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/conversationId/i);
+  });
+
+  it('returns 403 when conversation token id does not match body conversationId', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'conversation', id: 'conv-1' },
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-OTHER' });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toMatch(/conversation/i);
+  });
+
+  it('rejects with 403 when a conversation token includes a driveId in the body (defense-in-depth)', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'conversation', id: 'conv-1' },
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-1', driveId: 'drive-x' });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('returns 403 when the token has no resource binding at all', async () => {
+    const app = makeApp({ userId: 'user-1' });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-1' });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toMatch(/resource binding/i);
+  });
+
+  it('returns 403 when the token has an unknown resource type', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'whatever', id: 'x' },
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-1' });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('does NOT enqueue an ingest-file job for conversation uploads (DM files have no Page)', async () => {
+    const app = makeApp({
+      userId: 'user-1',
+      resourceBinding: { type: 'conversation', id: 'conv-1' },
+    });
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ conversationId: 'conv-1' });
+
+    expect(response.status).toBe(200);
+    // The ingest-file worker requires a fileId === pageId. DM uploads have no Page,
+    // so no ingestion is queued. (Image optimization for DMs is a follow-up.)
+    expect(mockAddJob).not.toHaveBeenCalled();
   });
 });
