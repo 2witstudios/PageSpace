@@ -47,6 +47,11 @@ Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conve
 - Given a conversation target with a non-participant user, the service-token mint should fail before reaching the processor.
 - Given the polymorphic processor handler, an unknown target type should reject with 400 rather than crashing or defaulting.
 - Given a conversation-target upload, the processor should write the file with `driveId = NULL` and a `fileConversations` linkage instead of `filePages`.
+- Given an attachment upload processor response, should persist and link the file only when the returned content hash matches the bytes received by the web layer.
+- Given an attachment upload processor response, should reject the response before persistence when the returned size disagrees with the bytes received by the web layer.
+- Given `processAttachmentUpload`, should require a validated enforced auth context rather than a raw caller-provided user id.
+- Given a conversation-target upload, should clearly document that DM files pass upload-time content detection but do not enqueue post-storage ingest jobs until DM-safe processing exists.
+- Given cross-context content-addressable deduplication, should grant access only through a fresh authorized linkage and never by blob existence alone.
 
 ---
 

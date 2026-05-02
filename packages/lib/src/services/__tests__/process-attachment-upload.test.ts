@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 
 // --- Database boundary mocks ----------------------------------------------------
 const mockDmConversationsFindFirst = vi.fn();
@@ -118,14 +119,11 @@ vi.mock('../../logging/logger-config', () => ({
 
 // --- Imports under test ---------------------------------------------------------
 import { processAttachmentUpload, type AttachmentTarget } from '../attachment-upload';
+import { EnforcedAuthContext } from '../../permissions/enforced-context';
+import type { SessionClaims } from '../../auth/session-service';
 
 // --- Helpers --------------------------------------------------------------------
-const FAKE_HASH = 'h'.repeat(64);
-const PROCESSOR_OK = {
-  ok: true,
-  status: 200,
-  json: async () => ({ contentHash: FAKE_HASH, size: 1024 }),
-};
+const WRONG_HASH = 'f'.repeat(64);
 
 function buildRequest(file: File): Request {
   const fd = new FormData();
@@ -138,6 +136,39 @@ function buildRequest(file: File): Request {
 function makeFile(name = 'hello.png', type = 'image/png', size = 1024): File {
   const blob = new Blob([new Uint8Array(size)], { type });
   return new File([blob], name, { type });
+}
+
+async function hashFile(file: File): Promise<string> {
+  return createHash('sha256')
+    .update(Buffer.from(await file.arrayBuffer()))
+    .digest('hex');
+}
+
+async function mockProcessorSuccessFor(file: File, overrides: { size?: number } = {}) {
+  const contentHash = await hashFile(file);
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      contentHash,
+      size: overrides.size ?? file.size,
+    }),
+  }) as unknown as typeof fetch;
+  return contentHash;
+}
+
+function makeAuthContext(userId = 'user-1'): EnforcedAuthContext {
+  const claims: SessionClaims = {
+    sessionId: `session-${userId}`,
+    userId,
+    userRole: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 1,
+    type: 'user',
+    scopes: [],
+    expiresAt: new Date(Date.now() + 60_000),
+  };
+  return EnforcedAuthContext.fromSession(claims);
 }
 
 const PAGE_TARGET: AttachmentTarget = { type: 'page', pageId: 'page-1', driveId: 'drive-1' };
@@ -165,7 +196,6 @@ function setHappyPathDefaults() {
     participant1Id: 'user-1',
     participant2Id: 'user-2',
   });
-  globalThis.fetch = vi.fn().mockResolvedValue(PROCESSOR_OK) as unknown as typeof fetch;
 }
 
 describe('processAttachmentUpload', () => {
@@ -176,29 +206,31 @@ describe('processAttachmentUpload', () => {
 
   describe('happy path — page target', () => {
     it('inserts file row scoped to the drive and a filePages linkage (no fileConversations)', async () => {
-      const request = buildRequest(makeFile('a.png', 'image/png', 1024));
+      const file = makeFile('a.png', 'image/png', 1024);
+      const expectedHash = await mockProcessorSuccessFor(file);
+      const request = buildRequest(file);
       const res = await processAttachmentUpload({
         request,
         target: PAGE_TARGET,
-        userId: 'user-1',
+        authContext: makeAuthContext(),
       });
 
       expect(res.status).toBe(200);
       // File row carries the real driveId
       expect(mockSaveFileRecord).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: FAKE_HASH,
+          id: expectedHash,
           driveId: 'drive-1',
           createdBy: 'user-1',
           sizeBytes: 1024,
           mimeType: 'image/png',
-          storagePath: FAKE_HASH,
+          storagePath: expectedHash,
         })
       );
       // Linkage goes through linkFileToTarget with the page target
       expect(mockLinkFileToTarget).toHaveBeenCalledWith({
         target: PAGE_TARGET,
-        fileId: FAKE_HASH,
+        fileId: expectedHash,
         userId: 'user-1',
       });
     });
@@ -206,25 +238,20 @@ describe('processAttachmentUpload', () => {
 
   describe('happy path — conversation target', () => {
     it('inserts file row with NULL driveId and a fileConversations linkage (no filePages)', async () => {
-      // Processor returns its own measured size; SUT must use that, not the client claim.
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ contentHash: FAKE_HASH, size: 2048 }),
-      }) as unknown as typeof fetch;
-
-      const request = buildRequest(makeFile('b.pdf', 'application/pdf', 2048));
+      const file = makeFile('b.pdf', 'application/pdf', 2048);
+      const expectedHash = await mockProcessorSuccessFor(file);
+      const request = buildRequest(file);
       const res = await processAttachmentUpload({
         request,
         target: CONV_TARGET,
-        userId: 'user-1',
+        authContext: makeAuthContext(),
       });
 
       expect(res.status).toBe(200);
       // DM files have no drive
       expect(mockSaveFileRecord).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: FAKE_HASH,
+          id: expectedHash,
           driveId: null,
           createdBy: 'user-1',
           sizeBytes: 2048,
@@ -234,7 +261,7 @@ describe('processAttachmentUpload', () => {
       // Linkage goes through linkFileToTarget with the conversation target
       expect(mockLinkFileToTarget).toHaveBeenCalledWith({
         target: CONV_TARGET,
-        fileId: FAKE_HASH,
+        fileId: expectedHash,
         userId: 'user-1',
       });
       // Page token mint must not be called for conversation flow
@@ -258,7 +285,11 @@ describe('processAttachmentUpload', () => {
       });
 
       const request = buildRequest(makeFile());
-      const res = await processAttachmentUpload({ request, target: PAGE_TARGET, userId: 'user-1' });
+      const res = await processAttachmentUpload({
+        request,
+        target: PAGE_TARGET,
+        authContext: makeAuthContext(),
+      });
 
       expect(res.status).toBe(413);
       // Token mint should never be reached
@@ -273,7 +304,11 @@ describe('processAttachmentUpload', () => {
       mockAcquireUploadSlot.mockResolvedValueOnce(null);
 
       const request = buildRequest(makeFile());
-      const res = await processAttachmentUpload({ request, target: PAGE_TARGET, userId: 'user-1' });
+      const res = await processAttachmentUpload({
+        request,
+        target: PAGE_TARGET,
+        authContext: makeAuthContext(),
+      });
 
       expect(res.status).toBe(429);
       expect(mockCreateUploadServiceToken).not.toHaveBeenCalled();
@@ -287,7 +322,11 @@ describe('processAttachmentUpload', () => {
       }) as unknown as typeof fetch;
 
       const request = buildRequest(makeFile());
-      const res = await processAttachmentUpload({ request, target: PAGE_TARGET, userId: 'user-1' });
+      const res = await processAttachmentUpload({
+        request,
+        target: PAGE_TARGET,
+        authContext: makeAuthContext(),
+      });
 
       expect(res.status).toBe(500);
       // Slot was acquired and then released exactly once on the error path
@@ -296,14 +335,75 @@ describe('processAttachmentUpload', () => {
     });
   });
 
+  describe('processor response integrity', () => {
+    it('rejects and does not persist when the processor claims a different content hash', async () => {
+      const file = makeFile('payload.png', 'image/png', 128);
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ contentHash: WRONG_HASH, size: file.size }),
+      }) as unknown as typeof fetch;
+
+      const res = await processAttachmentUpload({
+        request: buildRequest(file),
+        target: PAGE_TARGET,
+        authContext: makeAuthContext(),
+      });
+
+      const body = await res.json();
+      expect(res.status).toBe(502);
+      expect(body.error).toMatch(/integrity/i);
+      expect(mockSaveFileRecord).not.toHaveBeenCalled();
+      expect(mockLinkFileToTarget).not.toHaveBeenCalled();
+      expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+      expect(mockReleaseUploadSlot).toHaveBeenCalledWith('slot-1');
+    });
+
+    it('rejects and does not persist when the processor claims a different size', async () => {
+      const file = makeFile('payload.pdf', 'application/pdf', 128);
+      const expectedHash = await hashFile(file);
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ contentHash: expectedHash, size: file.size + 1 }),
+      }) as unknown as typeof fetch;
+
+      const res = await processAttachmentUpload({
+        request: buildRequest(file),
+        target: CONV_TARGET,
+        authContext: makeAuthContext(),
+      });
+
+      const body = await res.json();
+      expect(res.status).toBe(502);
+      expect(body.error).toMatch(/integrity/i);
+      expect(mockSaveFileRecord).not.toHaveBeenCalled();
+      expect(mockLinkFileToTarget).not.toHaveBeenCalled();
+      expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+      expect(mockReleaseUploadSlot).toHaveBeenCalledWith('slot-1');
+    });
+  });
+
   describe('response shape parity', () => {
     it('returns the same response keys for page and conversation targets', async () => {
-      const reqA = buildRequest(makeFile('a.png', 'image/png', 256));
-      const resA = await processAttachmentUpload({ request: reqA, target: PAGE_TARGET, userId: 'user-1' });
+      const fileA = makeFile('a.png', 'image/png', 256);
+      await mockProcessorSuccessFor(fileA);
+      const reqA = buildRequest(fileA);
+      const resA = await processAttachmentUpload({
+        request: reqA,
+        target: PAGE_TARGET,
+        authContext: makeAuthContext(),
+      });
       const bodyA = await resA.json();
 
-      const reqB = buildRequest(makeFile('b.png', 'image/png', 256));
-      const resB = await processAttachmentUpload({ request: reqB, target: CONV_TARGET, userId: 'user-1' });
+      const fileB = makeFile('b.png', 'image/png', 256);
+      await mockProcessorSuccessFor(fileB);
+      const reqB = buildRequest(fileB);
+      const resB = await processAttachmentUpload({
+        request: reqB,
+        target: CONV_TARGET,
+        authContext: makeAuthContext(),
+      });
       const bodyB = await resB.json();
 
       // Top-level shape must match — the consumer (useAttachmentUpload) cannot branch on target type.
