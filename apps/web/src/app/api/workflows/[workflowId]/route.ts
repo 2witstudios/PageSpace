@@ -29,7 +29,10 @@ async function getWorkflowWithAuth(workflowId: string, userId: string) {
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE) {
+  // 404 backing workflows (cronExpression IS NULL) the same way we 404
+  // unknown rows: they're owned by task_triggers / calendar_triggers and
+  // must not be editable from the cron management surface.
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE || !workflow.cronExpression) {
     return { error: NextResponse.json({ error: 'Workflow not found' }, { status: 404 }) };
   }
 

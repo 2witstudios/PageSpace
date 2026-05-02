@@ -60,14 +60,15 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(),
-  and: vi.fn(),
+  eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
+  and: vi.fn((...conds) => ({ op: 'and', conds })),
+  isNotNull: vi.fn((field) => ({ op: 'isNotNull', field })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId' },
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
-  workflows: { driveId: 'driveId', createdAt: 'createdAt' },
+  workflows: { driveId: 'driveId', createdAt: 'createdAt', triggerType: 'triggerType', cronExpression: 'cronExpression' },
 }));
 
 import { GET, POST } from '../route';
@@ -189,6 +190,29 @@ describe('GET /api/workflows', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toEqual(mockWorkflows);
+  });
+
+  it('should filter out backing workflows (cronExpression IS NOT NULL guard)', async () => {
+    // Task-trigger and calendar-trigger backing workflows are tagged
+    // triggerType='cron' but have cronExpression=null. Without an
+    // isNotNull(cronExpression) gate they'd leak into this list and be
+    // editable/deletable from the cron management UI.
+    mockOrderBy.mockResolvedValue([]);
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+
+    const { isNotNull } = await import('@pagespace/db/operators');
+    const isNotNullMock = vi.mocked(isNotNull);
+    isNotNullMock.mockClear();
+
+    const request = new Request(`https://example.com/api/workflows?driveId=${mockDriveId}`);
+    await GET(request);
+
+    const guardedFields = isNotNullMock.mock.calls.map((call) => call[0]);
+    expect(guardedFields).toContain('cronExpression');
   });
 });
 

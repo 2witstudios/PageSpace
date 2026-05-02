@@ -26,7 +26,10 @@ export async function POST(
     .from(workflows)
     .where(eq(workflows.id, workflowId));
 
-  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE) {
+  // Backing workflows (those owned by task_triggers / calendar_triggers)
+  // share triggerType='cron' but have cronExpression=null. They are not
+  // user-runnable through this surface — fire them via their own trigger.
+  if (!workflow || workflow.triggerType !== MANAGEABLE_TRIGGER_TYPE || !workflow.cronExpression) {
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
