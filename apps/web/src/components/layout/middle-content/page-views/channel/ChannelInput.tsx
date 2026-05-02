@@ -285,6 +285,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
               value={value}
               onChange={onChange}
               onSend={handleSend}
+              canSendEmpty={!!attachment}
               placeholder={placeholder}
               driveId={driveId}
               crossDrive={crossDrive}

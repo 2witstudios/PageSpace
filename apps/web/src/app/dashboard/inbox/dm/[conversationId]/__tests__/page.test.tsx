@@ -288,6 +288,46 @@ describe('InboxDMPage — attachments', () => {
     expect(screen.getByTestId('attachment-file-x')).toBeInTheDocument();
   });
 
+  it('realtimeEchoForOwnOptimisticDm_replacesTempRowWithoutDuplicatingAttachment', async () => {
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('send-with-attachment'));
+    });
+    expect(screen.getAllByTestId('attachment-file-x')).toHaveLength(1);
+
+    const handlers = socketHandlers['new_dm_message'] ?? [];
+    expect(handlers.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      handlers.forEach((h) =>
+        h({
+          id: 'm-server',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: '',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          fileId: sampleAttachment.id,
+          attachmentMeta: {
+            originalName: sampleAttachment.originalName,
+            size: sampleAttachment.size,
+            mimeType: sampleAttachment.mimeType,
+            contentHash: sampleAttachment.contentHash,
+          },
+        }),
+      );
+    });
+
+    expect(screen.getAllByTestId('attachment-file-x')).toHaveLength(1);
+    expect(mockPatch).not.toHaveBeenCalledWith('/api/messages/conv-1');
+  });
+
   it('realtimeNewDmMessage_withAttachment_appendsRowAndRendersAttachment_withoutRefetch', async () => {
     await act(async () => {
       render(<InboxDMPage />);

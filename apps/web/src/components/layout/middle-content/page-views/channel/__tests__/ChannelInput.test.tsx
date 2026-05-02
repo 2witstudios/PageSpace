@@ -60,6 +60,7 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
     driveId?: string;
     onPasteFiles?: (files: File[]) => void;
     disabled?: boolean;
+    canSendEmpty?: boolean;
   }
   const MockChatTextarea = React.forwardRef<
     { focus: () => void; clear: () => void },
@@ -77,7 +78,9 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            props.onSend();
+            if ((props.value.trim() || props.canSendEmpty) && !props.disabled) {
+              props.onSend();
+            }
           }
         }}
         onPaste={(e) => {

@@ -60,6 +60,28 @@ interface Conversation {
   };
 }
 
+const isMatchingOptimisticMessage = (optimistic: Message, message: Message) =>
+  optimistic.id.startsWith('temp-') &&
+  optimistic.conversationId === message.conversationId &&
+  optimistic.senderId === message.senderId &&
+  optimistic.content === message.content &&
+  (optimistic.fileId ?? null) === (message.fileId ?? null);
+
+const reconcileMessage = (prev: Message[], message: Message) => {
+  const optimisticIndex = prev.findIndex((m) => isMatchingOptimisticMessage(m, message));
+
+  if (optimisticIndex !== -1) {
+    return prev.reduce<Message[]>((next, current, index) => {
+      if (current.id === message.id) return next;
+      next.push(index === optimisticIndex ? message : current);
+      return next;
+    }, []);
+  }
+
+  if (prev.find((m) => m.id === message.id)) return prev;
+  return [...prev, message];
+};
+
 export default function InboxDMPage() {
   const params = useParams();
   const conversationId = params.conversationId as string;
@@ -103,10 +125,7 @@ export default function InboxDMPage() {
 
     const handleNewMessage = (message: Message) => {
       if (message.conversationId === conversationId) {
-        setMessages((prev) => {
-          if (prev.find((m) => m.id === message.id)) return prev;
-          return [...prev, message];
-        });
+        setMessages((prev) => reconcileMessage(prev, message));
 
         if (message.senderId !== user.id) {
           patch(`/api/messages/${conversationId}`);
@@ -191,7 +210,11 @@ export default function InboxDMPage() {
         body.fileId = attachment.id;
         body.attachmentMeta = attachmentMeta!;
       }
-      await post(`/api/messages/${conversationId}`, body);
+      const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
+      const persistedMessage = response.message;
+      if (persistedMessage) {
+        setMessages((prev) => reconcileMessage(prev, persistedMessage));
+      }
     } catch (error) {
       toast.error('Failed to send message');
       console.error('Error sending message:', error);

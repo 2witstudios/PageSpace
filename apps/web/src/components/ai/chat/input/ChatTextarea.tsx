@@ -21,6 +21,8 @@ export interface ChatTextareaProps {
   onChange: (value: string) => void;
   /** Send message handler (triggered on Enter without Shift) */
   onSend: () => void;
+  /** Allow Enter to send when the textarea is empty, for attachment-only sends */
+  canSendEmpty?: boolean;
   /** Placeholder text */
   placeholder?: string;
   /** Drive ID for mention suggestions */
@@ -56,6 +58,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       value,
       onChange,
       onSend,
+      canSendEmpty = false,
       placeholder = 'Type your message...',
       driveId,
       crossDrive = false,
@@ -115,7 +118,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           return;
         }
         e.preventDefault();
-        if (value.trim() && !disabled) {
+        if ((value.trim() || canSendEmpty) && !disabled) {
           onSend();
         }
       }
