@@ -22,8 +22,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
-  getUserLMStudioSettings: vi.fn(),
+vi.mock('@/lib/ai/core/ai-utils', () => ({
+  getManagedProviderKey: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/security/url-validator', () => ({
@@ -32,7 +32,7 @@ vi.mock('@pagespace/lib/security/url-validator', () => ({
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
-import { getUserLMStudioSettings } from '@/lib/ai/core';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -61,7 +61,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: no settings configured
-    vi.mocked(getUserLMStudioSettings).mockResolvedValue(null);
+    vi.mocked(getManagedProviderKey).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -79,8 +79,8 @@ describe('GET /api/ai/lmstudio/models', () => {
   });
 
   describe('configuration validation', () => {
-    it('should return 400 when LM Studio is not configured', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue(null);
+    it('should return 503 when LM Studio is not configured on this deployment', async () => {
+      vi.mocked(getManagedProviderKey).mockReturnValue(null);
 
       const request = new Request('https://example.com/api/ai/lmstudio/models', {
         method: 'GET',
@@ -89,20 +89,16 @@ describe('GET /api/ai/lmstudio/models', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(503);
       expect(body.success).toBe(false);
-      expect(body.error).toContain('LM Studio not configured');
+      expect(body.error).toContain('not configured');
       expect(body.models).toEqual({});
     });
-
-    // Note: The getUserLMStudioSettings implementation returns null when baseUrl is falsy,
-    // so we don't need a separate test for empty baseUrl - it's covered by the null case above.
   });
 
   describe('successful model discovery', () => {
     it('should return models from LM Studio instance', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -146,8 +142,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should clean up model display names', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -174,8 +169,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should handle empty models array', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -198,8 +192,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should log successful model fetch', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -227,8 +220,7 @@ describe('GET /api/ai/lmstudio/models', () => {
 
   describe('LM Studio connection failures', () => {
     it('should return empty models with error when LM Studio is unreachable', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -251,8 +243,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should return empty models when LM Studio returns non-OK status', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -274,8 +265,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should log errors when LM Studio fetch fails', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -301,7 +291,7 @@ describe('GET /api/ai/lmstudio/models', () => {
 
   describe('error handling', () => {
     it('should handle unexpected errors gracefully', async () => {
-      vi.mocked(getUserLMStudioSettings).mockRejectedValue(new Error('Database error'));
+      vi.mocked(getManagedProviderKey).mockImplementationOnce(() => { throw new Error('Database error'); });
 
       const request = new Request('https://example.com/api/ai/lmstudio/models', {
         method: 'GET',
@@ -320,8 +310,7 @@ describe('GET /api/ai/lmstudio/models', () => {
 
   describe('edge cases', () => {
     it('should handle models without id property', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -351,8 +340,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     });
 
     it('should handle missing data array in response', async () => {
-      vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-        isConfigured: true,
+      vi.mocked(getManagedProviderKey).mockReturnValue({
         baseUrl: mockBaseUrl,
       });
 
@@ -381,8 +369,7 @@ describe('GET /api/ai/lmstudio/models', () => {
       ];
 
       for (const baseUrl of testCases) {
-        vi.mocked(getUserLMStudioSettings).mockResolvedValue({
-          isConfigured: true,
+        vi.mocked(getManagedProviderKey).mockReturnValue({
           baseUrl,
         });
 

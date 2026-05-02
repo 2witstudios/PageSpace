@@ -20,16 +20,13 @@ import {
 } from '@/lib/ai/core/ai-providers-config';
 
 interface ProviderStatus {
-  isConfigured: boolean;
-  hasApiKey?: boolean;
-  hasBaseUrl?: boolean;
+  isAvailable: boolean;
 }
 
 interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
   providers: Record<string, ProviderStatus>;
-  isAnyProviderConfigured: boolean;
 }
 
 /** Category mapping for providers */
@@ -217,19 +214,11 @@ export function ProviderModelSelector({
     return getModelDisplayName(provider, model);
   }, [provider, model, ollamaModels, lmstudioModels]);
 
-  // Check if a provider is configured
-  const isProviderConfigured = useCallback(
+  // Check whether the deployment has this provider configured.
+  const isProviderAvailable = useCallback(
     (providerId: string) => {
       if (!providerSettings) return false;
-
-      // PageSpace is always configured
-      if (providerId === 'pagespace') return true;
-
-      // openrouter_free uses the same API key as openrouter
-      const checkId = providerId === 'openrouter_free' ? 'openrouter' : providerId;
-
-      const status = providerSettings.providers[checkId];
-      return status?.isConfigured ?? false;
+      return providerSettings.providers[providerId]?.isAvailable ?? false;
     },
     [providerSettings]
   );
@@ -344,35 +333,37 @@ export function ProviderModelSelector({
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[280px] p-2">
             <div className="space-y-2">
-              {PROVIDER_GROUPS.map((group) => (
-                <div key={group.label}>
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
-                    {group.label}
+              {PROVIDER_GROUPS
+                .map((group) => ({
+                  ...group,
+                  providers: group.providers.filter((p) => isProviderAvailable(p.id)),
+                }))
+                .filter((group) => group.providers.length > 0)
+                .map((group) => (
+                  <div key={group.label}>
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+                      {group.label}
+                    </div>
+                    <div className="space-y-0.5">
+                      {group.providers.map((p) => {
+                        const isSelected = provider === p.id;
+                        return (
+                          <Button
+                            key={p.id}
+                            variant={isSelected ? 'secondary' : 'ghost'}
+                            size="sm"
+                            disabled={isSaving}
+                            onClick={() => handleProviderSelect(p.id)}
+                            className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                          >
+                            <span className="truncate min-w-0">{p.name}</span>
+                            {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                          </Button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="space-y-0.5">
-                    {group.providers.map((p) => {
-                      const configured = isProviderConfigured(p.id);
-                      const isSelected = provider === p.id;
-                      return (
-                        <Button
-                          key={p.id}
-                          variant={isSelected ? 'secondary' : 'ghost'}
-                          size="sm"
-                          disabled={!configured || isSaving}
-                          onClick={() => handleProviderSelect(p.id)}
-                          className={cn(
-                            'w-full justify-between text-xs h-7 px-2 min-w-0',
-                            !configured && 'opacity-50'
-                          )}
-                        >
-                          <span className="truncate min-w-0">{p.name}</span>
-                          {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+                ))}
             </div>
           </ScrollArea>
         </PopoverContent>

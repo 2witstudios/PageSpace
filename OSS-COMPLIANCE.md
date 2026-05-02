@@ -394,7 +394,7 @@ and the seller rotates or retires keys.
 | Item | Reason |
 |---|---|
 | Production VPS (Postgres) | Decommissioned at cutover; user data migrated to buyer infrastructure per §4.5 before destruction. |
-| BYOK provider keys held by end users (OpenAI, Anthropic, xAI, OpenRouter, Google AI, etc.) | Encrypted at rest in `user_ai_settings.encryptedApiKey` (`packages/db/src/schema/ai.ts`); handover handled as part of the database migration in §4.5. |
+| Per-user BYOK provider keys | Not applicable — the `user_ai_settings` table was retired and no per-user provider keys are stored. AI providers are managed at the deployment level via `*_DEFAULT_API_KEY` env vars (see §4.2). |
 | Predecessor GitHub repositories (§2) | Private legacy repos retained by the seller. At buyer's election, the seller will either (a) grant a perpetual read-only collaborator permission to a buyer-designated GitHub account on each predecessor repo listed in §2; or (b) deliver a `git clone --mirror` archive of each predecessor repo to the buyer at closing, which buyer may retain for forensic / chain-of-authorship purposes. Default unless buyer specifies otherwise: (b) clone-archive delivery. |
 
 ### 4.4 Closing checklist
@@ -409,8 +409,6 @@ and the seller rotates or retires keys.
       agree).
 - [ ] User-data migration per §4.5 completed; buyer confirms data
       integrity.
-- [ ] Encryption-key handover or BYOK-column rotation decision recorded
-      (option a/b/c).
 - [ ] DPA assignment schedule executed.
 - [ ] Transfer-of-control email sent to all users; privacy notice
       updated on `pagespace.ai`.
@@ -421,36 +419,19 @@ and the seller rotates or retires keys.
 ### 4.5 User-data handover
 
 Because production users exist at cutover, §4.3's high-level handling for the
-VPS and BYOK keys is specified below.
+VPS is specified below.
 
 **Scope of user data.** Workspaces, pages (all page types — Document, Code,
 Sheet, Canvas, Task List, Channel, AI Chat, File, Folder), uploaded files, AI
 chat history, integrations state (GitHub / Google Calendar / etc. OAuth
-tokens), audit logs, session data, and encrypted BYOK provider keys. Canonical
-table list: from `packages/db/src/schema/`.
+tokens), audit logs, and session data. AI provider keys are not user-scoped —
+they live in deployment env vars and travel with the operator (see §4.2).
+Canonical table list: from `packages/db/src/schema/`.
 
 **Migration mechanism.** `pg_dump` from the seller's VPS Postgres to the
 buyer-provided Postgres over an encrypted transfer channel (SSH tunnel
 or signed S3-compatible upload with a short-lived credential). The production
 stack runs on Postgres only — there is no secondary datastore to coordinate.
-
-**BYOK keys — encryption at rest and handover options.** The
-`user_ai_settings.encryptedApiKey` column is encrypted with a symmetric key
-(see `packages/lib/src/encryption/encryption-utils.ts`). Handover options for
-the parties to choose from:
-
-- (a) **Inherit the existing encryption key** — transfer the key material to
-  buyer as part of the closing asset schedule so users' BYOK entries continue
-  to decrypt on buyer infrastructure without any end-user action.
-- (b) **Rotate at migration** — decrypt with the seller's key during migration
-  and re-encrypt with a new buyer-held key before write to buyer Postgres.
-  Users experience no visible change.
-- (c) **Null the column** — require users to re-enter their BYOK keys at
-  first buyer-infrastructure login.
-
-Default recommendation from the seller: **(b) rotate** — minimizes
-continued key-material exposure to seller systems and requires no end-user
-action.
 
 **DPA assignment.** Existing customer Data Processing Agreements are assigned
 to buyer at closing via an APA schedule; buyer becomes data controller /

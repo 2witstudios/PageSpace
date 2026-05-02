@@ -86,7 +86,7 @@ export const productSchema = {
       name: "Free",
       price: "0",
       priceCurrency: "USD",
-      description: "500MB storage, 50 daily AI calls, BYOK unlimited",
+      description: "500MB storage, 50 daily AI calls",
       availability: "https://schema.org/InStock",
     },
     {

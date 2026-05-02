@@ -14,11 +14,3 @@ export function getOnPremUserDefaults() {
     currentAiModel: '',
   };
 }
-
-/** Fields for the default Ollama `userAiSettings` row. */
-export function getOnPremOllamaSettings() {
-  return {
-    provider: 'ollama' as const,
-    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-  };
-}

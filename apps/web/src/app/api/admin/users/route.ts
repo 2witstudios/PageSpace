@@ -4,7 +4,6 @@ import { users } from '@pagespace/db/schema/auth'
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations'
 import { subscriptions } from '@pagespace/db/schema/subscriptions'
-import { userAiSettings } from '@pagespace/db/schema/ai';
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -52,7 +51,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     );
 
     // Batch aggregate stats instead of per-user N+1 queries
-    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts, aiSettingCounts] = await Promise.all([
+    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts] = await Promise.all([
       db.select({
         userId: drives.ownerId,
         count: count(),
@@ -82,13 +81,6 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         .from(messages)
         .where(inArray(messages.userId, userIds))
         .groupBy(messages.userId),
-      db.select({
-        userId: userAiSettings.userId,
-        count: count(),
-      })
-        .from(userAiSettings)
-        .where(inArray(userAiSettings.userId, userIds))
-        .groupBy(userAiSettings.userId),
     ]);
 
     const toCountMap = (rows: Array<{ userId: string | null; count: unknown }>) => {
@@ -104,7 +96,6 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     const pagesCountMap = toCountMap(pageCounts);
     const chatMessagesCountMap = toCountMap(chatMessageCounts);
     const globalMessagesCountMap = toCountMap(globalMessageCounts);
-    const aiSettingsCountMap = toCountMap(aiSettingCounts);
 
     const usersWithStats = allUsers.map((user) => ({
       ...user,
@@ -112,30 +103,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       pagesCount: pagesCountMap.get(user.id) ?? 0,
       chatMessagesCount: chatMessagesCountMap.get(user.id) ?? 0,
       globalMessagesCount: globalMessagesCountMap.get(user.id) ?? 0,
-      aiSettingsCount: aiSettingsCountMap.get(user.id) ?? 0,
     }));
-
-    // Get AI settings details for each user
-    const allAiSettings = await db
-      .select({
-        userId: userAiSettings.userId,
-        provider: userAiSettings.provider,
-        baseUrl: userAiSettings.baseUrl,
-        createdAt: userAiSettings.createdAt,
-        updatedAt: userAiSettings.updatedAt
-      })
-      .from(userAiSettings)
-      .where(inArray(userAiSettings.userId, userIds));
-
-    const aiSettingsByUserId = new Map<string, typeof allAiSettings>();
-    for (const setting of allAiSettings) {
-      const existing = aiSettingsByUserId.get(setting.userId);
-      if (existing) {
-        existing.push(setting);
-      } else {
-        aiSettingsByUserId.set(setting.userId, [setting]);
-      }
-    }
 
     // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
@@ -172,7 +140,6 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
 
     // Combine the data
     const enrichedUsers = usersWithStats.map(user => {
-      const userAiSettings = aiSettingsByUserId.get(user.id) ?? [];
       const subscription = subscriptionsByUserId.get(user.id);
       const stripeDetails = stripeSubscriptionDetails.get(user.id);
 
@@ -183,10 +150,8 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
           pages: user.pagesCount,
           chatMessages: user.chatMessagesCount,
           globalMessages: user.globalMessagesCount,
-          aiSettings: user.aiSettingsCount,
           totalMessages: user.chatMessagesCount + user.globalMessagesCount
         },
-        aiSettings: userAiSettings,
         subscription: subscription ? {
           id: subscription.id,
           stripeSubscriptionId: subscription.stripeSubscriptionId,
@@ -211,8 +176,6 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         chatMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         globalMessagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        aiSettingsCount,
         ...user
       } = userData;
       return user;
