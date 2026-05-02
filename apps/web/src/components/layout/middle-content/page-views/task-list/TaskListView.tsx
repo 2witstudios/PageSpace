@@ -722,7 +722,7 @@ function TaskListView({ page }: TaskListViewProps) {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0">
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -756,56 +756,58 @@ function TaskListView({ page }: TaskListViewProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* View toggle (desktop only) */}
-          <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
-            <button
-              onClick={() => setViewMode('table')}
-              className={cn(
-                'p-1.5 rounded transition-colors',
-                viewMode === 'table'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Table view"
-              aria-label="Table view"
-            >
-              <LayoutList className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={cn(
-                'p-1.5 rounded transition-colors',
-                viewMode === 'kanban'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Kanban view"
-              aria-label="Kanban view"
-            >
-              <Kanban className="h-4 w-4" />
-            </button>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+          <div className="flex items-center gap-2 sm:contents">
+            {/* View toggle (desktop only) */}
+            <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+              <button
+                onClick={() => setViewMode('table')}
+                className={cn(
+                  'p-1.5 rounded transition-colors',
+                  viewMode === 'table'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title="Table view"
+                aria-label="Table view"
+              >
+                <LayoutList className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={cn(
+                  'p-1.5 rounded transition-colors',
+                  viewMode === 'kanban'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title="Kanban view"
+                aria-label="Kanban view"
+              >
+                <Kanban className="h-4 w-4" />
+              </button>
+            </div>
+
+            {canEdit && (
+              <StatusConfigManager
+                pageId={page.id}
+                statusConfigs={statusConfigs}
+                onConfigsChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
+              />
+            )}
+
+            {canManageWorkflows && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1"
+                onClick={() => setWorkflowsDialogOpen(true)}
+              >
+                <Zap className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Workflows</span>
+              </Button>
+            )}
           </div>
-
-          {canEdit && (
-            <StatusConfigManager
-              pageId={page.id}
-              statusConfigs={statusConfigs}
-              onConfigsChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
-            />
-          )}
-
-          {canManageWorkflows && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1"
-              onClick={() => setWorkflowsDialogOpen(true)}
-            >
-              <Zap className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Workflows</span>
-            </Button>
-          )}
 
           {canEdit && viewMode === 'table' && (
             <Button
