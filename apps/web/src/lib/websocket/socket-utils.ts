@@ -530,6 +530,40 @@ export interface ChatUserMessagePayload {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+export interface ChatMessageEditedPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  parts: import('ai').UIMessage['parts'];
+  editedAt: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatMessageDeletedPayload {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatUndoAppliedPayload {
+  conversationId: string;
+  pageId: string;
+  mode: 'messages_only' | 'messages_and_changes';
+  affectedMessageIds: string[];
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatConversationAddedPayload {
+  agentId: string;
+  conversation: {
+    id: string;
+    title: string;
+    createdAt: string;
+  };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -627,6 +661,142 @@ export async function broadcastChatUserMessage(payload: ChatUserMessagePayload):
       {
         event: 'chat:user_message',
         channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiMessageEdited(payload: ChatMessageEditedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat message-edited broadcast', {
+      event: 'chat:message_edited',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:message_edited',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat message-edited',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:message_edited',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiMessageDeleted(payload: ChatMessageDeletedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat message-deleted broadcast', {
+      event: 'chat:message_deleted',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:message_deleted',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat message-deleted',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:message_deleted',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiUndoApplied(payload: ChatUndoAppliedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat undo-applied broadcast', {
+      event: 'chat:undo_applied',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.pageId,
+      event: 'chat:undo_applied',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat undo-applied',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:undo_applied',
+        channel: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationAdded(payload: ChatConversationAddedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-added broadcast', {
+      event: 'chat:conversation_added',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_added',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-added',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_added',
+        channel: maskIdentifier(payload.agentId),
       }
     );
   }

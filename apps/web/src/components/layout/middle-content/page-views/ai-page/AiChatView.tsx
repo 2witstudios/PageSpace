@@ -34,6 +34,11 @@ import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
+import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
+import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -151,6 +156,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     loadConversation,
     createConversation,
     deleteConversation,
+    prependConversationOptimistic,
   } = useConversations({
     agentId: page.id,
     currentConversationId,
@@ -347,6 +353,28 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    },
+    onMessageEdited: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) =>
+        applyMessageEdit(prev, {
+          messageId: payload.messageId,
+          parts: payload.parts,
+          editedAt: new Date(payload.editedAt),
+        }),
+      );
+    },
+    onMessageDeleted: (payload) => {
+      if (payload.conversationId !== currentConversationId) return;
+      setMessages((prev) => applyMessageDelete(prev, payload.messageId));
+    },
+    onUndoApplied: (payload) => {
+      if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
+      void loadConversation(payload.conversationId);
+    },
+    onConversationAdded: (payload) => {
+      if (!shouldPrependConversation(payload, getBrowserSessionId(), conversations)) return;
+      prependConversationOptimistic(payload.conversation);
     },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
