@@ -634,10 +634,11 @@ export const calendarWriteTools = {
         // Get all attendee IDs before deletion for broadcasting
         const attendeeIds = await getEventAttendeeIds(eventId);
 
-        // Cancel any unfired triggers linked to this event by writing a
-        // cancelled run for each. ON CONFLICT DO NOTHING handles the case
-        // where the cron has already claimed (status='running') and is
-        // about to finish — we leave its outcome alone.
+        // Record a cancelled run for each trigger so the audit trail captures
+        // the deletion. The cron's discovery query (NOT EXISTS over running/
+        // success runs) is what actually prevents re-firing — the cancelled
+        // row is purely informational. If a cron run is already in-flight,
+        // we leave it alone; both rows end up in workflow_runs.
         const eventMeta = event.metadata as CalendarTriggerMetadata | null;
         if (eventMeta?.isTrigger) {
           const triggers = await db
@@ -656,7 +657,7 @@ export const calendarWriteTools = {
                 endedAt: new Date(),
                 error: 'Calendar event deleted',
               }))
-            ).onConflictDoNothing();
+            );
           }
         }
 

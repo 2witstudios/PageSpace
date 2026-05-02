@@ -1301,9 +1301,7 @@ describe('calendar-write-tools', () => {
       });
 
       // Capture the cancellation insert
-      const cancelValuesSpy = vi.fn().mockReturnValue({
-        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
-      });
+      const cancelValuesSpy = vi.fn().mockResolvedValue(undefined);
       (mockDb.insert as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue({ values: cancelValuesSpy });
 
       // Soft-delete update path (no trigger writes anymore)
