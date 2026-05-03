@@ -7,8 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 // Auth schema
 import * as auth from '../auth';
@@ -67,7 +66,7 @@ import * as calendar from '../calendar';
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
 
-const schemaDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const schemaDir = resolve(process.cwd(), 'src/schema');
 
 describe('Schema definitions', () => {
   describe('auth schema', () => {
