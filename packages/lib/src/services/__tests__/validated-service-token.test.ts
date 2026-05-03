@@ -474,13 +474,15 @@ describe('createValidatedServiceToken', () => {
     });
 
     it('createFileServiceToken creates an exact file-scoped read token after file access validation', async () => {
+      mockFileFindFirst.mockResolvedValue({ driveId: 'drive-1', storagePath: 'stored-content-hash' });
+
       const result = await createFileServiceToken('user-1', 'file-1', ['files:read', 'files:write']);
 
       expect(result.grantedScopes).toEqual(['files:read']);
       expect(canUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'drive-1');
       expect(mockCreateSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          resourceId: 'file-1',
+          resourceId: 'stored-content-hash',
           resourceType: 'file',
           userId: 'user-1',
           scopes: ['files:read'],
