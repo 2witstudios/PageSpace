@@ -1,12 +1,20 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { filePages, files } from '@pagespace/db/schema/storage';
+import { fileConversations, filePages, files } from '@pagespace/db/schema/storage';
 import { pages } from '@pagespace/db/schema/core';
+import { dmConversations } from '@pagespace/db/schema/social';
 
 export interface FileLink {
   fileId: string;
   pageId: string;
   driveId: string;
+}
+
+export interface ConversationFileLink {
+  fileId: string;
+  conversationId: string;
+  participant1Id: string;
+  participant2Id: string;
 }
 
 export async function ensureFileLinked(options: {
@@ -57,6 +65,21 @@ export async function getLinksForFile(fileId: string): Promise<FileLink[]> {
     .from(filePages)
     .innerJoin(pages, eq(pages.id, filePages.pageId))
     .where(eq(filePages.fileId, fileId));
+
+  return results;
+}
+
+export async function getConversationLinksForFile(fileId: string): Promise<ConversationFileLink[]> {
+  const results = await db
+    .select({
+      fileId: fileConversations.fileId,
+      conversationId: fileConversations.conversationId,
+      participant1Id: dmConversations.participant1Id,
+      participant2Id: dmConversations.participant2Id,
+    })
+    .from(fileConversations)
+    .innerJoin(dmConversations, eq(dmConversations.id, fileConversations.conversationId))
+    .where(eq(fileConversations.fileId, fileId));
 
   return results;
 }

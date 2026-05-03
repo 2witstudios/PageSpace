@@ -7,7 +7,7 @@ import { files } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums'
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { isFilePage } from '@pagespace/lib/content/page-types.config'
-import { createPageServiceToken, createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { createPageServiceToken, createDriveServiceToken, createFileServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { sanitizeFilenameForHeader, isDangerousMimeType, getCSPHeaderForFile } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -145,23 +145,13 @@ export async function GET(
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
-    // Conversation-uploaded files (driveId === null) require a conversation-scoped
-    // token mint that lands with the polymorphic upload core. Until then no such
-    // files exist in production, so this guard is dead at runtime but keeps the
-    // type narrow.
-    if (file.driveId === null) {
-      return NextResponse.json({ error: 'Not yet supported' }, { status: 503 });
-    }
-
     const contentHash = file.storagePath || file.id;
 
     try {
-      const { token: serviceToken } = await createDriveServiceToken(
-        user.id,
-        file.driveId,
-        ['files:read'],
-        '5m'
-      );
+      const { token: serviceToken } =
+        file.driveId === null
+          ? await createFileServiceToken(user.id, file.id, ['files:read'], '5m')
+          : await createDriveServiceToken(user.id, file.driveId, ['files:read'], '5m');
 
       const response = await fetchAndServeFile(
         contentHash,

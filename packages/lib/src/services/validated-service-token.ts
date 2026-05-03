@@ -10,11 +10,13 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { files } from '@pagespace/db/schema/storage';
 import { users } from '@pagespace/db/schema/auth';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions';
+import { canUserAccessFile } from '../permissions/file-access';
 import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
 
@@ -118,7 +120,7 @@ export function isPermissionDeniedError(
   );
 }
 
-export type ResourceType = 'page' | 'drive' | 'user';
+export type ResourceType = 'page' | 'drive' | 'user' | 'file';
 
 /**
  * Permission set representing what a user can do with a resource
@@ -286,6 +288,28 @@ async function getPermissionsForResource(
       };
     }
 
+    case 'file': {
+      const file = await db.query.files.findFirst({
+        where: eq(files.id, resourceId),
+        columns: { driveId: true },
+      });
+      if (!file) {
+        return null;
+      }
+
+      const canAccess = await canUserAccessFile(userId, resourceId, file.driveId);
+      if (!canAccess) {
+        return null;
+      }
+
+      return {
+        canView: true,
+        canEdit: false,
+        canDelete: false,
+        isOwner: false,
+      };
+    }
+
     default:
       return null;
   }
@@ -379,6 +403,29 @@ export async function createUserServiceToken(
     userId,
     resourceType: 'user',
     resourceId: userId,
+    requestedScopes: scopes,
+    expiresIn,
+  });
+}
+
+/**
+ * Convenience function for creating a file-scoped read token.
+ *
+ * This is used for files whose authorization is not drive-bound, such as DM
+ * attachments. The token is still bound to the exact content hash, and scope
+ * grants are filtered through canUserAccessFile before the service session is
+ * minted.
+ */
+export async function createFileServiceToken(
+  userId: string,
+  fileId: string,
+  scopes: ServiceScope[],
+  expiresIn?: string
+): Promise<ValidatedTokenResult> {
+  return createValidatedServiceToken({
+    userId,
+    resourceType: 'file',
+    resourceId: fileId,
     requestedScopes: scopes,
     expiresIn,
   });
