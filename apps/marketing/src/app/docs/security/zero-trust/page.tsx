@@ -99,6 +99,14 @@ Blocked:
 - Symlink escape — paths are resolved through the filesystem and rejected if the resolved target falls outside the configured base directory.
 - Absolute paths when a base directory is configured.
 
+## File Upload Integrity
+
+Attachment uploads treat the processor response as an untrusted cross-service claim. The web layer independently hashes the received bytes and rejects processor responses whose SHA-256 content hash or byte size does not match before it creates file metadata or authorization linkages.
+
+The file store is content-addressable, so identical bytes can deduplicate across contexts. Deduplication does not grant access by itself: files are served only through authorized page or conversation linkages, and a new upload creates only the linkage the caller is allowed to create.
+
+All attachment targets pass the upload-time content detector that rejects executables, HTML, SVG, and scripts based on detected bytes rather than extensions. Channel uploads also enqueue page-backed ingest jobs for OCR and extraction. DM uploads currently stop after storage and linkage because they have no page row for the ingest worker; policy decisions that depend on post-storage DLP or text extraction should treat DM attachments as a narrower processing surface until DM-safe ingestion exists.
+
 ## Content Security
 
 ### HTML Sanitization
