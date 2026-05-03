@@ -3,6 +3,7 @@ import {
   createValidatedServiceToken,
   createPageServiceToken,
   createDriveServiceToken,
+  createFileServiceToken,
   createUserServiceToken,
   createUploadServiceToken,
   createSystemFileDeleteToken,
@@ -13,6 +14,7 @@ import {
 
 // Mock the database module
 const mockFindFirst = vi.fn();
+const mockFileFindFirst = vi.fn();
 const mockOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
 const mockInsertValues = vi.fn(() => ({ onConflictDoNothing: mockOnConflictDoNothing }));
 const mockInsert = vi.fn((_table: unknown) => ({ values: mockInsertValues }));
@@ -21,6 +23,9 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       pages: {
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
+      files: {
+        findFirst: (...args: unknown[]) => mockFileFindFirst(...args),
       },
     },
     insert: (table: unknown) => mockInsert(table),
@@ -32,6 +37,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'users.id', email: 'users.email' },
 }));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: { id: 'files.id' },
+}));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
 }));
@@ -40,6 +48,9 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDrivePermissions: vi.fn(),
+}));
+vi.mock('../../permissions/file-access', () => ({
+  canUserAccessFile: vi.fn(),
 }));
 
 // Mock the session service
@@ -63,12 +74,15 @@ vi.mock('../../logging/logger-config', () => ({
 }));
 
 import { getUserAccessLevel, getUserDrivePermissions } from '../../permissions/permissions';
+import { canUserAccessFile } from '../../permissions/file-access';
 import { sessionService } from '../../auth/session-service';
 import { loggers } from '../../logging/logger-config';
 
 describe('createValidatedServiceToken', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFileFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    (canUserAccessFile as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   });
 
   describe('page resource type', () => {
@@ -455,6 +469,23 @@ describe('createValidatedServiceToken', () => {
           resourceId: 'user-1',
           resourceType: 'user',
           userId: 'user-1',
+        })
+      );
+    });
+
+    it('createFileServiceToken creates an exact file-scoped read token after file access validation', async () => {
+      mockFileFindFirst.mockResolvedValue({ driveId: 'drive-1', storagePath: 'stored-content-hash' });
+
+      const result = await createFileServiceToken('user-1', 'file-1', ['files:read', 'files:write']);
+
+      expect(result.grantedScopes).toEqual(['files:read']);
+      expect(canUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'drive-1');
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceId: 'stored-content-hash',
+          resourceType: 'file',
+          userId: 'user-1',
+          scopes: ['files:read'],
         })
       );
     });

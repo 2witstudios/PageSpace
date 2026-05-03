@@ -10,11 +10,13 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { files } from '@pagespace/db/schema/storage';
 import { users } from '@pagespace/db/schema/auth';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions';
+import { canUserAccessFile } from '../permissions/file-access';
 import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
 
@@ -382,6 +384,88 @@ export async function createUserServiceToken(
     requestedScopes: scopes,
     expiresIn,
   });
+}
+
+/**
+ * Convenience function for creating a file-scoped read token.
+ *
+ * This is used for files whose authorization is not drive-bound, such as DM
+ * attachments. The token is still bound to the exact content hash, and scope
+ * grants are filtered through canUserAccessFile before the service session is
+ * minted.
+ */
+export async function createFileServiceToken(
+  userId: string,
+  fileId: string,
+  scopes: ServiceScope[],
+  expiresIn?: string
+): Promise<ValidatedTokenResult> {
+  const file = await db.query.files.findFirst({
+    where: eq(files.id, fileId),
+    columns: { driveId: true, storagePath: true },
+  });
+
+  if (!file) {
+    loggers.api.warn('File service token denied: file not found', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User has no access to file:${fileId}`);
+  }
+
+  const hasAccess = await canUserAccessFile(userId, fileId, file.driveId);
+  if (!hasAccess) {
+    loggers.api.warn('File service token denied: no access to file', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User has no access to file:${fileId}`);
+  }
+
+  const permissions: PermissionSet = {
+    canView: true,
+    canEdit: false,
+    canDelete: false,
+    isOwner: false,
+  };
+  const grantedScopes = filterScopesByPermissions(scopes, permissions);
+
+  if (grantedScopes.length === 0) {
+    loggers.api.warn('File service token denied: no authorized scopes', {
+      userId,
+      fileId,
+      requestedScopes: scopes,
+    });
+    throw new Error(`User lacks permissions for requested scopes: ${scopes.join(', ')}`);
+  }
+
+  const contentHash = file.storagePath || fileId;
+
+  loggers.api.info('File service token scope grant', {
+    userId,
+    fileId,
+    contentHash,
+    requested: scopes,
+    granted: grantedScopes,
+    filtered: scopes.length !== grantedScopes.length,
+  });
+
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    scopes: grantedScopes as string[],
+    resourceType: 'file',
+    resourceId: contentHash,
+    expiresInMs: durationToMs(expiresIn ?? '5m'),
+    createdByService: 'web',
+  });
+
+  return {
+    token,
+    grantedScopes,
+  };
 }
 
 /** Scopes granted for file upload operations */

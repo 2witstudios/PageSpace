@@ -38,6 +38,7 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
     createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
     createDriveServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
+    createFileServiceToken: vi.fn().mockResolvedValue({ token: 'mock-file-token' }),
 }));
 
 vi.mock('@pagespace/lib/permissions/file-access', () => ({
@@ -65,6 +66,8 @@ import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
+import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { createFileServiceToken } from '@pagespace/lib/services/validated-service-token';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';
@@ -96,6 +99,35 @@ describe('GET /api/files/[id]/download audit', () => {
     expect(auditRequest).toHaveBeenCalledWith(
       request,
       { eventType: 'data.read', userId: mockUserId, resourceType: 'file', resourceId: mockFileId, details: { action: 'download' } }
+    );
+  });
+
+  it('downloads a DM-linked null-drive file with a file-bound read token', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({
+      id: mockFileId,
+      driveId: null,
+      storagePath: 'a'.repeat(64),
+      mimeType: 'image/png',
+      sizeBytes: 10,
+    } as never);
+    vi.mocked(canUserAccessFile).mockResolvedValue(true);
+
+    const request = new Request('http://localhost/api/files/file-1/download?filename=dm.png');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(200);
+    expect(createFileServiceToken).toHaveBeenCalledWith(
+      mockUserId,
+      mockFileId,
+      ['files:read'],
+      '5m'
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://processor:3003/cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/original',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer mock-file-token' },
+      })
     );
   });
 });

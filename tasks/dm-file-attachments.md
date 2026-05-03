@@ -76,6 +76,7 @@ Update `canUserAccessFile()` to accept a nullable `driveId` and add a second lin
 - Given Carol who is not a participant, should be denied access.
 - Given a file linked to both a page and a conversation, should grant access if either path qualifies, without leaking page access to non-page-viewers or conversation membership to non-participants.
 - Given a file with no linkages and `driveId === null`, should be denied (no fall-through to "anyone can see it").
+- Given a conversation-linked file with `driveId === null`, should still be served by `/api/files/[id]/{view,download}` for DM participants using a file-bound read token instead of requiring drive membership.
 
 ---
 

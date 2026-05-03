@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const VALID_HASH = 'a'.repeat(64);
 
 const mockGetLinksForFile = vi.fn();
+const mockGetConversationLinksForFile = vi.fn();
 const mockGetFileDriveId = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
 const mockGetUserDrivePermissions = vi.fn();
 
 vi.mock('../file-links', () => ({
   getLinksForFile: (...args: unknown[]) => mockGetLinksForFile(...args),
+  getConversationLinksForFile: (...args: unknown[]) => mockGetConversationLinksForFile(...args),
   getFileDriveId: (...args: unknown[]) => mockGetFileDriveId(...args),
 }));
 
@@ -50,6 +52,7 @@ describe('authorizeFileAccess', () => {
     vi.clearAllMocks();
 
     mockGetLinksForFile.mockResolvedValue([]);
+    mockGetConversationLinksForFile.mockResolvedValue([]);
     mockGetFileDriveId.mockResolvedValue('drive-1');
     mockGetUserAccessLevel.mockResolvedValue(null);
     mockGetUserDrivePermissions.mockResolvedValue(null);
@@ -153,6 +156,41 @@ describe('authorizeFileAccess', () => {
       expect(decision.allowed).toBe(false);
       expect(decision.binding.matchType).toBe('mismatch');
       expect(decision.denial?.stage).toBe('binding');
+    });
+
+    it('allows a file-bound token for a conversation-linked null-drive file when user is a participant', async () => {
+      mockGetFileDriveId.mockResolvedValue(undefined);
+      mockGetConversationLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, conversationId: 'conv-1', participant1Id: 'user-1', participant2Id: 'user-2' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'file', id: VALID_HASH },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(true);
+      expect(decision.binding.matchType).toBe('exact');
+      expect(decision.permission?.grantedVia).toBe('conversation_participant');
+      expect(decision.context?.conversationId).toBe('conv-1');
+      expect(mockGetUserDrivePermissions).not.toHaveBeenCalled();
+      expect(mockGetUserAccessLevel).not.toHaveBeenCalled();
+    });
+
+    it('denies a file-bound token for a conversation-linked file when user is not a participant', async () => {
+      mockGetFileDriveId.mockResolvedValue(undefined);
+      mockGetConversationLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, conversationId: 'conv-1', participant1Id: 'alice', participant2Id: 'bob' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'file', id: VALID_HASH },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+      expect(decision.binding.matchType).toBe('exact');
     });
   });
 
