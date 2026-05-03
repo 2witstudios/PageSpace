@@ -6,6 +6,8 @@
  * importing them is sufficient to get coverage.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Auth schema
 import * as auth from '../auth';
@@ -63,6 +65,8 @@ import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
+
+const schemaDir = resolve(process.cwd(), 'src/schema');
 
 describe('Schema definitions', () => {
   describe('auth schema', () => {
@@ -346,6 +350,27 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(social.connectionsRelations).toBeDefined();
+    });
+
+    it('keeps DM data covered by account-erasure cascade constraints', () => {
+      const socialSource = readFileSync(resolve(schemaDir, 'social.ts'), 'utf8');
+      const storageSource = readFileSync(resolve(schemaDir, 'storage.ts'), 'utf8');
+
+      expect(socialSource).toMatch(
+        /participant1Id:\s*text\('participant1Id'\)\.notNull\(\)\.references\(\(\) => users\.id, \{ onDelete: 'cascade' \}\)/
+      );
+      expect(socialSource).toMatch(
+        /participant2Id:\s*text\('participant2Id'\)\.notNull\(\)\.references\(\(\) => users\.id, \{ onDelete: 'cascade' \}\)/
+      );
+      expect(socialSource).toMatch(
+        /senderId:\s*text\('senderId'\)\.notNull\(\)\.references\(\(\) => users\.id, \{ onDelete: 'cascade' \}\)/
+      );
+      expect(socialSource).toMatch(
+        /conversationId:\s*text\('conversationId'\)\.notNull\(\)\.references\(\(\) => dmConversations\.id, \{ onDelete: 'cascade' \}\)/
+      );
+      expect(storageSource).toMatch(
+        /conversationId:\s*text\('conversationId'\)[\s\S]*?references\(\(\) => dmConversations\.id, \{ onDelete: 'cascade' \}\)/
+      );
     });
   });
 

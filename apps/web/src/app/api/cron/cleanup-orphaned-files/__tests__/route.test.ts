@@ -1,14 +1,33 @@
 /**
  * Contract tests for /api/cron/cleanup-orphaned-files
- * Verifies security audit logging on successful orphaned file cleanup.
+ *
+ * After PR 7 (DM lifecycle + orphan GC) the cron now:
+ *   1. Mints a system file-bound delete token for ALL orphans (drive AND
+ *      null-drive). The dual-path that depended on createDriveServiceToken
+ *      has been collapsed because that path silently failed on the missing
+ *      'system' user — now both paths share the same self-bootstrapping mint.
+ *   2. Decrements the uploader's storageUsedBytes by exactly -sizeBytes for
+ *      every orphan that was physically deleted.
+ *   3. Skips storage credit and DB-row deletion when the physical delete
+ *      fails; the orphan is retried next run.
+ *   4. DB-only reaps orphans with null storagePath (no physical blob to
+ *      delete, no storage credit, but the DB row is hard-deleted so it
+ *      doesn't accumulate forever).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockFindOrphans, mockDeleteRecords, mockAudit, mockCreateServiceToken } = vi.hoisted(() => ({
+const {
+  mockFindOrphans,
+  mockDeleteRecords,
+  mockAudit,
+  mockCreateSystemFileDeleteToken,
+  mockUpdateStorageUsage,
+} = vi.hoisted(() => ({
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
   mockAudit: vi.fn(),
-  mockCreateServiceToken: vi.fn(),
+  mockCreateSystemFileDeleteToken: vi.fn(),
+  mockUpdateStorageUsage: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -25,7 +44,11 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/validated-service-token', () => ({
-  createDriveServiceToken: mockCreateServiceToken,
+  createSystemFileDeleteToken: mockCreateSystemFileDeleteToken,
+}));
+
+vi.mock('@pagespace/lib/services/storage-limits', () => ({
+  updateStorageUsage: mockUpdateStorageUsage,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -49,12 +72,41 @@ function makeRequest(): Request {
   return new Request('http://localhost:3000/api/cron/cleanup-orphaned-files');
 }
 
+const driveOrphan = (overrides: Partial<{
+  id: string;
+  storagePath: string;
+  driveId: string;
+  sizeBytes: number;
+  createdBy: string;
+}> = {}) => ({
+  id: overrides.id ?? 'f_drive',
+  storagePath: overrides.storagePath ?? '/storage/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/original',
+  driveId: overrides.driveId ?? 'd_1',
+  sizeBytes: overrides.sizeBytes ?? 1024,
+  createdBy: overrides.createdBy ?? 'user_uploader_drive',
+});
+
+const nullDriveOrphan = (overrides: Partial<{
+  id: string;
+  storagePath: string;
+  sizeBytes: number;
+  createdBy: string;
+}> = {}) => ({
+  id: overrides.id ?? 'f_null',
+  storagePath: overrides.storagePath ?? '/storage/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/original',
+  driveId: null,
+  sizeBytes: overrides.sizeBytes ?? 4096,
+  createdBy: overrides.createdBy ?? 'user_uploader_dm',
+});
+
 describe('/api/cron/cleanup-orphaned-files', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    // No orphans by default
     mockFindOrphans.mockResolvedValue([]);
+    mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok', grantedScopes: ['files:delete'] });
+    mockDeleteRecords.mockResolvedValue(0);
+    mockUpdateStorageUsage.mockResolvedValue(undefined);
   });
 
   it('logs audit event when no orphans found', async () => {
@@ -62,21 +114,6 @@ describe('/api/cron/cleanup-orphaned-files', () => {
 
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 0, filesDeleted: 0, physicalFilesDeleted: 0 } })
-    );
-  });
-
-  it('logs audit event with counts on successful cleanup', async () => {
-    const orphans = [
-      { id: 'f1', storagePath: null, driveId: 'd1' },
-      { id: 'f2', storagePath: null, driveId: 'd1' },
-    ];
-    mockFindOrphans.mockResolvedValue(orphans);
-    mockDeleteRecords.mockResolvedValue(2);
-
-    await GET(makeRequest());
-
-    expect(mockAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'data.delete', resourceType: 'cron_job', resourceId: 'cleanup_orphaned_files', details: { orphansFound: 2, filesDeleted: 2, physicalFilesDeleted: 0 } })
     );
   });
 
@@ -97,22 +134,133 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     expect(mockAudit).not.toHaveBeenCalled();
   });
 
-  it('skips physical and DB cleanup for null-driveId orphans', async () => {
-    // Conversation-uploaded orphans need a conversation-scoped token mint that
-    // doesn't exist yet. Until the polymorphic upload core PR lands, the cron
-    // must defer them rather than mint a non-existent token.
-    mockFindOrphans.mockResolvedValue([
-      { id: 'f1', storagePath: '/storage/abc/original', driveId: null },
-    ]);
+  it('cron_nullDriveOrphan_isReclaimed_notDeferred', async () => {
+    const orphan = nullDriveOrphan();
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
 
     await GET(makeRequest());
 
-    expect(mockCreateServiceToken).not.toHaveBeenCalled();
+    // The system token mint MUST be exercised — null-drive orphans no longer
+    // defer; they reach the processor like any other orphan.
+    expect(mockCreateSystemFileDeleteToken).toHaveBeenCalledTimes(1);
+    expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('cron_nullDriveOrphan_creditsUploaderStorageBy_negativeSizeBytes', async () => {
+    // Boundary obligation: the uploader's quota MUST be credited back by the
+    // exact size of the reclaimed orphan, attributed to createdBy.
+    const orphan = nullDriveOrphan({ sizeBytes: 4096, createdBy: 'user_dm_uploader' });
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await GET(makeRequest());
+
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith(
+      'user_dm_uploader',
+      -4096,
+      expect.objectContaining({ eventType: 'delete' })
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it('cron_driveOrphan_reclaimedViaSystemToken_andCreditsStorage', async () => {
+    // After collapsing dual-path: drive orphans now mint a system file-bound
+    // token too, so both paths share the same self-bootstrapping mint and
+    // the same processor re-check.
+    const orphan = driveOrphan({ sizeBytes: 1024, createdBy: 'user_drive_uploader' });
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await GET(makeRequest());
+
+    expect(mockCreateSystemFileDeleteToken).toHaveBeenCalledTimes(1);
+    expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith(
+      'user_drive_uploader',
+      -1024,
+      expect.objectContaining({ eventType: 'delete' })
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it('cron_nullStoragePathOrphan_dbDeletedWithoutStorageCredit_andNoTokenMint', async () => {
+    // Files with a DB row but no storagePath (e.g. aborted upload stub) have
+    // no physical blob to delete. The DB row must still be hard-deleted so it
+    // doesn't accumulate forever, and storage is NOT credited because the
+    // bytes were never persisted.
+    const orphan = { ...nullDriveOrphan(), storagePath: null as string | null };
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+
+    await GET(makeRequest());
+
+    expect(mockCreateSystemFileDeleteToken).not.toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
+  });
+
+  it('cron_orphanWithFailedPhysicalDelete_doesNotCreditStorage_andRetriesNextRun', async () => {
+    // If the processor 500s, the row stays so it retries next cron tick.
+    // The uploader's quota MUST NOT be credited until the blob is actually gone.
+    const orphan = nullDriveOrphan({ sizeBytes: 8192 });
+    mockFindOrphans.mockResolvedValue([orphan]);
+    const fetchMock = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await GET(makeRequest());
+
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    // DB row not deleted on failure — orphan retries next run.
     expect(mockDeleteRecords).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('cron_orphanWithoutCreatedBy_skipsStorageCreditButStillReclaimsBlob', async () => {
+    // Orphans can predate the createdBy column (set null on user delete), in
+    // which case there's nothing to credit. The blob must still be reclaimed.
+    const orphan = { ...nullDriveOrphan(), createdBy: null as string | null };
+    mockFindOrphans.mockResolvedValue([orphan]);
+    mockDeleteRecords.mockResolvedValue(1);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await GET(makeRequest());
+
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+    expect(mockDeleteRecords).toHaveBeenCalledWith(expect.anything(), [orphan.id]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('cron_audit_includesPhysicalAndDbCounts_acrossMixedOrphanShapes', async () => {
+    // Two orphans (one drive, one null-drive); both succeed → audit shows both.
+    mockFindOrphans.mockResolvedValue([driveOrphan(), nullDriveOrphan()]);
+    mockDeleteRecords.mockResolvedValue(2);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await GET(makeRequest());
+
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        details: { orphansFound: 1, filesDeleted: 0, physicalFilesDeleted: 0 },
+        eventType: 'data.delete',
+        resourceType: 'cron_job',
+        details: { orphansFound: 2, filesDeleted: 2, physicalFilesDeleted: 2 },
       })
     );
+
+    vi.unstubAllGlobals();
   });
 });

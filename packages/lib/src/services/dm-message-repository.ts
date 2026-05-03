@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNull, lt, or, type InferSelectModel } from '@pagespace/db/operators';
+import { and, desc, eq, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -138,9 +138,186 @@ async function updateConversationLastMessage(
     );
 }
 
+export interface ActiveMessageLookupInput {
+  messageId: string;
+  conversationId: string;
+}
+
+async function findActiveMessage(
+  input: ActiveMessageLookupInput
+): Promise<DmMessageRow | null> {
+  const row = await db.query.directMessages.findFirst({
+    where: and(
+      eq(directMessages.id, input.messageId),
+      eq(directMessages.conversationId, input.conversationId),
+      eq(directMessages.isActive, true)
+    ),
+  });
+  return row ?? null;
+}
+
+async function softDeleteMessage(messageId: string): Promise<number> {
+  const result = await db
+    .update(directMessages)
+    .set({
+      isActive: false,
+      deletedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(directMessages.id, messageId),
+        eq(directMessages.isActive, true)
+      )
+    )
+    .returning({ id: directMessages.id });
+  return result.length;
+}
+
+async function purgeInactiveMessages(olderThan: Date): Promise<number> {
+  return db.transaction(async (tx) => {
+    const purgedMessages = await tx
+      .delete(directMessages)
+      .where(
+        and(
+          eq(directMessages.isActive, false),
+          isNotNull(directMessages.deletedAt),
+          lt(directMessages.deletedAt, olderThan)
+        )
+      )
+      .returning({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+        fileId: directMessages.fileId,
+      });
+
+    const purgedAttachmentPairs = purgedMessages.flatMap((message) =>
+      message.fileId
+        ? [{ fileId: message.fileId, conversationId: message.conversationId }]
+        : []
+    );
+
+    if (purgedAttachmentPairs.length > 0) {
+      await tx.execute(sql`
+        WITH purged_pairs("fileId", "conversationId") AS (
+          VALUES ${sql.join(
+            purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+            sql`, `
+          )}
+        )
+        DELETE FROM file_conversations fc
+        USING purged_pairs pp
+        WHERE fc."fileId" = pp."fileId"
+          AND fc."conversationId" = pp."conversationId"
+          AND NOT EXISTS (
+            SELECT 1
+            FROM direct_messages dm
+            WHERE dm."fileId" = fc."fileId"
+              AND dm."conversationId" = fc."conversationId"
+          )
+      `);
+    }
+
+    return purgedMessages.length;
+  });
+}
+
+export interface EditActiveMessageInput {
+  messageId: string;
+  content: string;
+  editedAt: Date;
+}
+
+async function editActiveMessage(input: EditActiveMessageInput): Promise<number> {
+  const result = await db
+    .update(directMessages)
+    .set({ content: input.content, isEdited: true, editedAt: input.editedAt })
+    .where(
+      and(
+        eq(directMessages.id, input.messageId),
+        eq(directMessages.isActive, true)
+      )
+    )
+    .returning({ id: directMessages.id });
+  return result.length;
+}
+
+export interface ListActiveMessagesInput {
+  conversationId: string;
+  limit: number;
+  before?: Date;
+}
+
+async function listActiveMessages(
+  input: ListActiveMessagesInput
+): Promise<DmMessageRow[]> {
+  const baseFilters = [
+    eq(directMessages.conversationId, input.conversationId),
+    eq(directMessages.isActive, true),
+  ];
+
+  const where = input.before
+    ? and(...baseFilters, lt(directMessages.createdAt, input.before))
+    : and(...baseFilters);
+
+  return db
+    .select()
+    .from(directMessages)
+    .where(where)
+    .orderBy(desc(directMessages.createdAt))
+    .limit(input.limit);
+}
+
+export interface MarkMessagesReadInput {
+  conversationId: string;
+  otherUserId: string;
+  readAt: Date;
+}
+
+async function markActiveMessagesRead(
+  input: MarkMessagesReadInput
+): Promise<void> {
+  await db
+    .update(directMessages)
+    .set({ isRead: true, readAt: input.readAt })
+    .where(
+      and(
+        eq(directMessages.conversationId, input.conversationId),
+        eq(directMessages.senderId, input.otherUserId),
+        eq(directMessages.isRead, false),
+        eq(directMessages.isActive, true)
+      )
+    );
+}
+
+export interface UpdateLastReadInput {
+  conversationId: string;
+  participantSide: 'participant1' | 'participant2';
+  readAt: Date;
+}
+
+async function updateConversationLastRead(
+  input: UpdateLastReadInput
+): Promise<void> {
+  const updateField = input.participantSide === 'participant1'
+    ? { participant1LastRead: input.readAt }
+    : { participant2LastRead: input.readAt };
+
+  await db
+    .update(dmConversations)
+    .set(updateField)
+    .where(eq(dmConversations.id, input.conversationId));
+}
+
 export const dmMessageRepository = {
   findConversationForParticipant,
   validateAttachmentForDm,
   insertDmMessage,
   updateConversationLastMessage,
+  findActiveMessage,
+  softDeleteMessage,
+  purgeInactiveMessages,
+  editActiveMessage,
+  listActiveMessages,
+  markActiveMessagesRead,
+  updateConversationLastRead,
 };

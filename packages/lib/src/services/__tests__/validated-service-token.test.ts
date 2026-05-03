@@ -5,12 +5,17 @@ import {
   createDriveServiceToken,
   createUserServiceToken,
   createUploadServiceToken,
+  createSystemFileDeleteToken,
+  SYSTEM_SERVICE_USER_ID,
   PermissionDeniedError,
   isPermissionDeniedError,
 } from '../validated-service-token';
 
 // Mock the database module
 const mockFindFirst = vi.fn();
+const mockOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+const mockInsertValues = vi.fn(() => ({ onConflictDoNothing: mockOnConflictDoNothing }));
+const mockInsert = vi.fn((_table: unknown) => ({ values: mockInsertValues }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -18,10 +23,14 @@ vi.mock('@pagespace/db/db', () => ({
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
       },
     },
+    insert: (table: unknown) => mockInsert(table),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', email: 'users.email' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
@@ -933,6 +942,75 @@ describe('createValidatedServiceToken', () => {
       expect(caughtError).not.toBeInstanceOf(PermissionDeniedError);
       expect(isPermissionDeniedError(caughtError)).toBe(false);
       expect((caughtError as Error).message).toBe('Token signing failed');
+    });
+  });
+
+  describe('createSystemFileDeleteToken', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      // Restore the default resolved value — a prior test in this file leaves
+      // the createSession mock in a rejected state when bubbling signing errors.
+      mockCreateSession.mockResolvedValue('ps_svc_mock-session-token');
+    });
+
+    it('mints a system, file-bound, files:delete-scoped token (no permission check)', async () => {
+      const contentHash = 'a'.repeat(64);
+
+      const result = await createSystemFileDeleteToken({ contentHash });
+
+      expect(result.grantedScopes).toEqual(['files:delete']);
+      expect(result.token).toBe('ps_svc_mock-session-token');
+      // No drive/page permission lookups — this is a server-only system mint
+      // gated by the cron's HMAC, not by user identity.
+      expect(getUserAccessLevel).not.toHaveBeenCalled();
+      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: SYSTEM_SERVICE_USER_ID,
+          type: 'service',
+          resourceType: 'file',
+          resourceId: contentHash,
+          scopes: ['files:delete'],
+        })
+      );
+    });
+
+    it('bootstraps the system principal user row before minting (FK satisfaction)', async () => {
+      // sessions.userId FKs users.id, so without an existing 'system' row the
+      // session insert would fail and orphan reaping would silently skip every
+      // file. The token mint must idempotently upsert the principal first.
+      mockInsert.mockClear();
+      mockInsertValues.mockClear();
+      mockOnConflictDoNothing.mockClear();
+
+      await createSystemFileDeleteToken({ contentHash: 'a'.repeat(64) });
+
+      expect(mockInsert).toHaveBeenCalledWith(expect.anything());
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: SYSTEM_SERVICE_USER_ID,
+          name: 'System',
+          email: 'system@pagespace.invalid',
+        })
+      );
+      expect(mockOnConflictDoNothing).toHaveBeenCalled();
+    });
+
+    it('defaults expiration to 30s (orphan reap is short-lived)', async () => {
+      await createSystemFileDeleteToken({ contentHash: 'b'.repeat(64) });
+
+      // 30s = 30000ms (above the 10s minimum, below the 30d maximum).
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ expiresInMs: 30000 })
+      );
+    });
+
+    it('honors a custom expiresIn within bounds', async () => {
+      await createSystemFileDeleteToken({ contentHash: 'c'.repeat(64), expiresIn: '1m' });
+
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ expiresInMs: 60000 })
+      );
     });
   });
 

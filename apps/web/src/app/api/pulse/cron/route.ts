@@ -422,7 +422,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
         and(
           inArray(directMessages.conversationId, conversationIds),
           ne(directMessages.senderId, userId),
-          eq(directMessages.isRead, false)
+          eq(directMessages.isRead, false),
+          eq(directMessages.isActive, true)
         )
       )
       .orderBy(desc(directMessages.createdAt))

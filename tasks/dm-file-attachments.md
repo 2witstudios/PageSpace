@@ -124,6 +124,7 @@ Soft-delete a DM message via `directMessages.isActive = false`. Find the existin
 - Given a deleted conversation whose attached files are not linked elsewhere, the GC should reclaim the rows and blobs and decrement the uploader's `users.storageUsedBytes` by exactly `sizeBytes` per file.
 - Given a deleted conversation containing a file also linked to a still-live page or another conversation, neither the `files` row nor the blob should be reclaimed.
 - Given a soft-deleted DM message, the file and its `fileConversations` row should remain so other messages and inbox previews are not broken.
+- Given a soft-deleted DM message, should record when deletion occurred, exclude it from unread counts and AI-generated summaries, disclose its deletion state in GDPR exports while retained, and permanently purge it after the configured deleted-message retention window.
 
 ---
 

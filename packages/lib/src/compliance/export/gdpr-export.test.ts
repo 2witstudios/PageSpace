@@ -53,6 +53,8 @@ const { mockTable } = vi.hoisted(() => {
     participant2Id: `${name}.participant2Id`,
     isRead: `${name}.isRead`,
     readAt: `${name}.readAt`,
+    isActive: `${name}.isActive`,
+    deletedAt: `${name}.deletedAt`,
     message: `${name}.message`,
     preferenceType: `${name}.preferenceType`,
     enabled: `${name}.enabled`,
@@ -277,6 +279,31 @@ describe('collectUserMessages', () => {
     expect(result).toHaveLength(1);
     expect(result[0].source).toBe('direct_message');
     expect(result[0].direction).toBe('sent');
+  });
+
+  it('given_retainedSoftDeletedDM_includesDeletionStateForTransparency', async () => {
+    const deletedAt = new Date('2026-04-15T12:00:00.000Z');
+    const sentDm = {
+      id: 'm4',
+      content: 'Retained deleted DM',
+      conversationId: 'conv-1',
+      createdAt: new Date('2026-04-01T12:00:00.000Z'),
+      isActive: false,
+      deletedAt,
+    };
+    const db = createChainDb([[], [], [], [sentDm], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        source: 'direct_message',
+        direction: 'sent',
+        isActive: false,
+        deletedAt,
+      })
+    );
   });
 
   it('given_userHasReceivedDMs_includesThemWithDirectionReceived', async () => {

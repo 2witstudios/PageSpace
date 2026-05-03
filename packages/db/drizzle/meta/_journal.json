@@ -827,6 +827,13 @@
       "when": 1777697978362,
       "tag": "0117_stale_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1777734268331,
+      "tag": "0118_short_impossible_man",
+      "breakpoints": true
     }
   ]
 }

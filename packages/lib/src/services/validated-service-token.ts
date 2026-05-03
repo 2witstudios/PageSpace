@@ -10,6 +10,7 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import {
   getUserAccessLevel,
   getUserDrivePermissions,
@@ -493,5 +494,89 @@ export async function createUploadServiceToken(
   return {
     token,
     grantedScopes: UPLOAD_SCOPES,
+  };
+}
+
+/** Scopes granted for system orphan-reaping operations */
+const SYSTEM_FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
+
+/** Identity used to mint server-only system tokens (not a real user). */
+export const SYSTEM_SERVICE_USER_ID = 'system' as const;
+
+/**
+ * Bootstrap the system principal user row that backs system-minted service
+ * tokens. The sessions table FKs userId → users.id, so the row must exist
+ * before any session is inserted. The email uses the RFC 2606 reserved
+ * `.invalid` TLD so it can never be delivered to or registered through any
+ * external auth flow. This user has no passkeys, no OAuth IDs, and no magic
+ * link path, so even though the row exists nobody can authenticate as it.
+ *
+ * Idempotent on every call (ON CONFLICT DO NOTHING is a sub-millisecond
+ * no-op when the row exists). Not cached at module scope so the bootstrap
+ * always re-runs in-process — keeps the truth source in PostgreSQL rather
+ * than in-memory state that could disagree with the DB across deploys.
+ */
+async function ensureSystemPrincipal(): Promise<void> {
+  await db
+    .insert(users)
+    .values({
+      id: SYSTEM_SERVICE_USER_ID,
+      name: 'System',
+      email: 'system@pagespace.invalid',
+      provider: 'email',
+      tokenVersion: 0,
+      role: 'user',
+      adminRoleVersion: 0,
+      subscriptionTier: 'free',
+    })
+    .onConflictDoNothing();
+}
+
+export interface SystemFileDeleteOptions {
+  /** Content hash of the orphaned blob to reap. */
+  contentHash: string;
+  /** Token expiration (default '30s'). */
+  expiresIn?: string;
+}
+
+/**
+ * Create a system file-bound delete token for orphan reaping.
+ *
+ * This token shape exists for the cleanup-orphaned-files cron, which reclaims
+ * files with no live linkages (drive-attached, DM-only, or otherwise). The
+ * token is bound to the specific contentHash so it cannot be repurposed to
+ * delete a different file.
+ *
+ * SECURITY: The processor's delete handler enforces a defense-in-depth re-check
+ * (isFileOrphaned across all 5 linkage tables, including isActive=true on DMs)
+ * before honoring the token, so a TOCTOU race between the cron's orphan scan
+ * and the processor's delete cannot reclaim a file that was re-linked in the
+ * meantime.
+ */
+export async function createSystemFileDeleteToken(
+  options: SystemFileDeleteOptions
+): Promise<ValidatedTokenResult> {
+  const { contentHash, expiresIn = '30s' } = options;
+
+  await ensureSystemPrincipal();
+
+  loggers.api.info('System file delete token mint', {
+    contentHash,
+    scopes: SYSTEM_FILE_DELETE_SCOPES,
+  });
+
+  const token = await sessionService.createSession({
+    userId: SYSTEM_SERVICE_USER_ID,
+    type: 'service',
+    scopes: SYSTEM_FILE_DELETE_SCOPES as string[],
+    resourceType: 'file',
+    resourceId: contentHash,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
+  });
+
+  return {
+    token,
+    grantedScopes: SYSTEM_FILE_DELETE_SCOPES,
   };
 }

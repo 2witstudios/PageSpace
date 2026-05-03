@@ -52,6 +52,8 @@ export interface UserMessageExport {
   role?: string;
   pageId?: string;
   conversationId?: string;
+  isActive?: boolean;
+  deletedAt?: Date | null;
   createdAt: Date;
 }
 
@@ -319,6 +321,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       id: directMessages.id,
       content: directMessages.content,
       conversationId: directMessages.conversationId,
+      isActive: directMessages.isActive,
+      deletedAt: directMessages.deletedAt,
       createdAt: directMessages.createdAt,
     })
     .from(directMessages)
@@ -331,6 +335,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       content: msg.content,
       direction: 'sent',
       conversationId: msg.conversationId,
+      isActive: msg.isActive,
+      deletedAt: msg.deletedAt,
       createdAt: msg.createdAt,
     });
   }
@@ -353,6 +359,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
         id: directMessages.id,
         content: directMessages.content,
         conversationId: directMessages.conversationId,
+        isActive: directMessages.isActive,
+        deletedAt: directMessages.deletedAt,
         createdAt: directMessages.createdAt,
       })
       .from(directMessages)
@@ -370,6 +378,8 @@ export async function collectUserMessages(database: DB, userId: string): Promise
         content: msg.content,
         direction: 'received',
         conversationId: msg.conversationId,
+        isActive: msg.isActive,
+        deletedAt: msg.deletedAt,
         createdAt: msg.createdAt,
       });
     }
