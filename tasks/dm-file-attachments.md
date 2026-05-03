@@ -100,6 +100,7 @@ Update `apps/web/src/app/api/messages/[conversationId]/route.ts` POST to accept 
 - Given a `fileId` for a file the sender did not upload, should return 403.
 - Given a `fileId` for a file not linked to this conversation, should return 403 (prevents cross-DM file smuggling).
 - Given a delivered DM with a file, the receiver's client should receive the full payload over Socket.IO without an extra fetch.
+- Given the sender is subscribed to realtime and receives their persisted DM echo, should replace the optimistic local row rather than rendering a duplicate.
 - Given a DM whose only payload is an attachment, `dmConversations.lastMessagePreview` should render a synthetic preview (`[image: name.png]` or `[file: name.pdf]`) so inbox lists are meaningful.
 
 ---
@@ -110,6 +111,7 @@ Update `apps/web/src/components/messages/ChatInput.tsx` to consume `useAttachmen
 
 **Requirements**:
 - Given a user pastes, drops, or picks a file in the DM composer, should upload optimistically and send on submit with the same UX as channels.
+- Given an uploaded attachment and empty composer text, should send the attachment once when the user presses Enter on a desktop keyboard.
 - Given a received DM with an image, should render a clickable thumbnail; with a non-image, should render the download card — pixel-identical to channels.
 
 ---
