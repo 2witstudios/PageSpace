@@ -3,7 +3,10 @@
 import { useRef, useCallback, useEffect } from 'react';
 import { useVoiceModeStore, type TTSVoice, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { splitOversizedForTts } from '@/lib/voice/chunkForTts';
 import { createId } from '@paralleldrive/cuid2';
+
+const TTS_MAX_CHARS = 1500;
 
 function getMicPermissionErrorMessage(err: unknown): string {
   const isDesktop = typeof window !== 'undefined' && !!window.electron?.isDesktop;
@@ -564,6 +567,15 @@ export function useVoiceMode({
     async (text: string) => {
       if (!text.trim()) return;
 
+      // Safety net: if a chunk somehow exceeds the OpenAI TTS 4096-char limit,
+      // hard-split on word boundary and queue the remainder so nothing is dropped.
+      let chunkToSpeak = text;
+      if (chunkToSpeak.length > TTS_MAX_CHARS) {
+        const pieces = splitOversizedForTts(chunkToSpeak, TTS_MAX_CHARS);
+        chunkToSpeak = pieces[0];
+        speechQueueRef.current.unshift(...pieces.slice(1));
+      }
+
       try {
         setError(null);
         const audioId = createId();
@@ -575,7 +587,7 @@ export function useVoiceMode({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            text,
+            text: chunkToSpeak,
             voice: ttsVoice,
             speed: ttsSpeed,
           }),
@@ -644,6 +656,14 @@ export function useVoiceMode({
         setError(message);
         callbacksRef.current.onError?.(message);
         stopBargeInMonitoring();
+
+        // Don't let a single failed chunk mute the rest of the queue —
+        // drain the next item rather than abandoning playback entirely.
+        if (speechQueueRef.current.length > 0) {
+          const next = speechQueueRef.current.shift()!;
+          void speak(next);
+          return;
+        }
         stopSpeakingStore();
       }
     },
