@@ -17,7 +17,7 @@ export type PathType =
   | 'drive-settings'
   | 'drive-trash'
   | 'drive-calendar'
-  | 'drive-inbox'
+  | 'drive-channels'
   // Global dashboard routes
   | 'dashboard-tasks'
   | 'dashboard-activity'
@@ -26,11 +26,12 @@ export type PathType =
   | 'dashboard-connections'
   | 'dashboard-calendar'
   | 'dashboard-drives'
-  // Inbox routes
-  | 'inbox'
-  | 'inbox-dm'
-  | 'inbox-channel'
-  | 'inbox-new'
+  // Direct Messages + Channels routes
+  | 'dms'
+  | 'dm'
+  | 'dm-new'
+  | 'channels'
+  | 'channel'
   // Settings routes
   | 'settings'
   // Admin routes
@@ -64,10 +65,10 @@ export interface TabMeta {
 }
 
 // Global dashboard routes (not drive-specific)
-const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'inbox', 'drives'] as const;
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives'] as const;
 
 // Drive-specific special routes
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'inbox'] as const;
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels'] as const;
 
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
@@ -140,28 +141,28 @@ export const parseTabPath = (path: string): ParsedPath => {
 
   // Check if it's a global dashboard route first
   if (GLOBAL_DASHBOARD_ROUTES.includes(secondSegment as typeof GLOBAL_DASHBOARD_ROUTES[number])) {
-    // /dashboard/inbox routes
-    if (secondSegment === 'inbox') {
-      // /dashboard/inbox/dm/[conversationId]
-      if (segments[2] === 'dm' && segments[3]) {
-        return {
-          type: 'inbox-dm',
-          conversationId: segments[3],
-        };
-      }
-      // /dashboard/inbox/channel/[pageId]
-      if (segments[2] === 'channel' && segments[3]) {
-        return {
-          type: 'inbox-channel',
-          pageId: segments[3],
-        };
-      }
-      // /dashboard/inbox/new
+    // /dashboard/dms routes
+    if (secondSegment === 'dms') {
+      // /dashboard/dms/new
       if (segments[2] === 'new') {
-        return { type: 'inbox-new' };
+        return { type: 'dm-new' };
       }
-      // /dashboard/inbox
-      return { type: 'inbox' };
+      // /dashboard/dms/[conversationId]
+      if (segments[2]) {
+        return { type: 'dm', conversationId: segments[2] };
+      }
+      // /dashboard/dms
+      return { type: 'dms' };
+    }
+
+    // /dashboard/channels routes
+    if (secondSegment === 'channels') {
+      // /dashboard/channels/[pageId]
+      if (segments[2]) {
+        return { type: 'channel', pageId: segments[2] };
+      }
+      // /dashboard/channels
+      return { type: 'channels' };
     }
 
     // Other global dashboard routes
@@ -219,7 +220,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       settings: 'drive-settings',
       trash: 'drive-trash',
       calendar: 'drive-calendar',
-      inbox: 'drive-inbox',
+      channels: 'drive-channels',
     };
     return {
       type: typeMap[thirdSegment],
@@ -308,22 +309,25 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'drive-calendar':
       return { title: 'Calendar', iconName: 'Calendar' };
 
-    case 'drive-inbox':
-      return { title: 'Inbox', iconName: 'Inbox' };
+    case 'drive-channels':
+      return { title: 'Channels', iconName: 'Hash' };
 
-    // Global inbox routes
-    case 'inbox':
-      return { title: 'Inbox', iconName: 'Inbox' };
+    // Direct Messages + Channels routes
+    case 'dms':
+      return { title: 'Direct Messages', iconName: 'MessageSquare' };
 
-    case 'inbox-dm':
+    case 'channels':
+      return { title: 'Channels', iconName: 'Hash' };
+
+    case 'dm':
       // Requires async lookup for conversation name
       return null;
 
-    case 'inbox-channel':
+    case 'channel':
       // Requires async lookup for channel name
       return null;
 
-    case 'inbox-new':
+    case 'dm-new':
       return { title: 'New Message', iconName: 'PenSquare' };
 
     // Settings routes
