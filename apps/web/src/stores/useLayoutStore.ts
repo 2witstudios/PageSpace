@@ -2,6 +2,15 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 type TaskListViewMode = 'table' | 'kanban';
+export type TaskListPageFilter = 'all' | 'active' | 'completed';
+
+export interface StoredDashboardFilters {
+  status?: string;
+  priority?: 'low' | 'medium' | 'high';
+  search?: string;
+  dueDateFilter?: 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
+  assigneeFilter?: 'mine' | 'all';
+}
 
 interface LayoutState {
   // UI panels state (PERSISTED)
@@ -10,6 +19,8 @@ interface LayoutState {
   leftSidebarSize: number;
   rightSidebarSize: number;
   taskListViewMode: TaskListViewMode;
+  taskListPageFilters: Record<string, TaskListPageFilter>;
+  tasksDashboardFilters: Record<string, StoredDashboardFilters>;
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
   pulseCollapsed: boolean;
@@ -34,6 +45,8 @@ interface LayoutState {
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
+  setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => void;
+  setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => void;
   setDriveFooterCollapsed: (collapsed: boolean) => void;
   setDashboardFooterCollapsed: (collapsed: boolean) => void;
   setPulseCollapsed: (collapsed: boolean) => void;
@@ -50,6 +63,8 @@ export const useLayoutStore = create<LayoutState>()(
       leftSidebarSize: 18,
       rightSidebarSize: 18,
       taskListViewMode: 'table',
+      taskListPageFilters: {},
+      tasksDashboardFilters: {},
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
       pulseCollapsed: false,
@@ -70,6 +85,18 @@ export const useLayoutStore = create<LayoutState>()(
 
       setTaskListViewMode: (mode: TaskListViewMode) => {
         set({ taskListViewMode: mode });
+      },
+
+      setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => {
+        set((state) => ({
+          taskListPageFilters: { ...state.taskListPageFilters, [pageId]: filter },
+        }));
+      },
+
+      setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => {
+        set((state) => ({
+          tasksDashboardFilters: { ...state.tasksDashboardFilters, [scopeKey]: filters },
+        }));
       },
 
       toggleLeftSidebar: () => {
@@ -124,6 +151,8 @@ export const useLayoutStore = create<LayoutState>()(
         leftSidebarSize: state.leftSidebarSize,
         rightSidebarSize: state.rightSidebarSize,
         taskListViewMode: state.taskListViewMode,
+        taskListPageFilters: state.taskListPageFilters,
+        tasksDashboardFilters: state.tasksDashboardFilters,
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,
         pulseCollapsed: state.pulseCollapsed,

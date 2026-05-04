@@ -37,6 +37,14 @@ import { cn } from '@/lib/utils';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import {
+  scopeKeyFor,
+  pickInitialFilters,
+  toStoredDashboardFilters,
+  fromStoredOrDefaults,
+  type DueDateFilter,
+  type AssigneeFilter,
+} from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
 import { useCapacitor } from '@/hooks/useCapacitor';
@@ -63,9 +71,6 @@ interface TasksDashboardProps {
   driveId?: string;
   driveName?: string;
 }
-
-type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
-type AssigneeFilter = 'mine' | 'all';
 
 interface ExtendedFilters extends TaskFilters {
   search?: string;
@@ -103,16 +108,14 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   const [detailSheetOpen, setDetailSheetOpen] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
-  // Filter state from URL params
+  // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
-  const [filters, setFilters] = useState<ExtendedFilters>(() => ({
-    status: searchParams.get('status') || undefined,
-    priority: (searchParams.get('priority') as TaskPriority) || undefined,
-    driveId: searchParams.get('driveId') || undefined,
-    search: searchParams.get('search') || undefined,
-    dueDateFilter: (searchParams.get('dueDateFilter') as DueDateFilter) || undefined,
-    assigneeFilter: (searchParams.get('assigneeFilter') as AssigneeFilter) || 'mine',
-  }));
+  const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
+  const [filters, setFilters] = useState<ExtendedFilters>(() => {
+    const initialScopeKey = scopeKeyFor(context, initialDriveId);
+    const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
+    return pickInitialFilters(searchParams, stored);
+  });
 
   // Track last data refresh time
   const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
@@ -137,7 +140,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     };
   }, []);
 
-  // Update URL when filters change
+  // Update URL when filters change, and persist the filter state per scope.
   const updateUrl = useCallback((newFilters: ExtendedFilters, newDriveId?: string) => {
     const params = new URLSearchParams();
 
@@ -168,7 +171,9 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     const newUrl = queryString ? `${basePath}?${queryString}` : basePath;
 
     router.replace(newUrl, { scroll: false });
-  }, [router]);
+
+    persistDashboardFilter(scopeKeyFor(context, newDriveId), toStoredDashboardFilters(newFilters));
+  }, [router, persistDashboardFilter, context]);
 
   // Handle search with debounce
   const handleSearchChange = useCallback((value: string) => {
@@ -318,7 +323,15 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   const handleDriveChange = (driveId: string) => {
     if (context === 'drive') {
       setSelectedDriveId(driveId);
-      const updatedFilters = { ...filters };
+      const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKeyFor('drive', driveId)];
+      const updatedFilters = fromStoredOrDefaults(stored);
+      // Cancel any in-flight debounced search and sync the input to the restored filter
+      // so the search box doesn't display the previous drive's text.
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+        searchTimeoutRef.current = null;
+      }
+      setSearchValue(updatedFilters.search || '');
       setFilters(updatedFilters);
       updateUrl(updatedFilters, driveId);
     } else {
