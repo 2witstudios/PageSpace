@@ -208,20 +208,20 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         isInitialized: true
       });
 
-      // Listen for token refresh events to proactively reconnect
       if (typeof window !== 'undefined') {
-        // Remove any existing listener to prevent duplicates
         if (handleAuthRefresh) {
           window.removeEventListener('auth:refreshed', handleAuthRefresh);
         }
 
-        // Create new handler that captures the current store reference
+        // Token is consumed only at handshake — a connected socket stays
+        // authenticated. Reconnecting it on every refresh cascades into chat
+        // refetches (GlobalChatContext, agent multiplayer) that snap the
+        // message list to the bottom. Only retry when the socket is down.
         handleAuthRefresh = () => {
           const currentSocket = get().socket;
-          if (currentSocket?.connected) {
-            console.log('🔄 Token refreshed, proactively reconnecting socket...');
-            get().connect(true); // Force reconnect with new token
-          }
+          if (!currentSocket || currentSocket.connected) return;
+          console.log('🔄 Token refreshed, retrying disconnected socket...');
+          get().connect(true);
         };
 
         window.addEventListener('auth:refreshed', handleAuthRefresh);
