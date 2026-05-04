@@ -70,30 +70,36 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
-    it('given inbox root, should return inbox type', () => {
-      const result = parseTabPath('/dashboard/inbox');
+    it('given dms root, should return dms type', () => {
+      const result = parseTabPath('/dashboard/dms');
 
-      expect(result.type).toBe('inbox');
+      expect(result.type).toBe('dms');
     });
 
-    it('given inbox dm conversation, should return inbox-dm type', () => {
-      const result = parseTabPath('/dashboard/inbox/dm/conv-123');
+    it('given dm conversation, should return dm type', () => {
+      const result = parseTabPath('/dashboard/dms/conv-123');
 
-      expect(result.type).toBe('inbox-dm');
+      expect(result.type).toBe('dm');
       expect(result.conversationId).toBe('conv-123');
     });
 
-    it('given inbox channel, should return inbox-channel type', () => {
-      const result = parseTabPath('/dashboard/inbox/channel/page-123');
+    it('given dms new, should return dm-new type', () => {
+      const result = parseTabPath('/dashboard/dms/new');
 
-      expect(result.type).toBe('inbox-channel');
-      expect(result.pageId).toBe('page-123');
+      expect(result.type).toBe('dm-new');
     });
 
-    it('given inbox new, should return inbox-new type', () => {
-      const result = parseTabPath('/dashboard/inbox/new');
+    it('given channels root, should return channels type', () => {
+      const result = parseTabPath('/dashboard/channels');
 
-      expect(result.type).toBe('inbox-new');
+      expect(result.type).toBe('channels');
+    });
+
+    it('given channel page, should return channel type', () => {
+      const result = parseTabPath('/dashboard/channels/page-123');
+
+      expect(result.type).toBe('channel');
+      expect(result.pageId).toBe('page-123');
     });
 
     it('given settings root, should return settings type', () => {
@@ -167,10 +173,10 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
-    it('given drive inbox path, should return drive-inbox type', () => {
-      const result = parseTabPath('/dashboard/drive-123/inbox');
+    it('given drive channels path, should return drive-channels type', () => {
+      const result = parseTabPath('/dashboard/drive-123/channels');
 
-      expect(result.type).toBe('drive-inbox');
+      expect(result.type).toBe('drive-channels');
       expect(result.driveId).toBe('drive-123');
     });
 
@@ -298,27 +304,34 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Trash2');
     });
 
-    it('given inbox type, should return Inbox title', () => {
-      const meta = getStaticTabMeta({ type: 'inbox' });
+    it('given dms type, should return Direct Messages title', () => {
+      const meta = getStaticTabMeta({ type: 'dms' });
 
-      expect(meta!.title).toBe('Inbox');
-      expect(meta!.iconName).toBe('Inbox');
+      expect(meta!.title).toBe('Direct Messages');
+      expect(meta!.iconName).toBe('MessageSquare');
     });
 
-    it('given inbox-dm type, should return null (requires async lookup)', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-dm', conversationId: 'conv-123' });
+    it('given channels type, should return Channels title', () => {
+      const meta = getStaticTabMeta({ type: 'channels' });
+
+      expect(meta!.title).toBe('Channels');
+      expect(meta!.iconName).toBe('Hash');
+    });
+
+    it('given dm type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'dm', conversationId: 'conv-123' });
 
       expect(meta).toBeNull();
     });
 
-    it('given inbox-channel type, should return null (requires async lookup)', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-channel', pageId: 'page-123' });
+    it('given channel type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'channel', pageId: 'page-123' });
 
       expect(meta).toBeNull();
     });
 
-    it('given inbox-new type, should return New Message title', () => {
-      const meta = getStaticTabMeta({ type: 'inbox-new' });
+    it('given dm-new type, should return New Message title', () => {
+      const meta = getStaticTabMeta({ type: 'dm-new' });
 
       expect(meta!.title).toBe('New Message');
       expect(meta!.iconName).toBe('PenSquare');
@@ -414,11 +427,11 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Calendar');
     });
 
-    it('given drive-inbox type, should return Inbox title', () => {
-      const meta = getStaticTabMeta({ type: 'drive-inbox', driveId: 'drive-123' });
+    it('given drive-channels type, should return Channels title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-channels', driveId: 'drive-123' });
 
-      expect(meta!.title).toBe('Inbox');
-      expect(meta!.iconName).toBe('Inbox');
+      expect(meta!.title).toBe('Channels');
+      expect(meta!.iconName).toBe('Hash');
     });
 
     // Members sub-routes

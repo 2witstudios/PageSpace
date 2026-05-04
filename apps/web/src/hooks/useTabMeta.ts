@@ -68,8 +68,8 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const updateTabMeta = useTabsStore((state) => state.updateTabMeta);
 
   // Check if tab already has cached metadata for a page, channel, or public-page
-  const isPageType = parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page';
-  const pageId = (parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page') ? parsed.pageId : undefined;
+  const isPageType = parsed.type === 'page' || parsed.type === 'channel' || parsed.type === 'public-page';
+  const pageId = (parsed.type === 'page' || parsed.type === 'channel' || parsed.type === 'public-page') ? parsed.pageId : undefined;
   const hasCachedPageMeta = isPageType && pageId && tab.title;
 
   // Only fetch if it's a page/channel without cached metadata
@@ -77,8 +77,8 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const pageKey = needsPageFetch ? `/api/pages/${pageId}` : null;
 
   // Check if tab needs DM conversation metadata
-  const hasCachedDmMeta = parsed.type === 'inbox-dm' && parsed.conversationId && tab.title;
-  const needsDmFetch = parsed.type === 'inbox-dm' && parsed.conversationId && !tab.title;
+  const hasCachedDmMeta = parsed.type === 'dm' && parsed.conversationId && tab.title;
+  const needsDmFetch = parsed.type === 'dm' && parsed.conversationId && !tab.title;
   const dmKey = needsDmFetch ? `/api/messages/conversations/${parsed.conversationId}` : null;
 
   const { data: pageData, isLoading: isPageLoading, error: pageError } = useSWR<PageMetaResponse>(
@@ -180,7 +180,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   }
 
   // Channel tab (from inbox) - similar to page, use cached or fetched data
-  if (parsed.type === 'inbox-channel' && parsed.pageId) {
+  if (parsed.type === 'channel' && parsed.pageId) {
     // Return cached metadata from tab if available
     if (hasCachedPageMeta) {
       return {
@@ -256,7 +256,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   }
 
   // DM tab - use cached or fetched conversation data
-  if (parsed.type === 'inbox-dm' && parsed.conversationId) {
+  if (parsed.type === 'dm' && parsed.conversationId) {
     // Return cached metadata from tab if available
     if (hasCachedDmMeta) {
       return {

@@ -73,7 +73,7 @@ export default function NewConversationPage() {
       });
 
       // Navigate to the conversation
-      router.push(`/dashboard/inbox/dm/${conversation.id}`);
+      router.push(`/dashboard/dms/${conversation.id}`);
     } catch (error) {
       toast.error((error as Error).message || 'Failed to start conversation');
       setIsCreating(false);
@@ -92,7 +92,7 @@ export default function NewConversationPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => router.push('/dashboard/inbox')}
+            onClick={() => router.push('/dashboard/dms')}
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
@@ -202,7 +202,7 @@ export default function NewConversationPage() {
           <div className="flex justify-end gap-3 mt-6">
             <Button
               variant="outline"
-              onClick={() => router.push('/dashboard/inbox')}
+              onClick={() => router.push('/dashboard/dms')}
               disabled={isCreating}
             >
               Cancel

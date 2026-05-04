@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Folder, Home, Inbox } from "lucide-react";
+import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/useLayoutStore";
@@ -24,10 +24,17 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             icon: Home,
             exact: true,
         },
+        // DMs are user-scoped — same href in drive nav so they're always one click away.
         {
-            name: "Inbox",
-            href: driveId ? `/dashboard/${driveId}/inbox` : "/dashboard/inbox",
-            icon: Inbox,
+            name: "Direct Messages",
+            href: "/dashboard/dms",
+            icon: MessageSquare,
+            exact: false,
+        },
+        {
+            name: "Channels",
+            href: driveId ? `/dashboard/${driveId}/channels` : "/dashboard/channels",
+            icon: Hash,
             exact: false,
         },
         {
