@@ -53,14 +53,15 @@ export async function POST(
       email: bodyEmail,
       role = 'MEMBER',
       customRoleId,
-      permissions,
+      permissions: rawPermissions,
     } = body as {
       userId?: string;
       email?: string;
       role?: 'MEMBER' | 'ADMIN';
       customRoleId?: string | null;
-      permissions: PermissionEntry[];
+      permissions?: PermissionEntry[];
     };
+    const permissions: PermissionEntry[] = Array.isArray(rawPermissions) ? rawPermissions : [];
 
     // Check if user is drive owner or admin
     const drive = await driveInviteRepository.findDriveById(driveId);
