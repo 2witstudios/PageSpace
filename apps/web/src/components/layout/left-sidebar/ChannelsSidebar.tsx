@@ -64,6 +64,16 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
     revalidateOnFocus: false,
   });
 
+  // Reset state on driveId change BEFORE the data-sync effect so that an
+  // SWR cache hit for the new drive can repopulate the list in the same
+  // commit (otherwise the clear would run after, leaving the list empty).
+  useEffect(() => {
+    setAllItems([]);
+    setPagination(null);
+    setIsLoadingMore(false);
+    setHasLoadedMore(false);
+  }, [driveId]);
+
   useEffect(() => {
     if (!data) return;
     if (hasLoadedMore) {
@@ -84,13 +94,6 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
       setPagination(data.pagination);
     }
   }, [data, hasLoadedMore]);
-
-  useEffect(() => {
-    setAllItems([]);
-    setPagination(null);
-    setIsLoadingMore(false);
-    setHasLoadedMore(false);
-  }, [driveId]);
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));

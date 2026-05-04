@@ -47,6 +47,16 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
     revalidateOnFocus: false,
   });
 
+  // Reset state on driveId change BEFORE the data-sync effect so that an
+  // SWR cache hit for the new drive can repopulate the list in the same
+  // commit (otherwise the clear would run after, leaving the list empty).
+  useEffect(() => {
+    setAllItems([]);
+    setPagination(null);
+    setIsLoadingMore(false);
+    setHasLoadedMore(false);
+  }, [driveId]);
+
   useEffect(() => {
     if (!data) return;
     if (hasLoadedMore) {
@@ -67,13 +77,6 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
       setPagination(data.pagination);
     }
   }, [data, hasLoadedMore]);
-
-  useEffect(() => {
-    setAllItems([]);
-    setPagination(null);
-    setIsLoadingMore(false);
-    setHasLoadedMore(false);
-  }, [driveId]);
 
   const loadMore = async () => {
     if (!pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) return;
