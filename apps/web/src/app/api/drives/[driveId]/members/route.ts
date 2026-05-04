@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccess, listDriveMembers, isMemberOfDrive, addDriveMember } from '@pagespace/lib/services/drive-member-service';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(
   request: Request,
@@ -46,61 +43,9 @@ export async function GET(
   }
 }
 
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ driveId: string }> }
-) {
-  try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
-
-    const { driveId } = await context.params;
-
-    const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER' } = body;
-
-    // Check if user is drive owner
-    const access = await checkDriveAccess(driveId, userId);
-
-    if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    }
-
-    if (!access.isOwner) {
-      return NextResponse.json({ error: 'Only drive owner can add members' }, { status: 403 });
-    }
-
-    // Check if member already exists
-    const alreadyMember = await isMemberOfDrive(driveId, invitedUserId);
-
-    if (alreadyMember) {
-      return NextResponse.json({ error: 'User is already a member' }, { status: 400 });
-    }
-
-    // Add member
-    const newMember = await addDriveMember(driveId, userId, {
-      userId: invitedUserId,
-      role: role as 'ADMIN' | 'MEMBER',
-    });
-
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    logMemberActivity(userId, 'member_add', {
-      driveId,
-      driveName: access.drive.name,
-      targetUserId: invitedUserId,
-      role: role as string,
-    }, actorInfo);
-
-    auditRequest(request, { eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role } });
-
-    return NextResponse.json({ member: newMember });
-  } catch (error) {
-    loggers.api.error('Error adding drive member:', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to add member' },
-      { status: 500 }
-    );
-  }
-}
+// POST handler intentionally removed.
+// `/api/drives/[driveId]/members/invite` is the canonical add-member entry point — it
+// enforces email-verified inviter, owner OR admin authorization, per-drive + per-email
+// rate limits, the email-vs-userId payload branch with pending-state handling, and
+// the member_added fan-out broadcast. The legacy POST here had none of those gates and
+// auto-accepted the new row, which subverted the invitation acceptance design.
