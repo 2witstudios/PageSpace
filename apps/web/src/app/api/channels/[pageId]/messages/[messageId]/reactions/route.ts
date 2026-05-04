@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
-import { channelMessages, channelMessageReactions } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -39,12 +37,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
 
   // Verify message exists and belongs to this channel
-  const message = await db.query.channelMessages.findFirst({
-    where: and(
-      eq(channelMessages.id, messageId),
-      eq(channelMessages.pageId, pageId)
-    ),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -52,26 +45,16 @@ export async function POST(req: Request, { params }: RouteParams) {
 
   // Insert reaction (unique constraint will prevent duplicates)
   try {
-    const [reaction] = await db.insert(channelMessageReactions).values({
+    const reaction = await channelMessageRepository.addChannelReaction({
       messageId,
       userId,
       emoji,
-    }).returning();
+    });
 
     auditRequest(req, { eventType: 'data.write', userId, resourceType: 'reaction', resourceId: messageId });
 
     // Fetch with user info for broadcast
-    const reactionWithUser = await db.query.channelMessageReactions.findFirst({
-      where: eq(channelMessageReactions.id, reaction.id),
-      with: {
-        user: {
-          columns: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-    });
+    const reactionWithUser = await channelMessageRepository.loadChannelReactionWithUser(reaction.id);
 
     // Broadcast reaction to channel
     if (process.env.INTERNAL_REALTIME_URL) {
@@ -133,27 +116,16 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   }
 
   // Verify message exists and belongs to this channel (same validation as POST)
-  const message = await db.query.channelMessages.findFirst({
-    where: and(
-      eq(channelMessages.id, messageId),
-      eq(channelMessages.pageId, pageId)
-    ),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
   }
 
   // Delete the reaction (only the user's own reaction)
-  const result = await db.delete(channelMessageReactions)
-    .where(and(
-      eq(channelMessageReactions.messageId, messageId),
-      eq(channelMessageReactions.userId, userId),
-      eq(channelMessageReactions.emoji, emoji)
-    ))
-    .returning();
+  const removed = await channelMessageRepository.removeChannelReaction({ messageId, userId, emoji });
 
-  if (result.length === 0) {
+  if (removed === 0) {
     return NextResponse.json({ error: 'Reaction not found' }, { status: 404 });
   }
 

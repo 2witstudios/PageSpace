@@ -191,6 +191,11 @@
       "import": "./dist/services/dm-message-repository.js",
       "require": "./dist/services/dm-message-repository.js"
     },
+    "./services/channel-message-repository": {
+      "types": "./dist/services/channel-message-repository.d.ts",
+      "import": "./dist/services/channel-message-repository.js",
+      "require": "./dist/services/channel-message-repository.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
