@@ -110,6 +110,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),

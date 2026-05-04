@@ -90,6 +90,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
+
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
       deviceToken: 'mock-device-token',

@@ -17,6 +17,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
@@ -220,6 +221,19 @@ export async function GET(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Accept any pending drive invitations for this user. The acceptedAt-IS-NOT-NULL
+    // filter on authorization queries gates drive access, so without this hook a Google
+    // sign-in would leave invitees stuck pending and unable to reach the drive they
+    // were invited to. Failure aborts the login (page_permissions are pre-created at
+    // invite time and would otherwise be reachable while acceptedAt stays null).
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on Google sign-in', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return NextResponse.redirect(new URL('/auth/signin?error=server_error', baseUrl));
+    }
 
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);

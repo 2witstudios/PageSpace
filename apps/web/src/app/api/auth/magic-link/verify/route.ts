@@ -14,9 +14,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
-import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -125,23 +123,10 @@ export async function GET(req: Request) {
     // still null would let them reach those pages without ever clearing the invitation gate.
     let acceptedInviteDriveId: string | null = null;
     try {
-      const pending = await driveInviteRepository.findPendingMembersForUser(userId);
-      for (const row of pending) {
-        const accepted = await driveInviteRepository.acceptPendingMember(row.id);
-        if (!accepted) continue;
-        // Fan out to all drive members so admins watching the members page
-        // see the pending row promote in real time, not just the new joiner.
-        const driveRecipients = await getDriveRecipientUserIds(row.driveId);
-        await broadcastDriveMemberEventToRecipients(
-          createDriveMemberEventPayload(row.driveId, userId, 'member_added', {
-            role: row.role,
-            driveName: row.driveName,
-          }),
-          driveRecipients
-        );
-        if (inviteDriveId && row.driveId === inviteDriveId) {
-          acceptedInviteDriveId = row.driveId;
-        }
+      const accepted = await acceptUserPendingInvitations(userId);
+      if (inviteDriveId) {
+        const match = accepted.find((row) => row.driveId === inviteDriveId);
+        if (match) acceptedInviteDriveId = match.driveId;
       }
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations', error as Error, { userId });

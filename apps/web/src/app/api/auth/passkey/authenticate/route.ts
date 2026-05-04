@@ -8,6 +8,7 @@ import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -172,6 +173,19 @@ export async function POST(req: Request) {
 
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Accept any pending drive invitations for this user. The acceptedAt-IS-NOT-NULL
+    // filter on authorization queries gates drive access, so without this hook a passkey
+    // sign-in would leave invitees stuck pending and unable to reach the drive they
+    // were invited to. Failure aborts the login (page_permissions are pre-created at
+    // invite time and would otherwise be reachable while acceptedAt stays null).
+    try {
+      await acceptUserPendingInvitations(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on passkey sign-in', error as Error, { userId });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return NextResponse.json({ error: 'Server error' }, { status: 500 });
+    }
 
     // Reset rate limit on successful login
     await resetDistributedRateLimit(rateLimitKey);

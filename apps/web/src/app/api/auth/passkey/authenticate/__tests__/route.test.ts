@@ -77,6 +77,10 @@ vi.mock('@/lib/auth', () => ({
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
