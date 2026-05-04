@@ -111,7 +111,8 @@ export async function GET(
         .where(and(
           eq(driveMembers.driveId, drive.id),
           eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         ))
         .limit(1);
 

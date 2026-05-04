@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
@@ -94,7 +94,10 @@ export async function GET(req: Request) {
       // User's drives
       db.select({ driveId: driveMembers.driveId })
         .from(driveMembers)
-        .where(eq(driveMembers.userId, userId)),
+        .where(and(
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )),
       // Tasks overdue
       db.select({ count: count() })
         .from(taskItems)

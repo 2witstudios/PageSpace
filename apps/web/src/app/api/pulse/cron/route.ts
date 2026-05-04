@@ -10,7 +10,7 @@ import {
   formatDateInTimezone,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray, isNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
@@ -145,7 +145,10 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(and(
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
+    ));
   const driveIds = userDrives.map(d => d.driveId);
 
   // ========================================
@@ -174,7 +177,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .leftJoin(users, eq(users.id, driveMembers.userId))
     .where(and(
       inArray(driveMembers.driveId, driveIds),
-      ne(driveMembers.userId, userId)
+      ne(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
     )) : [];
 
   const teamByDrive = teamMembers.reduce((acc, m) => {

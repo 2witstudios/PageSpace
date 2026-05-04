@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators';
+import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
@@ -53,7 +53,8 @@ export async function GET(
         .where(and(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, user.id),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         ))
         .limit(1);
 
