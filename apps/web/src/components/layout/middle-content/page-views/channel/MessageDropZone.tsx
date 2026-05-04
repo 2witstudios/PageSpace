@@ -46,16 +46,25 @@ export function MessageDropZone({
     if (!enabled) reset();
   }, [enabled, reset]);
 
-  // Catch drags that leave the window entirely (no dragleave fires on the wrapper
-  // in that case, so the counter would stay > 0).
+  // Reset the overlay for cases the wrapper's own handlers will not catch:
+  // 1. Drop on a child target that calls stopPropagation (e.g. the composer).
+  //    Capture phase fires before the target handler can stop propagation.
+  // 2. Drag pointer exits the document entirely (no balanced dragleave on the
+  //    wrapper). On most browsers this fires a dragleave on document with
+  //    relatedTarget === null.
+  // 3. Internal drag source completes (dragend bubbles).
   useEffect(() => {
-    const onWindowDragEnd = () => reset();
-    const onWindowDrop = () => reset();
-    window.addEventListener('dragend', onWindowDragEnd);
-    window.addEventListener('drop', onWindowDrop);
+    const handleReset = () => reset();
+    const handleDocumentDragLeave = (e: DragEvent) => {
+      if (e.relatedTarget === null) reset();
+    };
+    window.addEventListener('drop', handleReset, true);
+    window.addEventListener('dragend', handleReset, true);
+    document.addEventListener('dragleave', handleDocumentDragLeave);
     return () => {
-      window.removeEventListener('dragend', onWindowDragEnd);
-      window.removeEventListener('drop', onWindowDrop);
+      window.removeEventListener('drop', handleReset, true);
+      window.removeEventListener('dragend', handleReset, true);
+      document.removeEventListener('dragleave', handleDocumentDragLeave);
     };
   }, [reset]);
 

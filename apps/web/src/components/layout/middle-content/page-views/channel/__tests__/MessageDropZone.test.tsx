@@ -175,6 +175,63 @@ describe('MessageDropZone', () => {
     expect(screen.queryByText('Drop file to attach')).toBeNull();
   });
 
+  it('childDropStopsPropagation_overlayStillResets_viaCaptureListener', () => {
+    // Reproduces the composer-drop-with-stopPropagation case: an inner element
+    // calls stopPropagation, so MessageDropZone's own onDrop never fires.
+    // The capture-phase window listener must still reset the overlay.
+    const { ref } = makeInputRef();
+    render(
+      <MessageDropZone inputRef={ref} enabled>
+        <button
+          data-testid="inner-target"
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          inner
+        </button>
+      </MessageDropZone>,
+    );
+
+    const file = new File(['x'], 'a.png', { type: 'image/png' });
+    fireDragEvent(dropZone(), 'dragEnter', { files: [file] });
+    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+
+    fireDragEvent(screen.getByTestId('inner-target'), 'drop', { files: [file] });
+    expect(screen.queryByText('Drop file to attach')).toBeNull();
+  });
+
+  it('documentDragLeave_withNullRelatedTarget_resetsOverlay', () => {
+    const { ref } = makeInputRef();
+    renderZone(ref);
+
+    fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
+    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+
+    act(() => {
+      const ev = new Event('dragleave', { bubbles: true });
+      Object.defineProperty(ev, 'relatedTarget', { value: null });
+      document.dispatchEvent(ev);
+    });
+    expect(screen.queryByText('Drop file to attach')).toBeNull();
+  });
+
+  it('documentDragLeave_withRelatedTarget_doesNotReset', () => {
+    const { ref } = makeInputRef();
+    renderZone(ref);
+
+    fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
+    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+
+    act(() => {
+      const ev = new Event('dragleave', { bubbles: true });
+      Object.defineProperty(ev, 'relatedTarget', { value: document.body });
+      document.dispatchEvent(ev);
+    });
+    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+  });
+
   it('enabledFalse_afterMount_resetsOverlayIfActive', () => {
     const { ref } = makeInputRef();
     const { rerender } = renderZone(ref, true);
