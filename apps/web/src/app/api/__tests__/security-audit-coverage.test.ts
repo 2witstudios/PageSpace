@@ -81,6 +81,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
   ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
   ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
+  ['drives/[driveId]/members', 'Read-only member list — write paths live in /members/invite (audited) and /members/[userId] (audited)'],
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],
   ['drives/[driveId]/integrations/audit', 'Integration audit log — follow-up'],
