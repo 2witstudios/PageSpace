@@ -98,7 +98,13 @@ export async function POST(
     let normalizedEmail: string | null = null;
     let pendingMagicToken: string | null = null;
 
-    if (bodyEmail && !bodyUserId) {
+    if (bodyEmail !== undefined && !bodyUserId) {
+      if (typeof bodyEmail !== 'string') {
+        return NextResponse.json(
+          { error: 'Invalid email address' },
+          { status: 400 }
+        );
+      }
       normalizedEmail = bodyEmail.toLowerCase().trim();
 
       const emailParse = emailSchema.safeParse(normalizedEmail);

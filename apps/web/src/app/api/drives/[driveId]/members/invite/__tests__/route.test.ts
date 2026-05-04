@@ -897,6 +897,18 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
+    it('given a non-string email payload, responds 400 instead of throwing on toLowerCase()', async () => {
+      const response = await POST(
+        createInviteRequest(mockDriveId, { email: 12345, role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid email address');
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+    });
+
     it('given createMagicLinkToken returns USER_SUSPENDED, responds 403 instead of bubbling through as a 500', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
       vi.mocked(createMagicLinkToken).mockResolvedValueOnce({
