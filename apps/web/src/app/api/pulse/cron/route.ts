@@ -180,7 +180,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .leftJoin(users, eq(users.id, driveMembers.userId))
     .where(and(
       inArray(driveMembers.driveId, driveIds),
-      ne(driveMembers.userId, userId)
+      ne(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
     )) : [];
 
   const teamByDrive = teamMembers.reduce((acc, m) => {

@@ -57,7 +57,10 @@ export async function POST(
       );
     }
 
-    const body = await request.json();
+    const body: unknown = await request.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
+    }
     const {
       userId: bodyUserId,
       email: bodyEmail,
@@ -333,7 +336,10 @@ export async function POST(
       kind: inviteKind,
       ...(normalizedEmail ? { email: normalizedEmail } : {}),
       permissionsGranted: validResults.length,
-      message: `User added with ${validResults.length} page permissions`,
+      message:
+        inviteKind === 'invited'
+          ? `Invitation sent to ${normalizedEmail ?? 'recipient'} with ${validResults.length} page permissions`
+          : `User added with ${validResults.length} page permissions`,
     });
   } catch (error) {
     loggers.api.error('Error adding member:', error as Error);

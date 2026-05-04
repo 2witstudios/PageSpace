@@ -57,7 +57,7 @@ After session creation in `apps/web/src/app/api/auth/magic-link/verify/route.ts`
 
 ## Resend pending invitation
 
-`POST /api/drives/[driveId]/members/[userId]/resend` re-fires `createMagicLinkToken` and `sendDriveInvitationEmail` for a pending row, rate-limited to 3 sends per row per 24 hours via `checkDistributedRateLimit`; the members UI exposes a Resend button on each pending row.
+`POST /api/drives/[driveId]/members/[userId]/resend` re-fires `createMagicLinkToken` and `sendPendingDriveInvitationEmail` for a pending row, rate-limited to 3 sends per row per 24 hours via `checkDistributedRateLimit`; the members UI exposes a Resend button on each pending row.
 
 **Requirements**:
 - Given a pending row, should issue a fresh magic-link token and send a new invitation email.

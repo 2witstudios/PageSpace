@@ -134,8 +134,11 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     );
   }
 
-  const acceptedMembers = members.filter((m) => !!m.acceptedAt);
-  const pendingMembers = members.filter((m) => !m.acceptedAt);
+  // Strict null check so an explicit `acceptedAt: null` from the API is the
+  // only thing that classifies a row as pending — undefined or a malformed
+  // payload should not silently dump rows into the pending section.
+  const acceptedMembers = members.filter((m) => m.acceptedAt != null);
+  const pendingMembers = members.filter((m) => m.acceptedAt === null);
 
   return (
     <div className="space-y-6">

@@ -279,14 +279,25 @@ export async function POST(req: Request) {
       ipAddress: clientIP,
     });
 
-    // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
+    // Generate CSRF token using session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Run pending-invite acceptance BEFORE rate-limit reset and trackAuthEvent so a
+    // mid-login failure here doesn't leave behind success-side telemetry.
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on mobile Google OAuth', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return Response.json({ error: 'Server error' }, { status: 500 });
+    }
+
+    // Reset rate limits on successful authentication (graceful — failures don't affect successful auth)
     const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`oauth:exchange:ip:${clientIP}`),
       resetDistributedRateLimit(`oauth:exchange:verify:${clientIP}`),
       resetDistributedRateLimit(`oauth:exchange:email:${userInfo.email.toLowerCase()}`),
     ]);
-
-    // Log any reset failures for observability
     const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length > 0) {
       loggers.auth.warn('Rate limit reset failed after successful OAuth', {
@@ -304,17 +315,6 @@ export async function POST(req: Request) {
       platform,
       appVersion,
     });
-
-    // Generate CSRF token using session ID
-    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
-
-    try {
-      await acceptUserPendingInvitations(user.id);
-    } catch (error) {
-      loggers.auth.error('Failed to accept pending invitations on mobile Google OAuth', error as Error, { userId: user.id });
-      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
-      return Response.json({ error: 'Server error' }, { status: 500 });
-    }
 
     auditRequest(req, {
       eventType: 'auth.login.success',

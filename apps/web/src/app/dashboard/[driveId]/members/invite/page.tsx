@@ -142,11 +142,17 @@ export default function InviteMemberPage() {
       ? selectedUnifiedRole.roleId
       : null;
 
+    // Snapshot the invitee email at submit time so the toast renders the
+    // right address even if state mutates (e.g., handleClearUser) before the
+    // async response lands.
+    const submittedInviteEmail = pendingInviteEmail;
     const successToast = (kind: InviteKind) => {
       if (kind === 'invited') {
         toast({
           title: 'Invitation sent',
-          description: `An email invitation has been sent to ${pendingInviteEmail}`,
+          description: submittedInviteEmail
+            ? `An email invitation has been sent to ${submittedInviteEmail}`
+            : 'An email invitation has been sent',
         });
       } else {
         toast({
