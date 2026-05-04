@@ -92,6 +92,17 @@ describe('acceptUserPendingInvitations', () => {
 
     expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_1');
     expect(getDriveRecipientUserIds).toHaveBeenCalledWith('drive_a');
+
+    // Acceptance must precede recipient resolution and broadcast — see the
+    // filter-self-out test for why this ordering is load-bearing.
+    const acceptOrder =
+      vi.mocked(driveInviteRepository.acceptPendingMember).mock.invocationCallOrder[0];
+    const recipientsOrder = vi.mocked(getDriveRecipientUserIds).mock.invocationCallOrder[0];
+    const broadcastOrder =
+      vi.mocked(broadcastDriveMemberEventToRecipients).mock.invocationCallOrder[0];
+    expect(acceptOrder).toBeLessThan(recipientsOrder!);
+    expect(recipientsOrder!).toBeLessThan(broadcastOrder!);
+
     expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
       'drive_a',
       'user_x',
@@ -120,6 +131,16 @@ describe('acceptUserPendingInvitations', () => {
     vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['admin_a', 'user_x', 'admin_b']);
 
     await acceptUserPendingInvitations('user_x');
+
+    // Critical ordering: acceptPendingMember must run BEFORE getDriveRecipientUserIds.
+    // The filter only matters because acceptedAt is already written when recipients
+    // are queried, so the user appears in the list and must be removed. Reversing
+    // the order would make the filter dead code and silently leak member_added
+    // back to the acceptee.
+    const acceptOrder =
+      vi.mocked(driveInviteRepository.acceptPendingMember).mock.invocationCallOrder[0];
+    const recipientsOrder = vi.mocked(getDriveRecipientUserIds).mock.invocationCallOrder[0];
+    expect(acceptOrder).toBeLessThan(recipientsOrder!);
 
     expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
     expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledWith(
@@ -170,6 +191,15 @@ describe('acceptUserPendingInvitations', () => {
     expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledTimes(2);
     expect(getDriveRecipientUserIds).toHaveBeenCalledWith('drive_a');
     expect(getDriveRecipientUserIds).toHaveBeenCalledWith('drive_b');
+
+    // Per-row ordering: each acceptance must precede its own recipient lookup,
+    // so a future refactor cannot pull recipients in parallel before the row is
+    // marked accepted.
+    const acceptOrders = vi.mocked(driveInviteRepository.acceptPendingMember).mock.invocationCallOrder;
+    const recipientOrders = vi.mocked(getDriveRecipientUserIds).mock.invocationCallOrder;
+    expect(acceptOrders[0]!).toBeLessThan(recipientOrders[0]!);
+    expect(acceptOrders[1]!).toBeLessThan(recipientOrders[1]!);
+
     expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(2);
     expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledWith(
       expect.objectContaining({ driveId: 'drive_a', role: 'MEMBER', driveName: 'Alpha' }),

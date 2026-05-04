@@ -244,10 +244,11 @@ export async function POST(req: Request) {
       });
     }
 
-    // Track login event (mask email to prevent PII in activity logs)
-    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
+    // Track login event — use the shared maskEmail utility so 1-char local
+    // parts and unusual addresses cannot leak through (the regex form would
+    // emit the raw email when the pattern did not match).
     trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
-      email: maskedEmail,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'google-one-tap',
       userAgent: req.headers.get('user-agent'),
