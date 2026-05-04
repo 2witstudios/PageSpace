@@ -254,7 +254,7 @@ export default function InboxDMPage() {
 
       {/* Messages */}
       <div className="flex-grow overflow-hidden relative">
-        <Conversation>
+        <Conversation className="h-full">
           <ConversationContent className="gap-4 max-w-4xl mx-auto p-4">
             {messages.map((message) => {
               const isOwnMessage = message.senderId === user?.id;
