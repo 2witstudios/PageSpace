@@ -390,7 +390,7 @@ function ChannelView({ page }: ChannelViewProps) {
     <div className="flex flex-col h-full">
         <div className="flex-grow overflow-hidden relative">
           <Conversation>
-            <ConversationContent className="p-4 space-y-4 max-w-4xl mx-auto">
+            <ConversationContent className="gap-4 p-4 max-w-4xl mx-auto">
                     {hasMore && (
                       <div className="flex justify-center py-2">
                         <button
