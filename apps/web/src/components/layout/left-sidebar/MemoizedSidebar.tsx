@@ -6,23 +6,23 @@ import Sidebar, { type SidebarProps } from './index';
 import DMSidebar from './DMSidebar';
 import ChannelsSidebar from './ChannelsSidebar';
 
+const DMS_PATH = /^\/dashboard\/dms(\/|$)/;
+const CHANNELS_PATH = /^\/dashboard\/channels(\/|$)/;
+const DRIVE_CHANNELS_PATH = /^\/dashboard\/[^/]+\/channels(\/|$)/;
+
 /**
  * Memoized version of Sidebar to prevent unnecessary re-renders.
  * Each top-level nav item gets its own sidebar feed so the list is
  * always visible (mirrors PageTree always-on behavior in drive view).
  */
 const MemoizedSidebar = memo((props: SidebarProps) => {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? '';
 
-  if (pathname?.startsWith('/dashboard/dms')) {
+  if (DMS_PATH.test(pathname)) {
     return <DMSidebar {...props} />;
   }
 
-  if (pathname?.startsWith('/dashboard/channels')) {
-    return <ChannelsSidebar {...props} />;
-  }
-
-  if (pathname && /^\/dashboard\/[^/]+\/channels(\/|$)/.test(pathname)) {
+  if (CHANNELS_PATH.test(pathname) || DRIVE_CHANNELS_PATH.test(pathname)) {
     return <ChannelsSidebar {...props} />;
   }
 
