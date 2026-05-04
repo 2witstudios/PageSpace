@@ -8,7 +8,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { desc } from '@pagespace/db/operators';
-import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
+import { createCalendarTriggerWorkflow, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -56,8 +56,13 @@ const createEventSchema = z.object({
   attendeeIds: z.array(z.string()).optional(),
   agentTrigger: z.object({
     agentPageId: z.string(),
-    prompt: z.string().trim().min(1).max(10000),
-  }).optional(),
+    prompt: z.string().trim().max(10000).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).max(10).optional(),
+  }).refine(
+    (data) => Boolean(data.prompt) || Boolean(data.instructionPageId),
+    { message: 'agentTrigger needs either a prompt or an instructionPageId' },
+  ).optional(),
 });
 
 /**
@@ -492,31 +497,25 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const [agentPage] = await db
-        .select({ id: pages.id })
-        .from(pages)
-        .where(
-          and(
-            eq(pages.id, data.agentTrigger.agentPageId),
-            eq(pages.type, 'AI_CHAT'),
-            eq(pages.isTrashed, false),
-            eq(pages.driveId, data.driveId)
-          )
-        );
-      if (!agentPage) {
-        return NextResponse.json(
-          { error: 'Agent not found in this drive' },
-          { status: 400 }
-        );
+
+      try {
+        const validated = await validateCalendarAgentTrigger(db, {
+          driveId: data.driveId,
+          agentTrigger: data.agentTrigger,
+        });
+        agentPageId = validated.agentPageId;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Invalid agent trigger';
+        return NextResponse.json({ error: message }, { status: 400 });
       }
-      const canViewAgent = await canUserViewPage(userId, agentPage.id);
+
+      const canViewAgent = await canUserViewPage(userId, agentPageId);
       if (!canViewAgent) {
         return NextResponse.json(
           { error: 'Agent not found in this drive' },
           { status: 400 }
         );
       }
-      agentPageId = agentPage.id;
     }
 
     // Validate attendees constraints
@@ -600,8 +599,8 @@ export async function POST(request: Request) {
           agentTrigger: {
             agentPageId,
             prompt: data.agentTrigger.prompt,
-            instructionPageId: null,
-            contextPageIds: [],
+            instructionPageId: data.agentTrigger.instructionPageId ?? null,
+            contextPageIds: data.agentTrigger.contextPageIds ?? [],
           },
         });
       }
