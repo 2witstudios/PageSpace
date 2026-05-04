@@ -65,6 +65,7 @@ vi.mock('@pagespace/db/schema/storage', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: string, value: unknown) => ({ field, value })),
   and: vi.fn((...conditions: unknown[]) => ({ conditions })),
+  isNotNull: vi.fn((a: unknown) => ({ isNotNull: a })),
 }));
 
 // Mock permissions functions

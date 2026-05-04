@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -130,7 +130,8 @@ async function getPageIfCanShare(
       and(
         eq(driveMembers.driveId, page.driveId),
         eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
+        eq(driveMembers.role, 'ADMIN'),
+        isNotNull(driveMembers.acceptedAt)
       )
     )
     .limit(1);

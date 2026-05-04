@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, sql } from '@pagespace/db/operators';
+import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
@@ -92,7 +92,11 @@ export async function checkDriveAccess(
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
     .limit(1);
 
   if (membership.length === 0) {
@@ -116,7 +120,10 @@ export async function getDriveMemberUserIds(driveId: string): Promise<string[]> 
   const members = await db
     .select({ userId: driveMembers.userId })
     .from(driveMembers)
-    .where(eq(driveMembers.driveId, driveId));
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      isNotNull(driveMembers.acceptedAt),
+    ));
 
   return members.map((m) => m.userId);
 }
@@ -138,7 +145,10 @@ export async function getDriveRecipientUserIds(driveId: string): Promise<string[
   const members = await db
     .select({ userId: driveMembers.userId })
     .from(driveMembers)
-    .where(eq(driveMembers.driveId, driveId));
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      isNotNull(driveMembers.acceptedAt),
+    ));
 
   const userIds = new Set([drive.ownerId, ...members.map((m) => m.userId)]);
   return Array.from(userIds);
@@ -214,7 +224,11 @@ export async function isMemberOfDrive(driveId: string, userId: string): Promise<
   const existing = await db
     .select({ id: driveMembers.id })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
     .limit(1);
 
   return existing.length > 0;
