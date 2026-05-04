@@ -1,0 +1,171 @@
+/**
+ * Voice mode TTS chunking utilities.
+ *
+ * Streaming assistant text arrives token-by-token with raw markdown. The TTS
+ * pipeline needs to ship reasonably-sized, speakable chunks to OpenAI's TTS
+ * API (4096 char hard limit) without splitting on every newline (which causes
+ * audible gaps between line-by-line synthesis calls).
+ */
+
+const FENCED_CODE = /```[\s\S]*?```/g;
+const INLINE_CODE = /`([^`\n]+)`/g;
+const IMAGE = /!\[[^\]]*\]\([^)]*\)/g;
+const LINK = /\[([^\]]+)\]\([^)]+\)/g;
+const HORIZONTAL_RULE = /^[ \t]*[-*_]{3,}[ \t]*$/gm;
+const BLOCKQUOTE = /^[ \t]*>\s?/gm;
+const HEADING = /^[ \t]*#{1,6}[ \t]+/gm;
+const LIST_BULLET = /^[ \t]*[-*+][ \t]+/gm;
+const LIST_ORDERED = /^[ \t]*\d+[.)][ \t]+/gm;
+const BOLD = /(\*\*|__)([^*_\n]+?)\1/g;
+const ITALIC = /(?<![*_\w])([*_])([^*_\n]+?)\1(?![*_\w])/g;
+
+const SENTENCE_BOUNDARY = /[.!?]+(?=\s|$)/g;
+const PARAGRAPH_BREAK = /\n{2,}/g;
+
+const DEFAULT_MAX_CHARS = 1500;
+
+export function normalizeForSpeech(text: string): string {
+  let s = text;
+  s = s.replace(IMAGE, '');
+  s = s.replace(FENCED_CODE, ' ');
+  s = s.replace(LINK, '$1');
+  s = s.replace(HORIZONTAL_RULE, '');
+  s = s.replace(BLOCKQUOTE, '');
+  s = s.replace(HEADING, '');
+  s = s.replace(LIST_BULLET, '');
+  s = s.replace(LIST_ORDERED, '');
+  s = s.replace(BOLD, '$2');
+  s = s.replace(ITALIC, '$2');
+  s = s.replace(INLINE_CODE, '$1');
+  s = s.replace(/\n{2,}/g, '. ');
+  s = s.replace(/\n/g, ' ');
+  s = s.replace(/[ \t]+/g, ' ');
+  s = s.replace(/\s+([.!?,;:])/g, '$1');
+  s = s.replace(/([.!?])\1{2,}/g, '$1');
+  return s.trim();
+}
+
+export interface ChunkResult {
+  ready: string[];
+  pending: string;
+}
+
+export interface ChunkOptions {
+  maxChars?: number;
+}
+
+/**
+ * Find the index of the last "safe" cut point in a streaming raw buffer.
+ * Returns the index *after* the last sentence terminator or paragraph break,
+ * or -1 if the buffer has no complete sentence yet.
+ */
+function findLastSafeBoundary(buffer: string): number {
+  let last = -1;
+  for (const m of buffer.matchAll(SENTENCE_BOUNDARY)) {
+    last = m.index + m[0].length;
+  }
+  for (const m of buffer.matchAll(PARAGRAPH_BREAK)) {
+    const end = m.index + m[0].length;
+    if (end > last) last = end;
+  }
+  return last;
+}
+
+function packSentences(text: string, maxChars: number): string[] {
+  const sentences: string[] = [];
+  const re = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const s = m[0].trim();
+    if (s) sentences.push(s);
+  }
+
+  const out: string[] = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (s.length > maxChars) {
+      if (cur) {
+        out.push(cur);
+        cur = '';
+      }
+      for (const sub of splitOversizedForTts(s, maxChars)) out.push(sub);
+      continue;
+    }
+    if (!cur) {
+      cur = s;
+      continue;
+    }
+    if (cur.length + 1 + s.length <= maxChars) {
+      cur += ' ' + s;
+    } else {
+      out.push(cur);
+      cur = s;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * Process a streaming raw buffer of assistant text. Returns chunks that are
+ * ready to be sent to TTS, plus the unfinished tail to keep buffered.
+ *
+ * The returned `pending` is RAW (unnormalized) so the caller can keep
+ * appending new stream tokens to it before re-processing.
+ */
+export function chunkStreamingForTts(
+  buffer: string,
+  opts: ChunkOptions = {}
+): ChunkResult {
+  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
+
+  if (!buffer) return { ready: [], pending: '' };
+
+  const cutPoint = findLastSafeBoundary(buffer);
+  if (cutPoint <= 0) {
+    return { ready: [], pending: buffer };
+  }
+
+  const completeRaw = buffer.slice(0, cutPoint);
+  const pending = buffer.slice(cutPoint).replace(/^\s+/, '');
+
+  const normalized = normalizeForSpeech(completeRaw);
+  if (!normalized) return { ready: [], pending };
+
+  const ready = packSentences(normalized, maxChars);
+  return { ready, pending };
+}
+
+/**
+ * Final-flush variant: normalize the whole buffer (including any unfinished
+ * tail) and return all packed chunks. Use this when the AI stream has ended
+ * and any remaining text must be spoken.
+ */
+export function flushForTts(
+  buffer: string,
+  opts: ChunkOptions = {}
+): string[] {
+  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
+  if (!buffer) return [];
+  const normalized = normalizeForSpeech(buffer);
+  if (!normalized) return [];
+  return packSentences(normalized, maxChars);
+}
+
+/**
+ * Split a single oversized chunk on word boundaries so each piece fits under
+ * the TTS API's character limit. Used as a final safety net inside `speak()`.
+ */
+export function splitOversizedForTts(text: string, maxChars: number): string[] {
+  const out: string[] = [];
+  let remaining = text.trim();
+  while (remaining.length > maxChars) {
+    let cut = remaining.lastIndexOf(' ', maxChars);
+    if (cut <= 0) cut = maxChars;
+    const piece = remaining.slice(0, cut).trim();
+    if (piece) out.push(piece);
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining) out.push(remaining);
+  return out;
+}

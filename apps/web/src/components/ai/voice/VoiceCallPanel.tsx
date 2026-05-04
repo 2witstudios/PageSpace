@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useVoiceMode } from '@/hooks/useVoiceMode';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
+import { chunkStreamingForTts, flushForTts } from '@/lib/voice/chunkForTts';
 import { VoiceModeSettings } from './VoiceModeSettings';
 
 export interface VoiceResponse {
@@ -54,7 +55,6 @@ export function VoiceCallPanel({
     disable,
     startListening,
     stopListening,
-    speak,
     queueSentence,
     bargeIn,
     interactionMode,
@@ -88,14 +88,9 @@ export function VoiceCallPanel({
     pendingTextRef.current += newChunk;
     streamingSpokenRef.current = streamingText.length;
 
-    const sentenceRe = /[^.!?\n]+[.!?\n]+(?=\s|$)/g;
-    let match: RegExpExecArray | null;
-    let lastIndex = 0;
-    while ((match = sentenceRe.exec(pendingTextRef.current)) !== null) {
-      queueSentence(match[0].trim());
-      lastIndex = sentenceRe.lastIndex;
-    }
-    pendingTextRef.current = pendingTextRef.current.slice(lastIndex);
+    const { ready, pending } = chunkStreamingForTts(pendingTextRef.current);
+    pendingTextRef.current = pending;
+    for (const chunk of ready) queueSentence(chunk);
   }, [streamingText, isAIStreaming, isOwnerActive, queueSentence]);
 
   // Reset streamed marker and pending buffer when a new stream begins
@@ -105,16 +100,14 @@ export function VoiceCallPanel({
     pendingTextRef.current = '';
   }, [isAIStreaming]);
 
-  // When stream ends, flush any buffered tail — skip if barge-in already started capture
+  // When stream ends, flush any buffered tail. queueSentence drops chunks
+  // when the user is mid-barge-in (listening/processing), so this is safe.
   useEffect(() => {
     if (isAIStreaming) return;
-    const tail = pendingTextRef.current.trim();
+    const tail = pendingTextRef.current;
     pendingTextRef.current = '';
-    if (!tail) return;
-    const { voiceState: liveState } = useVoiceModeStore.getState();
-    if (liveState !== 'listening' && liveState !== 'processing') {
-      queueSentence(tail);
-    }
+    if (!tail.trim()) return;
+    for (const chunk of flushForTts(tail)) queueSentence(chunk);
   }, [isAIStreaming, queueSentence]);
 
   // Fallback: speak full message when voice mode was activated after streaming ended
@@ -126,8 +119,17 @@ export function VoiceCallPanel({
     if (streamingSpokenRef.current > 0) return;
 
     spokenMessageIdsRef.current.add(latestAssistantMessage.id);
-    void speak(latestAssistantMessage.text);
-  }, [latestAssistantMessage, isAIStreaming, isOwnerActive, isListening, isProcessing, speak]);
+    for (const chunk of flushForTts(latestAssistantMessage.text)) {
+      queueSentence(chunk);
+    }
+  }, [
+    latestAssistantMessage,
+    isAIStreaming,
+    isOwnerActive,
+    isListening,
+    isProcessing,
+    queueSentence,
+  ]);
 
   const handleClose = useCallback(() => {
     disable();
