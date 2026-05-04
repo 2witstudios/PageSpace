@@ -16,6 +16,7 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
@@ -172,6 +173,18 @@ export async function POST(req: Request) {
 
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on passkey login', error as Error, { userId });
+      await sessionService.revokeAllUserSessions(userId, 'pending_invite_acceptance_failed');
+      return NextResponse.json(
+        { error: 'Server error' },
+        { status: 500 }
+      );
+    }
 
     // Reset rate limit on successful login
     await resetDistributedRateLimit(rateLimitKey);

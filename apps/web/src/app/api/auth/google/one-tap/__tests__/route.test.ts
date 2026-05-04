@@ -126,6 +126,10 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -138,6 +142,7 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const mockNewUser = {
   id: 'user-123',
@@ -747,6 +752,47 @@ describe('POST /api/auth/google/one-tap', () => {
       const meta = call?.[1] as Record<string, unknown>;
       expect(meta).not.toHaveProperty('name');
       expect(meta).toHaveProperty('userId');
+    });
+  });
+
+  describe('post-login pending invite acceptance', () => {
+    beforeEach(() => {
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    });
+
+    it('given a successful login, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      expect(acceptUserPendingInvitations).toHaveBeenCalledWith(mockExistingUser.id);
+      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
+      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
+      expect(acceptOrder).toBeGreaterThan(sessionOrder);
+    });
+
+    it('given the helper throws, revokes the just-created session and returns 500', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
+
+      const request = createOneTapRequest(validOneTapPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+        mockExistingUser.id,
+        'pending_invite_acceptance_failed'
+      );
+    });
+
+    it('given the helper resolves, the original response is unchanged', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
+        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
+      ]);
+
+      const request = createOneTapRequest(validOneTapPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
     });
   });
 });

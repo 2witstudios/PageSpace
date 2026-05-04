@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -74,6 +75,10 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 import { POST } from '../route';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -85,6 +90,7 @@ import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const validPayload = {
   email: 'user@example.com',
@@ -526,6 +532,57 @@ describe('POST /api/auth/signup-passkey', () => {
         new Error('Unexpected'),
         { email: 'us***@example.com', clientIP: '127.0.0.1' },
       );
+    });
+  });
+
+  describe('post-login pending invite acceptance', () => {
+    beforeEach(() => {
+      // Restore validateSession default — earlier tests in the file override it
+      // with mockResolvedValue(null) which clearAllMocks does not reset.
+      // @ts-expect-error - partial mock data
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'mock-session-id',
+        userId: 'new-user-1',
+        userRole: 'user',
+        tokenVersion: 0,
+        type: 'user',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
+    });
+
+    it('given a successful signup, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
+      await POST(createRequest());
+
+      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('new-user-1');
+      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
+      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
+      expect(acceptOrder).toBeGreaterThan(sessionOrder);
+    });
+
+    it('given the helper throws, revokes the just-created session and returns 500', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
+
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(500);
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+        'new-user-1',
+        'pending_invite_acceptance_failed'
+      );
+    });
+
+    it('given the helper resolves, redirect/response is unchanged', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
+        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
+      ]);
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
     });
   });
 });

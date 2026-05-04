@@ -296,6 +296,78 @@ export async function broadcastDriveMemberEvent(payload: DriveMemberEventPayload
 }
 
 /**
+ * Broadcasts a drive member event to a list of recipient users.
+ *
+ * Mirrors broadcastDriveEvent's fan-out pattern but for member-event payloads.
+ * Used by post-login pending acceptance so admins watching a drive's members
+ * page see the realtime promotion as the invitee accepts.
+ *
+ * Internal failures are logged and swallowed — broadcast is best-effort and
+ * must NEVER abort the calling operation (login, in particular).
+ */
+export async function broadcastDriveMemberEventToRecipients(
+  payload: DriveMemberEventPayload,
+  recipientUserIds: string[]
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping member event broadcast', {
+      event: 'drive_member',
+      operation: payload.operation,
+    });
+    return;
+  }
+
+  if (recipientUserIds.length === 0) {
+    realtimeLogger.debug('No recipients for drive member event broadcast', {
+      driveId: maskIdentifier(payload.driveId),
+      operation: payload.operation,
+    });
+    return;
+  }
+
+  try {
+    const results = await Promise.allSettled(
+      recipientUserIds.map((userId) => {
+        const requestBody = JSON.stringify({
+          channelId: `user:${userId}:drives`,
+          event: `drive:${payload.operation}`,
+          payload,
+        });
+        return fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+      })
+    );
+
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      realtimeLogger.warn('Some drive member event broadcasts failed', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        failedCount: failures.length,
+        totalCount: recipientUserIds.length,
+      });
+    } else if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Drive member event broadcasted to recipients', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        recipientCount: recipientUserIds.length,
+      });
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast drive member event to recipients',
+      error instanceof Error ? error : undefined,
+      { event: 'drive_member', operation: payload.operation }
+    );
+  }
+}
+
+/**
  * Helper to create a page event payload
  */
 export function createPageEventPayload(

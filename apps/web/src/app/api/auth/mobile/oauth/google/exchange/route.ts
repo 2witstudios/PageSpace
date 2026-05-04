@@ -66,6 +66,7 @@ import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -264,6 +265,15 @@ export async function POST(req: Request) {
         { error: 'Failed to generate session' },
         { status: 500 }
       );
+    }
+
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on mobile Google exchange', error as Error, { userId: user.id });
+      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      return Response.json({ error: 'Server error' }, { status: 500 });
     }
 
     // Create or validate device token for the mobile device

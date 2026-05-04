@@ -101,6 +101,10 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';

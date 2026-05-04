@@ -29,6 +29,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
+  isNull: vi.fn((field) => ({ kind: 'isNull', field })),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -36,7 +37,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  drives: { id: 'drives.id' },
+  drives: { id: 'drives.id', name: 'drives.name' },
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
 }));
 
@@ -56,7 +57,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 
 import { driveInviteRepository } from '../drive-invite-repository';
-import { isNotNull } from '@pagespace/db/operators';
+import { isNotNull, isNull } from '@pagespace/db/operators';
 
 const setupSelectLimit = (rows: unknown[]) => {
   const limit = vi.fn().mockResolvedValue(rows);
@@ -250,5 +251,86 @@ describe('driveInviteRepository.findUserEmail', () => {
 
     mockUsersFindFirst.mockResolvedValueOnce(undefined);
     expect(await driveInviteRepository.findUserEmail('missing')).toBeUndefined();
+  });
+});
+
+describe('driveInviteRepository.findPendingMembersForUser', () => {
+  const setupSelectJoinWhere = (rows: unknown[]) => {
+    const where = vi.fn().mockResolvedValue(rows);
+    const innerJoin = vi.fn().mockReturnValue({ where });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin });
+    return { innerJoin, where };
+  };
+
+  it('given a user with two pending rows across two drives, returns both with drive names joined in', async () => {
+    const rows = [
+      { id: 'mem_a', driveId: 'drive_a', role: 'MEMBER', driveName: 'Alpha' },
+      { id: 'mem_b', driveId: 'drive_b', role: 'ADMIN', driveName: 'Beta' },
+    ];
+    const { where } = setupSelectJoinWhere(rows);
+
+    const result = await driveInviteRepository.findPendingMembersForUser('user_1');
+
+    expect(result).toEqual(rows);
+    expect(isNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(args?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'driveMembers.userId', value: 'user_1' }),
+        expect.objectContaining({ kind: 'isNull', field: 'driveMembers.acceptedAt' }),
+      ])
+    );
+  });
+
+  it('given a user with no pending rows, returns an empty array', async () => {
+    setupSelectJoinWhere([]);
+    expect(await driveInviteRepository.findPendingMembersForUser('user_1')).toEqual([]);
+  });
+
+  it('given a user with both pending and accepted rows, the isNull(acceptedAt) clause filters to only pending', async () => {
+    const pendingOnly = [{ id: 'mem_p', driveId: 'drive_p', role: 'MEMBER', driveName: 'Pending' }];
+    const { where } = setupSelectJoinWhere(pendingOnly);
+
+    const result = await driveInviteRepository.findPendingMembersForUser('user_1');
+
+    expect(result).toEqual(pendingOnly);
+    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    const hasIsNull = (args?.conditions ?? []).some(
+      (c) => (c as { kind?: string }).kind === 'isNull'
+    );
+    expect(hasIsNull).toBe(true);
+  });
+});
+
+describe('driveInviteRepository.acceptPendingMember', () => {
+  const setupConditionalUpdate = (returnRows: { id: string }[]) => {
+    const returning = vi.fn().mockResolvedValue(returnRows);
+    const where = vi.fn().mockReturnValue({ returning });
+    const set = vi.fn().mockReturnValue({ where });
+    mockUpdateChain.set = set;
+    return { set, where, returning };
+  };
+
+  it('given a member id where acceptedAt IS NULL, sets acceptedAt and returns true', async () => {
+    const { set, where } = setupConditionalUpdate([{ id: 'mem_1' }]);
+
+    const result = await driveInviteRepository.acceptPendingMember('mem_1');
+
+    expect(result).toBe(true);
+    const setArg = set.mock.calls[0]?.[0] as { acceptedAt?: Date };
+    expect(setArg?.acceptedAt).toBeInstanceOf(Date);
+    expect(isNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+    const whereArg = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(whereArg?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'driveMembers.id', value: 'mem_1' }),
+        expect.objectContaining({ kind: 'isNull', field: 'driveMembers.acceptedAt' }),
+      ])
+    );
+  });
+
+  it('given a concurrent acceptance has already set acceptedAt, the conditional UPDATE matches zero rows and returns false', async () => {
+    setupConditionalUpdate([]);
+    expect(await driveInviteRepository.acceptPendingMember('mem_already_accepted')).toBe(false);
   });
 });

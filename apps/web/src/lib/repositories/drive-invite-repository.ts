@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -142,6 +142,38 @@ export const driveInviteRepository = {
       columns: { email: true },
     });
     return user?.email;
+  },
+
+  async findPendingMembersForUser(userId: string) {
+    return db
+      .select({
+        id: driveMembers.id,
+        driveId: driveMembers.driveId,
+        role: driveMembers.role,
+        driveName: drives.name,
+      })
+      .from(driveMembers)
+      .innerJoin(drives, eq(drives.id, driveMembers.driveId))
+      .where(
+        and(
+          eq(driveMembers.userId, userId),
+          isNull(driveMembers.acceptedAt)
+        )
+      );
+  },
+
+  async acceptPendingMember(memberId: string): Promise<boolean> {
+    const updated = await db
+      .update(driveMembers)
+      .set({ acceptedAt: new Date() })
+      .where(
+        and(
+          eq(driveMembers.id, memberId),
+          isNull(driveMembers.acceptedAt)
+        )
+      )
+      .returning({ id: driveMembers.id });
+    return updated.length > 0;
   },
 };
 
