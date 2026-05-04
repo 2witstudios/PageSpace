@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -21,6 +21,10 @@ export const driveInviteRepository = {
   },
 
   async findAdminMembership(driveId: string, userId: string) {
+    // Match the acceptedAt-IS-NOT-NULL gate used by checkDriveAccess so a
+    // pending invitee with role 'ADMIN' cannot exercise admin powers (sending
+    // further invites, resending invites) before they themselves complete the
+    // invitation acceptance flow.
     const results = await db
       .select()
       .from(driveMembers)
@@ -28,7 +32,8 @@ export const driveInviteRepository = {
         and(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         )
       )
       .limit(1);
@@ -55,7 +60,7 @@ export const driveInviteRepository = {
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
     customRoleId: string | null;
     invitedBy: string;
-    acceptedAt: Date;
+    acceptedAt: Date | null;
   }) {
     const results = await db
       .insert(driveMembers)

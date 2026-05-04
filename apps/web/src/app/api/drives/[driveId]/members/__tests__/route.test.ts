@@ -1,29 +1,44 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/members
 //
-// These tests mock at the SERVICE SEAM level (checkDriveAccess, listDriveMembers,
-// isMemberOfDrive, addDriveMember), NOT at the ORM/query-builder level.
+// POST mocks the driveInviteRepository seam (rubric §4) — no ORM chain mocks.
+// GET still mocks the read services (checkDriveAccess, listDriveMembers); the
+// GET handler is out of scope for the Epic 2 refactor, so its existing seams
+// are preserved.
 // ============================================================================
 
-// Mock at the service seam - this is the ONLY place we mock DB-related logic
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findDriveById: vi.fn(),
+    findAdminMembership: vi.fn(),
+    findExistingMember: vi.fn(),
+    createDriveMember: vi.fn(),
+    updateDriveMemberRole: vi.fn(),
+    getValidPageIds: vi.fn(),
+    findPagePermission: vi.fn(),
+    createPagePermission: vi.fn(),
+    updatePagePermission: vi.fn(),
+    findUserEmail: vi.fn(),
+  },
+}));
+
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
-    checkDriveAccess: vi.fn(),
-    listDriveMembers: vi.fn(),
-    isMemberOfDrive: vi.fn(),
-    addDriveMember: vi.fn(),
+  checkDriveAccess: vi.fn(),
+  listDriveMembers: vi.fn(),
 }));
+
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
@@ -31,7 +46,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       debug: vi.fn(),
     },
   },
-
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
@@ -40,9 +54,18 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { checkDriveAccess, listDriveMembers, isMemberOfDrive, addDriveMember } from '@pagespace/lib/services/drive-member-service'
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ userId: 'user_123', email: 'user@example.com' }),
+  logMemberActivity: vi.fn(),
+}));
+
+import { GET, POST } from '../route';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // ============================================================================
 // Test Fixtures
@@ -113,6 +136,24 @@ const createMemberFixture = (overrides: {
     edit: 0,
     share: 0,
   },
+});
+
+const createInsertedMember = (overrides: {
+  id?: string;
+  driveId: string;
+  userId: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  invitedBy: string;
+}) => ({
+  id: overrides.id ?? 'mem_new',
+  driveId: overrides.driveId,
+  userId: overrides.userId,
+  role: overrides.role,
+  customRoleId: null,
+  invitedBy: overrides.invitedBy,
+  invitedAt: new Date('2024-01-01'),
+  acceptedAt: new Date('2024-01-01'),
+  lastAccessedAt: null,
 });
 
 const createContext = (driveId: string) => ({
@@ -295,7 +336,6 @@ describe('GET /api/drives/[driveId]/members', () => {
       expect(response.status).toBe(200);
       expect(body.members).toHaveLength(2);
 
-      // Verify member structure
       expect(body.members[0]).toMatchObject({
         id: 'mem_1',
         userId: 'user_456',
@@ -353,7 +393,7 @@ describe('GET /api/drives/[driveId]/members', () => {
 });
 
 // ============================================================================
-// POST /api/drives/[driveId]/members - Contract Tests
+// POST /api/drives/[driveId]/members - Contract Tests (seam-mocked)
 // ============================================================================
 
 describe('POST /api/drives/[driveId]/members', () => {
@@ -361,10 +401,35 @@ describe('POST /api/drives/[driveId]/members', () => {
   const mockDriveId = 'drive_abc';
   const mockInvitedUserId = 'user_456';
 
+  const arrangeOwnerCreate = (role: 'ADMIN' | 'MEMBER' = 'MEMBER', driveName = 'Test') => {
+    vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(
+      createDriveFixture({ id: mockDriveId, name: driveName, ownerId: mockUserId })
+    );
+    vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null);
+    const inserted = createInsertedMember({
+      driveId: mockDriveId,
+      userId: mockInvitedUserId,
+      role,
+      invitedBy: mockUserId,
+    });
+    vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue(inserted);
+    return inserted;
+  };
+
+  const buildPost = (body: Record<string, unknown> = { userId: mockInvitedUserId }) =>
+    new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(getActorInfo).mockResolvedValue({
+      actorEmail: 'user@example.com',
+      actorDisplayName: 'User 123',
+    });
   });
 
   describe('authentication', () => {
@@ -372,37 +437,15 @@ describe('POST /api/drives/[driveId]/members', () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
 
       expect(response.status).toBe(401);
     });
 
     it('should require CSRF for write operations', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
+      arrangeOwnerCreate();
+      const request = buildPost();
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
       await POST(request, createContext(mockDriveId));
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
@@ -414,235 +457,158 @@ describe('POST /api/drives/[driveId]/members', () => {
 
   describe('authorization', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null);
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Drive not found');
     });
 
-    it('should return 403 when user is not drive owner', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: false,
-        isAdmin: true, // Admin cannot add members
-        isMember: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'other_user' }),
-      }));
+    it('should return 403 when caller is not the drive owner', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'other_user' })
+      );
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Only drive owner can add members');
+      expect(driveInviteRepository.findExistingMember).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
   });
 
   describe('validation', () => {
-    it('should reject when user is already a member', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(true);
+    it('should reject when target is already a drive member', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(
+        createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId })
+      );
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(
+        createInsertedMember({
+          id: 'mem_existing',
+          driveId: mockDriveId,
+          userId: mockInvitedUserId,
+          role: 'MEMBER',
+          invitedBy: mockUserId,
+        })
+      );
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('User is already a member');
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
   });
 
-  describe('service integration', () => {
-    it('should call checkDriveAccess with driveId and userId', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
+  describe('seam integration', () => {
+    it('should look up drive and existing membership through the seam', async () => {
+      arrangeOwnerCreate();
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      await POST(request, createContext(mockDriveId));
+      await POST(buildPost(), createContext(mockDriveId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(driveInviteRepository.findDriveById).toHaveBeenCalledWith(mockDriveId);
+      expect(driveInviteRepository.findExistingMember).toHaveBeenCalledWith(
+        mockDriveId,
+        mockInvitedUserId
+      );
     });
 
-    it('should call isMemberOfDrive with driveId and invitedUserId', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
+    it('should call createDriveMember with auto-accepted MEMBER row by default', async () => {
+      arrangeOwnerCreate();
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      await POST(request, createContext(mockDriveId));
+      await POST(buildPost(), createContext(mockDriveId));
 
-      expect(isMemberOfDrive).toHaveBeenCalledWith(mockDriveId, mockInvitedUserId);
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          userId: mockInvitedUserId,
+          role: 'MEMBER',
+          customRoleId: null,
+          invitedBy: mockUserId,
+          acceptedAt: expect.any(Date),
+        })
+      );
     });
 
-    it('should call addDriveMember with correct parameters', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'ADMIN',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
+    it('should call createDriveMember with ADMIN role when requested', async () => {
+      arrangeOwnerCreate('ADMIN');
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId, role: 'ADMIN' }),
-      });
+      await POST(buildPost({ userId: mockInvitedUserId, role: 'ADMIN' }), createContext(mockDriveId));
+
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'ADMIN' })
+      );
+    });
+  });
+
+  describe('side effects', () => {
+    it('should record member_add activity log entry with drive name and target', async () => {
+      arrangeOwnerCreate('MEMBER', 'Test Drive');
+
+      await POST(buildPost(), createContext(mockDriveId));
+
+      expect(logMemberActivity).toHaveBeenCalledWith(
+        mockUserId,
+        'member_add',
+        expect.objectContaining({
+          driveId: mockDriveId,
+          driveName: 'Test Drive',
+          targetUserId: mockInvitedUserId,
+          role: 'MEMBER',
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should emit authz.permission.granted audit event', async () => {
+      arrangeOwnerCreate();
+      const request = buildPost();
+
       await POST(request, createContext(mockDriveId));
 
-      expect(addDriveMember).toHaveBeenCalledWith(mockDriveId, mockUserId, {
-        userId: mockInvitedUserId,
-        role: 'ADMIN',
-      });
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'authz.permission.granted',
+          userId: mockUserId,
+          resourceType: 'drive',
+          resourceId: mockDriveId,
+          details: expect.objectContaining({
+            targetUserId: mockInvitedUserId,
+            role: 'MEMBER',
+          }),
+        })
+      );
     });
   });
 
   describe('response contract', () => {
-    it('should return 200 with member on successful creation', async () => {
-      const newMember = {
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER' as const,
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      };
+    it('should return 200 with the created member envelope', async () => {
+      arrangeOwnerCreate();
 
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue(newMember);
-
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.member).toMatchObject({
-        id: 'mem_new',
         userId: mockInvitedUserId,
         role: 'MEMBER',
         invitedBy: mockUserId,
       });
     });
 
-    it('should add member with default MEMBER role', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
+    it('should echo ADMIN role in response when requested', async () => {
+      arrangeOwnerCreate('ADMIN');
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      await POST(request, createContext(mockDriveId));
-
-      expect(addDriveMember).toHaveBeenCalledWith(mockDriveId, mockUserId, {
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-      });
-    });
-
-    it('should add member with specified ADMIN role', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockResolvedValue({
-        id: 'mem_new',
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'ADMIN',
-        customRoleId: null,
-        invitedBy: mockUserId,
-        invitedAt: new Date(),
-        acceptedAt: new Date(),
-        lastAccessedAt: null,
-      });
-
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId, role: 'ADMIN' }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(
+        buildPost({ userId: mockInvitedUserId, role: 'ADMIN' }),
+        createContext(mockDriveId)
+      );
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -651,40 +617,16 @@ describe('POST /api/drives/[driveId]/members', () => {
   });
 
   describe('error handling', () => {
-    it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockRejectedValueOnce(new Error('Insert failed'));
+    it('should return 500 and log when the seam throws', async () => {
+      const error = new Error('Insert failed');
+      arrangeOwnerCreate();
+      vi.mocked(driveInviteRepository.createDriveMember).mockRejectedValueOnce(error);
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      const response = await POST(request, createContext(mockDriveId));
+      const response = await POST(buildPost(), createContext(mockDriveId));
       const body = await response.json();
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to add member');
-    });
-
-    it('should log error when service throws', async () => {
-      const error = new Error('Service failure');
-      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
-        isOwner: true,
-        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
-      }));
-      vi.mocked(isMemberOfDrive).mockResolvedValue(false);
-      vi.mocked(addDriveMember).mockRejectedValueOnce(error);
-
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userId: mockInvitedUserId }),
-      });
-      await POST(request, createContext(mockDriveId));
-
       expect(loggers.api.error).toHaveBeenCalledWith('Error adding drive member:', error);
     });
   });
