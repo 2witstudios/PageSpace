@@ -49,7 +49,7 @@ interface Message {
   attachmentMeta?: AttachmentMeta | null;
 }
 
-interface Conversation {
+interface DmConversation {
   id: string;
   participant1Id: string;
   participant2Id: string;
@@ -98,7 +98,7 @@ export default function InboxDMPage() {
   const socket = useSocket();
 
   // Fetch conversation details (single conversation, not the full list)
-  const { data: conversationData } = useSWR<{ conversation: Conversation }>(
+  const { data: conversationData } = useSWR<{ conversation: DmConversation }>(
     conversationId ? `/api/messages/conversations/${conversationId}` : null,
     fetcher
   );

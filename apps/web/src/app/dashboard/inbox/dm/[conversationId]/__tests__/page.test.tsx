@@ -76,6 +76,13 @@ vi.mock('swr', () => ({
   },
 }));
 
+// Conversation primitives — bypass use-stick-to-bottom (needs ResizeObserver, missing in jsdom)
+vi.mock('@/components/ai/ui/conversation', () => ({
+  Conversation: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ConversationContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ConversationScrollButton: () => null,
+}));
+
 // MessagePartRenderer — render content as plain text for assertions
 vi.mock('@/components/messages/MessagePartRenderer', () => ({
   renderMessageParts: (parts: Array<{ text?: string }>) =>
