@@ -290,7 +290,9 @@ export async function sendPendingDriveInvitationEmail(
       }),
     });
   } catch (error) {
-    console.error('Failed to send pending drive invitation email:', error);
+    const message = error instanceof Error ? error.message : 'unknown error';
+    const safeMessage = message.replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
+    console.error('Failed to send pending drive invitation email: %s', safeMessage);
   }
 }
 

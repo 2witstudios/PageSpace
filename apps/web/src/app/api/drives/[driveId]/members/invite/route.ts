@@ -87,21 +87,25 @@ export async function POST(
     if (bodyEmail && !bodyUserId) {
       normalizedEmail = bodyEmail.toLowerCase().trim();
 
+      // Reject re-invites of an email that already has a pending row in this drive,
+      // regardless of whether the email currently maps to an existing user (e.g. a
+      // temp user created by a prior invitation). The lookup joins users → members
+      // by email, so it catches both the no-user-yet and pending-temp-user cases.
+      const pending = await driveInviteRepository.findActivePendingMemberByEmail(
+        driveId,
+        normalizedEmail
+      );
+      if (pending) {
+        return NextResponse.json(
+          { error: 'An invitation is already pending for this email', existingMemberId: pending.id },
+          { status: 409 }
+        );
+      }
+
       const existingUser = await driveInviteRepository.findUserIdByEmail(normalizedEmail);
       if (existingUser) {
         invitedUserId = existingUser.id;
       } else {
-        const pending = await driveInviteRepository.findActivePendingMemberByEmail(
-          driveId,
-          normalizedEmail
-        );
-        if (pending) {
-          return NextResponse.json(
-            { error: 'An invitation is already pending for this email', existingMemberId: pending.id },
-            { status: 409 }
-          );
-        }
-
         const rateLimit = await checkDistributedRateLimit(
           `drive_invite:email:${normalizedEmail}`,
           DISTRIBUTED_RATE_LIMITS.MAGIC_LINK

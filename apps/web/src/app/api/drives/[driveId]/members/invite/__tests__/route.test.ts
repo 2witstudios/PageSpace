@@ -807,6 +807,28 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(emailCall.magicLinkUrl).toContain(`inviteDriveId=${mockDriveId}`);
     });
 
+    it('given an active pending row already exists for the email and the email maps to an existing temp user, still responds 409 (regression: re-invite bypass)', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'user_temp_from_prior_invite',
+      } as never);
+      vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue({
+        id: 'mem_pending_existing',
+      } as never);
+
+      const response = await POST(
+        createInviteRequest(mockDriveId, emailBody),
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.existingMemberId).toBe('mem_pending_existing');
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
     it('given an active pending row already exists for the email, responds 409 with the existing member id', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
       vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue({
