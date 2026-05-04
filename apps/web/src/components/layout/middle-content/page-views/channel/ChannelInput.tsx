@@ -218,7 +218,6 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
           type="file"
           className="hidden"
           onChange={handleFileSelect}
-          accept="image/*,.pdf,.doc,.docx,.txt,.md"
         />
 
         <InputCard

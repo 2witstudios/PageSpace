@@ -370,6 +370,14 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(mockUploadFile).toHaveBeenCalledWith(file);
   });
 
+  it('filePicker_hasNoAcceptRestriction_allowsAnyFileType', () => {
+    const { container } = renderInput();
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).toBeTruthy();
+    expect(fileInput.getAttribute('accept')).toBeNull();
+  });
+
   it('attachmentsDisabled_doesNotShowPicker_andIgnoresPaste', () => {
     renderInput({ attachmentsEnabled: false });
 
