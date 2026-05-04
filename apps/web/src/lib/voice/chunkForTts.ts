@@ -61,17 +61,13 @@ export interface ChunkOptions {
  */
 function findLastSafeBoundary(buffer: string): number {
   let last = -1;
-
-  SENTENCE_BOUNDARY.lastIndex = 0;
-  while (SENTENCE_BOUNDARY.exec(buffer) !== null) {
-    last = SENTENCE_BOUNDARY.lastIndex;
+  for (const m of buffer.matchAll(SENTENCE_BOUNDARY)) {
+    last = m.index + m[0].length;
   }
-
-  PARAGRAPH_BREAK.lastIndex = 0;
-  while (PARAGRAPH_BREAK.exec(buffer) !== null) {
-    if (PARAGRAPH_BREAK.lastIndex > last) last = PARAGRAPH_BREAK.lastIndex;
+  for (const m of buffer.matchAll(PARAGRAPH_BREAK)) {
+    const end = m.index + m[0].length;
+    if (end > last) last = end;
   }
-
   return last;
 }
 
