@@ -14,7 +14,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
+import { acceptUserPendingInvitations, type AcceptedInvitation } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -115,7 +115,7 @@ export async function GET(req: Request) {
     // Accept any pending drive invitations now that the session is live. Genuine
     // failures (acceptance write) revoke the session — the user shouldn't reach
     // a half-state where they're authenticated but invisible to authz queries.
-    let acceptedInvitations: { driveId: string; driveName: string; role: string }[];
+    let acceptedInvitations: AcceptedInvitation[];
     try {
       acceptedInvitations = await acceptUserPendingInvitations(userId);
     } catch (error) {
