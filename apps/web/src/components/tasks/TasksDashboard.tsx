@@ -326,6 +326,13 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       setSelectedDriveId(driveId);
       const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKeyFor('drive', driveId)];
       const updatedFilters = fromStoredOrDefaults(stored);
+      // Cancel any in-flight debounced search and sync the input to the restored filter
+      // so the search box doesn't display the previous drive's text.
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+        searchTimeoutRef.current = null;
+      }
+      setSearchValue(updatedFilters.search || '');
       setFilters(updatedFilters);
       updateUrl(updatedFilters, driveId);
     } else {
