@@ -120,7 +120,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { broadcastDriveMemberEvent, broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
+import { broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
 
 const createVerifyRequest = (token?: string, inviteDriveId?: string) => {
   const params = new URLSearchParams();
