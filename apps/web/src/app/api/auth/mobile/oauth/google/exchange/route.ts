@@ -66,6 +66,7 @@ import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -306,6 +307,15 @@ export async function POST(req: Request) {
 
     // Generate CSRF token using session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on mobile Google OAuth', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return Response.json({ error: 'Server error' }, { status: 500 });
+    }
+
     auditRequest(req, {
       eventType: 'auth.login.success',
       userId: user.id,

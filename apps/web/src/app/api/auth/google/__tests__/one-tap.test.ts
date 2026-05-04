@@ -15,6 +15,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../one-tap/route';
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
     verifyIdToken: vi.fn().mockResolvedValue({

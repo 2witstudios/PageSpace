@@ -13,6 +13,7 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -199,6 +200,14 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on Google native sign-in', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return Response.json({ error: 'Server error' }, { status: 500 });
+    }
 
     // Create device token
     const { deviceToken } = await validateOrCreateDeviceToken({

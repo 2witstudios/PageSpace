@@ -8,6 +8,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifySignupRegistration: vi.fn(),
 }));
