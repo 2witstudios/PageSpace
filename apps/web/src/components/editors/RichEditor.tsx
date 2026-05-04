@@ -15,6 +15,7 @@ import { PaginationPlus } from '@/lib/editor/pagination';
 import { CodeBlockShiki } from '@/lib/editor/code-block';
 import { FontFormatting } from '@/lib/editor/font-formatting';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
+import LinkButton from './LinkButton';
 
 interface RichEditorProps {
   value: string;
@@ -71,6 +72,9 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         },
         link: {
           openOnClick: true,
+          autolink: true,
+          linkOnPaste: true,
+          defaultProtocol: 'https',
         },
         codeBlock: false,
       }),
@@ -274,6 +278,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
           <button onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
           <button onClick={() => editor.chain().focus().toggleCode().run()} className={`p-2 rounded ${editor.isActive('code') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Code size={16} /></button>
+          <LinkButton editor={editor} variant="bubble" />
           <div className="w-[1px] h-6 bg-muted-foreground/50 mx-2" />
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /></button>
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /></button>
