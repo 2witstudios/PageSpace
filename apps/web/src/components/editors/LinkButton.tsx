@@ -12,9 +12,12 @@ interface LinkButtonProps {
   variant?: 'toolbar' | 'bubble';
 }
 
+const DANGEROUS_PROTOCOL = /^\s*(javascript|data|vbscript):/i;
+
 const normalizeUrl = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) return '';
+  if (DANGEROUS_PROTOCOL.test(trimmed)) return '';
   if (/^(https?:\/\/|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 };
@@ -22,6 +25,7 @@ const normalizeUrl = (raw: string): string => {
 const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   const [open, setOpen] = React.useState(false);
   const [value, setValue] = React.useState('');
+  const inputId = React.useId();
 
   const isActive = editor.isActive('link');
 
@@ -35,6 +39,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
 
   const apply = () => {
     const href = normalizeUrl(value);
+    const existingAttrs = editor.getAttributes('link');
     const chain = editor.chain().focus().extendMarkRange('link');
     if (!href) {
       chain.unsetLink().run();
@@ -49,7 +54,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
           })
           .run();
       } else {
-        chain.setLink({ href }).run();
+        chain.setLink({ ...existingAttrs, href }).run();
       }
     }
     setOpen(false);
@@ -87,25 +92,17 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
           <LinkIcon size={16} />
         </button>
       </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-80 p-3"
-        onOpenAutoFocus={(e) => {
-          // Let our autoFocus on the input handle focus instead of Radix's default.
-          e.preventDefault();
-        }}
-      >
+      <PopoverContent align="start" className="w-80 p-3">
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="link-url-input">
+          <label className="text-xs font-medium text-muted-foreground" htmlFor={inputId}>
             URL
           </label>
           <Input
-            id="link-url-input"
+            id={inputId}
             type="url"
             inputMode="url"
             placeholder="https://example.com"
             value={value}
-            autoFocus
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
           />
