@@ -91,6 +91,7 @@ import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import {
   upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
+  validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
 const USER_ID = 'user_creator';
@@ -224,6 +225,27 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     }), ctx());
 
     expect(res.status).toBe(400);
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 cleanly when validation throws — without opening the event update tx', async () => {
+    // Re-prime findFirst since the prior tests may have consumed the queue.
+    (db.query.calendarEvents.findFirst as Mock).mockReset();
+    (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(baseEvent);
+
+    (validateCalendarAgentTrigger as Mock).mockRejectedValueOnce(
+      new Error('Agent must be in the same drive as the event'),
+    );
+
+    const res = await PATCH(makeRequest({
+      title: 'Renamed',
+      agentTrigger: { agentPageId: 'wrong-drive-agent', prompt: 'p' },
+    }), ctx());
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/same drive/i);
+    // The event update tx must not have run — partial-write protection.
+    expect(db.transaction).not.toHaveBeenCalled();
     expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
   });
 
