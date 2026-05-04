@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccess, listDriveMembers, isMemberOfDrive, addDriveMember } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -60,35 +61,35 @@ export async function POST(
     const body = await request.json();
     const { userId: invitedUserId, role = 'MEMBER' } = body;
 
-    // Check if user is drive owner
-    const access = await checkDriveAccess(driveId, userId);
+    const drive = await driveInviteRepository.findDriveById(driveId);
 
-    if (!access.drive) {
+    if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    if (!access.isOwner) {
+    if (drive.ownerId !== userId) {
       return NextResponse.json({ error: 'Only drive owner can add members' }, { status: 403 });
     }
 
-    // Check if member already exists
-    const alreadyMember = await isMemberOfDrive(driveId, invitedUserId);
+    const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
 
-    if (alreadyMember) {
+    if (existingMember) {
       return NextResponse.json({ error: 'User is already a member' }, { status: 400 });
     }
 
-    // Add member
-    const newMember = await addDriveMember(driveId, userId, {
+    const newMember = await driveInviteRepository.createDriveMember({
+      driveId,
       userId: invitedUserId,
       role: role as 'ADMIN' | 'MEMBER',
+      customRoleId: null,
+      invitedBy: userId,
+      acceptedAt: new Date(),
     });
 
-    // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
     logMemberActivity(userId, 'member_add', {
       driveId,
-      driveName: access.drive.name,
+      driveName: drive.name,
       targetUserId: invitedUserId,
       role: role as string,
     }, actorInfo);
