@@ -134,7 +134,12 @@ export async function POST(
       }
 
       const existingUser = await driveInviteRepository.findUserIdByEmail(normalizedEmail);
-      if (existingUser) {
+      // Treat an unverified-email row as a temp account (magic-link service created
+      // it on a prior invite that was later revoked or never clicked). Re-routing
+      // through the invitation flow keeps the row pending and sends a fresh magic
+      // link rather than silently auto-accepting a never-confirmed account.
+      const isTempUser = existingUser !== null && existingUser.emailVerified === null;
+      if (existingUser && !isTempUser) {
         invitedUserId = existingUser.id;
       } else {
         // Two complementary rate-limits guard the invitation email side-channel:

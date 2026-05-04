@@ -791,9 +791,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       ],
     };
 
-    it('given an email that maps to an existing user, falls through to add path with kind: added', async () => {
+    it('given an email that maps to an existing verified user, falls through to add path with kind: added', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'user_existing_42',
+        emailVerified: new Date(),
       } as never);
 
       const response = await POST(
@@ -859,6 +860,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     it('given an active pending row already exists for the email and the email maps to an existing temp user, still responds 409 (regression: re-invite bypass)', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'user_temp_from_prior_invite',
+        emailVerified: null,
       } as never);
       vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue({
         id: 'mem_pending_existing',
@@ -876,6 +878,27 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
       expect(createMagicLinkToken).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('given an email maps to an unverified temp user with no active pending row (prior invite revoked), routes through invitation flow with kind: invited', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'user_temp_orphan',
+        emailVerified: null,
+      } as never);
+      vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue(null as never);
+
+      const response = await POST(
+        createInviteRequest(mockDriveId, emailBody),
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.kind).toBe('invited');
+      expect(createMagicLinkToken).toHaveBeenCalledWith(expect.objectContaining({ email: 'newcomer@example.com' }));
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalledTimes(1);
+      const createCall = vi.mocked(driveInviteRepository.createDriveMember).mock.calls[0][0];
+      expect(createCall.acceptedAt).toBeNull();
     });
 
     it('given an active pending row already exists for the email, responds 409 with the existing member id', async () => {

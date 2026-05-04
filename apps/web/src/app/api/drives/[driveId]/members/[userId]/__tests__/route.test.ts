@@ -550,6 +550,27 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       expect(body.error).toBe('Invalid role');
     });
 
+    it('should accept role-only updates without a permissions array', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER' });
+      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: 'ADMIN' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      expect(updateMemberRole).toHaveBeenCalledWith(mockDriveId, mockTargetUserId, 'ADMIN', undefined);
+    });
+
     it('should accept ADMIN role', async () => {
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true,

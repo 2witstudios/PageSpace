@@ -90,11 +90,20 @@ export async function PATCH(
     const { driveId, userId } = await context.params;
 
     const body = await request.json();
-    const { role, customRoleId, permissions } = body;
+    const { role, customRoleId, permissions: rawPermissions } = body;
 
-    if (!permissions || !Array.isArray(permissions)) {
+    // Reject malformed payloads: a non-array `permissions` is invalid even when
+    // role/customRole are also being changed.
+    if (rawPermissions !== undefined && !Array.isArray(rawPermissions)) {
       return NextResponse.json({ error: 'Invalid permissions data' }, { status: 400 });
     }
+    // Require at least one updatable field so a totally empty PATCH still 400s
+    // rather than silently no-op'ing.
+    if (rawPermissions === undefined && role === undefined && customRoleId === undefined) {
+      return NextResponse.json({ error: 'Invalid permissions data' }, { status: 400 });
+    }
+    const permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }> =
+      Array.isArray(rawPermissions) ? rawPermissions : [];
 
     if (role && !['MEMBER', 'ADMIN'].includes(role)) {
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
