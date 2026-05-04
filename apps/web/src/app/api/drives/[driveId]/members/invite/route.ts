@@ -5,7 +5,8 @@ import { createDriveNotification } from '@pagespace/lib/notifications/notificati
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
@@ -201,12 +202,15 @@ export async function POST(
     }
 
     if (membershipAccepted) {
-      // Broadcast member added/updated event to the affected user
-      await broadcastDriveMemberEvent(
+      // Fan out to drive recipients (owner + accepted members) plus the invitee
+      // so admins watching the members page see the new join in real time.
+      const driveRecipients = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
         createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
           role,
           driveName: drive.name
-        })
+        }),
+        driveRecipients
       );
     }
 

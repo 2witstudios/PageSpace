@@ -37,6 +37,10 @@ vi.mock('@pagespace/lib/services/notification-email-service', () => ({
   sendPendingDriveInvitationEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 2 }),
   DISTRIBUTED_RATE_LIMITS: {
@@ -70,6 +74,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn(
     (driveId: string, userId: string, operation: string, data: unknown) => ({
       driveId,
@@ -97,7 +102,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { broadcastDriveMemberEvent, broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
@@ -593,7 +598,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         'member_added',
         { role: 'MEMBER', driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
     });
 
     it('should send notification to invited user', async () => {
@@ -732,6 +737,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
       expect(driveInviteRepository.createPagePermission).not.toHaveBeenCalled();
       expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
   });
 
@@ -808,6 +814,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       // Pending invites must not be broadcast as member_added — the user hasn't joined yet.
       expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
 
     it('given an active pending row already exists for the email and the email maps to an existing temp user, still responds 409 (regression: re-invite bypass)', async () => {

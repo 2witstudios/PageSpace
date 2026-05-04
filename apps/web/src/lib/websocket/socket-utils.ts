@@ -250,6 +250,63 @@ export async function broadcastDriveEvent(
  * Sent to user-specific channel so only affected user receives it
  * @param payload - The event payload to broadcast
  */
+/**
+ * Fan out a drive-member event to a set of recipient user channels so admins
+ * watching the members page see realtime updates for someone else's join /
+ * role change / removal — not just the affected user themselves.
+ */
+export async function broadcastDriveMemberEventToRecipients(
+  payload: DriveMemberEventPayload,
+  recipientUserIds: string[]
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping drive member fan-out', {
+      event: 'drive_member_fanout',
+      driveId: maskIdentifier(payload.driveId),
+    });
+    return;
+  }
+
+  // Always include the affected user so they receive the event in their own session.
+  const uniqueRecipients = Array.from(new Set([payload.userId, ...recipientUserIds]));
+  if (uniqueRecipients.length === 0) return;
+
+  try {
+    const results = await Promise.allSettled(
+      uniqueRecipients.map((userId) => {
+        const requestBody = JSON.stringify({
+          channelId: `user:${userId}:drives`,
+          event: `drive:${payload.operation}`,
+          payload,
+        });
+        return fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+          signal: AbortSignal.timeout(5000),
+        });
+      })
+    );
+
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      realtimeLogger.warn('Some drive member fan-out broadcasts failed', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        failedCount: failures.length,
+        totalCount: uniqueRecipients.length,
+      });
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to fan out drive member event',
+      error instanceof Error ? error : undefined,
+      { operation: payload.operation, driveId: maskIdentifier(payload.driveId) }
+    );
+  }
+}
+
 export async function broadcastDriveMemberEvent(payload: DriveMemberEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');

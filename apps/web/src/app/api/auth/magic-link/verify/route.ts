@@ -15,7 +15,8 @@ import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -122,11 +123,15 @@ export async function GET(req: Request) {
       for (const row of pending) {
         const accepted = await driveInviteRepository.acceptPendingMember(row.id);
         if (!accepted) continue;
-        await broadcastDriveMemberEvent(
+        // Fan out to all drive members so admins watching the members page
+        // see the pending row promote in real time, not just the new joiner.
+        const driveRecipients = await getDriveRecipientUserIds(row.driveId);
+        await broadcastDriveMemberEventToRecipients(
           createDriveMemberEventPayload(row.driveId, userId, 'member_added', {
             role: row.role,
             driveName: row.driveName,
-          })
+          }),
+          driveRecipients
         );
         if (inviteDriveId && row.driveId === inviteDriveId) {
           acceptedInviteDriveId = row.driveId;

@@ -110,6 +110,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn(
     (driveId: string, userId: string, operation: string, data: unknown) => ({
       driveId,
@@ -118,6 +119,10 @@ vi.mock('@/lib/websocket', () => ({
       ...(data as Record<string, unknown>),
     })
   ),
+}));
+
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 
 import { GET } from '../route';

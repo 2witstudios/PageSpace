@@ -94,6 +94,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn(
     (driveId: string, userId: string, operation: string, data: unknown) => ({
       driveId,
@@ -102,6 +103,10 @@ vi.mock('@/lib/websocket', () => ({
       ...(data as Record<string, unknown>),
     })
   ),
+}));
+
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 
 import { GET } from '../route';
@@ -115,7 +120,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import { broadcastDriveMemberEvent, broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } from '@/lib/websocket';
 
 const createVerifyRequest = (token?: string, inviteDriveId?: string) => {
   const params = new URLSearchParams();
@@ -545,7 +550,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_p1');
       expect(location).toContain('/dashboard/drive_invited');
-      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalled();
       expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
         'drive_invited',
         'test-user-id',
@@ -566,7 +571,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledTimes(2);
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_a');
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_b');
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(2);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(2);
     });
 
     it('given the conditional UPDATE returns false (concurrent acceptance), does not re-broadcast member_added', async () => {
@@ -578,7 +583,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       await GET(createVerifyRequest('valid-token'));
 
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_race');
-      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
 
     it('given inviteDriveId does not match any pending row for this user, falls through to default redirect rather than error', async () => {
@@ -590,7 +595,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(response.status).toBe(302);
       expect(location).not.toContain('/dashboard/drive_unrelated');
       expect(location).toContain('/dashboard');
-      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
   });
 
