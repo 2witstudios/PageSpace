@@ -12,6 +12,10 @@ import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib/permissio
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import {
+  removeCalendarTrigger,
+  upsertCalendarTriggerWorkflow,
+} from '@/lib/workflows/calendar-trigger-helpers';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -37,6 +41,19 @@ const updateEventSchema = z.object({
   visibility: z.enum(['DRIVE', 'ATTENDEES_ONLY', 'PRIVATE']).optional(),
   color: z.string().optional(),
   pageId: z.string().nullable().optional(),
+  // agentTrigger has three states:
+  //   undefined → leave any existing trigger alone
+  //   null      → remove the trigger
+  //   object    → upsert with these fields
+  agentTrigger: z.object({
+    agentPageId: z.string(),
+    prompt: z.string().trim().max(10000).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).max(10).optional(),
+  }).refine(
+    (d) => Boolean(d.prompt) || Boolean(d.instructionPageId),
+    { message: 'agentTrigger needs either a prompt or an instructionPageId' },
+  ).nullable().optional(),
 });
 
 /**
@@ -222,6 +239,16 @@ export async function PATCH(
       );
     }
 
+    // Reject agent-trigger upserts on personal events; triggers require a
+    // drive context so the executor can resolve agent / instruction / context
+    // pages against a known drive.
+    if (data.agentTrigger && !event.driveId) {
+      return NextResponse.json(
+        { error: 'Agent triggers require a drive event' },
+        { status: 400 }
+      );
+    }
+
     // Update the event and sync pending trigger time atomically
     const [updatedEvent] = await db.transaction(async (tx) => {
       const result = await tx
@@ -262,6 +289,26 @@ export async function PATCH(
 
       return result;
     });
+
+    // Apply agentTrigger changes after the event update commits.
+    // null → drop the trigger; object → upsert (validated inside the helper).
+    if (data.agentTrigger === null) {
+      await removeCalendarTrigger(db, eventId);
+    } else if (data.agentTrigger && event.driveId) {
+      try {
+        await upsertCalendarTriggerWorkflow(db, {
+          driveId: event.driveId,
+          scheduledById: userId,
+          calendarEventId: eventId,
+          triggerAt: newStartAt,
+          timezone: data.timezone ?? event.timezone ?? 'UTC',
+          agentTrigger: data.agentTrigger,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to update agent trigger';
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
+    }
 
     // Fetch complete event with relations
     const completeEvent = await db.query.calendarEvents.findFirst({
