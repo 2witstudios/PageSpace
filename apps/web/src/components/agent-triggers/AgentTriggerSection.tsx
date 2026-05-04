@@ -45,8 +45,8 @@ export interface AgentTriggerSectionProps {
 /**
  * Shared agent / prompt / instruction-page / context-pages form section.
  *
- * Used by both TaskAgentTriggersDialog (per-trigger-type) and
- * EventAgentTriggerDialog (single trigger). Selection state lives entirely in
+ * Used by both TaskAgentTriggersDialog (per-trigger-type) and the calendar
+ * EventModal's inline agent disclosure. Selection state lives entirely in
  * the parent through `value`/`onChange` so this component carries no internal
  * state a remote refetch could clobber. Collapsible "Advanced" matches the
  * task dialog's UX so users see the same affordance in both surfaces.

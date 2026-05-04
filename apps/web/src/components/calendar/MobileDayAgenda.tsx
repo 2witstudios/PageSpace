@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { format, isToday as checkIsToday, isTomorrow, isYesterday } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { MapPin, Clock, Users, Plus, Calendar } from 'lucide-react';
+import { MapPin, Clock, Users, Plus, Calendar, Zap } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -209,6 +209,9 @@ function MobileEventCard({
       {/* Title and time */}
       <div className="flex items-start justify-between gap-3">
         <h3 className="font-semibold text-base flex-1 min-w-0 truncate">
+          {event.hasAgentTrigger && (
+            <Zap className="inline-block h-3.5 w-3.5 mr-1 text-amber-500 align-text-top" aria-label="Agent trigger configured" />
+          )}
           {event.title}
         </h3>
         {!event.allDay && (

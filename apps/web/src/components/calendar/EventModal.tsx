@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { format } from 'date-fns';
-import { CalendarIcon, Clock, MapPin, Trash2, Zap } from 'lucide-react';
+import { AlertCircle, Bot, CalendarIcon, ChevronRight, Clock, MapPin, Trash2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
+import useSWR from 'swr';
 import {
   Dialog,
   DialogContent,
@@ -29,10 +30,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useEditingStore } from '@/stores/useEditingStore';
+import { useEditingSession } from '@/stores/useEditingSession';
 import { CalendarEvent, EVENT_COLORS } from './calendar-types';
 import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
-import { EventAgentTriggerDialog } from './EventAgentTriggerDialog';
+import {
+  AgentTriggerSection,
+  type AgentTriggerValue,
+  type AgentTriggerAgent,
+} from '@/components/agent-triggers/AgentTriggerSection';
+
+export type AgentTriggerSavePayload =
+  | { agentPageId: string; prompt?: string; instructionPageId: string | null; contextPageIds: string[] };
 
 interface EventModalProps {
   isOpen: boolean;
@@ -53,6 +69,7 @@ interface EventModalProps {
     color?: string;
     attendeeIds?: string[];
     pageId?: string | null;
+    agentTrigger?: AgentTriggerSavePayload | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
   driveId?: string;
@@ -72,6 +89,44 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
 
 const COLOR_OPTIONS = Object.keys(EVENT_COLORS) as (keyof typeof EVENT_COLORS)[];
 
+interface EventTriggerRow {
+  id: string;
+  agentPageId: string;
+  prompt: string | null;
+  instructionPageId: string | null;
+  contextPageIds: string[] | null;
+  lastFiredAt: string | null;
+  lastFireError: string | null;
+}
+
+type LastRunStatus = 'never_run' | 'success' | 'error';
+
+const lastRunStatusFor = (row: EventTriggerRow): LastRunStatus =>
+  row.lastFiredAt === null
+    ? 'never_run'
+    : row.lastFireError
+      ? 'error'
+      : 'success';
+
+const EMPTY_AGENT_VALUE: AgentTriggerValue = {
+  agentPageId: '',
+  prompt: '',
+  instructionPageId: null,
+  contextPageIds: [],
+};
+
+const triggerFetcher = async (url: string): Promise<{ trigger: EventTriggerRow | null }> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to load trigger');
+  return res.json();
+};
+
+const agentsFetcher = async (url: string): Promise<{ agents: AgentTriggerAgent[] }> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to load agents');
+  return res.json();
+};
+
 export function EventModal({
   isOpen,
   onClose,
@@ -84,10 +139,10 @@ export function EventModal({
 }: EventModalProps) {
   const isEditing = !!event;
   const isDriveContext = context === 'drive' && !!driveId;
-  // Agent triggers live in their own dialog now (parity with TaskAgentTriggersDialog).
-  // Open it from the "Configure agent trigger" button below — only meaningful for
-  // saved drive events because the executor needs a drive + a real eventId.
-  const canManageAgent = isDriveContext && isEditing && !!event;
+  const isRecurring = !!event?.recurrenceRule;
+  // Agent triggers attach to drive events only — the executor needs a drive
+  // context to resolve agent / instruction / context pages.
+  const showAgentSection = isDriveContext;
 
   // Form state
   const [title, setTitle] = useState('');
@@ -101,7 +156,62 @@ export function EventModal({
   const [allDay, setAllDay] = useState(false);
   const [color, setColor] = useState<keyof typeof EVENT_COLORS>('default');
   const [isSaving, setIsSaving] = useState(false);
-  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+
+  // Agent trigger state
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentValue, setAgentValue] = useState<AgentTriggerValue>(EMPTY_AGENT_VALUE);
+  const [agentExpanded, setAgentExpanded] = useState(false);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+
+  // Pause SWR while the modal is open so a remote calendar broadcast can't
+  // clobber unsaved typing in the form (mirrors the dialog's prior behavior).
+  useEditingSession(`event-modal:${event?.id ?? 'new'}`, isOpen, 'form', {
+    pageId: event?.id,
+    componentName: 'EventModal',
+  });
+
+  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const triggerLoadedRef = useRef(false);
+  const agentsLoadedRef = useRef(false);
+
+  // Fetch the existing trigger when editing a saved drive event. New events
+  // (no eventId yet) start from the empty value; the agent trigger is sent
+  // in the same POST that creates the event.
+  const triggerKey =
+    isOpen && showAgentSection && isEditing && event ? `/api/calendar/events/${event.id}/triggers` : null;
+  const agentsKey =
+    isOpen && showAgentSection && driveId ? `/api/drives/${driveId}/agents` : null;
+
+  const { data: triggerData, isLoading: triggerLoading } = useSWR(
+    triggerKey,
+    triggerFetcher,
+    {
+      revalidateOnFocus: false,
+      isPaused: () => triggerLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        triggerLoadedRef.current = true;
+      },
+    },
+  );
+
+  const { data: agentsData, isLoading: agentsLoading } = useSWR(
+    agentsKey,
+    agentsFetcher,
+    {
+      revalidateOnFocus: false,
+      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      onSuccess: () => {
+        agentsLoadedRef.current = true;
+      },
+    },
+  );
+
+  const agents = useMemo(() => agentsData?.agents ?? [], [agentsData]);
+  const noAgents = !agentsLoading && agents.length === 0;
+  const existingTrigger = triggerData?.trigger ?? null;
+  const existingStatus: LastRunStatus | null = existingTrigger
+    ? lastRunStatusFor(existingTrigger)
+    : null;
 
   // Initialize form when modal opens
   useEffect(() => {
@@ -150,8 +260,42 @@ export function EventModal({
         setStartTime(format(start, 'HH:mm'));
         setEndTime(format(end, 'HH:mm'));
       }
+      setAdvancedExpanded(false);
+      setAgentExpanded(false);
+    } else {
+      triggerLoadedRef.current = false;
+      agentsLoadedRef.current = false;
     }
   }, [isOpen, event, defaultValues]);
+
+  // Hydrate agent state once the trigger fetch lands (or reset if there's no
+  // trigger / no eventId yet).
+  useEffect(() => {
+    if (!isOpen) return;
+    if (existingTrigger) {
+      setAgentEnabled(true);
+      setAgentValue({
+        agentPageId: existingTrigger.agentPageId,
+        prompt: existingTrigger.prompt ?? '',
+        instructionPageId: existingTrigger.instructionPageId,
+        contextPageIds: existingTrigger.contextPageIds ?? [],
+      });
+    } else if (!triggerKey) {
+      // New event (no fetch happened) → empty
+      setAgentEnabled(false);
+      setAgentValue(EMPTY_AGENT_VALUE);
+    } else if (!triggerLoading && triggerData) {
+      // Editing existing event but no trigger row exists → empty
+      setAgentEnabled(false);
+      setAgentValue(EMPTY_AGENT_VALUE);
+    }
+  }, [isOpen, existingTrigger, triggerKey, triggerLoading, triggerData]);
+
+  const selectedAgentName = useMemo(() => {
+    if (!agentEnabled) return null;
+    const found = agents.find((a) => a.id === agentValue.agentPageId);
+    return found?.title ?? null;
+  }, [agentEnabled, agents, agentValue.agentPageId]);
 
   const buildDateTime = (date: Date, time: string): Date => {
     const [hours, minutes] = time.split(':').map(Number);
@@ -178,6 +322,34 @@ export function EventModal({
       return;
     }
 
+    let agentTrigger: AgentTriggerSavePayload | null | undefined;
+    if (showAgentSection) {
+      if (agentEnabled) {
+        if (isRecurring) {
+          toast.error('Recurring events can’t have agent triggers');
+          return;
+        }
+        if (!agentValue.agentPageId) {
+          toast.error('Pick an agent for the trigger');
+          return;
+        }
+        if (!agentValue.prompt.trim() && !agentValue.instructionPageId) {
+          toast.error('Enter a prompt or pick an instruction page');
+          return;
+        }
+        agentTrigger = {
+          agentPageId: agentValue.agentPageId,
+          prompt: agentValue.prompt.trim() || undefined,
+          instructionPageId: agentValue.instructionPageId,
+          contextPageIds: agentValue.contextPageIds,
+        };
+      } else if (existingTrigger) {
+        // Was enabled, user turned it off → remove
+        agentTrigger = null;
+      }
+      // else: undefined → no-op (no trigger before, none now)
+    }
+
     setIsSaving(true);
     try {
       await onSave({
@@ -189,6 +361,7 @@ export function EventModal({
         allDay,
         color,
         pageId: isDriveContext ? linkedPageId : undefined,
+        agentTrigger,
       });
       toast.success(isEditing ? 'Event updated' : 'Event created');
       onClose();
@@ -218,9 +391,15 @@ export function EventModal({
     }
   };
 
+  const agentHeaderLabel = !agentEnabled
+    ? 'Off'
+    : selectedAgentName
+      ? `${selectedAgentName} at start`
+      : 'On';
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? 'Edit Event' : 'New Event'}</DialogTitle>
         </DialogHeader>
@@ -378,23 +557,6 @@ export function EventModal({
             </div>
           </div>
 
-          {/* Linked page (drive events only — events in a drive can carry a doc the way task items do via taskItems.pageId) */}
-          {isDriveContext && driveId && (
-            <div className="space-y-2">
-              <Label>Linked page</Label>
-              <TriggerPagePicker
-                mode="single"
-                driveId={driveId}
-                value={linkedPageId}
-                onChange={setLinkedPageId}
-                placeholder="Pick a doc, sheet, or other page…"
-              />
-              <p className="text-xs text-muted-foreground">
-                Optional. Surfaces a related doc on the event.
-              </p>
-            </div>
-          )}
-
           {/* Description */}
           <div className="space-y-2">
             <Label htmlFor="description">Description</Label>
@@ -407,19 +569,117 @@ export function EventModal({
             />
           </div>
 
-          {/* Agent trigger button — opens dedicated dialog (parity with TaskAgentTriggersDialog).
-              Only meaningful for saved drive events because the dialog needs an eventId
-              + drive context to upsert into /api/calendar/events/:id/triggers. */}
-          {canManageAgent && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full justify-start"
-              onClick={() => setAgentDialogOpen(true)}
-            >
-              <Zap className="mr-2 h-4 w-4 text-amber-500" />
-              Configure agent trigger
-            </Button>
+          {/* Agent trigger — collapsed by default; only meaningful for drive events.
+              Status text reflects whether a trigger is configured so the modal
+              reads as a normal calendar by default. */}
+          {showAgentSection && (
+            <Collapsible open={agentExpanded} onOpenChange={setAgentExpanded}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full justify-between px-2 -mx-2"
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <Zap className={cn('h-4 w-4', agentEnabled ? 'text-amber-500' : 'text-muted-foreground')} />
+                    Agent trigger
+                  </span>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {agentHeaderLabel}
+                    <ChevronRight className="h-3.5 w-3.5 transition-transform data-[state=open]:rotate-90" data-state={agentExpanded ? 'open' : 'closed'} />
+                  </span>
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-3 pt-2">
+                {isRecurring ? (
+                  <p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
+                    Recurring events can&apos;t have agent triggers. The cron poller fires one-shot occurrences only.
+                  </p>
+                ) : (
+                  <div className="space-y-3 rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <Label className="font-medium cursor-pointer truncate">Run agent at event start</Label>
+                      </div>
+                      <Switch
+                        checked={agentEnabled}
+                        disabled={noAgents}
+                        onCheckedChange={setAgentEnabled}
+                      />
+                    </div>
+
+                    {noAgents && (
+                      <p className="text-xs text-muted-foreground">
+                        No agents in this drive. Create an AI Chat page first.
+                      </p>
+                    )}
+
+                    {agentEnabled && !noAgents && driveId && (
+                      <>
+                        <AgentTriggerSection
+                          driveId={driveId}
+                          agents={agents}
+                          agentsLoading={agentsLoading}
+                          value={agentValue}
+                          onChange={setAgentValue}
+                          promptPlaceholder="What should the agent do when this event starts?"
+                        />
+
+                        {existingStatus && existingStatus !== 'never_run' && (
+                          <p className={cn(
+                            'text-xs',
+                            existingStatus === 'error' ? 'text-destructive' : 'text-muted-foreground',
+                          )}>
+                            {existingStatus === 'error' && (
+                              <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
+                            )}
+                            Last run: <span className="font-medium">{existingStatus}</span>
+                            {existingTrigger?.lastFiredAt
+                              ? ` • ${new Date(existingTrigger.lastFiredAt).toLocaleString()}`
+                              : ''}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
+          {/* Advanced — Linked page lives here so casual users see only normal
+              calendar fields. Drive events only because the picker scopes to
+              the drive's pages. */}
+          {isDriveContext && driveId && (
+            <Collapsible open={advancedExpanded} onOpenChange={setAdvancedExpanded}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 -ml-2 px-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronRight className="mr-1 h-3.5 w-3.5 transition-transform data-[state=open]:rotate-90" data-state={advancedExpanded ? 'open' : 'closed'} />
+                  Advanced
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-3 pt-2">
+                <div className="space-y-2">
+                  <Label>Linked page</Label>
+                  <TriggerPagePicker
+                    mode="single"
+                    driveId={driveId}
+                    value={linkedPageId}
+                    onChange={setLinkedPageId}
+                    placeholder="Pick a doc, sheet, or other page…"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Attach a doc, sheet, or other page to this event.
+                  </p>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
           </div>
         </fieldset>
@@ -444,15 +704,6 @@ export function EventModal({
           </Button>
         </DialogFooter>
       </DialogContent>
-      {canManageAgent && event && driveId && (
-        <EventAgentTriggerDialog
-          open={agentDialogOpen}
-          onOpenChange={setAgentDialogOpen}
-          eventId={event.id}
-          eventTitle={event.title}
-          driveId={driveId}
-        />
-      )}
     </Dialog>
   );
 }

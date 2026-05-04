@@ -10,6 +10,7 @@ import {
   format,
   isSameMonth,
 } from 'date-fns';
+import { Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CalendarEvent,
@@ -201,6 +202,9 @@ function EventPill({
       )}
       onClick={onClick}
     >
+      {event.hasAgentTrigger && (
+        <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-label="Agent trigger configured" />
+      )}
       {!isAllDay && <span className="font-medium mr-1">{startTime}</span>}
       {event.title}
     </button>
