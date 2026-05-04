@@ -387,38 +387,42 @@ describe('useSocketStore', () => {
     });
   });
 
-  describe('proactive reconnect', () => {
-    it('given auth:refreshed event fires while connected, should force reconnect', async () => {
+  describe('auth:refreshed handling', () => {
+    it('given socket connected when auth:refreshed fires, should leave the live connection alone', async () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
       mockSocket.connected = true;
       mockSocket._trigger('connect');
 
-      // Dispatch auth:refreshed event
+      const disconnectsBefore = mockSocket.disconnect.mock.calls.length;
+      vi.mocked(io).mockClear();
+
       const event = new Event('auth:refreshed');
       windowEventMock.dispatchEvent(event);
 
-      // The connect function should have been called again with forceReconnect
-      // Note: Since we're testing the store behavior, we verify the disconnect was called
-      expect(mockSocket.disconnect).toHaveBeenCalled();
+      // Token refresh on a healthy socket would cascade into chat refetches
+      // (GlobalChatContext, agent multiplayer) and snap message lists to the
+      // bottom mid-read. The token is consumed at handshake only, so a connected
+      // socket stays authenticated — no reconnect needed.
+      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectsBefore);
+      expect(io).not.toHaveBeenCalled();
     });
 
-    it('given socket not connected when auth:refreshed fires, should not attempt reconnect', async () => {
+    it('given socket disconnected when auth:refreshed fires, should reconnect with the fresh token', async () => {
       const { connect } = useSocketStore.getState();
       await connect();
 
-      // Socket is not connected
       mockSocket.connected = false;
+      const disconnectsBefore = mockSocket.disconnect.mock.calls.length;
 
-      const disconnectCallCount = mockSocket.disconnect.mock.calls.length;
-
-      // Dispatch auth:refreshed event
       const event = new Event('auth:refreshed');
       windowEventMock.dispatchEvent(event);
 
-      // Should not have called disconnect again
-      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectCallCount);
+      // Stalled socket: fresh token unblocks the next handshake. connect(true)
+      // synchronously calls disconnect on the existing socket before kicking
+      // off the async re-handshake.
+      expect(mockSocket.disconnect.mock.calls.length).toBe(disconnectsBefore + 1);
     });
   });
 
