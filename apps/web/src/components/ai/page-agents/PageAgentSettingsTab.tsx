@@ -479,7 +479,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">Tool Permissions</CardTitle>
+              <CardTitle className="text-lg">Default Tools</CardTitle>
               <div className="flex space-x-2">
                 <Button 
                   type="button"
@@ -502,7 +502,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
-              Choose which tools your AI agent can access. This controls what actions the agent can perform.
+              The agent&apos;s default toolset. The Tools menu in the chat composer is the live control at runtime — it can enable or disable any tool per session.
             </p>
             <ScrollArea className="h-48">
               <Controller
