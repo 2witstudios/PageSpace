@@ -13,6 +13,7 @@ import { useToast } from '@/hooks/useToast';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { InviteKind } from '@/app/api/drives/[driveId]/members/invite/route';
 import { getRoleColorClasses } from '@/lib/utils';
 import { VerificationRequiredAlert } from '@/components/VerificationRequiredAlert';
 
@@ -141,7 +142,7 @@ export default function InviteMemberPage() {
       ? selectedUnifiedRole.roleId
       : null;
 
-    const successToast = (kind: 'added' | 'invited') => {
+    const successToast = (kind: InviteKind) => {
       if (kind === 'invited') {
         toast({
           title: 'Invitation sent',
@@ -159,7 +160,7 @@ export default function InviteMemberPage() {
     if (selectedUnifiedRole?.type === 'admin') {
       setSaving(true);
       try {
-        const response = await post<{ kind?: 'added' | 'invited' }>(
+        const response = await post<{ kind?: InviteKind }>(
           `/api/drives/${driveId}/members/invite`,
           {
             ...targetIdentity,
@@ -209,7 +210,7 @@ export default function InviteMemberPage() {
 
     setSaving(true);
     try {
-      const response = await post<{ kind?: 'added' | 'invited' }>(
+      const response = await post<{ kind?: InviteKind }>(
         `/api/drives/${driveId}/members/invite`,
         {
           ...targetIdentity,

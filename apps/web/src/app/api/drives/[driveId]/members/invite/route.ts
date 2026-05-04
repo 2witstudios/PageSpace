@@ -22,6 +22,15 @@ interface PermissionEntry {
   canShare: boolean;
 }
 
+export type InviteKind = 'added' | 'invited';
+export interface InviteMemberResponse {
+  memberId: string;
+  kind: InviteKind;
+  email?: string;
+  permissionsGranted: number;
+  message: string;
+}
+
 const emailSchema = z.string().email();
 
 export async function POST(
