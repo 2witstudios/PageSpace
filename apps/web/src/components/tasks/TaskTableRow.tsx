@@ -20,6 +20,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { TableRow, TableCell } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
@@ -76,7 +82,9 @@ export function TaskTableRow({
   const taskStatusOrder = getStatusOrder(statusConfigs);
 
   return (
-    <TableRow className={cn('group', isCompleted && 'opacity-60')}>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+    <TableRow className={cn(isCompleted && 'opacity-60')}>
       <TableCell>
         <Checkbox
           checked={isCompleted}
@@ -209,32 +217,48 @@ export function TaskTableRow({
       </TableCell>
 
       <TableCell>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {task.pageId && (
-                <DropdownMenuItem onClick={() => onNavigate(task)}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Open
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onStartEdit(task)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {task.pageId && (
+              <DropdownMenuItem onClick={() => onNavigate(task)}>
+                <FileText className="h-4 w-4 mr-2" />
+                Open
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onDelete(task)} className="text-destructive">
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+            )}
+            <DropdownMenuItem onClick={() => onStartEdit(task)}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDelete(task)} className="text-destructive">
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TableCell>
     </TableRow>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {task.pageId && (
+          <ContextMenuItem onSelect={() => onNavigate(task)}>
+            <FileText className="h-4 w-4 mr-2" />
+            Open
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onSelect={() => onStartEdit(task)}>
+          <Pencil className="h-4 w-4 mr-2" />
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onDelete(task)} className="text-destructive">
+          <Trash2 className="h-4 w-4 mr-2" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
