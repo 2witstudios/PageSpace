@@ -128,8 +128,8 @@ describe('EventModal — agent trigger disclosure', () => {
 
     assert({
       given: 'a personal calendar context (no driveId)',
-      should: 'not render the Agent trigger disclosure or any agent affordance',
-      actual: screen.queryByText(/Agent trigger/i),
+      should: 'not render the Agent trigger disclosure button',
+      actual: screen.queryByRole('button', { name: /Agent trigger/i }),
       expected: null,
     });
   });
@@ -215,6 +215,87 @@ describe('EventModal — agent trigger disclosure', () => {
       should: 'not surface the Linked page label',
       actual: screen.queryByText(/^Linked page$/i),
       expected: null,
+    });
+  });
+
+  test('saving with agent enabled forwards a complete agentTrigger payload to onSave', async () => {
+    const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
+    renderModal({ event: baseEvent(), onSave });
+
+    const header = await screen.findByRole('button', { name: /Triage Bot at start/i });
+    await userEvent.click(header);
+
+    await screen.findByDisplayValue('remote-prompt');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
+
+    await waitFor(() => {
+      if (!onSave.mock.calls.length) throw new Error('onSave not called');
+    });
+
+    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+
+    assert({
+      given: 'an event with an existing trigger and the user clicks Update without changing anything',
+      should: 'call onSave with an agentTrigger object that mirrors the existing trigger (idempotent upsert)',
+      actual: payload.agentTrigger,
+      expected: {
+        agentPageId: 'agent-1',
+        prompt: 'remote-prompt',
+        instructionPageId: null,
+        contextPageIds: [],
+      },
+    });
+  });
+
+  test('saving with toggle off + existing trigger forwards agentTrigger=null to onSave', async () => {
+    const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
+    renderModal({ event: baseEvent(), onSave });
+
+    const header = await screen.findByRole('button', { name: /Triage Bot at start/i });
+    await userEvent.click(header);
+
+    // Wait for the form to render then flip the enable toggle off
+    const toggle = await screen.findByRole('switch', { name: /Run agent at event start/i });
+    await userEvent.click(toggle);
+
+    await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
+
+    await waitFor(() => {
+      if (!onSave.mock.calls.length) throw new Error('onSave not called');
+    });
+
+    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+
+    assert({
+      given: 'an existing trigger with the toggle flipped off',
+      should: 'call onSave with agentTrigger=null so the API removes the trigger',
+      actual: payload.agentTrigger,
+      expected: null,
+    });
+  });
+
+  test('saving on a personal event omits agentTrigger entirely', async () => {
+    const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
+    renderModal({ context: 'user', driveId: undefined, event: null, onSave });
+
+    // Title is required
+    const titleInput = await screen.findByLabelText(/Title/i);
+    await userEvent.type(titleInput, 'Solo lunch');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+
+    await waitFor(() => {
+      if (!onSave.mock.calls.length) throw new Error('onSave not called');
+    });
+
+    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+
+    assert({
+      given: 'a personal calendar create flow',
+      should: 'omit agentTrigger from the onSave payload (undefined, not null)',
+      actual: payload.agentTrigger,
+      expected: undefined,
     });
   });
 

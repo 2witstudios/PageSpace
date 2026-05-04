@@ -8,6 +8,7 @@ import useSWR from 'swr';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -269,10 +270,12 @@ export function EventModal({
   }, [isOpen, event, defaultValues]);
 
   // Hydrate agent state once the trigger fetch lands (or reset if there's no
-  // trigger / no eventId yet).
+  // trigger / no eventId yet). Recurring events skip hydration because the
+  // executor rejects triggers on recurring rows — keeping agentEnabled=false
+  // means save sends agentTrigger=null and removes any defensive stale row.
   useEffect(() => {
     if (!isOpen) return;
-    if (existingTrigger) {
+    if (existingTrigger && !isRecurring) {
       setAgentEnabled(true);
       setAgentValue({
         agentPageId: existingTrigger.agentPageId,
@@ -289,7 +292,7 @@ export function EventModal({
       setAgentEnabled(false);
       setAgentValue(EMPTY_AGENT_VALUE);
     }
-  }, [isOpen, existingTrigger, triggerKey, triggerLoading, triggerData]);
+  }, [isOpen, existingTrigger, isRecurring, triggerKey, triggerLoading, triggerData]);
 
   const selectedAgentName = useMemo(() => {
     if (!agentEnabled) return null;
@@ -402,6 +405,9 @@ export function EventModal({
       <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? 'Edit Event' : 'New Event'}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Configure the event title, schedule, location, and optional agent trigger.
+          </DialogDescription>
         </DialogHeader>
 
         <fieldset disabled={isSaving}>
@@ -600,9 +606,12 @@ export function EventModal({
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <Label className="font-medium cursor-pointer truncate">Run agent at event start</Label>
+                        <Label htmlFor="agent-trigger-enabled" className="font-medium cursor-pointer truncate">
+                          Run agent at event start
+                        </Label>
                       </div>
                       <Switch
+                        id="agent-trigger-enabled"
                         checked={agentEnabled}
                         disabled={noAgents}
                         onCheckedChange={setAgentEnabled}
