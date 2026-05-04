@@ -75,12 +75,12 @@ const mockAuth = (uid: string): SessionAuthResult => ({
 
 const baseEvent = {
   id: EVENT_ID,
-  driveId: DRIVE_ID,
+  driveId: DRIVE_ID as string | null,
   createdById: USER_ID,
   startAt: new Date('2026-06-01T09:00:00Z'),
   timezone: 'UTC',
   isTrashed: false,
-} as Parameters<Parameters<Mock>[0]>[0];
+};
 
 const ctx = (): { params: Promise<{ eventId: string }> } => ({
   params: Promise.resolve({ eventId: EVENT_ID }),
