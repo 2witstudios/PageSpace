@@ -182,6 +182,14 @@ describe('useDashboardContext', () => {
       const { result } = renderHook(() => useDashboardContext());
       expect(result.current.isDashboardContext).toBe(false);
     });
+
+    it('should return false for nested channel route /dashboard/channels/[pageId]', () => {
+      vi.mocked(useParams).mockReturnValue({ pageId: 'page-123' });
+      vi.mocked(usePathname).mockReturnValue('/dashboard/channels/page-123');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
   });
 
   // ============================================

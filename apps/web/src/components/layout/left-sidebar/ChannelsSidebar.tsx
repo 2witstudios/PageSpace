@@ -86,6 +86,9 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
   }, [data, hasLoadedMore]);
 
   useEffect(() => {
+    setAllItems([]);
+    setPagination(null);
+    setIsLoadingMore(false);
     setHasLoadedMore(false);
   }, [driveId]);
 
@@ -104,7 +107,13 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
         throw new Error(`Failed to fetch: ${response.status}`);
       }
       const moreData: InboxResponse = await response.json();
-      setAllItems((prev) => [...prev, ...moreData.items]);
+      setAllItems((prev) => {
+        const existingIds = new Set(prev.map((item) => `${item.type}-${item.id}`));
+        const newItems = moreData.items.filter(
+          (item) => !existingIds.has(`${item.type}-${item.id}`)
+        );
+        return [...prev, ...newItems];
+      });
       setPagination(moreData.pagination);
       setHasLoadedMore(true);
     } catch (err) {

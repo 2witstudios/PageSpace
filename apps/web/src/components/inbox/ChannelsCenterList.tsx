@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { formatDistanceToNow } from 'date-fns';
-import { Search, Hash, MailOpen, ChevronRight } from 'lucide-react';
+import { Search, Hash, ChevronRight } from 'lucide-react';
 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
@@ -69,6 +69,9 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
   }, [data, hasLoadedMore]);
 
   useEffect(() => {
+    setAllItems([]);
+    setPagination(null);
+    setIsLoadingMore(false);
     setHasLoadedMore(false);
   }, [driveId]);
 
@@ -156,7 +159,7 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
 
           {!isLoading && filteredItems.length === 0 && (
             <div className="py-12 text-center">
-              <MailOpen className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
+              <Hash className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
               <h3 className="text-lg font-medium mb-1">No channels yet</h3>
               <p className="text-muted-foreground text-sm">
                 {driveId ? 'No channels in this drive' : 'Channels will appear here'}
