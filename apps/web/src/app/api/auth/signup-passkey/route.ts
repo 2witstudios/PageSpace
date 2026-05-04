@@ -169,12 +169,12 @@ export async function POST(req: Request) {
       resetDistributedRateLimit(emailRateLimitKey),
     ]);
 
-    // Track signup event (using 'signup' + passkey_registered for full event tracking)
-    // Mask PII to comply with data retention policies
-    const maskedEmail = email.substring(0, 3) + '***@' + (email.split('@')[1] || '***');
+    // Track signup event — use the shared maskEmail utility instead of an
+    // inline substring; the inline form leaks part of the domain into the
+    // local segment for short addresses (e.g. "a@x.io" → "a@x***@x.io").
     const maskedName = name.substring(0, 1) + '***';
     trackAuthEvent(userId, 'signup', {
-      email: maskedEmail,
+      email: maskEmail(email),
       name: maskedName,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),

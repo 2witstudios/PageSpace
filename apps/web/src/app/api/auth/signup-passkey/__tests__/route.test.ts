@@ -201,8 +201,11 @@ describe('POST /api/auth/signup-passkey', () => {
     it('tracks signup and passkey_registered events with masked PII', async () => {
       await POST(createRequest());
 
+      // 'us***@example.com' is the canonical maskEmail output (2 visible chars
+      // before ***@); the inline 3-char masking previously used here would leak
+      // domain characters into the local part for short addresses.
       expect(trackAuthEvent).toHaveBeenCalledWith('new-user-1', 'signup', expect.objectContaining({
-        email: 'use***@example.com',
+        email: 'us***@example.com',
         name: 'T***',
         method: 'passkey',
       }));
