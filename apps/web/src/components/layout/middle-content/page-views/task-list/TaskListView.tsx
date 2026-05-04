@@ -40,6 +40,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import {
   Plus,
   Search,
   MoreHorizontal,
@@ -313,10 +319,11 @@ interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -331,12 +338,11 @@ function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskR
     transition,
   };
 
-  return (
+  const row = (
     <TableRow
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group',
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
       )}
@@ -355,6 +361,15 @@ function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskR
       </TableCell>
       {children}
     </TableRow>
+  );
+
+  if (!contextMenu) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      {contextMenu}
+    </ContextMenu>
   );
 }
 
@@ -929,6 +944,32 @@ function TaskListView({ page }: TaskListViewProps) {
                         task={task}
                         canEdit={canEdit}
                         isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                        contextMenu={
+                          <ContextMenuContent>
+                            {task.pageId && (
+                              <ContextMenuItem onSelect={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
+                                <FileText className="h-4 w-4 mr-2" />
+                                Open
+                              </ContextMenuItem>
+                            )}
+                            <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Rename
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => setTriggerDialogTask(task)} disabled={!canEdit}>
+                              <Zap className="h-4 w-4 mr-2" />
+                              Agent triggers…
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              onSelect={() => handleDeleteTask(task.id)}
+                              className="text-destructive"
+                              disabled={!canEdit}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </ContextMenuItem>
+                          </ContextMenuContent>
+                        }
                       >
                         {/* Checkbox */}
                         <TableCell>
@@ -1059,39 +1100,37 @@ function TaskListView({ page }: TaskListViewProps) {
 
                         {/* Actions */}
                         <TableCell>
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8">
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {task.pageId && (
-                                  <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                                    <FileText className="h-4 w-4 mr-2" />
-                                    Open
-                                  </DropdownMenuItem>
-                                )}
-                                <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
-                                  <Pencil className="h-4 w-4 mr-2" />
-                                  Rename
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {task.pageId && (
+                                <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
+                                  <FileText className="h-4 w-4 mr-2" />
+                                  Open
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setTriggerDialogTask(task)} disabled={!canEdit}>
-                                  <Zap className="h-4 w-4 mr-2" />
-                                  Agent triggers…
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleDeleteTask(task.id)}
-                                  className="text-destructive"
-                                  disabled={!canEdit}
-                                >
-                                  <Trash2 className="h-4 w-4 mr-2" />
-                                  Delete
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
+                              )}
+                              <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
+                                <Pencil className="h-4 w-4 mr-2" />
+                                Rename
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setTriggerDialogTask(task)} disabled={!canEdit}>
+                                <Zap className="h-4 w-4 mr-2" />
+                                Agent triggers…
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteTask(task.id)}
+                                className="text-destructive"
+                                disabled={!canEdit}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </SortableTaskRow>
                     ))}
