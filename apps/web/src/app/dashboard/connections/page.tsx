@@ -195,7 +195,7 @@ export default function ConnectionsPage() {
   const handleStartConversation = async (userId: string) => {
     try {
       const data = await post<{ conversation: { id: string } }>('/api/messages/conversations', { recipientId: userId });
-      router.push(`/dashboard/inbox/dm/${data.conversation.id}`);
+      router.push(`/dashboard/dms/${data.conversation.id}`);
     } catch {
       toast.error('Failed to start conversation');
     }

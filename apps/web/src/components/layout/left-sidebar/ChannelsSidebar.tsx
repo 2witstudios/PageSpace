@@ -8,18 +8,20 @@ import { formatDistanceToNow } from 'date-fns';
 import { Search, Hash } from 'lucide-react';
 
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { cn, isElectron } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 import DashboardFooter from './DashboardFooter';
+import DriveFooter from './DriveFooter';
 import PrimaryNavigation from './PrimaryNavigation';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { useDriveStore } from '@/hooks/useDrive';
+import { canManageDrive } from '@/hooks/usePermissions';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
@@ -30,7 +32,7 @@ const fetcher = async (url: string) => {
   return response.json();
 };
 
-export default function InboxSidebar({ className }: SidebarProps) {
+export default function ChannelsSidebar({ className }: SidebarProps) {
   const params = useParams();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,61 +41,50 @@ export default function InboxSidebar({ className }: SidebarProps) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasLoadedMore, setHasLoadedMore] = useState(false);
   const [isElectronMac, setIsElectronMac] = useState(false);
-  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
+  const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
   const driveIdParams = params.driveId;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
 
-  // Build API URL based on context
-  const apiUrl = driveId
-    ? `/api/inbox?driveId=${driveId}&limit=20`
-    : '/api/inbox?limit=20';
+  const drives = useDriveStore((state) => state.drives);
+  const drive = drives.find((d) => d.id === driveId);
+  const canManage = canManageDrive(drive);
 
-  // Socket integration for real-time updates
+  const apiUrl = driveId
+    ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`
+    : '/api/inbox?type=channel&limit=20';
+
   const { hasLoadedRef } = useInboxSocket({ driveId });
 
   const { data, error } = useSWR<InboxResponse>(apiUrl, fetcher, {
-    refreshInterval: 0, // Disable polling - socket handles updates
+    refreshInterval: 0,
     isPaused: () => hasLoadedRef.current && isEditingActive(),
     onSuccess: () => { hasLoadedRef.current = true; },
     revalidateOnFocus: false,
   });
 
   useEffect(() => {
-    if (data) {
-      if (hasLoadedMore) {
-        // We have additional pages loaded - merge updates, preserve extra items
-        setAllItems(prev => {
-          // Build set of IDs in the new first page
-          const firstPageIds = new Set(
-            data.items.map(item => `${item.type}-${item.id}`)
-          );
-          // Keep items that were loaded via "Load more" and aren't in new first page
-          const additionalItems = prev.filter(
-            item => !firstPageIds.has(`${item.type}-${item.id}`)
-          );
-          // Merge: new first page + additional items from previous loads
-          const merged = [...data.items, ...additionalItems];
-          // Re-sort by lastMessageAt (most recent first)
-          merged.sort((a, b) => {
-            if (!a.lastMessageAt && !b.lastMessageAt) return 0;
-            if (!a.lastMessageAt) return 1;
-            if (!b.lastMessageAt) return -1;
-            return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
-          });
-          return merged;
+    if (!data) return;
+    if (hasLoadedMore) {
+      setAllItems((prev) => {
+        const firstPageIds = new Set(data.items.map((item) => `${item.type}-${item.id}`));
+        const additionalItems = prev.filter((item) => !firstPageIds.has(`${item.type}-${item.id}`));
+        const merged = [...data.items, ...additionalItems];
+        merged.sort((a, b) => {
+          if (!a.lastMessageAt && !b.lastMessageAt) return 0;
+          if (!a.lastMessageAt) return 1;
+          if (!b.lastMessageAt) return -1;
+          return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
         });
-        // Note: Don't update pagination - we have more pages loaded
-      } else {
-        // Initial load or after reset - replace everything
-        setAllItems(data.items);
-        setPagination(data.pagination);
-      }
+        return merged;
+      });
+    } else {
+      setAllItems(data.items);
+      setPagination(data.pagination);
     }
   }, [data, hasLoadedMore]);
 
-  // Reset hasLoadedMore when driveId changes to avoid mixing data from different contexts
   useEffect(() => {
     setHasLoadedMore(false);
   }, [driveId]);
@@ -107,20 +98,17 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
     setIsLoadingMore(true);
     try {
-      const url = driveId
-        ? `/api/inbox?driveId=${driveId}&limit=20&cursor=${pagination.nextCursor}`
-        : `/api/inbox?limit=20&cursor=${pagination.nextCursor}`;
+      const url = `${apiUrl}&cursor=${pagination.nextCursor}`;
       const response = await fetchWithAuth(url);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.status}`);
       }
       const moreData: InboxResponse = await response.json();
-
       setAllItems((prev) => [...prev, ...moreData.items]);
       setPagination(moreData.pagination);
-      setHasLoadedMore(true); // Mark that we've loaded additional pages
+      setHasLoadedMore(true);
     } catch (err) {
-      console.error('Failed to load more inbox items:', err);
+      console.error('Failed to load more channels:', err);
     } finally {
       setIsLoadingMore(false);
     }
@@ -130,51 +118,43 @@ export default function InboxSidebar({ className }: SidebarProps) {
     item.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const getItemHref = (item: InboxItem) => {
-    if (item.type === 'dm') {
-      return `/dashboard/inbox/dm/${item.id}`;
-    }
-    return `/dashboard/inbox/channel/${item.id}`;
-  };
+  const itemHref = (item: InboxItem) =>
+    driveId ? `/dashboard/${driveId}/${item.id}` : `/dashboard/channels/${item.id}`;
 
   const isItemActive = (item: InboxItem) => {
-    const itemHref = getItemHref(item);
-    return pathname === itemHref || pathname?.startsWith(`${itemHref}/`);
+    const href = itemHref(item);
+    return pathname === href || pathname?.startsWith(`${href}/`);
   };
 
   return (
     <aside
       className={cn(
-        "flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden",
+        'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden',
         className
       )}
     >
       <div className="flex h-full flex-col px-3 py-3">
-        {/* Drive Switcher - with Electron Mac stoplight button padding */}
-        <div className={cn("mb-3", isElectronMac && isSheetBreakpoint && "pl-[60px]")}>
+        <div className={cn('mb-3', isElectronMac && isSheetBreakpoint && 'pl-[60px]')}>
           <DriveSwitcher />
         </div>
 
-        {/* Primary Navigation (Dashboard, Inbox, Tasks, Calendar) */}
         <PrimaryNavigation driveId={driveId} />
 
-        {/* Search */}
         <div className="relative mb-3">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder={driveId ? "Search channels..." : "Search conversations..."}
+            placeholder="Search channels..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="h-8 pl-8"
           />
         </div>
 
-        {/* Conversations List */}
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-1">
             {error && (
               <div className="text-center py-8 text-muted-foreground text-sm">
-                Failed to load inbox
+                Failed to load channels
               </div>
             )}
 
@@ -186,41 +166,29 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
             {!error && filteredItems.length === 0 && data && (
               <div className="text-center py-8 text-muted-foreground text-sm">
-                {driveId ? 'No channels in this drive' : 'No conversations yet'}
+                {driveId ? 'No channels in this drive' : 'No channels yet'}
               </div>
             )}
 
             {filteredItems.map((item) => {
               const isActive = isItemActive(item);
-
               return (
                 <Link
                   key={`${item.type}-${item.id}`}
-                  href={getItemHref(item)}
+                  href={itemHref(item)}
                   onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
                   className={cn(
                     'flex items-start gap-3 p-2 rounded-lg hover:bg-accent transition-colors cursor-pointer',
                     isActive && 'bg-accent'
                   )}
                 >
-                  {item.type === 'dm' ? (
-                    <Avatar className="h-9 w-9 flex-shrink-0">
-                      <AvatarImage src={item.avatarUrl || ''} />
-                      <AvatarFallback className="text-xs">
-                        {item.name.charAt(0).toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                  ) : (
-                    <div className="h-9 w-9 flex-shrink-0 rounded-full bg-muted flex items-center justify-center">
-                      <Hash className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                  )}
+                  <div className="h-9 w-9 flex-shrink-0 rounded-full bg-muted flex items-center justify-center">
+                    <Hash className="h-4 w-4 text-muted-foreground" />
+                  </div>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="font-medium text-sm truncate flex-1">
-                        {item.type === 'channel' ? `#${item.name}` : item.name}
-                      </p>
+                      <p className="font-medium text-sm truncate flex-1">#{item.name}</p>
                       {item.unreadCount > 0 && (
                         <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded-full bg-primary text-primary-foreground text-xs font-medium">
                           {item.unreadCount}
@@ -231,11 +199,9 @@ export default function InboxSidebar({ className }: SidebarProps) {
                     {item.lastMessageAt && (
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <span>
-                          {formatDistanceToNow(new Date(item.lastMessageAt), {
-                            addSuffix: false,
-                          })}
+                          {formatDistanceToNow(new Date(item.lastMessageAt), { addSuffix: false })}
                         </span>
-                        {item.type === 'channel' && !driveId && item.driveName && (
+                        {!driveId && item.driveName && (
                           <>
                             <span>·</span>
                             <span className="truncate">{item.driveName}</span>
@@ -246,7 +212,7 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
                     {item.lastMessagePreview && (
                       <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        {item.lastMessageSender && item.type === 'channel' && (
+                        {item.lastMessageSender && (
                           <span className="font-medium">{item.lastMessageSender}: </span>
                         )}
                         {item.lastMessagePreview}
@@ -257,7 +223,6 @@ export default function InboxSidebar({ className }: SidebarProps) {
               );
             })}
 
-            {/* Load More */}
             {!searchQuery && pagination?.hasMore && (
               <button
                 onClick={loadMore}
@@ -270,8 +235,7 @@ export default function InboxSidebar({ className }: SidebarProps) {
           </div>
         </ScrollArea>
 
-        {/* Dashboard Actions */}
-        <DashboardFooter />
+        {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
     </aside>
   );

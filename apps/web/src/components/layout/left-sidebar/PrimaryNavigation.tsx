@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Folder, Home, Inbox } from "lucide-react";
+import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/useLayoutStore";
@@ -24,10 +24,21 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             icon: Home,
             exact: true,
         },
+        // DMs are user-scoped, so the entry only appears in the dashboard nav.
+        ...(driveId
+            ? []
+            : [
+                  {
+                      name: "Direct Messages",
+                      href: "/dashboard/dms",
+                      icon: MessageSquare,
+                      exact: false,
+                  },
+              ]),
         {
-            name: "Inbox",
-            href: driveId ? `/dashboard/${driveId}/inbox` : "/dashboard/inbox",
-            icon: Inbox,
+            name: "Channels",
+            href: driveId ? `/dashboard/${driveId}/channels` : "/dashboard/channels",
+            icon: Hash,
             exact: false,
         },
         {

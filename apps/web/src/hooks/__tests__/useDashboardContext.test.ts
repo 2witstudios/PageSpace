@@ -127,9 +127,17 @@ describe('useDashboardContext', () => {
       expect(result.current.isDashboardContext).toBe(false);
     });
 
-    it('should return false for /dashboard/inbox', () => {
+    it('should return false for /dashboard/dms', () => {
       vi.mocked(useParams).mockReturnValue({});
-      vi.mocked(usePathname).mockReturnValue('/dashboard/inbox');
+      vi.mocked(usePathname).mockReturnValue('/dashboard/dms');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for /dashboard/channels', () => {
+      vi.mocked(useParams).mockReturnValue({});
+      vi.mocked(usePathname).mockReturnValue('/dashboard/channels');
 
       const { result } = renderHook(() => useDashboardContext());
       expect(result.current.isDashboardContext).toBe(false);
@@ -159,17 +167,17 @@ describe('useDashboardContext', () => {
       expect(result.current.isDashboardContext).toBe(false);
     });
 
-    it('should return false for drive-level inbox /dashboard/[driveId]/inbox', () => {
+    it('should return false for drive-level channels /dashboard/[driveId]/channels', () => {
       vi.mocked(useParams).mockReturnValue({ driveId: 'drive-123' });
-      vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/inbox');
+      vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/channels');
 
       const { result } = renderHook(() => useDashboardContext());
       expect(result.current.isDashboardContext).toBe(false);
     });
 
-    it('should return false for nested inbox route /dashboard/inbox/dm/[conversationId]', () => {
+    it('should return false for nested DM route /dashboard/dms/[conversationId]', () => {
       vi.mocked(useParams).mockReturnValue({ conversationId: 'conv-789' });
-      vi.mocked(usePathname).mockReturnValue('/dashboard/inbox/dm/conv-789');
+      vi.mocked(usePathname).mockReturnValue('/dashboard/dms/conv-789');
 
       const { result } = renderHook(() => useDashboardContext());
       expect(result.current.isDashboardContext).toBe(false);

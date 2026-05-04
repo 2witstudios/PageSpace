@@ -38,7 +38,7 @@ function resolveDestination(notification: StoredNotification): string | null {
     'conversationId' in notification.metadata &&
     typeof notification.metadata.conversationId === 'string'
   ) {
-    return `/dashboard/inbox/dm/${notification.metadata.conversationId}`;
+    return `/dashboard/dms/${notification.metadata.conversationId}`;
   }
 
   if (

@@ -11,9 +11,10 @@ import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
 const FULL_PAGE_ROUTES = [
   '/dashboard/activity',
   '/dashboard/calendar',
+  '/dashboard/channels',
   '/dashboard/connections',
+  '/dashboard/dms',
   '/dashboard/drives',
-  '/dashboard/inbox',
   '/dashboard/storage',
   '/dashboard/tasks',
   '/dashboard/trash',
@@ -29,7 +30,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname === route || pathname?.startsWith(route + '/')
-  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|files|inbox|tasks|trash|settings|members|workflows)/);
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|channels|files|tasks|trash|settings|members|workflows)/);
 
 
   return (

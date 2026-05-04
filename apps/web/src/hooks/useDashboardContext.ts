@@ -4,7 +4,7 @@ import { useParams, usePathname } from 'next/navigation';
 
 // Full-page routes that render their own content in the center panel
 // (no GlobalAssistantView). The sidebar should show the chat tab for these.
-const FULL_PAGE_ROUTE_PATTERN = /\/(calendar|drives|tasks|inbox)(\/|$)/;
+const FULL_PAGE_ROUTE_PATTERN = /\/(calendar|drives|tasks|dms|channels)(\/|$)/;
 
 /**
  * Hook to detect if we're on a "dashboard context" where GlobalAssistantView
@@ -17,7 +17,7 @@ const FULL_PAGE_ROUTE_PATTERN = /\/(calendar|drives|tasks|inbox)(\/|$)/;
  * NOT dashboard context:
  * - /dashboard/[driveId]/[pageId] (viewing a specific page)
  * - /dashboard/[driveId]/settings (settings pages)
- * - /dashboard/calendar, /dashboard/tasks, /dashboard/inbox (full-page routes)
+ * - /dashboard/calendar, /dashboard/tasks, /dashboard/dms, /dashboard/channels (full-page routes)
  * - /dashboard/[driveId]/calendar, etc. (drive-level full-page routes)
  */
 export function useDashboardContext() {
