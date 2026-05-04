@@ -961,7 +961,7 @@ describe('upload router - magika content-type detection', () => {
     ['svg', 'image/svg+xml'],
     ['xhtml', 'application/xhtml+xml'],
     ['javascript', 'application/javascript'],
-  ])('rejects single-upload with HTTP 415 when magika labels content as script-active %s', async (label, mimeType) => {
+  ])('accepts single-upload when magika labels content as script-active %s (Slack-style: opaque attachment)', async (label, mimeType) => {
     mockDetectContentType.mockResolvedValue({
       label,
       mimeType,
@@ -983,15 +983,14 @@ describe('upload router - magika content-type detection', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    expect(response.status).toBe(415);
-    expect(response.body.error).toContain('Unsupported file type');
-    expect(response.body.detectedLabel).toBe(label);
-    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
-    expect(mockAddJob).not.toHaveBeenCalled();
-    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType,
+      detectedLabel: label,
+    }));
   });
 
-  it('rejects single-upload with HTTP 415 when magika label is denylisted', async () => {
+  it('accepts single-upload when magika labels content as a binary executable (download-only)', async () => {
     mockDetectContentType.mockResolvedValue({
       label: 'macho',
       mimeType: 'application/x-mach-binary',
@@ -1013,12 +1012,11 @@ describe('upload router - magika content-type detection', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    expect(response.status).toBe(415);
-    expect(response.body.error).toContain('Unsupported file type');
-    expect(response.body.detectedLabel).toBe('macho');
-    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
-    expect(mockAddJob).not.toHaveBeenCalled();
-    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'application/x-mach-binary',
+      detectedLabel: 'macho',
+    }));
   });
 
   it('passes verified mimeType and detectedLabel into the ingest job for single uploads', async () => {
@@ -1054,7 +1052,7 @@ describe('upload router - magika content-type detection', () => {
     }));
   });
 
-  it('rejects single-upload with HTTP 415 when magika falls back (fail-closed on unverified content)', async () => {
+  it('accepts single-upload when magika falls back (unknown content stored as octet-stream)', async () => {
     mockDetectContentType.mockResolvedValue({
       label: 'unknown',
       mimeType: 'application/octet-stream',
@@ -1075,15 +1073,14 @@ describe('upload router - magika content-type detection', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    expect(response.status).toBe(415);
-    expect(response.body.error).toBe('Unable to verify file type');
-    expect(response.body.detectedLabel).toBe('unknown');
-    expect(mockAddJob).not.toHaveBeenCalled();
-    expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
-    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'application/octet-stream',
+      detectedLabel: 'unknown',
+    }));
   });
 
-  it('rejects single-upload with HTTP 415 when magika returns an `unknown` label from a real classification', async () => {
+  it('accepts single-upload when magika returns an `unknown` label from a real classification', async () => {
     mockDetectContentType.mockResolvedValue({
       label: 'unknown',
       mimeType: 'application/octet-stream',
@@ -1104,12 +1101,14 @@ describe('upload router - magika content-type detection', () => {
       .post('/upload/single')
       .send({ driveId: 'drive-1', pageId: 'page-1' });
 
-    expect(response.status).toBe(415);
-    expect(response.body.error).toBe('Unable to verify file type');
-    expect(mockAddJob).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'application/octet-stream',
+      detectedLabel: 'unknown',
+    }));
   });
 
-  it('rejects denylisted entries inside multi-upload while still processing siblings', async () => {
+  it('accepts both image and executable entries in multi-upload (no content denylist)', async () => {
     mockDetectContentType
       .mockResolvedValueOnce({
         label: 'png',
@@ -1145,23 +1144,21 @@ describe('upload router - magika content-type detection', () => {
     expect(response.status).toBe(200);
     expect(response.body.files).toHaveLength(2);
 
-    const accepted = response.body.files[0];
-    const rejected = response.body.files[1];
+    const first = response.body.files[0];
+    const second = response.body.files[1];
 
-    expect(accepted.contentHash).toBeDefined();
-    expect(rejected.success).toBe(false);
-    expect(rejected.error).toContain('Unsupported file type');
-    expect(rejected.detectedLabel).toBe('elf');
+    expect(first.contentHash).toBeDefined();
+    expect(second.contentHash).toBeDefined();
 
-    expect(mockAddJob).toHaveBeenCalledTimes(1);
+    expect(mockAddJob).toHaveBeenCalledTimes(2);
     expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
       mimeType: 'image/png',
       detectedLabel: 'png',
     }));
-
-    // Both temp files should be unlinked: one from rejection, one from batch cleanup
-    expect(mockFsUnlink).toHaveBeenCalledWith(`${UPLOAD_TEMP_DIR}/temp-file-2.jpg`);
-    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      mimeType: 'application/x-executable',
+      detectedLabel: 'elf',
+    }));
   });
 });
 
