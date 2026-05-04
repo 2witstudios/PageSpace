@@ -691,6 +691,9 @@ export function useVoiceMode({
     (text: string) => {
       if (!text.trim()) return;
       const { voiceState: currentState } = useVoiceModeStore.getState();
+      // Don't talk over the user. If they are speaking or being transcribed,
+      // drop incoming TTS chunks — barge-in already cleared the existing queue.
+      if (currentState === 'listening' || currentState === 'processing') return;
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
       } else {

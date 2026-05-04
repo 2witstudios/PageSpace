@@ -100,9 +100,8 @@ export function VoiceCallPanel({
     pendingTextRef.current = '';
   }, [isAIStreaming]);
 
-  // When stream ends, always flush any buffered tail. If the user has actually
-  // barged in, bargeIn() clears the speech queue, so an enqueued tail is
-  // discarded there — gating here just races and silently drops content.
+  // When stream ends, flush any buffered tail. queueSentence drops chunks
+  // when the user is mid-barge-in (listening/processing), so this is safe.
   useEffect(() => {
     if (isAIStreaming) return;
     const tail = pendingTextRef.current;
