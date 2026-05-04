@@ -10,28 +10,8 @@ import { processorLogger } from '../logger';
 import { rateLimitUpload } from '../middleware/rate-limit';
 import { hasAuthScope } from '../middleware/auth';
 import { resolvePathWithin, sanitizeExtension } from '../utils/security';
-import { detectContentType, type DetectedContentType } from '../services/content-detector';
+import { detectContentType } from '../services/content-detector';
 import { getMaxFileSizeBytes } from './upload-multer-config';
-
-const DENIED_LABELS: ReadonlySet<string> = new Set([
-  'pebin',
-  'elf',
-  'macho',
-  'dex',
-  'html',
-  'svg',
-  'xhtml',
-  'javascript',
-]);
-
-// Fail closed on unverified content: when Magika can't initialize or falls back
-// to the `unknown` label, we treat the upload as unsafe rather than letting it
-// bypass the denylist. Without this, a broken model / native binding would
-// accept renamed executables because `detected.label` defaults to 'unknown'
-// and escapes DENIED_LABELS.
-function isUnverifiedDetection(detected: DetectedContentType): boolean {
-  return detected.source === 'fallback' || detected.label === 'unknown';
-}
 
 const router = Router();
 
@@ -199,31 +179,6 @@ router.post('/single', upload.single('file'), async (req, res) => {
     });
 
     const detected = await detectContentType(tempPath);
-    if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
-      try {
-        await fs.unlink(tempPath);
-      } catch (cleanupError) {
-        processorLogger.warn('Failed to clean up temp upload after denylist rejection', {
-          tempPath,
-          error: cleanupError instanceof Error ? cleanupError.message : cleanupError
-        });
-      }
-      tempFilePath = undefined;
-      const unverified = isUnverifiedDetection(detected);
-      if (unverified) {
-        processorLogger.warn('Rejecting upload with unverified content type', {
-          tempPath,
-          originalname,
-          source: detected.source,
-          label: detected.label,
-        });
-      }
-      return res.status(415).json({
-        error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
-        detectedLabel: detected.label
-      });
-    }
-
     const verifiedMimeType = detected.mimeType;
     const detectedLabel = detected.label;
 
@@ -415,35 +370,6 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
 
       try {
         const detected = await detectContentType(tempPath);
-        if (DENIED_LABELS.has(detected.label) || isUnverifiedDetection(detected)) {
-          try {
-            await fs.unlink(tempPath);
-          } catch (cleanupError) {
-            processorLogger.warn('Failed to clean up temp upload after denylist rejection', {
-              tempPath,
-              error: cleanupError instanceof Error ? cleanupError.message : cleanupError
-            });
-          }
-          const idx = tempFilePaths.indexOf(tempPath);
-          if (idx >= 0) tempFilePaths.splice(idx, 1);
-          const unverified = isUnverifiedDetection(detected);
-          if (unverified) {
-            processorLogger.warn('Rejecting upload with unverified content type', {
-              tempPath,
-              originalname,
-              source: detected.source,
-              label: detected.label,
-            });
-          }
-          results.push({
-            originalname,
-            error: unverified ? 'Unable to verify file type' : 'Unsupported file type',
-            detectedLabel: detected.label,
-            success: false
-          });
-          continue;
-        }
-
         const verifiedMimeType = detected.mimeType;
         const detectedLabel = detected.label;
 

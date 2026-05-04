@@ -161,10 +161,10 @@ describe('detectContentType', () => {
       expect(result.source).toBe('magika');
     }
 
-    // Each fixture must classify as its canonical label — this is what proves
-    // the DENIED_LABELS denylist would actually catch a renamed executable at
-    // upload time. If we loosen these expectations we lose the load-bearing
-    // evidence that Magika is working.
+    // Each fixture must classify as its canonical label — Magika's label feeds
+    // the MIME mapping table, which the ingest worker branches on to pick
+    // thumbnail vs text-extraction paths. If we loosen these expectations we
+    // lose the evidence that Magika is correctly classifying real bytes.
     expect(png.label).toBe('png');
     expect(py.label).toBe('python');
     expect(pdf.label).toBe('pdf');
