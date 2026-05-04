@@ -16,7 +16,7 @@ const DANGEROUS_PROTOCOL = /^\s*(javascript|data|vbscript):/i;
 const ABSOLUTE_OR_RELATIVE = /^(https?:\/\/|ftp:\/\/|mailto:|tel:|#|\/|\?|\.{1,2}\/)/i;
 const LOOKS_LIKE_HOSTNAME = /^[^\s/?#]+\.[^\s]+/;
 
-const normalizeUrl = (raw: string): string => {
+export const normalizeUrl = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   if (DANGEROUS_PROTOCOL.test(trimmed)) return '';
