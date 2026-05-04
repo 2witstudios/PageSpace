@@ -4,7 +4,6 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
-import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { desc } from '@pagespace/db/operators';
