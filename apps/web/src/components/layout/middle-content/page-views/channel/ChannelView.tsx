@@ -4,10 +4,14 @@ import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/ai/ui/conversation';
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -22,7 +26,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import {
   type AttachmentMeta,
   type FileRelation,
@@ -53,7 +56,6 @@ function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
@@ -67,7 +69,6 @@ function ChannelView({ page }: ChannelViewProps) {
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const skipAutoScrollRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
 
@@ -119,16 +120,6 @@ function ChannelView({ page }: ChannelViewProps) {
       socket.off('new_message', handleNewMessage);
     };
   }, [socket, connectionStatus, page.id]);
-
-  useEffect(() => {
-    if (skipAutoScrollRef.current) {
-      skipAutoScrollRef.current = false;
-      return;
-    }
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-    }
-  }, [messages]);
 
   const handleSubmit = async (content: string, attachment?: FileAttachment) => {
     if (!user) return;
@@ -209,7 +200,6 @@ function ChannelView({ page }: ChannelViewProps) {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages?cursor=${encodeURIComponent(nextCursor)}`);
       const data = await res.json();
       const olderMessages: MessageWithReactions[] = data.messages ?? data;
-      skipAutoScrollRef.current = true;
       setMessages((prev) => [...olderMessages, ...prev]);
       setHasMore(data.hasMore ?? false);
       setNextCursor(data.nextCursor ?? null);
@@ -219,19 +209,6 @@ function ChannelView({ page }: ChannelViewProps) {
       setLoadingOlder(false);
     }
   }, [page.id, hasMore, loadingOlder, nextCursor]);
-
-  // Pull-to-refresh handler for mobile - re-fetch messages if real-time missed any
-  const handleRefresh = useCallback(async () => {
-    try {
-      const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
-      const data = await res.json();
-      setMessages(data.messages ?? data);
-      setHasMore(data.hasMore ?? false);
-      setNextCursor(data.nextCursor ?? null);
-    } catch (error) {
-      console.error('Failed to refresh messages:', error);
-    }
-  }, [page.id]);
 
   // Reaction handlers
   const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
@@ -411,10 +388,9 @@ function ChannelView({ page }: ChannelViewProps) {
 
   return (
     <div className="flex flex-col h-full">
-        <div className="flex-grow overflow-hidden">
-          <PullToRefresh direction="top" onRefresh={handleRefresh}>
-            <ScrollArea className="h-full" ref={scrollAreaRef}>
-                <div className="p-4 space-y-4 max-w-4xl mx-auto">
+        <div className="flex-grow overflow-hidden relative">
+          <Conversation>
+            <ConversationContent className="p-4 space-y-4 max-w-4xl mx-auto">
                     {hasMore && (
                       <div className="flex justify-center py-2">
                         <button
@@ -543,9 +519,9 @@ function ChannelView({ page }: ChannelViewProps) {
                         </div>
                         );
                     })}
-                </div>
-            </ScrollArea>
-          </PullToRefresh>
+            </ConversationContent>
+            <ConversationScrollButton className="z-20 bottom-6" />
+          </Conversation>
         </div>
         <div className="flex-shrink-0 border-t border-border p-4">
           <div className="max-w-4xl mx-auto">

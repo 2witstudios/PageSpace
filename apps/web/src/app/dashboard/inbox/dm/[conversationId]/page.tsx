@@ -3,8 +3,12 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/ai/ui/conversation';
 import { ChannelInput, type ChannelInputRef } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
@@ -90,7 +94,6 @@ export default function InboxDMPage() {
   const [inputValue, setInputValue] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
 
@@ -140,13 +143,6 @@ export default function InboxDMPage() {
       socket.emit('leave_dm_conversation', conversationId);
     };
   }, [conversationId, user, socket]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-    }
-  }, [messages]);
 
   const handleEditMessage = useCallback(async (messageId: string, content: string) => {
     const editedAt = new Date().toISOString();
@@ -256,9 +252,9 @@ export default function InboxDMPage() {
       </div>
 
       {/* Messages */}
-      <div className="flex-grow overflow-hidden">
-        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
-          <div className="space-y-4 max-w-4xl mx-auto">
+      <div className="flex-grow overflow-hidden relative">
+        <Conversation>
+          <ConversationContent className="space-y-4 max-w-4xl mx-auto p-4">
             {messages.map((message) => {
               const isOwnMessage = message.senderId === user?.id;
               const senderName = isOwnMessage ? 'You' : displayName;
@@ -375,8 +371,9 @@ export default function InboxDMPage() {
                 </div>
               );
             })}
-          </div>
-        </ScrollArea>
+          </ConversationContent>
+          <ConversationScrollButton className="z-20 bottom-6" />
+        </Conversation>
       </div>
 
       {/* Input */}
