@@ -105,6 +105,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
         <button
           type="button"
           aria-label={isActive ? 'Edit link' : 'Add link'}
+          aria-keyshortcuts={variant === 'toolbar' ? 'Meta+K Control+K' : undefined}
           onMouseDown={(e) => e.preventDefault()}
           className={triggerClass}
         >
