@@ -27,6 +27,16 @@ export async function GET(request: Request) {
     });
     const cursor = searchParams.get('cursor'); // ISO timestamp or "id:<id>" for null timestamps
     const driveId = searchParams.get('driveId'); // Optional: filter to specific drive
+    const typeParam = searchParams.get('type');
+    const type: 'dm' | 'channel' | 'all' =
+      typeParam === 'dm' || typeParam === 'channel' ? typeParam : 'all';
+
+    if (type === 'dm' && driveId) {
+      return NextResponse.json(
+        { error: 'type=dm cannot be combined with driveId (DMs are user-scoped)' },
+        { status: 400 }
+      );
+    }
 
     // Fetch one extra row to determine if there are more results
     const fetchLimit = limit + 1;
@@ -147,145 +157,149 @@ export async function GET(request: Request) {
       const cursorId = isIdCursor ? cursor.slice(3) : null;
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
-      // Fetch DM conversations with cursor filtering
-      const dmResults = await db.execute<DMRow>(sql`
-        WITH dm_data AS (
+      // Fetch DM conversations with cursor filtering (skipped when filter excludes DMs)
+      if (type !== 'channel') {
+        const dmResults = await db.execute<DMRow>(sql`
+          WITH dm_data AS (
+            SELECT
+              c.id,
+              c."lastMessageAt",
+              c."lastMessagePreview",
+              CASE
+                WHEN c."participant1Id" = ${userId} THEN c."participant2Id"
+                ELSE c."participant1Id"
+              END as other_user_id
+            FROM dm_conversations c
+            WHERE c."participant1Id" = ${userId} OR c."participant2Id" = ${userId}
+          ),
+          unread_counts AS (
+            SELECT
+              dm."conversationId",
+              COUNT(*) as unread_count
+            FROM direct_messages dm
+            INNER JOIN dm_data dd ON dm."conversationId" = dd.id
+            WHERE dm."senderId" = dd.other_user_id
+              AND dm."isRead" = false
+              AND dm."isActive" = true
+            GROUP BY dm."conversationId"
+          )
           SELECT
-            c.id,
-            c."lastMessageAt",
-            c."lastMessagePreview",
-            CASE
-              WHEN c."participant1Id" = ${userId} THEN c."participant2Id"
-              ELSE c."participant1Id"
-            END as other_user_id
-          FROM dm_conversations c
-          WHERE c."participant1Id" = ${userId} OR c."participant2Id" = ${userId}
-        ),
-        unread_counts AS (
-          SELECT
-            dm."conversationId",
-            COUNT(*) as unread_count
-          FROM direct_messages dm
-          INNER JOIN dm_data dd ON dm."conversationId" = dd.id
-          WHERE dm."senderId" = dd.other_user_id
-            AND dm."isRead" = false
-            AND dm."isActive" = true
-          GROUP BY dm."conversationId"
-        )
-        SELECT
-          dd.id,
-          dd."lastMessageAt" as last_message_at,
-          dd."lastMessagePreview" as last_message,
-          u.name as other_user_name,
-          up."displayName" as other_user_display_name,
-          up."avatarUrl" as other_user_avatar_url,
-          COALESCE(uc.unread_count, 0) as unread_count
-        FROM dm_data dd
-        LEFT JOIN users u ON u.id = dd.other_user_id
-        LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
-        LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
-        ${cursorTimestamp
-          ? sql`WHERE (dd."lastMessageAt" < ${cursorTimestamp} OR dd."lastMessageAt" IS NULL)`
-          : cursorId
-            ? sql`WHERE dd."lastMessageAt" IS NULL AND dd.id < ${cursorId}`
-            : sql``}
-        ORDER BY dd."lastMessageAt" DESC NULLS LAST
-        LIMIT ${fetchLimit}
-      `);
+            dd.id,
+            dd."lastMessageAt" as last_message_at,
+            dd."lastMessagePreview" as last_message,
+            u.name as other_user_name,
+            up."displayName" as other_user_display_name,
+            up."avatarUrl" as other_user_avatar_url,
+            COALESCE(uc.unread_count, 0) as unread_count
+          FROM dm_data dd
+          LEFT JOIN users u ON u.id = dd.other_user_id
+          LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
+          LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
+          ${cursorTimestamp
+            ? sql`WHERE (dd."lastMessageAt" < ${cursorTimestamp} OR dd."lastMessageAt" IS NULL)`
+            : cursorId
+              ? sql`WHERE dd."lastMessageAt" IS NULL AND dd.id < ${cursorId}`
+              : sql``}
+          ORDER BY dd."lastMessageAt" DESC NULLS LAST
+          LIMIT ${fetchLimit}
+        `);
 
-      for (const row of dmResults.rows) {
-        items.push({
-          id: row.id,
-          type: 'dm',
-          name: row.other_user_display_name || row.other_user_name,
-          avatarUrl: row.other_user_avatar_url,
-          lastMessageAt: toISOTimestamp(row.last_message_at),
-          lastMessagePreview: row.last_message,
-          lastMessageSender: null,
-          unreadCount: parseInt(row.unread_count) || 0,
-        });
+        for (const row of dmResults.rows) {
+          items.push({
+            id: row.id,
+            type: 'dm',
+            name: row.other_user_display_name || row.other_user_name,
+            avatarUrl: row.other_user_avatar_url,
+            lastMessageAt: toISOTimestamp(row.last_message_at),
+            lastMessagePreview: row.last_message,
+            lastMessageSender: null,
+            unreadCount: parseInt(row.unread_count) || 0,
+          });
+        }
       }
 
-      // Fetch channels from all drives user is member of or owns
-      const channelResults = await db.execute<ChannelRow>(sql`
-        WITH user_channels AS (
+      // Fetch channels from all drives user is member of or owns (skipped when filter excludes channels)
+      if (type !== 'dm') {
+        const channelResults = await db.execute<ChannelRow>(sql`
+          WITH user_channels AS (
+            SELECT
+              p.id,
+              p.title,
+              p."driveId",
+              d.name as drive_name
+            FROM pages p
+            INNER JOIN drives d ON d.id = p."driveId"
+            LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+            WHERE p.type = 'CHANNEL'
+              AND p."isTrashed" = false
+              AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
+          ),
+          channel_last_messages AS (
+            SELECT DISTINCT ON (cm."pageId")
+              cm."pageId",
+              cm.content as last_message,
+              cm."createdAt" as last_message_at,
+              COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
+            FROM channel_messages cm
+            INNER JOIN user_channels uc ON uc.id = cm."pageId"
+            LEFT JOIN users u ON u.id = cm."userId"
+            ORDER BY cm."pageId", cm."createdAt" DESC
+          ),
+          channel_unread AS (
+            SELECT cm."pageId", COUNT(*) as unread_count
+            FROM channel_messages cm
+            LEFT JOIN channel_read_status crs
+              ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
+            WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+              AND (
+                cm."userId" != ${userId}
+                OR cm."aiMeta"->>'senderType' = 'agent'
+              )
+            GROUP BY cm."pageId"
+          )
           SELECT
-            p.id,
-            p.title,
-            p."driveId",
-            d.name as drive_name
-          FROM pages p
-          INNER JOIN drives d ON d.id = p."driveId"
-          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
-          WHERE p.type = 'CHANNEL'
-            AND p."isTrashed" = false
-            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
-        ),
-        channel_last_messages AS (
-          SELECT DISTINCT ON (cm."pageId")
-            cm."pageId",
-            cm.content as last_message,
-            cm."createdAt" as last_message_at,
-            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
-          FROM channel_messages cm
-          INNER JOIN user_channels uc ON uc.id = cm."pageId"
-          LEFT JOIN users u ON u.id = cm."userId"
-          ORDER BY cm."pageId", cm."createdAt" DESC
-        ),
-        channel_unread AS (
-          SELECT cm."pageId", COUNT(*) as unread_count
-          FROM channel_messages cm
-          LEFT JOIN channel_read_status crs
-            ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
-          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND (
-              cm."userId" != ${userId}
-              OR cm."aiMeta"->>'senderType' = 'agent'
-            )
-          GROUP BY cm."pageId"
-        )
-        SELECT
-          uc.id,
-          uc.title as name,
-          uc."driveId" as drive_id,
-          uc.drive_name,
-          clm.last_message,
-          clm.last_message_at,
-          clm.sender_name,
-          COALESCE(cu.unread_count, 0) as unread_count
-        FROM user_channels uc
-        LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
-        LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
-        ${cursorTimestamp
-          ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
-          : cursorId
-            ? sql`WHERE clm.last_message_at IS NULL AND uc.id < ${cursorId}`
-            : sql``}
-        ORDER BY clm.last_message_at DESC NULLS LAST
-        LIMIT ${fetchLimit}
-      `);
+            uc.id,
+            uc.title as name,
+            uc."driveId" as drive_id,
+            uc.drive_name,
+            clm.last_message,
+            clm.last_message_at,
+            clm.sender_name,
+            COALESCE(cu.unread_count, 0) as unread_count
+          FROM user_channels uc
+          LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
+          LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
+          ${cursorTimestamp
+            ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
+            : cursorId
+              ? sql`WHERE clm.last_message_at IS NULL AND uc.id < ${cursorId}`
+              : sql``}
+          ORDER BY clm.last_message_at DESC NULLS LAST
+          LIMIT ${fetchLimit}
+        `);
 
-      const channelPermissions = await getBatchPagePermissions(
-        userId,
-        channelResults.rows.map((row) => row.id)
-      );
+        const channelPermissions = await getBatchPagePermissions(
+          userId,
+          channelResults.rows.map((row) => row.id)
+        );
 
-      for (const row of channelResults.rows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
+        for (const row of channelResults.rows) {
+          const permissions = channelPermissions.get(row.id);
+          if (!permissions?.canView) continue;
 
-        items.push({
-          id: row.id,
-          type: 'channel',
-          name: row.name,
-          avatarUrl: null,
-          lastMessageAt: toISOTimestamp(row.last_message_at),
-          lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          lastMessageSender: row.sender_name,
-          unreadCount: parseInt(row.unread_count) || 0,
-          driveId: row.drive_id,
-          driveName: row.drive_name,
-        });
+          items.push({
+            id: row.id,
+            type: 'channel',
+            name: row.name,
+            avatarUrl: null,
+            lastMessageAt: toISOTimestamp(row.last_message_at),
+            lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
+            lastMessageSender: row.sender_name,
+            unreadCount: parseInt(row.unread_count) || 0,
+            driveId: row.drive_id,
+            driveName: row.drive_name,
+          });
+        }
       }
 
       // Sort combined results by lastMessageAt
