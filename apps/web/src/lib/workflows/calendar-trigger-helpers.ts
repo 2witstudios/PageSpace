@@ -1,6 +1,16 @@
 import type { db as DbType } from '@pagespace/db/db';
+import { eq, and, inArray } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+
+const MAX_CONTEXT_PAGES = 10;
+
+// Drizzle tx exposes the same insert/select/update/delete chain shape as the
+// top-level db, so helpers that don't open their own transaction can take
+// either. Call sites that are already inside an outer tx pass the tx; call
+// sites that aren't pass `db`.
+type DbOrTx = typeof DbType | Parameters<Parameters<typeof DbType.transaction>[0]>[0];
 
 export interface CalendarAgentTriggerInput {
   agentPageId: string;
@@ -53,4 +63,175 @@ export async function createCalendarTriggerWorkflow(
   }).returning({ id: calendarTriggers.id });
 
   return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id };
+}
+
+export interface ValidateCalendarAgentTriggerParams {
+  driveId: string;
+  agentTrigger: CalendarAgentTriggerInput;
+}
+
+/**
+ * Pre-write validation for calendar agent triggers. Mirrors the checks
+ * task-trigger-helpers does inline for tasks: at least a prompt or instruction
+ * page, agent is an AI_CHAT in the same drive, instruction + context pages all
+ * live in the same drive and aren't trashed, context list capped at 10.
+ *
+ * Both the REST POST and the AI create_calendar_event tool call this so the
+ * two surfaces can never drift on what's accepted.
+ */
+export async function validateCalendarAgentTrigger(
+  database: typeof DbType,
+  params: ValidateCalendarAgentTriggerParams,
+): Promise<{ agentPageId: string }> {
+  const { driveId, agentTrigger } = params;
+  const promptText = agentTrigger.prompt?.trim() ?? '';
+
+  if (!promptText && !agentTrigger.instructionPageId) {
+    throw new Error('Agent trigger needs either a prompt or instructionPageId');
+  }
+
+  const contextPageIds = agentTrigger.contextPageIds ?? [];
+  if (contextPageIds.length > MAX_CONTEXT_PAGES) {
+    throw new Error(`Agent trigger accepts at most ${MAX_CONTEXT_PAGES} context pages`);
+  }
+
+  const agent = await database.query.pages.findFirst({
+    where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
+    columns: { id: true, driveId: true },
+  });
+  if (!agent) throw new Error('Agent page not found or not an AI agent');
+  if (agent.driveId !== driveId) throw new Error('Agent must be in the same drive as the event');
+
+  if (agentTrigger.instructionPageId) {
+    const instrPage = await database.query.pages.findFirst({
+      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
+      columns: { id: true },
+    });
+    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
+  }
+
+  if (contextPageIds.length > 0) {
+    const validPages = await database.query.pages.findMany({
+      where: and(
+        inArray(pages.id, contextPageIds),
+        eq(pages.driveId, driveId),
+        eq(pages.isTrashed, false),
+      ),
+      columns: { id: true },
+    });
+    if (validPages.length !== contextPageIds.length) {
+      throw new Error('Some context pages were not found or are not in the same drive');
+    }
+  }
+
+  return { agentPageId: agent.id };
+}
+
+/**
+ * Remove the agent trigger from a calendar event. Deletes the linked workflows
+ * row(s); FK cascade drops the calendar_triggers rows. Treats a no-op
+ * (no triggers exist) as success so callers don't need a pre-check.
+ *
+ * Accepts either `db` or a transaction handle so callers that are already in
+ * an outer tx (e.g. PATCH /events/[id]) can keep event + trigger writes
+ * atomic.
+ */
+export async function removeCalendarTrigger(
+  database: DbOrTx,
+  calendarEventId: string,
+): Promise<void> {
+  const triggerRows = await database
+    .select({ workflowId: calendarTriggers.workflowId })
+    .from(calendarTriggers)
+    .where(eq(calendarTriggers.calendarEventId, calendarEventId));
+
+  if (triggerRows.length === 0) return;
+
+  const workflowIds = triggerRows.map((r) => r.workflowId);
+  await database.delete(workflows).where(inArray(workflows.id, workflowIds));
+}
+
+export interface UpsertCalendarTriggerWorkflowParams {
+  driveId: string;
+  scheduledById: string;
+  calendarEventId: string;
+  triggerAt: Date;
+  timezone: string;
+  agentTrigger: CalendarAgentTriggerInput;
+}
+
+/**
+ * In-tx version of upsertCalendarTriggerWorkflow. Caller is responsible for
+ * pre-validating via validateCalendarAgentTrigger. Used by event PATCH /
+ * AI update_calendar_event so the event update and the trigger upsert commit
+ * (or roll back) together — protects against partial-write states where a
+ * non-trigger validation failure (e.g. db blip mid-upsert) leaves the event
+ * mutated but the trigger out of sync.
+ */
+export async function upsertCalendarTriggerWorkflowInTx(
+  tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0],
+  params: UpsertCalendarTriggerWorkflowParams,
+): Promise<{ workflowId: string; triggerId: string }> {
+  const triggerPrompt = params.agentTrigger.prompt?.trim() || 'Execute instructions from linked page.';
+  const contextPageIds = params.agentTrigger.contextPageIds ?? [];
+
+  const existing = await tx
+    .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId })
+    .from(calendarTriggers)
+    .where(eq(calendarTriggers.calendarEventId, params.calendarEventId));
+
+  if (existing.length > 0) {
+    const { id: triggerId, workflowId } = existing[0];
+
+    await tx.update(workflows).set({
+      agentPageId: params.agentTrigger.agentPageId,
+      prompt: triggerPrompt,
+      instructionPageId: params.agentTrigger.instructionPageId ?? null,
+      contextPageIds,
+      timezone: params.timezone,
+      isEnabled: true,
+    }).where(eq(workflows.id, workflowId));
+
+    await tx.update(calendarTriggers).set({
+      triggerAt: params.triggerAt,
+    }).where(eq(calendarTriggers.id, triggerId));
+
+    return { workflowId, triggerId };
+  }
+
+  return createCalendarTriggerWorkflow({
+    tx,
+    driveId: params.driveId,
+    scheduledById: params.scheduledById,
+    calendarEventId: params.calendarEventId,
+    triggerAt: params.triggerAt,
+    timezone: params.timezone,
+    agentTrigger: params.agentTrigger,
+  });
+}
+
+/**
+ * Upsert an event's agent trigger.
+ *
+ * If a trigger row already exists for this event, updates the linked workflows
+ * row in place (agent / prompt / instruction / context pages) and re-aims
+ * triggerAt — the workflowId stays stable so any historical workflow_runs
+ * stays cleanly linked. If no trigger exists yet, falls through to
+ * createCalendarTriggerWorkflow inside the same transaction.
+ *
+ * Validation runs before the transaction so a bad agent or off-drive context
+ * page doesn't briefly hold a row lock. Used by the standalone PUT /triggers
+ * endpoint; PATCH event uses upsertCalendarTriggerWorkflowInTx instead so its
+ * event update and trigger upsert commit atomically.
+ */
+export async function upsertCalendarTriggerWorkflow(
+  database: typeof DbType,
+  params: UpsertCalendarTriggerWorkflowParams,
+): Promise<{ workflowId: string; triggerId: string }> {
+  await validateCalendarAgentTrigger(database, {
+    driveId: params.driveId,
+    agentTrigger: params.agentTrigger,
+  });
+
+  return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
 }

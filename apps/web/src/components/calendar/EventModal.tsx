@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { Bot, CalendarIcon, Clock, MapPin, Trash2 } from 'lucide-react';
+import { CalendarIcon, Clock, MapPin, Trash2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -30,13 +30,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { CalendarEvent, EVENT_COLORS } from './calendar-types';
-
-interface DriveAgent {
-  id: string;
-  title: string | null;
-}
+import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
+import { EventAgentTriggerDialog } from './EventAgentTriggerDialog';
 
 interface EventModalProps {
   isOpen: boolean;
@@ -56,7 +52,7 @@ interface EventModalProps {
     allDay: boolean;
     color?: string;
     attendeeIds?: string[];
-    agentTrigger?: { agentPageId: string; prompt: string };
+    pageId?: string | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
   driveId?: string;
@@ -87,12 +83,17 @@ export function EventModal({
   context,
 }: EventModalProps) {
   const isEditing = !!event;
-  const canScheduleAgent = context === 'drive' && !!driveId && !isEditing;
+  const isDriveContext = context === 'drive' && !!driveId;
+  // Agent triggers live in their own dialog now (parity with TaskAgentTriggersDialog).
+  // Open it from the "Configure agent trigger" button below — only meaningful for
+  // saved drive events because the executor needs a drive + a real eventId.
+  const canManageAgent = isDriveContext && isEditing && !!event;
 
   // Form state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
+  const [linkedPageId, setLinkedPageId] = useState<string | null>(null);
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [startTime, setStartTime] = useState('09:00');
   const [endDate, setEndDate] = useState<Date>(new Date());
@@ -100,13 +101,7 @@ export function EventModal({
   const [allDay, setAllDay] = useState(false);
   const [color, setColor] = useState<keyof typeof EVENT_COLORS>('default');
   const [isSaving, setIsSaving] = useState(false);
-
-  // Agent scheduling state
-  const [scheduleAgent, setScheduleAgent] = useState(false);
-  const [selectedAgentId, setSelectedAgentId] = useState('');
-  const [agentPrompt, setAgentPrompt] = useState('');
-  const [agents, setAgents] = useState<DriveAgent[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
 
   // Initialize form when modal opens
   useEffect(() => {
@@ -115,6 +110,7 @@ export function EventModal({
         setTitle(event.title);
         setDescription(event.description ?? '');
         setLocation(event.location ?? '');
+        setLinkedPageId(event.pageId ?? null);
         setAllDay(event.allDay);
         setColor(event.color as keyof typeof EVENT_COLORS);
 
@@ -128,6 +124,7 @@ export function EventModal({
         setTitle('');
         setDescription('');
         setLocation('');
+        setLinkedPageId(null);
         setAllDay(defaultValues.allDay);
         setColor('default');
         setStartDate(defaultValues.startAt);
@@ -145,6 +142,7 @@ export function EventModal({
         setTitle('');
         setDescription('');
         setLocation('');
+        setLinkedPageId(null);
         setAllDay(false);
         setColor('default');
         setStartDate(start);
@@ -152,25 +150,8 @@ export function EventModal({
         setStartTime(format(start, 'HH:mm'));
         setEndTime(format(end, 'HH:mm'));
       }
-
-      // Reset agent scheduling state
-      setScheduleAgent(false);
-      setSelectedAgentId('');
-      setAgentPrompt('');
     }
   }, [isOpen, event, defaultValues]);
-
-  // Fetch drive agents when modal opens in drive context
-  useEffect(() => {
-    if (!isOpen || !canScheduleAgent || !driveId) return;
-
-    setAgentsLoading(true);
-    fetchWithAuth(`/api/drives/${driveId}/agents`)
-      .then(res => res.ok ? res.json() : Promise.reject())
-      .then(data => setAgents(data.agents ?? []))
-      .catch(() => setAgents([]))
-      .finally(() => setAgentsLoading(false));
-  }, [isOpen, canScheduleAgent, driveId]);
 
   const buildDateTime = (date: Date, time: string): Date => {
     const [hours, minutes] = time.split(':').map(Number);
@@ -182,11 +163,6 @@ export function EventModal({
   const handleSave = async () => {
     if (!title.trim()) {
       toast.error('Please enter a title');
-      return;
-    }
-
-    if (scheduleAgent && (!selectedAgentId || selectedAgentId === '__none' || !agentPrompt.trim())) {
-      toast.error('Please select an agent and enter a prompt');
       return;
     }
 
@@ -212,9 +188,7 @@ export function EventModal({
         endAt,
         allDay,
         color,
-        agentTrigger: scheduleAgent && selectedAgentId && agentPrompt.trim()
-          ? { agentPageId: selectedAgentId, prompt: agentPrompt.trim() }
-          : undefined,
+        pageId: isDriveContext ? linkedPageId : undefined,
       });
       toast.success(isEditing ? 'Event updated' : 'Event created');
       onClose();
@@ -404,75 +378,20 @@ export function EventModal({
             </div>
           </div>
 
-          {/* Agent scheduling (drive context, new events only) */}
-          {canScheduleAgent && (
-            <div className="space-y-3 rounded-md border p-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-muted-foreground" />
-                  <Label
-                    htmlFor="schedule-agent"
-                    className={agentsLoading || agents.length > 0 ? 'cursor-pointer font-medium' : 'font-medium text-muted-foreground'}
-                  >
-                    Run agent
-                  </Label>
-                </div>
-                <Switch
-                  id="schedule-agent"
-                  checked={scheduleAgent}
-                  onCheckedChange={setScheduleAgent}
-                  disabled={!agentsLoading && agents.length === 0}
-                />
-              </div>
-              {!agentsLoading && agents.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  No agents in this drive. Create an AI agent page first.
-                </p>
-              )}
-
-              {scheduleAgent && (
-                <div className="space-y-3 pt-1">
-                  <div className="space-y-2">
-                    <Label>Agent</Label>
-                    <Select
-                      value={selectedAgentId}
-                      onValueChange={setSelectedAgentId}
-                      disabled={agentsLoading}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={agentsLoading ? 'Loading agents…' : 'Select an agent'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {agents.length === 0 && !agentsLoading && (
-                          <SelectItem value="__none" disabled>
-                            No agents in this drive
-                          </SelectItem>
-                        )}
-                        {agents.map((agent) => (
-                          <SelectItem key={agent.id} value={agent.id}>
-                            {agent.title ?? 'Untitled agent'}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="agent-prompt">Prompt</Label>
-                    <Textarea
-                      id="agent-prompt"
-                      placeholder="What should the agent do when this event starts?"
-                      value={agentPrompt}
-                      onChange={(e) => setAgentPrompt(e.target.value)}
-                      rows={3}
-                    />
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    The agent will run at the event&apos;s start time.
-                  </p>
-                </div>
-              )}
+          {/* Linked page (drive events only — events in a drive can carry a doc the way task items do via taskItems.pageId) */}
+          {isDriveContext && driveId && (
+            <div className="space-y-2">
+              <Label>Linked page</Label>
+              <TriggerPagePicker
+                mode="single"
+                driveId={driveId}
+                value={linkedPageId}
+                onChange={setLinkedPageId}
+                placeholder="Pick a doc, sheet, or other page…"
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. Surfaces a related doc on the event.
+              </p>
             </div>
           )}
 
@@ -487,6 +406,21 @@ export function EventModal({
               rows={3}
             />
           </div>
+
+          {/* Agent trigger button — opens dedicated dialog (parity with TaskAgentTriggersDialog).
+              Only meaningful for saved drive events because the dialog needs an eventId
+              + drive context to upsert into /api/calendar/events/:id/triggers. */}
+          {canManageAgent && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-start"
+              onClick={() => setAgentDialogOpen(true)}
+            >
+              <Zap className="mr-2 h-4 w-4 text-amber-500" />
+              Configure agent trigger
+            </Button>
+          )}
           </div>
         </fieldset>
 
@@ -510,6 +444,15 @@ export function EventModal({
           </Button>
         </DialogFooter>
       </DialogContent>
+      {canManageAgent && event && driveId && (
+        <EventAgentTriggerDialog
+          open={agentDialogOpen}
+          onOpenChange={setAgentDialogOpen}
+          eventId={event.id}
+          eventTitle={event.title}
+          driveId={driveId}
+        />
+      )}
     </Dialog>
   );
 }

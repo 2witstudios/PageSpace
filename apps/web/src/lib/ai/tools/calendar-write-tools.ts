@@ -7,7 +7,12 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
-import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
+import {
+  createCalendarTriggerWorkflow,
+  removeCalendarTrigger,
+  upsertCalendarTriggerWorkflowInTx,
+  validateCalendarAgentTrigger,
+} from '@/lib/workflows/calendar-trigger-helpers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -429,9 +434,18 @@ export const calendarWriteTools = {
         .describe('New visibility setting'),
       color: z.string().optional().describe('New color category'),
       pageId: z.string().nullable().optional().describe('Page ID to link to'),
+      agentTrigger: z.union([
+        z.object({
+          agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
+          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
+          instructionPageId: z.string().nullable().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
+          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+        }),
+        z.null().describe('Pass null to remove an existing agent trigger.'),
+      ]).optional().describe('Upsert (object) or remove (null) the event\'s agent trigger. Requires the event to live in a drive.'),
     }),
     execute: async (
-      { eventId, title, startAt, endAt, description, location, allDay, timezone, recurrence, visibility, color, pageId },
+      { eventId, title, startAt, endAt, description, location, allDay, timezone, recurrence, visibility, color, pageId, agentTrigger },
       { experimental_context: ctx }
     ) => {
       const userId = (ctx as ToolExecutionContext)?.userId;
@@ -493,53 +507,105 @@ export const calendarWriteTools = {
         if (color !== undefined) updates.color = color;
         if (pageId !== undefined) updates.pageId = pageId;
 
-        // If changing to PRIVATE visibility, remove all attendees except the creator
-        // This ensures the privacy guarantee is maintained when transitioning from shared to private
-        let removedAttendeesCount = 0;
-        if (visibility === 'PRIVATE' && event.visibility !== 'PRIVATE') {
-          const deletedAttendees = await db
-            .delete(eventAttendees)
-            .where(
-              and(
-                eq(eventAttendees.eventId, eventId),
-                ne(eventAttendees.userId, event.createdById)
-              )
-            )
-            .returning({ userId: eventAttendees.userId });
-          removedAttendeesCount = deletedAttendees.length;
+        // Reject agentTrigger upserts on personal events; trigger executor
+        // needs a drive context to resolve agent / instruction / context pages.
+        if (agentTrigger && !event.driveId) {
+          return {
+            success: false,
+            error: 'Agent triggers require a drive event. This event has no drive.',
+          };
+        }
 
-          if (removedAttendeesCount > 0) {
-            calendarWriteLogger.info('Removed attendees due to PRIVATE visibility change', {
-              eventId: maskIdentifier(eventId),
-              removedCount: removedAttendeesCount,
+        // Reject agentTrigger upserts on recurring events. The cron poller
+        // fires triggers as one-shot occurrences, so attaching one to a
+        // recurring event would silently misfire on every occurrence after
+        // the first. Mirrors the create_calendar_event guard.
+        const willBeRecurring = recurrence !== undefined ? recurrence !== null : event.recurrenceRule !== null;
+        if (agentTrigger && willBeRecurring) {
+          return {
+            success: false,
+            error: 'Agent triggers are not supported for recurring events.',
+          };
+        }
+
+        // Pre-validate agentTrigger BEFORE opening the tx so a bad payload
+        // (off-drive agent / context page, missing prompt-or-instruction)
+        // doesn't briefly hold row locks during the event update.
+        if (agentTrigger && event.driveId) {
+          try {
+            await validateCalendarAgentTrigger(db, {
+              driveId: event.driveId,
+              agentTrigger,
             });
+          } catch (err) {
+            return {
+              success: false,
+              error: err instanceof Error ? err.message : 'Invalid agent trigger',
+            };
           }
         }
 
-        // Update the event
-        const [updatedEvent] = await db
-          .update(calendarEvents)
-          .set(updates)
-          .where(eq(calendarEvents.id, eventId))
-          .returning();
+        // Single transaction wraps: PRIVATE-visibility attendee cleanup,
+        // event update, trigger time re-aim, and agentTrigger upsert/remove.
+        // All-or-nothing so a partial failure (e.g. trigger upsert hits a FK
+        // surprise) rolls the event update back too.
+        let removedAttendeesCount = 0;
+        const updatedEvent = await db.transaction(async (tx) => {
+          if (visibility === 'PRIVATE' && event.visibility !== 'PRIVATE') {
+            const deletedAttendees = await tx
+              .delete(eventAttendees)
+              .where(
+                and(
+                  eq(eventAttendees.eventId, eventId),
+                  ne(eventAttendees.userId, event.createdById)
+                )
+              )
+              .returning({ userId: eventAttendees.userId });
+            removedAttendeesCount = deletedAttendees.length;
+          }
 
-        // Sync trigger row if this is a trigger-linked event and startAt changed.
-        // Only re-aim triggers that haven't been processed yet — any
-        // workflow_runs row (running/success/error/cancelled) is a terminal-
-        // or-in-flight outcome we shouldn't disturb.
-        const meta = updatedEvent.metadata as CalendarTriggerMetadata | null;
-        if (meta?.isTrigger && parsedStartAt) {
-          await db
-            .update(calendarTriggers)
-            .set({ triggerAt: parsedStartAt })
-            .where(and(
-              eq(calendarTriggers.calendarEventId, eventId),
-              sql`NOT EXISTS (
-                SELECT 1 FROM ${workflowRuns}
-                WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
-                  AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-              )`,
-            ));
+          const [updated] = await tx
+            .update(calendarEvents)
+            .set(updates)
+            .where(eq(calendarEvents.id, eventId))
+            .returning();
+
+          const meta = updated.metadata as CalendarTriggerMetadata | null;
+          if (meta?.isTrigger && parsedStartAt && agentTrigger === undefined) {
+            await tx
+              .update(calendarTriggers)
+              .set({ triggerAt: parsedStartAt })
+              .where(and(
+                eq(calendarTriggers.calendarEventId, eventId),
+                sql`NOT EXISTS (
+                  SELECT 1 FROM ${workflowRuns}
+                  WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+                    AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+                )`,
+              ));
+          }
+
+          if (agentTrigger === null) {
+            await removeCalendarTrigger(tx, eventId);
+          } else if (agentTrigger && event.driveId) {
+            await upsertCalendarTriggerWorkflowInTx(tx, {
+              driveId: event.driveId,
+              scheduledById: userId,
+              calendarEventId: eventId,
+              triggerAt: updated.startAt,
+              timezone: updated.timezone ?? 'UTC',
+              agentTrigger,
+            });
+          }
+
+          return updated;
+        });
+
+        if (removedAttendeesCount > 0) {
+          calendarWriteLogger.info('Removed attendees due to PRIVATE visibility change', {
+            eventId: maskIdentifier(eventId),
+            removedCount: removedAttendeesCount,
+          });
         }
 
         // Get all attendee IDs for broadcasting

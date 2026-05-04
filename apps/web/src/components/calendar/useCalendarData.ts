@@ -123,8 +123,7 @@ export function useCalendarData({
       visibility?: 'DRIVE' | 'ATTENDEES_ONLY' | 'PRIVATE';
       color?: string;
       attendeeIds?: string[];
-      pageId?: string;
-      agentTrigger?: { agentPageId: string; prompt: string };
+      pageId?: string | null;
     }) => {
       const result = await post<CalendarEvent>('/api/calendar/events', {
         driveId: context === 'drive' ? driveId : null,

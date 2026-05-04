@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Bot, ChevronRight, Zap } from 'lucide-react';
+import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate as globalMutate } from 'swr';
 import {
@@ -14,26 +14,11 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 import { fetchWithAuth, put, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { TriggerPagePicker } from './TriggerPagePicker';
-
-const MAX_CONTEXT_PAGES = 10;
+import { AgentTriggerSection } from '@/components/agent-triggers/AgentTriggerSection';
 
 type TriggerType = 'due_date' | 'completion';
 
@@ -306,91 +291,23 @@ export function TaskAgentTriggersDialog({
 
                   {section.enabled && !disabled && (
                     <div className="space-y-3 pt-1">
-                      <div className="space-y-2">
-                        <Label>Agent</Label>
-                        <Select
-                          value={section.agentPageId}
-                          onValueChange={(v) => updateSection(ui, { agentPageId: v })}
-                          disabled={agentsLoading}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder={agentsLoading ? 'Loading agents…' : 'Select an agent'} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {agents.map((agent) => (
-                              <SelectItem key={agent.id} value={agent.id}>
-                                {agent.title ?? 'Untitled agent'}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Prompt</Label>
-                        <Textarea
-                          placeholder={
-                            ui === 'due_date'
-                              ? 'What should the agent do when the due date arrives?'
-                              : 'What should the agent do when the task is completed?'
-                          }
-                          value={section.prompt}
-                          onChange={(e) => updateSection(ui, { prompt: e.target.value })}
-                          rows={3}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Optional when an instruction page is set.
-                        </p>
-                      </div>
-
-                      <Collapsible>
-                        <CollapsibleTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 -ml-2 px-2 text-xs text-muted-foreground hover:text-foreground group"
-                          >
-                            <ChevronRight className="mr-1 h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
-                            Advanced
-                            {(section.instructionPageId || section.contextPageIds.length > 0) && (
-                              <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">
-                                {(section.instructionPageId ? 1 : 0) + section.contextPageIds.length}
-                              </span>
-                            )}
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="space-y-3 pt-2">
-                          <div className="space-y-2">
-                            <Label className="text-xs">Instruction page</Label>
-                            <p className="text-xs text-muted-foreground">
-                              When set, the page&apos;s body becomes the agent&apos;s instructions when the trigger fires.
-                            </p>
-                            <TriggerPagePicker
-                              mode="single"
-                              driveId={driveId}
-                              value={section.instructionPageId}
-                              onChange={(id) => updateSection(ui, { instructionPageId: id })}
-                              placeholder="Pick an instruction page…"
-                            />
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label className="text-xs">Context pages</Label>
-                            <p className="text-xs text-muted-foreground">
-                              Additional pages the agent can read for context (max {MAX_CONTEXT_PAGES}).
-                            </p>
-                            <TriggerPagePicker
-                              mode="multi"
-                              driveId={driveId}
-                              value={section.contextPageIds}
-                              onChange={(ids) => updateSection(ui, { contextPageIds: ids })}
-                              placeholder="Add context pages…"
-                              max={MAX_CONTEXT_PAGES}
-                            />
-                          </div>
-                        </CollapsibleContent>
-                      </Collapsible>
+                      <AgentTriggerSection
+                        driveId={driveId}
+                        agents={agents}
+                        agentsLoading={agentsLoading}
+                        value={{
+                          agentPageId: section.agentPageId,
+                          prompt: section.prompt,
+                          instructionPageId: section.instructionPageId,
+                          contextPageIds: section.contextPageIds,
+                        }}
+                        onChange={(next) => updateSection(ui, next)}
+                        promptPlaceholder={
+                          ui === 'due_date'
+                            ? 'What should the agent do when the due date arrives?'
+                            : 'What should the agent do when the task is completed?'
+                        }
+                      />
 
                       {existingStatus && existingStatus !== 'never_run' && (
                         <p className={statusToneClass(existingStatus)}>
