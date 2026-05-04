@@ -48,6 +48,7 @@ vi.mock('@pagespace/db/schema/workflow-runs', () => ({
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   upsertCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
+  validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
 
 vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({

@@ -97,6 +97,12 @@ vi.mock('@/lib/websocket/calendar-events', () => ({
   broadcastCalendarEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
+  createCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  upsertCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
@@ -1134,6 +1140,116 @@ describe('calendar-write-tools', () => {
       expect(triggerSyncSetSpy).toHaveBeenCalledWith(
         expect.objectContaining({ triggerAt: expect.any(Date) })
       );
+    });
+
+    describe('agentTrigger', () => {
+      it('forwards an agentTrigger object to upsertCalendarTriggerWorkflow', async () => {
+        const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([event]),
+            }),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+
+        const { upsertCalendarTriggerWorkflow } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          {
+            eventId: 'event-1',
+            agentTrigger: {
+              agentPageId: 'agent-1',
+              prompt: 'run prep',
+              instructionPageId: 'instr-1',
+              contextPageIds: ['ctx-a'],
+            },
+          },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger object on update_calendar_event',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        expect(upsertCalendarTriggerWorkflow).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            calendarEventId: 'event-1',
+            agentTrigger: expect.objectContaining({
+              agentPageId: 'agent-1',
+              instructionPageId: 'instr-1',
+              contextPageIds: ['ctx-a'],
+            }),
+          }),
+        );
+      });
+
+      it('removes the trigger when agentTrigger is null', async () => {
+        const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([event]),
+            }),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+
+        const { removeCalendarTrigger } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          { eventId: 'event-1', agentTrigger: null },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger=null on update_calendar_event',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        expect(removeCalendarTrigger).toHaveBeenCalledWith(expect.anything(), 'event-1');
+      });
+
+      it('rejects an agent-trigger upsert on a personal (no driveId) event', async () => {
+        const personalEvent = createMockEvent({ createdById: 'user-123', driveId: null });
+        mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(personalEvent);
+        (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+          set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([personalEvent]),
+            }),
+          }),
+        });
+
+        const { upsertCalendarTriggerWorkflow } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const result = await calendarWriteTools.update_calendar_event.execute!(
+          {
+            eventId: 'event-1',
+            agentTrigger: { agentPageId: 'agent-1', prompt: 'p' },
+          },
+          createAuthContext(),
+        );
+
+        assert({
+          given: 'agentTrigger upsert on a personal event',
+          should: 'return error',
+          actual: (result as { success: boolean }).success,
+          expected: false,
+        });
+
+        expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+      });
     });
   });
 

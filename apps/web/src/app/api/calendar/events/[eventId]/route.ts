@@ -15,6 +15,7 @@ import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/
 import {
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflow,
+  validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -247,6 +248,21 @@ export async function PATCH(
         { error: 'Agent triggers require a drive event' },
         { status: 400 }
       );
+    }
+
+    // Pre-validate agent trigger before opening the event update tx so a bad
+    // payload (off-drive agent / context page, missing prompt-or-instruction)
+    // returns 400 without dirtying event state.
+    if (data.agentTrigger && event.driveId) {
+      try {
+        await validateCalendarAgentTrigger(db, {
+          driveId: event.driveId,
+          agentTrigger: data.agentTrigger,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Invalid agent trigger';
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
     }
 
     // Update the event and sync pending trigger time atomically

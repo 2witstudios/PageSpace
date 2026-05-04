@@ -7,7 +7,11 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
-import { createCalendarTriggerWorkflow } from '@/lib/workflows/calendar-trigger-helpers';
+import {
+  createCalendarTriggerWorkflow,
+  removeCalendarTrigger,
+  upsertCalendarTriggerWorkflow,
+} from '@/lib/workflows/calendar-trigger-helpers';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -429,9 +433,18 @@ export const calendarWriteTools = {
         .describe('New visibility setting'),
       color: z.string().optional().describe('New color category'),
       pageId: z.string().nullable().optional().describe('Page ID to link to'),
+      agentTrigger: z.union([
+        z.object({
+          agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
+          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
+          instructionPageId: z.string().nullable().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
+          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+        }),
+        z.null().describe('Pass null to remove an existing agent trigger.'),
+      ]).optional().describe('Upsert (object) or remove (null) the event\'s agent trigger. Requires the event to live in a drive.'),
     }),
     execute: async (
-      { eventId, title, startAt, endAt, description, location, allDay, timezone, recurrence, visibility, color, pageId },
+      { eventId, title, startAt, endAt, description, location, allDay, timezone, recurrence, visibility, color, pageId, agentTrigger },
       { experimental_context: ctx }
     ) => {
       const userId = (ctx as ToolExecutionContext)?.userId;
@@ -540,6 +553,36 @@ export const calendarWriteTools = {
                   AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
               )`,
             ));
+        }
+
+        // Apply agentTrigger changes after the event update commits.
+        // null → drop the trigger; object → upsert (validated inside the helper).
+        if (agentTrigger !== undefined) {
+          if (!event.driveId) {
+            return {
+              success: false,
+              error: 'Agent triggers require a drive event. This event has no drive.',
+            };
+          }
+          if (agentTrigger === null) {
+            await removeCalendarTrigger(db, eventId);
+          } else {
+            try {
+              await upsertCalendarTriggerWorkflow(db, {
+                driveId: event.driveId,
+                scheduledById: userId,
+                calendarEventId: eventId,
+                triggerAt: updatedEvent.startAt,
+                timezone: updatedEvent.timezone ?? 'UTC',
+                agentTrigger,
+              });
+            } catch (err) {
+              return {
+                success: false,
+                error: err instanceof Error ? err.message : 'Failed to update agent trigger',
+              };
+            }
+          }
         }
 
         // Get all attendee IDs for broadcasting
