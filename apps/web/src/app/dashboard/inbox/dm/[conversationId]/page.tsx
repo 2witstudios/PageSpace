@@ -10,6 +10,7 @@ import {
   ConversationScrollButton,
 } from '@/components/ai/ui/conversation';
 import { ChannelInput, type ChannelInputRef } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
+import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
@@ -234,7 +235,7 @@ export default function InboxDMPage() {
   const displayName = otherUser.displayName || otherUser.name;
 
   return (
-    <div className="flex flex-col h-full">
+    <MessageDropZone inputRef={chatInputRef} enabled className="flex flex-col h-full">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-border p-4">
         <div className="flex items-center gap-3 max-w-4xl mx-auto">
@@ -390,6 +391,6 @@ export default function InboxDMPage() {
           />
         </div>
       </div>
-    </div>
+    </MessageDropZone>
   );
 }
