@@ -48,6 +48,13 @@ export async function POST(
       isAdmin = adminMembership !== null;
     }
     if (!isOwner && !isAdmin) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: callerId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { targetUserId, operation: 'resend_invitation', reason: 'not_owner_or_admin' },
+      });
       return NextResponse.json(
         { error: 'Only drive owners and admins can resend invitations' },
         { status: 403 }
@@ -70,6 +77,13 @@ export async function POST(
       RESEND_RATE_LIMIT
     );
     if (!rateLimit.allowed) {
+      auditRequest(request, {
+        eventType: 'security.rate.limited',
+        userId: callerId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { targetUserId, operation: 'resend_invitation' },
+      });
       return NextResponse.json(
         { error: 'Too many resend attempts. Please try again later.' },
         {

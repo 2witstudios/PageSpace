@@ -274,18 +274,24 @@ interface PendingDriveInvitationEmailInput {
   magicLinkUrl: string;
 }
 
+// Strip CR/LF and other control characters so user-controlled fields cannot
+// inject extra email headers when interpolated into the subject line.
+const stripHeaderControls = (s: string) => s.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 200);
+
 export async function sendPendingDriveInvitationEmail(
   input: PendingDriveInvitationEmailInput
 ): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName);
+  const safeDriveName = stripHeaderControls(input.driveName);
   // Propagate the error so callers can surface a 5xx and the operator knows the
   // invitation row exists without a delivered email — they can use Resend to retry.
   await sendEmail({
     to: input.recipientEmail,
-    subject: `${input.inviterName} invited you to ${input.driveName} on PageSpace`,
+    subject: `${safeInviterName} invited you to ${safeDriveName} on PageSpace`,
     react: DriveInvitationEmail({
       userName: input.recipientName || input.recipientEmail,
-      inviterName: input.inviterName,
-      driveName: input.driveName,
+      inviterName: safeInviterName,
+      driveName: safeDriveName,
       acceptUrl: input.magicLinkUrl,
       unsubscribeUrl: '',
     }),
