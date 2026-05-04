@@ -8,7 +8,7 @@ import {
   setMinutes,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { MapPin, Users } from 'lucide-react';
+import { MapPin, Users, Zap } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   CalendarEvent,
@@ -236,7 +236,15 @@ function TimedEventCard({
         onClick();
       }}
     >
-      <div className="font-medium truncate">{event.title}</div>
+      <div className="font-medium truncate">
+        {event.hasAgentTrigger && (
+          <>
+            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+            <span className="sr-only">Agent trigger configured. </span>
+          </>
+        )}
+        {event.title}
+      </div>
       <div className="text-xs text-muted-foreground">
         {format(new Date(event.startAt), 'h:mm a')} - {format(new Date(event.endAt), 'h:mm a')}
       </div>
@@ -293,7 +301,15 @@ function AllDayEventCard({
       )}
       onClick={onClick}
     >
-      <div className="font-medium">{event.title}</div>
+      <div className="font-medium">
+        {event.hasAgentTrigger && (
+          <>
+            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+            <span className="sr-only">Agent trigger configured. </span>
+          </>
+        )}
+        {event.title}
+      </div>
       {event.location && (
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <MapPin className="w-3 h-3" />

@@ -246,11 +246,22 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     color?: string;
     attendeeIds?: string[];
     pageId?: string | null;
+    agentTrigger?: {
+      agentPageId: string;
+      prompt?: string;
+      instructionPageId: string | null;
+      contextPageIds: string[];
+    } | null;
   }) => {
     if (selectedEvent) {
       await updateEvent(selectedEvent.id, eventData);
     } else {
-      await createEvent(eventData);
+      // POST schema doesn't accept null (only undefined no-op or object upsert)
+      const { agentTrigger, ...rest } = eventData;
+      await createEvent({
+        ...rest,
+        agentTrigger: agentTrigger ?? undefined,
+      });
     }
     setIsEventModalOpen(false);
   };

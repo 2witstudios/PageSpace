@@ -124,6 +124,12 @@ export function useCalendarData({
       color?: string;
       attendeeIds?: string[];
       pageId?: string | null;
+      agentTrigger?: {
+        agentPageId: string;
+        prompt?: string;
+        instructionPageId: string | null;
+        contextPageIds: string[];
+      };
     }) => {
       const result = await post<CalendarEvent>('/api/calendar/events', {
         driveId: context === 'drive' ? driveId : null,
@@ -141,7 +147,20 @@ export function useCalendarData({
 
   // Update event - patch() returns parsed JSON directly, throws on error
   const updateEvent = useCallback(
-    async (eventId: string, updates: Partial<Omit<CalendarEvent, 'startAt' | 'endAt'>> & { startAt?: Date | string; endAt?: Date | string }) => {
+    async (
+      eventId: string,
+      updates: Partial<Omit<CalendarEvent, 'startAt' | 'endAt'>> & {
+        startAt?: Date | string;
+        endAt?: Date | string;
+        // agentTrigger has three states: undefined no-op, null remove, object upsert
+        agentTrigger?: {
+          agentPageId: string;
+          prompt?: string;
+          instructionPageId: string | null;
+          contextPageIds: string[];
+        } | null;
+      },
+    ) => {
       const result = await patch<CalendarEvent>(`/api/calendar/events/${eventId}`, {
         ...updates,
         startAt: updates.startAt ? (updates.startAt instanceof Date ? updates.startAt.toISOString() : updates.startAt) : undefined,

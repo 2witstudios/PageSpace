@@ -11,6 +11,7 @@ import {
   setHours,
   setMinutes,
 } from 'date-fns';
+import { Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CalendarEvent,
@@ -223,7 +224,15 @@ export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, 
                         handlers.onEventClick(event);
                       }}
                     >
-                      <div className="font-medium truncate">{event.title}</div>
+                      <div className="font-medium truncate">
+                        {event.hasAgentTrigger && (
+                          <>
+                            <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+                            <span className="sr-only">Agent trigger configured. </span>
+                          </>
+                        )}
+                        {event.title}
+                      </div>
                       {height > 30 && (
                         <div className="text-muted-foreground truncate">
                           {format(new Date(event.startAt), 'h:mm a')}
@@ -281,6 +290,12 @@ function AllDayEventPill({
       )}
       onClick={onClick}
     >
+      {event.hasAgentTrigger && (
+        <>
+          <Zap className="inline-block h-3 w-3 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+          <span className="sr-only">Agent trigger configured. </span>
+        </>
+      )}
       {event.title}
     </button>
   );
