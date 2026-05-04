@@ -43,6 +43,15 @@ function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
   };
 }
 
+export function fromStoredOrDefaults(
+  stored: StoredDashboardFilters | undefined,
+): PersistableFilters {
+  if (stored) {
+    return { ...DEFAULT_DASHBOARD_FILTERS, ...stored };
+  }
+  return { ...DEFAULT_DASHBOARD_FILTERS };
+}
+
 export function pickInitialFilters(
   searchParams: URLSearchParams,
   stored: StoredDashboardFilters | undefined,
@@ -50,10 +59,7 @@ export function pickInitialFilters(
   if (urlHasAnyPersistableParam(searchParams)) {
     return readFromUrl(searchParams);
   }
-  if (stored) {
-    return { ...DEFAULT_DASHBOARD_FILTERS, ...stored };
-  }
-  return { ...DEFAULT_DASHBOARD_FILTERS };
+  return fromStoredOrDefaults(stored);
 }
 
 export function toStoredDashboardFilters(filters: PersistableFilters): StoredDashboardFilters {

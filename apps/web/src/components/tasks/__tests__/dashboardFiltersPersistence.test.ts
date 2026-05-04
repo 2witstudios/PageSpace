@@ -7,6 +7,7 @@ import {
   scopeKeyFor,
   pickInitialFilters,
   toStoredDashboardFilters,
+  fromStoredOrDefaults,
   DEFAULT_DASHBOARD_FILTERS,
 } from '../dashboardFiltersPersistence';
 import type { StoredDashboardFilters } from '@/stores/useLayoutStore';
@@ -72,6 +73,25 @@ describe('pickInitialFilters', () => {
     const result = pickInitialFilters(params({ assigneeFilter: 'mine' }), stored);
 
     expect(result.assigneeFilter).toBe('mine');
+  });
+});
+
+describe('fromStoredOrDefaults', () => {
+  it('given undefined stored prefs, should return defaults', () => {
+    expect(fromStoredOrDefaults(undefined)).toEqual(DEFAULT_DASHBOARD_FILTERS);
+  });
+
+  it('given partial stored prefs, should merge over defaults', () => {
+    const result = fromStoredOrDefaults({ status: 'in_progress' });
+
+    expect(result.status).toBe('in_progress');
+    expect(result.assigneeFilter).toBe('mine');
+  });
+
+  it('given stored prefs that override the default assignee, should respect the override', () => {
+    const result = fromStoredOrDefaults({ assigneeFilter: 'all' });
+
+    expect(result.assigneeFilter).toBe('all');
   });
 });
 

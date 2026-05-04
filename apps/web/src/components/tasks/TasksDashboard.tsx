@@ -41,6 +41,7 @@ import {
   scopeKeyFor,
   pickInitialFilters,
   toStoredDashboardFilters,
+  fromStoredOrDefaults,
 } from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
@@ -111,10 +112,10 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
   const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
-  const initialScopeKey = scopeKeyFor(context, initialDriveId);
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
+    const initialScopeKey = scopeKeyFor(context, initialDriveId);
     const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
-    return pickInitialFilters(searchParams, stored) as ExtendedFilters;
+    return pickInitialFilters(searchParams, stored);
   });
 
   // Track last data refresh time
@@ -323,7 +324,8 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   const handleDriveChange = (driveId: string) => {
     if (context === 'drive') {
       setSelectedDriveId(driveId);
-      const updatedFilters = { ...filters };
+      const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKeyFor('drive', driveId)];
+      const updatedFilters = fromStoredOrDefaults(stored);
       setFilters(updatedFilters);
       updateUrl(updatedFilters, driveId);
     } else {
