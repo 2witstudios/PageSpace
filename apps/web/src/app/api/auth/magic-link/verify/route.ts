@@ -115,8 +115,11 @@ export async function GET(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Accept any pending drive invitations for this user (independent of how they signed in)
-    // and remember the drive id requested via ?inviteDriveId for the post-verify redirect.
+    // Accept any pending drive invitations for this user (independent of how they signed in).
+    // The ?inviteDriveId query param is a redirect HINT only — it never filters which
+    // pending rows get accepted. All pending rows for this user are accepted unconditionally
+    // on every sign-in so an invitee isn't stranded if they sign in via a different magic link
+    // or passkey before clicking the invitation email.
     // On failure, revoke the just-created session and redirect to error: the invite path
     // pre-creates page_permissions for the invitee, so completing login with acceptedAt
     // still null would let them reach those pages without ever clearing the invitation gate.

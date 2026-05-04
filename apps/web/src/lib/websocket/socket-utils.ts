@@ -246,11 +246,6 @@ export async function broadcastDriveEvent(
 }
 
 /**
- * Broadcasts a drive member event to the realtime server
- * Sent to user-specific channel so only affected user receives it
- * @param payload - The event payload to broadcast
- */
-/**
  * Fan out a drive-member event to a set of recipient user channels so admins
  * watching the members page see realtime updates for someone else's join /
  * role change / removal — not just the affected user themselves.

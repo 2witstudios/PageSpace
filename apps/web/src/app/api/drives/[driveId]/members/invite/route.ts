@@ -128,16 +128,32 @@ export async function POST(
       if (existingUser) {
         invitedUserId = existingUser.id;
       } else {
-        const rateLimit = await checkDistributedRateLimit(
-          `drive_invite:email:${normalizedEmail}`,
-          DISTRIBUTED_RATE_LIMITS.MAGIC_LINK
-        );
-        if (!rateLimit.allowed) {
+        // Two complementary rate-limits guard the invitation email side-channel:
+        //   - drive_invite:email:<email>: across-drives cap to prevent a single
+        //     user-controlled email being bombarded by colluding drive owners.
+        //   - drive_invite:drive:<driveId>:<email>: per-drive cap so an owner
+        //     can't burn the global per-email budget by retrying within one drive.
+        const [globalLimit, perDriveLimit] = await Promise.all([
+          checkDistributedRateLimit(
+            `drive_invite:email:${normalizedEmail}`,
+            DISTRIBUTED_RATE_LIMITS.MAGIC_LINK
+          ),
+          checkDistributedRateLimit(
+            `drive_invite:drive:${driveId}:${normalizedEmail}`,
+            DISTRIBUTED_RATE_LIMITS.MAGIC_LINK
+          ),
+        ]);
+        if (!globalLimit.allowed || !perDriveLimit.allowed) {
+          const retryAfter = Math.max(
+            globalLimit.retryAfter ?? 0,
+            perDriveLimit.retryAfter ?? 0,
+            900
+          );
           return NextResponse.json(
             { error: 'Too many invitations sent to this email recently. Please try again later.' },
             {
               status: 429,
-              headers: { 'Retry-After': String(rateLimit.retryAfter ?? 900) },
+              headers: { 'Retry-After': String(retryAfter) },
             }
           );
         }
