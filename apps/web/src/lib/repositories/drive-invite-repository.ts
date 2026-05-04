@@ -164,6 +164,15 @@ export const driveInviteRepository = {
     return user?.email;
   },
 
+  async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { name: true, email: true },
+    });
+    if (!user) return null;
+    return { name: user.name || user.email, email: user.email };
+  },
+
   async findPendingMembersForUser(userId: string) {
     return db
       .select({

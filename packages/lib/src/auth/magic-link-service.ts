@@ -17,6 +17,8 @@ import { secureCompare } from './secure-compare';
 
 // Token expiry: 5 minutes for magic links
 export const MAGIC_LINK_EXPIRY_MINUTES = 5;
+// Drive invitations sit in inboxes; give them a multi-day TTL.
+export const INVITATION_LINK_EXPIRY_MINUTES = 60 * 24 * 7;
 
 // Input validation schemas
 const createMagicLinkSchema = z.object({
@@ -24,6 +26,7 @@ const createMagicLinkSchema = z.object({
   platform: z.enum(['web', 'desktop']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  expiryMinutes: z.number().int().positive().max(60 * 24 * 30).optional(),
 }).refine(
   (data) => data.platform !== 'desktop' || !!data.deviceId,
   { message: 'deviceId is required for desktop platform' }
@@ -82,7 +85,7 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     };
   }
 
-  const { email, platform, deviceId, deviceName } = parsed.data;
+  const { email, platform, deviceId, deviceName, expiryMinutes } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
 
   // Check if user exists
@@ -157,7 +160,8 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
 
   // Generate secure token with ps_magic_ prefix
   const { token, hash, tokenPrefix } = generateToken('ps_magic');
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000);
+  const ttlMinutes = expiryMinutes ?? MAGIC_LINK_EXPIRY_MINUTES;
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
 
   // Build metadata for desktop platform support
   const metadata = platform === 'desktop' && deviceId

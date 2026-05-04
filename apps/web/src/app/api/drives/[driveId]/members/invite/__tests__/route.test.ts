@@ -22,6 +22,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     createPagePermission: vi.fn(),
     updatePagePermission: vi.fn(),
     findUserEmail: vi.fn(),
+    findInviterDisplay: vi.fn(),
     findUserIdByEmail: vi.fn(),
     findActivePendingMemberByEmail: vi.fn(),
   },
@@ -29,10 +30,18 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 
 vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   createMagicLinkToken: vi.fn(),
+  INVITATION_LINK_EXPIRY_MINUTES: 60 * 24 * 7,
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
   sendPendingDriveInvitationEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 2 }),
+  DISTRIBUTED_RATE_LIMITS: {
+    MAGIC_LINK: { maxAttempts: 3, windowMs: 15 * 60 * 1000, blockDurationMs: 15 * 60 * 1000, progressiveDelay: false },
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -93,6 +102,7 @@ import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activ
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // ---------- helpers ----------
 
@@ -165,6 +175,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
+    vi.mocked(driveInviteRepository.findInviterDisplay).mockResolvedValue({
+      name: 'Inviter Name',
+      email: 'inviter@example.com',
+    });
     vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue(null as never);
     vi.mocked(createMagicLinkToken).mockResolvedValue({
@@ -772,7 +786,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(body.kind).toBe('invited');
       expect(body.email).toBe('newcomer@example.com');
 
-      expect(createMagicLinkToken).toHaveBeenCalledWith({ email: 'newcomer@example.com' });
+      expect(createMagicLinkToken).toHaveBeenCalledWith(expect.objectContaining({ email: 'newcomer@example.com' }));
 
       const createCall = vi.mocked(driveInviteRepository.createDriveMember).mock.calls[0][0];
       expect(createCall).toEqual(
@@ -812,6 +826,24 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
+    it('given the per-email rate limit denies the invite, responds 429 without creating a magic-link token or sending an email', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({
+        allowed: false,
+        retryAfter: 900,
+        attemptsRemaining: 0,
+      });
+
+      const response = await POST(
+        createInviteRequest(mockDriveId, emailBody),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(429);
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
     it('given an email with mixed case and surrounding whitespace, normalizes to lowercase trimmed before lookup and storage', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
@@ -828,7 +860,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         mockDriveId,
         'newcomer@example.com'
       );
-      expect(createMagicLinkToken).toHaveBeenCalledWith({ email: 'newcomer@example.com' });
+      expect(createMagicLinkToken).toHaveBeenCalledWith(expect.objectContaining({ email: 'newcomer@example.com' }));
     });
   });
 });

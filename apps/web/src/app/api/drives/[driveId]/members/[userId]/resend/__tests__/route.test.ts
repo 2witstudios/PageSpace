@@ -8,6 +8,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findAdminMembership: vi.fn(),
     findExistingMember: vi.fn(),
     findUserEmail: vi.fn(),
+    findInviterDisplay: vi.fn(),
     bumpInvitedAt: vi.fn(),
   },
 }));
@@ -23,6 +24,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 
 vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   createMagicLinkToken: vi.fn(),
+  INVITATION_LINK_EXPIRY_MINUTES: 60 * 24 * 7,
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
@@ -91,6 +93,10 @@ describe('POST /api/drives/[driveId]/members/[userId]/resend', () => {
       acceptedAt: null,
     } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('pending@example.com');
+    vi.mocked(driveInviteRepository.findInviterDisplay).mockResolvedValue({
+      name: 'Inviter Name',
+      email: 'inviter@example.com',
+    });
     vi.mocked(driveInviteRepository.bumpInvitedAt).mockResolvedValue(undefined);
     vi.mocked(createMagicLinkToken).mockResolvedValue({
       ok: true,
@@ -106,7 +112,7 @@ describe('POST /api/drives/[driveId]/members/[userId]/resend', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(createMagicLinkToken).toHaveBeenCalledWith({ email: 'pending@example.com' });
+    expect(createMagicLinkToken).toHaveBeenCalledWith(expect.objectContaining({ email: 'pending@example.com' }));
     expect(sendPendingDriveInvitationEmail).toHaveBeenCalledTimes(1);
     const call = vi.mocked(sendPendingDriveInvitationEmail).mock.calls[0][0];
     expect(call.recipientEmail).toBe('pending@example.com');

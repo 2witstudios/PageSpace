@@ -4,7 +4,7 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { createMagicLinkToken, INVITATION_LINK_EXPIRY_MINUTES } from '@pagespace/lib/auth/magic-link-service';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
@@ -84,7 +84,10 @@ export async function POST(
       return NextResponse.json({ error: 'Pending invitee has no email on file' }, { status: 404 });
     }
 
-    const tokenResult = await createMagicLinkToken({ email: recipientEmail });
+    const tokenResult = await createMagicLinkToken({
+      email: recipientEmail,
+      expiryMinutes: INVITATION_LINK_EXPIRY_MINUTES,
+    });
     if (!tokenResult.ok) {
       loggers.api.error('Failed to create magic link token for resend', new Error(tokenResult.error.code));
       return NextResponse.json({ error: 'Failed to resend invitation' }, { status: 500 });
@@ -95,11 +98,11 @@ export async function POST(
       process.env.NEXT_PUBLIC_APP_URL ||
       'http://localhost:3000';
     const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${tokenResult.data.token}&inviteDriveId=${driveId}`;
-    const inviterEmail = await driveInviteRepository.findUserEmail(callerId);
+    const inviter = await driveInviteRepository.findInviterDisplay(callerId);
 
     await sendPendingDriveInvitationEmail({
       recipientEmail,
-      inviterName: inviterEmail || 'A PageSpace user',
+      inviterName: inviter?.name || 'A PageSpace user',
       driveName: drive.name,
       magicLinkUrl,
     });
@@ -107,7 +110,7 @@ export async function POST(
     await driveInviteRepository.bumpInvitedAt(member.id);
 
     auditRequest(request, {
-      eventType: 'authz.permission.granted',
+      eventType: 'data.share',
       userId: callerId,
       resourceType: 'drive',
       resourceId: driveId,

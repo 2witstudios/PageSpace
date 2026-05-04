@@ -8,8 +8,9 @@ import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { createMagicLinkToken, INVITATION_LINK_EXPIRY_MINUTES } from '@pagespace/lib/auth/magic-link-service';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -101,7 +102,24 @@ export async function POST(
           );
         }
 
-        const tokenResult = await createMagicLinkToken({ email: normalizedEmail });
+        const rateLimit = await checkDistributedRateLimit(
+          `drive_invite:email:${normalizedEmail}`,
+          DISTRIBUTED_RATE_LIMITS.MAGIC_LINK
+        );
+        if (!rateLimit.allowed) {
+          return NextResponse.json(
+            { error: 'Too many invitations sent to this email recently. Please try again later.' },
+            {
+              status: 429,
+              headers: { 'Retry-After': String(rateLimit.retryAfter ?? 900) },
+            }
+          );
+        }
+
+        const tokenResult = await createMagicLinkToken({
+          email: normalizedEmail,
+          expiryMinutes: INVITATION_LINK_EXPIRY_MINUTES,
+        });
         if (!tokenResult.ok) {
           loggers.api.error('Failed to create magic link token for invite', new Error(tokenResult.error.code));
           return NextResponse.json({ error: 'Failed to create invitation' }, { status: 500 });
@@ -200,10 +218,10 @@ export async function POST(
         process.env.NEXT_PUBLIC_APP_URL ||
         'http://localhost:3000';
       const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${pendingMagicToken}&inviteDriveId=${driveId}`;
-      const inviterEmail = await driveInviteRepository.findUserEmail(userId);
+      const inviter = await driveInviteRepository.findInviterDisplay(userId);
       await sendPendingDriveInvitationEmail({
         recipientEmail: normalizedEmail,
-        inviterName: inviterEmail || 'A PageSpace user',
+        inviterName: inviter?.name || 'A PageSpace user',
         driveName: drive.name,
         magicLinkUrl,
       });
