@@ -11,6 +11,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useTaskListPageFilter } from './useTaskListPageFilter';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
@@ -367,7 +368,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const canManageWorkflows = canManageDrive(drive);
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
-  const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
+  const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
