@@ -103,6 +103,22 @@ export function filterTools<T>(
 }
 
 /**
+ * Build the tool set for a Page AI request from a baseline tool registry.
+ *
+ * The popover toggles in the chat composer are the source of truth at request
+ * time. The page's saved enabledTools array seeds those toggles on the client
+ * but is intentionally NOT consulted here — otherwise a hidden allow-list
+ * silently overrides whatever the user just clicked.
+ */
+export function buildPageAITools<T>(
+  baseline: Record<string, T>,
+  options: { isReadOnly: boolean; webSearchEnabled: boolean }
+): Record<string, T> {
+  const afterReadOnly = filterToolsForReadOnly(baseline, options.isReadOnly);
+  return filterToolsForWebSearch(afterReadOnly, options.webSearchEnabled);
+}
+
+/**
  * Get list of allowed tools for display purposes
  */
 export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {

@@ -146,6 +146,7 @@ vi.mock('@/lib/ai/core', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  buildPageAITools: vi.fn().mockReturnValue({}),
   getPageTreeContext: vi.fn(),
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   convertMCPToolsToAISDKSchemas: vi.fn(),

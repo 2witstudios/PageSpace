@@ -46,8 +46,7 @@ import {
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   buildPersonalizationPrompt,
-  filterToolsForReadOnly,
-  filterToolsForWebSearch,
+  buildPageAITools,
   getPageTreeContext,
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
@@ -275,9 +274,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // Extract custom agent configuration from page
+    // Extract custom agent configuration from page.
+    // Note: page.enabledTools is intentionally NOT consulted here. It seeds the
+    // composer's tool toggles on the client; the toggles in the request body
+    // are the source of truth at runtime so the UI doesn't lie about what the
+    // model can actually do.
     const customSystemPrompt = page.systemPrompt;
-    const enabledTools = page.enabledTools as string[] | null;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
     let drivePromptPrefix = '';
@@ -304,7 +306,6 @@ export async function POST(request: Request) {
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
-      enabledToolsCount: enabledTools?.length || 0,
       pageName: page.title,
       includeDrivePrompt: page.includeDrivePrompt,
       hasDrivePrompt: !!drivePromptPrefix
@@ -506,41 +507,20 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Filter tools based on custom enabled tools configuration
-    // - null or [] = no tools enabled (default behavior)
-    // - ['tool1', 'tool2'] = specific tools → use only those
-    let filteredTools: ToolSet;
-    if (enabledTools === null || enabledTools.length === 0) {
-      // No tools configured - default to no tools
-      filteredTools = {};
-      loggers.ai.debug('AI Page Chat API: No tools enabled', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: 0,
-        filteredTools: 0,
-        isReadOnly: readOnlyMode
-      });
-    } else {
-      // Filter tools based on the page's enabled tools configuration
-      // Simple object filtering approach to avoid complex TypeScript issues
-      const filtered: Record<string, (typeof pageSpaceTools)[keyof typeof pageSpaceTools]> = {};
-      for (const toolName of enabledTools) {
-        if (toolName in pageSpaceTools) {
-          filtered[toolName] = pageSpaceTools[toolName as keyof typeof pageSpaceTools];
-        }
-      }
-      // Apply read-only filtering on top of enabled tools
-      const postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
-      // Apply web search filtering (exclude web_search if disabled)
-      filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
+    // Build tools from the full PageSpace baseline, modulated by the composer's
+    // runtime toggles (read-only + web search). This makes the popover the
+    // single source of truth — see comment near customSystemPrompt above.
+    let filteredTools: ToolSet = buildPageAITools(pageSpaceTools, {
+      isReadOnly: readOnlyMode,
+      webSearchEnabled: webSearchMode,
+    });
 
-      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: enabledTools.length,
-        filteredTools: Object.keys(filteredTools).length,
-        isReadOnly: readOnlyMode,
-        webSearchEnabled: webSearchMode
-      });
-    }
+    loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
+      totalTools: Object.keys(pageSpaceTools).length,
+      filteredTools: Object.keys(filteredTools).length,
+      isReadOnly: readOnlyMode,
+      webSearchEnabled: webSearchMode
+    });
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
     try {
