@@ -31,6 +31,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   const inputId = React.useId();
 
   const isActive = editor.isActive('link');
+  const submittable = Boolean(normalizeUrl(value));
 
   const handleOpenChange = (next: boolean) => {
     if (next) {
@@ -40,25 +41,40 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
     setOpen(next);
   };
 
+  // Bind Mod-K to open the popover from the toolbar instance only — the bubble
+  // menu's instance is unmounted when there's no selection, and we want a
+  // single, predictable handler regardless of selection state.
+  React.useEffect(() => {
+    if (variant !== 'toolbar') return;
+    const root = editor.view.dom as HTMLElement;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
+        event.preventDefault();
+        const existing = (editor.getAttributes('link').href as string | undefined) ?? '';
+        setValue(existing);
+        setOpen(true);
+      }
+    };
+    root.addEventListener('keydown', onKeyDown);
+    return () => root.removeEventListener('keydown', onKeyDown);
+  }, [editor, variant]);
+
   const apply = () => {
     const href = normalizeUrl(value);
+    if (!href) return;
     const existingAttrs = editor.getAttributes('link');
     const chain = editor.chain().focus().extendMarkRange('link');
-    if (!href) {
-      chain.unsetLink().run();
+    const { from, to } = editor.state.selection;
+    if (from === to && !isActive) {
+      chain
+        .insertContent({
+          type: 'text',
+          text: href,
+          marks: [{ type: 'link', attrs: { href } }],
+        })
+        .run();
     } else {
-      const { from, to } = editor.state.selection;
-      if (from === to && !isActive) {
-        chain
-          .insertContent({
-            type: 'text',
-            text: href,
-            marks: [{ type: 'link', attrs: { href } }],
-          })
-          .run();
-      } else {
-        chain.setLink({ ...existingAttrs, href }).run();
-      }
+      chain.setLink({ ...existingAttrs, href }).run();
     }
     setOpen(false);
   };
@@ -71,7 +87,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      apply();
+      if (submittable) apply();
     } else if (event.key === 'Escape') {
       event.preventDefault();
       setOpen(false);
@@ -115,7 +131,7 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
                 Remove
               </Button>
             )}
-            <Button type="button" size="sm" onClick={apply}>
+            <Button type="button" size="sm" onClick={apply} disabled={!submittable}>
               {isActive ? 'Update' : 'Save'}
             </Button>
           </div>
