@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, not, inArray } from '@pagespace/db/operators';
+import { eq, and, not, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
@@ -77,7 +77,12 @@ export async function listAccessibleDrives(
   const memberDrives = await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(
+      and(
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      )
+    );
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
@@ -212,7 +217,13 @@ export async function getDriveAccess(
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(
+      and(
+        eq(driveMembers.driveId, driveId),
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      )
+    )
     .limit(1);
 
   if (membership.length > 0) {
@@ -260,7 +271,13 @@ export async function getDriveAccessWithDrive(
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(
+      and(
+        eq(driveMembers.driveId, driveId),
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      )
+    )
     .limit(1);
 
   if (membership.length > 0) {

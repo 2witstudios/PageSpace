@@ -39,12 +39,13 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
-  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', acceptedAt: 'dm.acceptedAt' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
 }));
 
 import { db } from '@pagespace/db/db';

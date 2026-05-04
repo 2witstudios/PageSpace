@@ -47,7 +47,12 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
 
   const memberDrives = await db.select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(
+      and(
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      )
+    );
 
   for (const membership of memberDrives) {
     driveIdSet.add(membership.driveId);

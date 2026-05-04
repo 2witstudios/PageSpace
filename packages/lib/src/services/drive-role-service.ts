@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, asc } from '@pagespace/db/operators';
+import { eq, and, asc, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 
@@ -104,7 +104,8 @@ export async function checkDriveAccessForRoles(
   const membership = await db.query.driveMembers.findFirst({
     where: and(
       eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
     ),
   });
 

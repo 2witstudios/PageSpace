@@ -29,7 +29,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { driveId: 'pages.driveId', id: 'pages.id' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role', acceptedAt: 'driveMembers.acceptedAt', lastAccessedAt: 'driveMembers.lastAccessedAt' },
   pagePermissions: { pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
 }));
 
 import { db } from '@pagespace/db/db';
