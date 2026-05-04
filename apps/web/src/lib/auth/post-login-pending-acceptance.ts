@@ -47,13 +47,20 @@ export async function acceptUserPendingInvitations(
     });
 
     try {
-      const driveRecipients = await getDriveRecipientUserIds(row.driveId);
+      // Exclude the just-accepted user from the recipient list. acceptedAt was
+      // already written above, so getDriveRecipientUserIds would otherwise
+      // return them as a recipient and the broadcast would echo a member_added
+      // event back to the very user the event is about.
+      const allRecipients = await getDriveRecipientUserIds(row.driveId);
+      const recipientsExcludingActor = allRecipients.filter((id) => id !== userId);
+      if (recipientsExcludingActor.length === 0) continue;
+
       await broadcastDriveMemberEventToRecipients(
         createDriveMemberEventPayload(row.driveId, userId, 'member_added', {
           role: row.role,
           driveName: row.driveName,
         }),
-        driveRecipients
+        recipientsExcludingActor
       );
     } catch (error) {
       loggers.auth.error(

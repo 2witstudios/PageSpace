@@ -60,6 +60,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -778,8 +779,12 @@ describe('POST /api/auth/google/one-tap', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(500);
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-        mockExistingUser.id,
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_session_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
         'pending_invite_acceptance_failed'
       );
     });

@@ -399,14 +399,19 @@ describe('POST /api/auth/google/native', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockNewUser.id,
         'login',
-        {
-          email: 'test@example.com',
+        expect.objectContaining({
           ip: '127.0.0.1',
           provider: 'google-native',
           platform: 'ios',
           userAgent: 'PageSpace-iOS/1.0',
-        }
+        })
       );
+      // Email must be masked, never raw — guards against the PII regression
+      // CodeRabbit flagged on the parallel apple/callback handler.
+      const trackCall = vi.mocked(trackAuthEvent).mock.calls.find(([, event]) => event === 'login');
+      const meta = trackCall?.[2] as { email?: string };
+      expect(meta?.email).toBe('te***@example.com');
+      expect(meta?.email).not.toBe('test@example.com');
     });
   });
 
@@ -788,8 +793,12 @@ describe('POST /api/auth/google/native', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(500);
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-        mockExistingUser.id,
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_session_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
         'pending_invite_acceptance_failed'
       );
     });

@@ -280,7 +280,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         mockUser.id,
         'login',
         {
-          email: 'oauth@example.com',
+          email: 'oa***@example.com',
           ip: '192.168.1.1',
           provider: 'google',
           userAgent: null,

@@ -183,7 +183,7 @@ export async function POST(req: Request) {
       await acceptUserPendingInvitations(user.id);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on Apple native login', error as Error, { userId: user.id });
-      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return Response.json({ error: 'Server error' }, { status: 500 });
     }
 
@@ -215,7 +215,7 @@ export async function POST(req: Request) {
       details: { method: `Apple OAuth Native (${platform})` },
     });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple-native',
       platform,

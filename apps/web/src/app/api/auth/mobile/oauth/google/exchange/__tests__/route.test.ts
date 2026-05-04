@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 86_400_000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -162,8 +163,12 @@ describe('POST /api/auth/mobile/oauth/google/exchange — post-login pending inv
     const response = await POST(createRequest());
 
     expect(response.status).toBe(500);
-    expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-      'oauth-user-1',
+    expect(sessionService.revokeSession).toHaveBeenCalledWith(
+      'ps_sess_mock_token',
+      'pending_invite_acceptance_failed'
+    );
+    expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+      expect.anything(),
       'pending_invite_acceptance_failed'
     );
   });

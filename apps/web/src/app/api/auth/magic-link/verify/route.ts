@@ -120,7 +120,7 @@ export async function GET(req: Request) {
       acceptedInvitations = await acceptUserPendingInvitations(userId);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on magic-link login', error as Error, { userId });
-      await sessionService.revokeAllUserSessions(userId, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return redirectWithError('server_error');
     }
 

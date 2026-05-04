@@ -72,6 +72,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -1305,8 +1306,12 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(response.status).toBe(307);
       expect(location).toContain('/auth/signin?error=server_error');
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-        'user-123',
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_session_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
         'pending_invite_acceptance_failed'
       );
     });

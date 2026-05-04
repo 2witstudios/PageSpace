@@ -272,7 +272,7 @@ export async function POST(req: Request) {
       await acceptUserPendingInvitations(user.id);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on mobile Google exchange', error as Error, { userId: user.id });
-      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return Response.json({ error: 'Server error' }, { status: 500 });
     }
 
@@ -306,7 +306,7 @@ export async function POST(req: Request) {
 
     // Track successful OAuth login
     trackAuthEvent(user.id, 'login', {
-      email: user.email,
+      email: maskEmail(user.email),
       ip: clientIP,
       provider: 'google',
       userAgent: req.headers.get('user-agent'),

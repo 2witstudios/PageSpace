@@ -227,7 +227,7 @@ export async function GET(req: Request) {
       await acceptUserPendingInvitations(user.id);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on Google callback', error as Error, { userId: user.id });
-      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return NextResponse.redirect(new URL('/auth/signin?error=server_error', baseUrl));
     }
 

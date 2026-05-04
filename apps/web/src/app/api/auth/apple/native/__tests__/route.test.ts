@@ -43,6 +43,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -638,14 +639,19 @@ describe('POST /api/auth/apple/native', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
         'login',
-        {
-          email: 'test@example.com',
+        expect.objectContaining({
           ip: '127.0.0.1',
           provider: 'apple-native',
           platform: 'ios',
           userAgent: 'TestApp/1.0',
-        }
+        })
       );
+      // Email must be masked, never raw — guards against the PII regression
+      // CodeRabbit flagged on the parallel apple/callback handler.
+      const trackCall = vi.mocked(trackAuthEvent).mock.calls.find(([, event]) => event === 'login');
+      const meta = trackCall?.[2] as { email?: string };
+      expect(meta?.email).toBe('te***@example.com');
+      expect(meta?.email).not.toBe('test@example.com');
     });
 
     it('sets session cookie in response headers', async () => {
@@ -747,8 +753,12 @@ describe('POST /api/auth/apple/native', () => {
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(500);
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-        'new-user-id',
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
         'pending_invite_acceptance_failed'
       );
     });

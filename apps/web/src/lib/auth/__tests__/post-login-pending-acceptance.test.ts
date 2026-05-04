@@ -112,6 +112,36 @@ describe('acceptUserPendingInvitations', () => {
     expect(accepted).toEqual([{ driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' }]);
   });
 
+  it('given the just-accepted user is in the drive recipient list, filters them out before broadcasting (no member_added echo to self)', async () => {
+    vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+      pendingRow('mem_1', 'drive_a', 'MEMBER', 'Alpha'),
+    ]);
+    vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(true);
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['admin_a', 'user_x', 'admin_b']);
+
+    await acceptUserPendingInvitations('user_x');
+
+    expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+    expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'drive_a', userId: 'user_x' }),
+      ['admin_a', 'admin_b']
+    );
+  });
+
+  it('given the just-accepted user is the only recipient (e.g. solo drive), skips the broadcast entirely', async () => {
+    vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+      pendingRow('mem_1', 'drive_solo', 'MEMBER', 'Solo'),
+    ]);
+    vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(true);
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValueOnce(['user_x']);
+
+    const accepted = await acceptUserPendingInvitations('user_x');
+
+    expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+    // Acceptance is still durable — the row appears in the returned list.
+    expect(accepted).toEqual([{ driveId: 'drive_solo', driveName: 'Solo', role: 'MEMBER' }]);
+  });
+
   it('given a pending row whose UPDATE returns false (concurrent acceptance), skips broadcast and is not in returned list', async () => {
     vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
       pendingRow('mem_race', 'drive_a'),

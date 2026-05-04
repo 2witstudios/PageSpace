@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -1173,8 +1174,12 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(response.status).toBe(307);
       expect(location).toContain('/auth/signin?error=server_error');
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
-        mockNewUser.id,
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
         'pending_invite_acceptance_failed'
       );
     });

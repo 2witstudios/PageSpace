@@ -215,7 +215,7 @@ export async function POST(req: Request) {
       await acceptUserPendingInvitations(userId);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on passkey signup', error as Error, { userId });
-      await sessionService.revokeAllUserSessions(userId, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return NextResponse.json(
         { error: 'Server error' },
         { status: 500 }

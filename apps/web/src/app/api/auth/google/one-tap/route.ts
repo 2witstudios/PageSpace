@@ -202,24 +202,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Reset rate limits on successful login
-    try {
-      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
-    } catch (error) {
-      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    // Track login event (mask email to prevent PII in activity logs)
-    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
-    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
-      email: maskedEmail,
-      ip: clientIP,
-      provider: 'google-one-tap',
-      userAgent: req.headers.get('user-agent'),
-    });
-
     const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
@@ -248,9 +230,28 @@ export async function POST(req: Request) {
       await acceptUserPendingInvitations(user.id);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on Google One Tap', error as Error, { userId: user.id });
-      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return NextResponse.json({ error: 'Server error' }, { status: 500 });
     }
+
+    // Reset rate limits — only after acceptance succeeds, so a failed acceptance
+    // does not silently clear failure counters or emit a misleading success event.
+    try {
+      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Track login event (mask email to prevent PII in activity logs)
+    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
+    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
+      email: maskedEmail,
+      ip: clientIP,
+      provider: 'google-one-tap',
+      userAgent: req.headers.get('user-agent'),
+    });
 
     auditRequest(req, {
       eventType: 'auth.login.success',

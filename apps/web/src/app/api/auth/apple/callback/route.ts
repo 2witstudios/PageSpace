@@ -213,7 +213,7 @@ export async function POST(req: Request) {
       await acceptUserPendingInvitations(user.id);
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations on Apple callback', error as Error, { userId: user.id });
-      await sessionService.revokeAllUserSessions(user.id, 'pending_invite_acceptance_failed');
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
       return NextResponse.redirect(new URL('/auth/signin?error=server_error', baseUrl));
     }
 
@@ -232,7 +232,7 @@ export async function POST(req: Request) {
       details: { method: 'Apple OAuth' },
     });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple',
       userAgent: req.headers.get('user-agent')
