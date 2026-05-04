@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
+import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/layout/middle-content/page-views/channel/MessageReactions';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -455,7 +456,7 @@ export default function InboxChannelPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-border p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
@@ -643,6 +644,6 @@ export default function InboxChannelPage() {
           )}
         </div>
       </div>
-    </div>
+    </MessageDropZone>
   );
 }
