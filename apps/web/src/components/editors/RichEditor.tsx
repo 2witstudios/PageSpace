@@ -72,6 +72,9 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         },
         link: {
           openOnClick: true,
+          autolink: true,
+          linkOnPaste: true,
+          defaultProtocol: 'https',
         },
         codeBlock: false,
       }),
