@@ -208,20 +208,15 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         isInitialized: true
       });
 
-      // Listen for token refresh events to proactively reconnect
       if (typeof window !== 'undefined') {
-        // Remove any existing listener to prevent duplicates
         if (handleAuthRefresh) {
           window.removeEventListener('auth:refreshed', handleAuthRefresh);
         }
 
-        // Socket.IO consumes the auth token only at handshake. A live, connected
-        // socket stays authenticated regardless of cookie/session refreshes, so
-        // forcing a reconnect here is pure churn — and it cascades into chat
-        // surfaces that refetch on reconnect (GlobalChatContext, agent multiplayer),
-        // which snaps the message list back to the bottom. Only retry when the
-        // socket is currently down; the connect_error path covers fresh-token
-        // recovery for handshakes that the server actually rejects.
+        // Token is consumed only at handshake — a connected socket stays
+        // authenticated. Reconnecting it on every refresh cascades into chat
+        // refetches (GlobalChatContext, agent multiplayer) that snap the
+        // message list to the bottom. Only retry when the socket is down.
         handleAuthRefresh = () => {
           const currentSocket = get().socket;
           if (!currentSocket || currentSocket.connected) return;
