@@ -55,7 +55,7 @@ export default function ConnectionsPage() {
   const { } = useAuth();
   const router = useRouter();
   const socket = useSocket();
-  const [searchQuery, setSearchQuery] = useState('');
+  const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
@@ -91,12 +91,12 @@ export default function ConnectionsPage() {
   }, [socket]);
 
   const handleSendConnectionRequest = async () => {
-    const email = searchQuery.trim();
-    if (!email) return;
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return;
 
     setIsSubmitting(true);
     try {
-      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(email)}`);
+      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(trimmedEmail)}`);
       if (!response.ok) throw new Error('Failed to send connection request');
 
       const data = await response.json();
@@ -111,7 +111,7 @@ export default function ConnectionsPage() {
 
       const recipientLabel = targetUser.displayName || targetUser.name;
       toast.success(`Connection request sent to ${recipientLabel} (${targetUser.email})`);
-      setSearchQuery('');
+      setEmail('');
       mutate('/api/connections?status=PENDING');
     } catch (error) {
       const errorMessage = (error as Error).message;
@@ -374,14 +374,14 @@ export default function ConnectionsPage() {
                   <Input
                     type="email"
                     placeholder="Enter email address"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendConnectionRequest()}
                     disabled={isSubmitting}
                   />
                   <Button
                     onClick={handleSendConnectionRequest}
-                    disabled={isSubmitting || !searchQuery.trim()}
+                    disabled={isSubmitting || !email.trim()}
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     {isSubmitting ? 'Sending...' : 'Send Request'}
