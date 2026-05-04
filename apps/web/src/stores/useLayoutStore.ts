@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 type TaskListViewMode = 'table' | 'kanban';
+export type TaskListPageFilter = 'all' | 'active' | 'completed';
 
 interface LayoutState {
   // UI panels state (PERSISTED)
@@ -10,6 +11,7 @@ interface LayoutState {
   leftSidebarSize: number;
   rightSidebarSize: number;
   taskListViewMode: TaskListViewMode;
+  taskListPageFilters: Record<string, TaskListPageFilter>;
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
   pulseCollapsed: boolean;
@@ -34,6 +36,7 @@ interface LayoutState {
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
+  setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => void;
   setDriveFooterCollapsed: (collapsed: boolean) => void;
   setDashboardFooterCollapsed: (collapsed: boolean) => void;
   setPulseCollapsed: (collapsed: boolean) => void;
@@ -50,6 +53,7 @@ export const useLayoutStore = create<LayoutState>()(
       leftSidebarSize: 18,
       rightSidebarSize: 18,
       taskListViewMode: 'table',
+      taskListPageFilters: {},
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
       pulseCollapsed: false,
@@ -70,6 +74,12 @@ export const useLayoutStore = create<LayoutState>()(
 
       setTaskListViewMode: (mode: TaskListViewMode) => {
         set({ taskListViewMode: mode });
+      },
+
+      setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => {
+        set((state) => ({
+          taskListPageFilters: { ...state.taskListPageFilters, [pageId]: filter },
+        }));
       },
 
       toggleLeftSidebar: () => {
@@ -124,6 +134,7 @@ export const useLayoutStore = create<LayoutState>()(
         leftSidebarSize: state.leftSidebarSize,
         rightSidebarSize: state.rightSidebarSize,
         taskListViewMode: state.taskListViewMode,
+        taskListPageFilters: state.taskListPageFilters,
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,
         pulseCollapsed: state.pulseCollapsed,
