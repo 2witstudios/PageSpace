@@ -117,6 +117,9 @@ export async function GET(req: Request) {
 
     // Accept any pending drive invitations for this user (independent of how they signed in)
     // and remember the drive id requested via ?inviteDriveId for the post-verify redirect.
+    // On failure, revoke the just-created session and redirect to error: the invite path
+    // pre-creates page_permissions for the invitee, so completing login with acceptedAt
+    // still null would let them reach those pages without ever clearing the invitation gate.
     let acceptedInviteDriveId: string | null = null;
     try {
       const pending = await driveInviteRepository.findPendingMembersForUser(userId);
@@ -139,6 +142,8 @@ export async function GET(req: Request) {
       }
     } catch (error) {
       loggers.auth.error('Failed to accept pending invitations', error as Error, { userId });
+      await sessionService.revokeSession(sessionToken, 'invite_acceptance_failed').catch(() => {});
+      return redirectWithError('server_error');
     }
 
     // DESKTOP: additionally create device token + exchange code for desktop token handoff

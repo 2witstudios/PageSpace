@@ -167,7 +167,11 @@ export async function POST(
     const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
 
     let memberId: string;
-    let membershipAccepted = false;
+    // membershipBecameAccepted = TRUE only when this request transitioned the row
+    // from no-membership or pending → accepted. Pure role-update on an
+    // already-accepted member is NOT a join transition and must not re-emit
+    // member_added or the invite-added notification.
+    let membershipBecameAccepted = false;
 
     if (!existingMember) {
       // Add as drive member with specified role; pending invites leave acceptedAt null
@@ -181,7 +185,7 @@ export async function POST(
       });
 
       memberId = newMember.id;
-      membershipAccepted = inviteKind !== 'invited';
+      membershipBecameAccepted = inviteKind !== 'invited';
     } else {
       // Update role if member exists
       await driveInviteRepository.updateDriveMemberRole(
@@ -192,16 +196,14 @@ export async function POST(
 
       memberId = existingMember.id;
       // If the legacy userId path lands on a pending row, accept it now —
-      // otherwise we'd emit member_added below for someone whose acceptedAt is null.
+      // that IS a join transition. An already-accepted row is just a role update.
       // Email path can't reach this branch for pending rows (409 fires earlier).
       if (existingMember.acceptedAt === null && inviteKind === 'added') {
-        membershipAccepted = await driveInviteRepository.acceptPendingMember(existingMember.id);
-      } else {
-        membershipAccepted = existingMember.acceptedAt !== null;
+        membershipBecameAccepted = await driveInviteRepository.acceptPendingMember(existingMember.id);
       }
     }
 
-    if (membershipAccepted) {
+    if (membershipBecameAccepted) {
       // Fan out to drive recipients (owner + accepted members) plus the invitee
       // so admins watching the members page see the new join in real time.
       const driveRecipients = await getDriveRecipientUserIds(driveId);
@@ -266,8 +268,9 @@ export async function POST(
         driveName: drive.name,
         magicLinkUrl,
       });
-    } else {
-      // Send notification to added existing user
+    } else if (membershipBecameAccepted) {
+      // Send "you've been added" notification only on a fresh join transition.
+      // Pure role/permissions updates on already-accepted members must not retrigger it.
       await createDriveNotification(
         invitedUserId,
         driveId,

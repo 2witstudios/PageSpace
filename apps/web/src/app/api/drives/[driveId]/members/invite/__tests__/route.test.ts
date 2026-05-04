@@ -25,6 +25,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findInviterDisplay: vi.fn(),
     findUserIdByEmail: vi.fn(),
     findActivePendingMemberByEmail: vi.fn(),
+    acceptPendingMember: vi.fn().mockResolvedValue(true),
   },
 }));
 
@@ -465,6 +466,41 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+    });
+
+    it('should NOT broadcast member_added or notify when re-inviting an already-accepted member (pure role/permissions update)', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'existing_mem',
+        userId: mockInvitedUserId,
+        acceptedAt: new Date('2025-01-01'),
+      } as never);
+
+      await POST(
+        createInviteRequest(mockDriveId, { ...defaultBody, role: 'ADMIN' }),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
+    it('should broadcast member_added and notify when legacy userId path lands on a pending row (acceptance transition)', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'existing_mem',
+        userId: mockInvitedUserId,
+        acceptedAt: null,
+      } as never);
+      vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValueOnce(true);
+
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('existing_mem');
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+      expect(createDriveNotification).toHaveBeenCalled();
     });
   });
 

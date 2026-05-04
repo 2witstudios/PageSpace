@@ -124,8 +124,8 @@ import { broadcastDriveMemberEventToRecipients, createDriveMemberEventPayload } 
 
 const createVerifyRequest = (token?: string, inviteDriveId?: string) => {
   const params = new URLSearchParams();
-  if (token) params.set('token', token);
-  if (inviteDriveId) params.set('inviteDriveId', inviteDriveId);
+  if (token !== undefined) params.set('token', token);
+  if (inviteDriveId !== undefined) params.set('inviteDriveId', inviteDriveId);
   const qs = params.toString();
   const url = qs
     ? `http://localhost/api/auth/magic-link/verify?${qs}`
