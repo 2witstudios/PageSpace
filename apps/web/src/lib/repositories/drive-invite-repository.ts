@@ -65,15 +65,17 @@ export const driveInviteRepository = {
   },
 
   async findUserIdByEmail(email: string) {
+    const normalized = email.toLowerCase().trim();
     const result = await db
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.email, email))
+      .where(eq(users.email, normalized))
       .limit(1);
     return result.at(0) ?? null;
   },
 
   async findActivePendingMemberByEmail(driveId: string, email: string) {
+    const normalized = email.toLowerCase().trim();
     const result = await db
       .select({ id: driveMembers.id })
       .from(driveMembers)
@@ -81,7 +83,7 @@ export const driveInviteRepository = {
       .where(
         and(
           eq(driveMembers.driveId, driveId),
-          eq(users.email, email),
+          eq(users.email, normalized),
           isNull(driveMembers.acceptedAt)
         )
       )

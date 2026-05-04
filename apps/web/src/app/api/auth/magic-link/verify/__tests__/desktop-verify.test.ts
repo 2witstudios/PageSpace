@@ -111,10 +111,10 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn(
-    (driveId: string, userId: string, event: string, data: unknown) => ({
+    (driveId: string, userId: string, operation: string, data: unknown) => ({
       driveId,
       userId,
-      event,
+      operation,
       ...(data as Record<string, unknown>),
     })
   ),

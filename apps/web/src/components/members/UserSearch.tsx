@@ -125,8 +125,8 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
       )}
 
       {/* No Results */}
-      {!loading && query.length >= 2 && results.length === 0 && (() => {
-        const normalized = query.toLowerCase().trim();
+      {!loading && debouncedQuery.length >= 2 && results.length === 0 && (() => {
+        const normalized = debouncedQuery.toLowerCase().trim();
         const isEmail = EMAIL_REGEX.test(normalized);
         if (isEmail && onInviteEmail) {
           return (

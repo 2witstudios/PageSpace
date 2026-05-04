@@ -29,6 +29,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
   and: vi.fn((...args) => ({ and: args })),
+  isNotNull: vi.fn(() => 'isNotNull'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({

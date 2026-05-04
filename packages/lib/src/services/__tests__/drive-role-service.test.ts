@@ -45,7 +45,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
-  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+  isNotNull: vi.fn((a: unknown) => ({ op: 'isNotNull', a })),
 }));
 
 import { db } from '@pagespace/db/db';

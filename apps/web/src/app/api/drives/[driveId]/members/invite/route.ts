@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
@@ -20,6 +21,8 @@ interface PermissionEntry {
   canEdit: boolean;
   canShare: boolean;
 }
+
+const emailSchema = z.string().email();
 
 export async function POST(
   request: Request,
@@ -86,6 +89,14 @@ export async function POST(
 
     if (bodyEmail && !bodyUserId) {
       normalizedEmail = bodyEmail.toLowerCase().trim();
+
+      const emailParse = emailSchema.safeParse(normalizedEmail);
+      if (!emailParse.success) {
+        return NextResponse.json(
+          { error: 'Invalid email address' },
+          { status: 400 }
+        );
+      }
 
       // Reject re-invites of an email that already has a pending row in this drive,
       // regardless of whether the email currently maps to an existing user (e.g. a
@@ -221,7 +232,7 @@ export async function POST(
         process.env.WEB_APP_URL ||
         process.env.NEXT_PUBLIC_APP_URL ||
         'http://localhost:3000';
-      const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${pendingMagicToken}&inviteDriveId=${driveId}`;
+      const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(pendingMagicToken)}&inviteDriveId=${encodeURIComponent(driveId)}`;
       const inviter = await driveInviteRepository.findInviterDisplay(userId);
       await sendPendingDriveInvitationEmail({
         recipientEmail: normalizedEmail,

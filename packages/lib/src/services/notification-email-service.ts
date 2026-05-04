@@ -277,23 +277,19 @@ interface PendingDriveInvitationEmailInput {
 export async function sendPendingDriveInvitationEmail(
   input: PendingDriveInvitationEmailInput
 ): Promise<void> {
-  try {
-    await sendEmail({
-      to: input.recipientEmail,
-      subject: `${input.inviterName} invited you to ${input.driveName} on PageSpace`,
-      react: DriveInvitationEmail({
-        userName: input.recipientName || input.recipientEmail,
-        inviterName: input.inviterName,
-        driveName: input.driveName,
-        acceptUrl: input.magicLinkUrl,
-        unsubscribeUrl: '',
-      }),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    const safeMessage = message.replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
-    console.error('Failed to send pending drive invitation email: %s', safeMessage);
-  }
+  // Propagate the error so callers can surface a 5xx and the operator knows the
+  // invitation row exists without a delivered email — they can use Resend to retry.
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${input.inviterName} invited you to ${input.driveName} on PageSpace`,
+    react: DriveInvitationEmail({
+      userName: input.recipientName || input.recipientEmail,
+      inviterName: input.inviterName,
+      driveName: input.driveName,
+      acceptUrl: input.magicLinkUrl,
+      unsubscribeUrl: '',
+    }),
+  });
 }
 
 /**

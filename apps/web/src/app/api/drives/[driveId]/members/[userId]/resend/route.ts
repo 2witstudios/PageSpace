@@ -97,7 +97,7 @@ export async function POST(
       process.env.WEB_APP_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
       'http://localhost:3000';
-    const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${tokenResult.data.token}&inviteDriveId=${driveId}`;
+    const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(tokenResult.data.token)}&inviteDriveId=${encodeURIComponent(driveId)}`;
     const inviter = await driveInviteRepository.findInviterDisplay(callerId);
 
     await sendPendingDriveInvitationEmail({
