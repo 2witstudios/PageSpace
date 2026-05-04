@@ -1,6 +1,6 @@
 # Drive Invites by Email Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ IMPLEMENTED (PR #1229; manual verification + CI green pending)
 **Goal**: Let drive owners and admins invite users who don't yet have a PageSpace account, by email.
 
 ## Overview

@@ -142,14 +142,25 @@ export async function PATCH(
 
       // Fan out role-change to all drive recipients so admins watching the
       // members page see the role badge update without a manual refresh.
-      const driveRecipients = await getDriveRecipientUserIds(driveId);
-      await broadcastDriveMemberEventToRecipients(
-        createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
-          role,
-          driveName: access.drive.name
-        }),
-        driveRecipients
-      );
+      // Realtime is best-effort: if recipient lookup or broadcast fails, the
+      // membership write has already committed; logging and surfacing the
+      // failure to the caller would lose data and make the route flaky.
+      try {
+        const driveRecipients = await getDriveRecipientUserIds(driveId);
+        await broadcastDriveMemberEventToRecipients(
+          createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
+            role,
+            driveName: access.drive.name
+          }),
+          driveRecipients
+        );
+      } catch (broadcastError) {
+        loggers.api.warn('Role-change fan-out failed; continuing', {
+          driveId,
+          userId,
+          error: broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
+        });
+      }
 
       // Log activity for audit trail (role change is a critical security event)
       const actorInfo = await getActorInfo(currentUserId);
@@ -328,14 +339,24 @@ export async function DELETE(
     // Fan out member removal to all drive recipients so admins watching the
     // members page see the row disappear in real time. The target user themselves
     // is already in the recipient set so they too receive the event before the
-    // kick-from-rooms step below.
-    const driveRecipients = await getDriveRecipientUserIds(driveId);
-    await broadcastDriveMemberEventToRecipients(
-      createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
-        driveName: access.drive.name,
-      }),
-      driveRecipients
-    );
+    // kick-from-rooms step below. Best-effort: don't fail the removal flow if
+    // the realtime broadcast fails — the kick-from-rooms step below is the
+    // primary security boundary and runs unconditionally.
+    try {
+      const driveRecipients = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
+        createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
+          driveName: access.drive.name,
+        }),
+        driveRecipients
+      );
+    } catch (broadcastError) {
+      loggers.api.warn('Member-removal fan-out failed; continuing with kick', {
+        driveId,
+        targetUserId,
+        error: broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
+      });
+    }
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
     // This ensures the user stops receiving updates even if their socket is still connected
