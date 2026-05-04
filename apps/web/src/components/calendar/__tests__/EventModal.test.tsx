@@ -275,6 +275,41 @@ describe('EventModal — agent trigger disclosure', () => {
     });
   });
 
+  test('a recurring event with a stale trigger row leaves it alone on save (agentTrigger=undefined)', async () => {
+    // Defensive case: the API rejects upserting triggers on recurring events,
+    // so a recurring row with a trigger should never exist. If one does, the
+    // modal must not surface it as enabled (would trap the user behind a
+    // recurring-validation error) and must not silently send agentTrigger=null
+    // either (that would delete the row without user intent).
+    const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
+
+    renderModal({
+      event: baseEvent({
+        recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      }),
+      onSave,
+    });
+
+    // Disclosure header should read 'Off' even though a trigger row exists,
+    // because hydration skips recurring events.
+    await screen.findByRole('button', { name: /Agent trigger\s*Off/i });
+
+    await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
+
+    await waitFor(() => {
+      if (!onSave.mock.calls.length) throw new Error('onSave not called');
+    });
+
+    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+
+    assert({
+      given: 'a recurring event with a stale trigger row',
+      should: 'send agentTrigger=undefined (no-op) so the broken row is left alone, not deleted',
+      actual: payload.agentTrigger,
+      expected: undefined,
+    });
+  });
+
   test('saving on a personal event omits agentTrigger entirely', async () => {
     const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
     renderModal({ context: 'user', driveId: undefined, event: null, onSave });

@@ -346,8 +346,11 @@ export function EventModal({
           instructionPageId: agentValue.instructionPageId,
           contextPageIds: agentValue.contextPageIds,
         };
-      } else if (existingTrigger) {
-        // Was enabled, user turned it off → remove
+      } else if (existingTrigger && !isRecurring) {
+        // Was enabled, user turned it off → remove. Skip on recurring events:
+        // the trigger row shouldn't exist there anyway, but if a stale one is
+        // present we leave it alone rather than silently deleting it on every
+        // edit. The user never saw an Off→On affordance for it.
         agentTrigger = null;
       }
       // else: undefined → no-op (no trigger before, none now)

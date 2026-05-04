@@ -210,7 +210,10 @@ function MobileEventCard({
       <div className="flex items-start justify-between gap-3">
         <h3 className="font-semibold text-base flex-1 min-w-0 truncate">
           {event.hasAgentTrigger && (
-            <Zap className="inline-block h-3.5 w-3.5 mr-1 text-amber-500 align-text-top" aria-label="Agent trigger configured" />
+            <>
+              <Zap className="inline-block h-3.5 w-3.5 mr-1 text-amber-500 align-text-top" aria-hidden="true" />
+              <span className="sr-only">Agent trigger configured. </span>
+            </>
           )}
           {event.title}
         </h3>
