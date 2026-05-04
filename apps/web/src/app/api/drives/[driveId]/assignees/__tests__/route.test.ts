@@ -27,6 +27,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
+  isNotNull: vi.fn((a: unknown) => ({ _type: 'isNotNull', a })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {

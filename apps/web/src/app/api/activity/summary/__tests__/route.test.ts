@@ -42,6 +42,7 @@ vi.mock('@pagespace/db/operators', () => ({
   ne: vi.fn(),
   sql: Object.assign(vi.fn(), { join: vi.fn() }),
   count: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
