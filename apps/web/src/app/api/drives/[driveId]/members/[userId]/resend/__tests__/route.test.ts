@@ -220,6 +220,22 @@ describe('POST /api/drives/[driveId]/members/[userId]/resend', () => {
     expect(response.status).toBe(403);
   });
 
+  it('given createMagicLinkToken returns USER_SUSPENDED, responds 403 instead of 500', async () => {
+    vi.mocked(createMagicLinkToken).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'USER_SUSPENDED', userId: targetUserId },
+    });
+
+    const response = await POST(
+      createResendRequest(driveId, targetUserId),
+      createContext(driveId, targetUserId)
+    );
+
+    expect(response.status).toBe(403);
+    expect(driveInviteRepository.bumpInvitedAt).not.toHaveBeenCalled();
+    expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+  });
+
   it('given the target user has no email on file, responds 404', async () => {
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue(undefined);
 

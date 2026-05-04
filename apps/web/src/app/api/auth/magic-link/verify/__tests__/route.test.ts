@@ -32,6 +32,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -584,6 +585,22 @@ describe('GET /api/auth/magic-link/verify', () => {
 
       expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_race');
       expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+    });
+
+    it('given acceptPendingMember throws, revokes the just-created session and redirects to server_error so the partial-acceptance state cannot complete login', async () => {
+      vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+        pendingRow('mem_throws', 'drive_a'),
+      ]);
+      vi.mocked(driveInviteRepository.acceptPendingMember).mockRejectedValueOnce(new Error('db down'));
+
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get('Location')).toContain('error=server_error');
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_token',
+        'invite_acceptance_failed'
+      );
     });
 
     it('given inviteDriveId does not match any pending row for this user, falls through to default redirect rather than error', async () => {

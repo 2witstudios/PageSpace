@@ -147,6 +147,12 @@ export async function POST(
           expiryMinutes: INVITATION_LINK_EXPIRY_MINUTES,
         });
         if (!tokenResult.ok) {
+          if (tokenResult.error.code === 'USER_SUSPENDED') {
+            return NextResponse.json(
+              { error: 'This account is suspended and cannot receive invitations.' },
+              { status: 403 }
+            );
+          }
           loggers.api.error('Failed to create magic link token for invite', new Error(tokenResult.error.code));
           return NextResponse.json({ error: 'Failed to create invitation' }, { status: 500 });
         }

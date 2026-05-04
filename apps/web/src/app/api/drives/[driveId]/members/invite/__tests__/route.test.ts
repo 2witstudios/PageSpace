@@ -894,6 +894,23 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
+    it('given createMagicLinkToken returns USER_SUSPENDED, responds 403 instead of bubbling through as a 500', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(createMagicLinkToken).mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'USER_SUSPENDED', userId: 'user_suspended' },
+      });
+
+      const response = await POST(
+        createInviteRequest(mockDriveId, emailBody),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(403);
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
     it('given the per-email rate limit denies the invite, responds 429 without creating a magic-link token or sending an email', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
       vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({
