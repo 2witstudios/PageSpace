@@ -42,6 +42,8 @@ import {
   pickInitialFilters,
   toStoredDashboardFilters,
   fromStoredOrDefaults,
+  type DueDateFilter,
+  type AssigneeFilter,
 } from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
@@ -69,9 +71,6 @@ interface TasksDashboardProps {
   driveId?: string;
   driveName?: string;
 }
-
-type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
-type AssigneeFilter = 'mine' | 'all';
 
 interface ExtendedFilters extends TaskFilters {
   search?: string;

@@ -4,16 +4,12 @@ import { persist } from 'zustand/middleware';
 type TaskListViewMode = 'table' | 'kanban';
 export type TaskListPageFilter = 'all' | 'active' | 'completed';
 
-export type TaskDashboardDueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
-export type TaskDashboardAssigneeFilter = 'mine' | 'all';
-export type TaskDashboardPriority = 'low' | 'medium' | 'high';
-
 export interface StoredDashboardFilters {
   status?: string;
-  priority?: TaskDashboardPriority;
+  priority?: 'low' | 'medium' | 'high';
   search?: string;
-  dueDateFilter?: TaskDashboardDueDateFilter;
-  assigneeFilter?: TaskDashboardAssigneeFilter;
+  dueDateFilter?: 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
+  assigneeFilter?: 'mine' | 'all';
 }
 
 interface LayoutState {
