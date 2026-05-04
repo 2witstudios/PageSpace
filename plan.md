@@ -8,6 +8,33 @@
 - [E2E and Load Testing](tasks/e2e-and-load-testing.md) — Playwright e2e for core user journeys + k6 load scenarios with Grafana dashboard for API latency and Postgres pool monitoring.
 - [Task List Agent Triggers Follow-up](tasks/task-list-agent-triggers-followup.md) — close PR #1177 post-merge gaps: cross-surface discoverability via TaskDetailSheet, page-scoped task broadcasts for collaborative real-time, agent-parity (instructionPageId + contextPageIds) in the trigger dialog, "anchored to" clarity in the page-level Workflows dialog, and small polish + correctness fixes.
 
+## Drive Invites by Email — followups
+
+Follow-up authz queries on `drive_members` discovered during Epic 1 gate
+hardening. These were left out of Epic 1 to keep the PR tight (security
+hardening only); each callsite is allow-listed in
+`apps/web/src/app/api/__tests__/drive-member-gate-coverage.test.ts` with a
+justification, and should be revisited as a follow-up:
+
+- `apps/web/src/app/api/account/drives-status/route.ts` — admin lookup for the
+  drive-transfer UI; should gate on `acceptedAt` so a pending admin can't be
+  offered as a transfer target.
+- `apps/web/src/app/api/account/handle-drive/route.ts` — drive-transfer POST
+  validates the new owner is an admin; same gate needed so transfer to a
+  pending admin is rejected.
+- `apps/web/src/app/api/admin/global-prompt/route.ts` — admin tool listing
+  member drives for global-prompt scoping; gate so pending invitations don't
+  surface in the admin's drive picker.
+- `apps/web/src/app/api/channels/[pageId]/messages/route.ts` — admin
+  membership lookup for mention notifications; pending admins shouldn't
+  receive @mentions before accepting.
+- `apps/web/src/app/api/pages/bulk-copy/route.ts`,
+  `apps/web/src/app/api/pages/bulk-move/route.ts` — target-drive membership
+  check used to authorise cross-drive copy/move; gate so a pending member
+  can't pull pages into a drive they haven't accepted into.
+- `apps/web/src/app/api/pages/tree/route.ts` — drive membership lookup for
+  the tree-rendering authz check; same gate.
+
 ## Recently Completed
 
 - [BYOK Retirement](tasks/archive/2026-05-01-byok-retirement.md) — ✅ 2026-05-01 — Drop `user_ai_settings`, route all AI calls through `*_DEFAULT_API_KEY` env vars, broaden per-tier rate-limit gate to every managed provider; breaking change for self-hosters.
