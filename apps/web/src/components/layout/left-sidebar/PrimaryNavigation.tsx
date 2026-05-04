@@ -24,17 +24,13 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             icon: Home,
             exact: true,
         },
-        // DMs are user-scoped, so the entry only appears in the dashboard nav.
-        ...(driveId
-            ? []
-            : [
-                  {
-                      name: "Direct Messages",
-                      href: "/dashboard/dms",
-                      icon: MessageSquare,
-                      exact: false,
-                  },
-              ]),
+        // DMs are user-scoped — same href in drive nav so they're always one click away.
+        {
+            name: "Direct Messages",
+            href: "/dashboard/dms",
+            icon: MessageSquare,
+            exact: false,
+        },
         {
             name: "Channels",
             href: driveId ? `/dashboard/${driveId}/channels` : "/dashboard/channels",
