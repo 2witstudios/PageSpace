@@ -209,7 +209,11 @@ export async function POST(
       memberId = newMember.id;
       membershipBecameAccepted = inviteKind !== 'invited';
     } else {
-      // Update role if member exists
+      // Update role if member exists. Pending rows stay pending — the invitee
+      // must complete sign-in via the magic link to clear the invitation gate.
+      // Auto-accepting here would let admins bypass that gate by re-inviting
+      // the temp userId from a prior email invite. The email path can't reach
+      // this branch for pending rows because the 409 check fires earlier.
       await driveInviteRepository.updateDriveMemberRole(
         existingMember.id,
         role,
@@ -217,12 +221,9 @@ export async function POST(
       );
 
       memberId = existingMember.id;
-      // If the legacy userId path lands on a pending row, accept it now —
-      // that IS a join transition. An already-accepted row is just a role update.
-      // Email path can't reach this branch for pending rows (409 fires earlier).
-      if (existingMember.acceptedAt === null && inviteKind === 'added') {
-        membershipBecameAccepted = await driveInviteRepository.acceptPendingMember(existingMember.id);
-      }
+      // membershipBecameAccepted stays false — neither pure role-update on an
+      // already-accepted member nor a role-update on a pending row counts as
+      // a fresh join transition, so member_added must not fire here.
     }
 
     if (membershipBecameAccepted) {

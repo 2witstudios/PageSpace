@@ -485,22 +485,25 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(createDriveNotification).not.toHaveBeenCalled();
     });
 
-    it('should broadcast member_added and notify when legacy userId path lands on a pending row (acceptance transition)', async () => {
+    it('should NOT auto-accept a pending row when re-invited via userId path — invitee must complete sign-in to clear the invitation gate', async () => {
       vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
         id: 'existing_mem',
         userId: mockInvitedUserId,
         acceptedAt: null,
       } as never);
-      vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValueOnce(true);
 
       await POST(
         createInviteRequest(mockDriveId, defaultBody),
         createContext(mockDriveId)
       );
 
-      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('existing_mem');
-      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
-      expect(createDriveNotification).toHaveBeenCalled();
+      // Role updates on the pending row are allowed (admin can change the
+      // pending invitee's role), but acceptance is NOT triggered: the row
+      // stays pending and the invitee still has to sign in via magic link.
+      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalled();
+      expect(driveInviteRepository.acceptPendingMember).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+      expect(createDriveNotification).not.toHaveBeenCalled();
     });
   });
 
