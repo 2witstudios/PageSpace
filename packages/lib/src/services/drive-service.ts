@@ -387,10 +387,13 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 /**
  * Update a user's last accessed timestamp for a drive.
  *
- * Owner self-heal: the new acceptedAt gate (Epic 1) hides any drive_members
- * row with acceptedAt IS NULL from authz queries. Legacy owner rows without
- * acceptedAt would therefore stop authorizing the owner. To avoid that, the
- * owner path upserts and backfills acceptedAt via COALESCE on conflict.
+ * Owner self-heal: the new acceptedAt gate (Epic 1) excludes drive_members
+ * rows with acceptedAt IS NULL from member-list queries (lastAccessedAt
+ * lookup, sidebar role display, recipient broadcast). Owners reach drives
+ * via drives.ownerId so they are not locked out of authz, but a legacy
+ * owner row with acceptedAt = NULL would stop populating those member-list
+ * paths. The owner branch upserts and backfills acceptedAt via COALESCE on
+ * conflict so the gate becomes a no-op for owner rows.
  *
  * Non-owners are never auto-accepted — pending invitations must be claimed
  * through the post-login acceptance flow (Epic 3).
