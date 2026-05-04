@@ -834,6 +834,13 @@
       "when": 1777734268331,
       "tag": "0118_short_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1777937933263,
+      "tag": "0119_reflective_vampiro",
+      "breakpoints": true
     }
   ]
 }
