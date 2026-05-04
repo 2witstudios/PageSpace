@@ -21,6 +21,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     getMemberPermissions: vi.fn(),
     updateMemberRole: vi.fn(),
     updateMemberPermissions: vi.fn(),
+    getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
@@ -44,7 +45,7 @@ vi.mock('@pagespace/lib/notifications/notifications', () => ({
 }));
 
 vi.mock('@/lib/websocket', () => ({
-  broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn((driveId, userId, event, data) => ({
     driveId,
     userId,
@@ -115,7 +116,7 @@ import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMe
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
-  broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
@@ -785,7 +786,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         'member_role_changed',
         { role: 'ADMIN', driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
     });
 
     it('should NOT send notification when role stays the same', async () => {
@@ -806,7 +807,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
       expect(createDriveNotification).not.toHaveBeenCalled();
-      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
 
     it('should NOT send notification when no role is provided', async () => {
@@ -827,7 +828,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
       expect(createDriveNotification).not.toHaveBeenCalled();
-      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
   });
 
@@ -1136,7 +1137,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
         'member_removed',
         { driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
     });
 
     it('should kick user from drive rooms', async () => {

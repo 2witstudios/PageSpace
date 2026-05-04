@@ -257,7 +257,10 @@ export async function addDriveMember(
       userId: input.userId,
       role: input.role || 'MEMBER',
       invitedBy,
-      acceptedAt: new Date(), // Auto-accept for now
+      // Helper currently has no production caller; kept for service tests.
+      // Pending-state membership is owned by the invite route, which writes
+      // acceptedAt: null directly through the drive-invite-repository seam.
+      acceptedAt: new Date(),
     })
     .returning();
 

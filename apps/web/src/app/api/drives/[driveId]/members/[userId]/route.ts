@@ -5,13 +5,14 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
-  broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
   kickUserFromPage,
   kickUserFromPageActivity,
 } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { db } from '@pagespace/db/db'
@@ -130,12 +131,15 @@ export async function PATCH(
         currentUserId
       );
 
-      // Broadcast role change event to the affected user
-      await broadcastDriveMemberEvent(
+      // Fan out role-change to all drive recipients so admins watching the
+      // members page see the role badge update without a manual refresh.
+      const driveRecipients = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
         createDriveMemberEventPayload(driveId, userId, 'member_role_changed', {
           role,
           driveName: access.drive.name
-        })
+        }),
+        driveRecipients
       );
 
       // Log activity for audit trail (role change is a critical security event)
@@ -312,11 +316,16 @@ export async function DELETE(
 
     auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
 
-    // Broadcast member removal event
-    await broadcastDriveMemberEvent(
+    // Fan out member removal to all drive recipients so admins watching the
+    // members page see the row disappear in real time. The target user themselves
+    // is already in the recipient set so they too receive the event before the
+    // kick-from-rooms step below.
+    const driveRecipients = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveMemberEventToRecipients(
       createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
         driveName: access.drive.name,
-      })
+      }),
+      driveRecipients
     );
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
