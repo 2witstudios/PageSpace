@@ -46,7 +46,7 @@ vi.mock('@pagespace/db/schema/workflow-runs', () => ({
 }));
 
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
-  upsertCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
@@ -89,7 +89,7 @@ import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import {
-  upsertCalendarTriggerWorkflow,
+  upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
@@ -136,14 +136,21 @@ function setupSuccessfulPatch() {
   const setMock = vi.fn(() => ({ where: whereMock }));
   (db.update as Mock).mockReturnValue({ set: setMock });
 
-  const txStub = {
-    update: db.update,
-  };
-  (db.transaction as Mock).mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txStub));
-
   const selectWhereMock = vi.fn().mockResolvedValue([]);
   const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
   (db.select as Mock).mockReturnValue({ from: selectFromMock });
+
+  // tx exposes the same select/update so the in-tx remove/upsert helpers
+  // and the trigger-time re-aim sweep all chain through the same mocks.
+  const txStub = {
+    select: db.select,
+    update: db.update,
+    delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'wf-1' }]) })),
+    })),
+  };
+  (db.transaction as Mock).mockImplementation(async (cb: (tx: unknown) => unknown) => cb(txStub));
 }
 
 const makeRequest = (body: Record<string, unknown>) =>
@@ -174,8 +181,8 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     }), ctx());
 
     expect(res.status).toBe(200);
-    expect(upsertCalendarTriggerWorkflow).toHaveBeenCalledWith(
-      db,
+    expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         driveId: DRIVE_ID,
         calendarEventId: EVENT_ID,
@@ -193,15 +200,15 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     const res = await PATCH(makeRequest({ agentTrigger: null }), ctx());
 
     expect(res.status).toBe(200);
-    expect(removeCalendarTrigger).toHaveBeenCalledWith(db, EVENT_ID);
-    expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+    expect(removeCalendarTrigger).toHaveBeenCalledWith(expect.anything(), EVENT_ID);
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
   });
 
   it('does nothing to triggers when agentTrigger is omitted', async () => {
     const res = await PATCH(makeRequest({ title: 'Renamed' }), ctx());
 
     expect(res.status).toBe(200);
-    expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
     expect(removeCalendarTrigger).not.toHaveBeenCalled();
   });
 
@@ -217,6 +224,22 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     }), ctx());
 
     expect(res.status).toBe(400);
-    expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+  });
+
+  it('rejects an agent-trigger upsert on a recurring event', async () => {
+    const recurringEvent = { ...baseEvent, recurrenceRule: { frequency: 'WEEKLY', interval: 1 } };
+    (db.query.calendarEvents.findFirst as Mock).mockReset();
+    (db.query.calendarEvents.findFirst as Mock)
+      .mockResolvedValueOnce(recurringEvent)
+      .mockResolvedValueOnce(recurringEvent);
+
+    const res = await PATCH(makeRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'p' },
+    }), ctx());
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/recur/i);
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
   });
 });

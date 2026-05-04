@@ -6,6 +6,12 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 
 const MAX_CONTEXT_PAGES = 10;
 
+// Drizzle tx exposes the same insert/select/update/delete chain shape as the
+// top-level db, so helpers that don't open their own transaction can take
+// either. Call sites that are already inside an outer tx pass the tx; call
+// sites that aren't pass `db`.
+type DbOrTx = typeof DbType | Parameters<Parameters<typeof DbType.transaction>[0]>[0];
+
 export interface CalendarAgentTriggerInput {
   agentPageId: string;
   prompt?: string;
@@ -125,9 +131,13 @@ export async function validateCalendarAgentTrigger(
  * Remove the agent trigger from a calendar event. Deletes the linked workflows
  * row(s); FK cascade drops the calendar_triggers rows. Treats a no-op
  * (no triggers exist) as success so callers don't need a pre-check.
+ *
+ * Accepts either `db` or a transaction handle so callers that are already in
+ * an outer tx (e.g. PATCH /events/[id]) can keep event + trigger writes
+ * atomic.
  */
 export async function removeCalendarTrigger(
-  database: typeof DbType,
+  database: DbOrTx,
   calendarEventId: string,
 ): Promise<void> {
   const triggerRows = await database
@@ -151,6 +161,56 @@ export interface UpsertCalendarTriggerWorkflowParams {
 }
 
 /**
+ * In-tx version of upsertCalendarTriggerWorkflow. Caller is responsible for
+ * pre-validating via validateCalendarAgentTrigger. Used by event PATCH /
+ * AI update_calendar_event so the event update and the trigger upsert commit
+ * (or roll back) together — protects against partial-write states where a
+ * non-trigger validation failure (e.g. db blip mid-upsert) leaves the event
+ * mutated but the trigger out of sync.
+ */
+export async function upsertCalendarTriggerWorkflowInTx(
+  tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0],
+  params: UpsertCalendarTriggerWorkflowParams,
+): Promise<{ workflowId: string; triggerId: string }> {
+  const triggerPrompt = params.agentTrigger.prompt?.trim() || 'Execute instructions from linked page.';
+  const contextPageIds = params.agentTrigger.contextPageIds ?? [];
+
+  const existing = await tx
+    .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId })
+    .from(calendarTriggers)
+    .where(eq(calendarTriggers.calendarEventId, params.calendarEventId));
+
+  if (existing.length > 0) {
+    const { id: triggerId, workflowId } = existing[0];
+
+    await tx.update(workflows).set({
+      agentPageId: params.agentTrigger.agentPageId,
+      prompt: triggerPrompt,
+      instructionPageId: params.agentTrigger.instructionPageId ?? null,
+      contextPageIds,
+      timezone: params.timezone,
+      isEnabled: true,
+    }).where(eq(workflows.id, workflowId));
+
+    await tx.update(calendarTriggers).set({
+      triggerAt: params.triggerAt,
+    }).where(eq(calendarTriggers.id, triggerId));
+
+    return { workflowId, triggerId };
+  }
+
+  return createCalendarTriggerWorkflow({
+    tx,
+    driveId: params.driveId,
+    scheduledById: params.scheduledById,
+    calendarEventId: params.calendarEventId,
+    triggerAt: params.triggerAt,
+    timezone: params.timezone,
+    agentTrigger: params.agentTrigger,
+  });
+}
+
+/**
  * Upsert an event's agent trigger.
  *
  * If a trigger row already exists for this event, updates the linked workflows
@@ -160,7 +220,9 @@ export interface UpsertCalendarTriggerWorkflowParams {
  * createCalendarTriggerWorkflow inside the same transaction.
  *
  * Validation runs before the transaction so a bad agent or off-drive context
- * page doesn't briefly hold a row lock.
+ * page doesn't briefly hold a row lock. Used by the standalone PUT /triggers
+ * endpoint; PATCH event uses upsertCalendarTriggerWorkflowInTx instead so its
+ * event update and trigger upsert commit atomically.
  */
 export async function upsertCalendarTriggerWorkflow(
   database: typeof DbType,
@@ -171,42 +233,5 @@ export async function upsertCalendarTriggerWorkflow(
     agentTrigger: params.agentTrigger,
   });
 
-  const triggerPrompt = params.agentTrigger.prompt?.trim() || 'Execute instructions from linked page.';
-  const contextPageIds = params.agentTrigger.contextPageIds ?? [];
-
-  return database.transaction(async (tx) => {
-    const existing = await tx
-      .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId })
-      .from(calendarTriggers)
-      .where(eq(calendarTriggers.calendarEventId, params.calendarEventId));
-
-    if (existing.length > 0) {
-      const { id: triggerId, workflowId } = existing[0];
-
-      await tx.update(workflows).set({
-        agentPageId: params.agentTrigger.agentPageId,
-        prompt: triggerPrompt,
-        instructionPageId: params.agentTrigger.instructionPageId ?? null,
-        contextPageIds,
-        timezone: params.timezone,
-        isEnabled: true,
-      }).where(eq(workflows.id, workflowId));
-
-      await tx.update(calendarTriggers).set({
-        triggerAt: params.triggerAt,
-      }).where(eq(calendarTriggers.id, triggerId));
-
-      return { workflowId, triggerId };
-    }
-
-    return createCalendarTriggerWorkflow({
-      tx,
-      driveId: params.driveId,
-      scheduledById: params.scheduledById,
-      calendarEventId: params.calendarEventId,
-      triggerAt: params.triggerAt,
-      timezone: params.timezone,
-      agentTrigger: params.agentTrigger,
-    });
-  });
+  return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
 }

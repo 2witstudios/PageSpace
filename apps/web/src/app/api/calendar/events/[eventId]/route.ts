@@ -14,7 +14,7 @@ import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrat
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import {
   removeCalendarTrigger,
-  upsertCalendarTriggerWorkflow,
+  upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
@@ -250,6 +250,18 @@ export async function PATCH(
       );
     }
 
+    // Reject agent-trigger upserts on recurring events. The cron poller
+    // fires one-shot occurrences, so attaching one trigger to a recurring
+    // event would silently misfire on every occurrence past the first.
+    // Mirrors the POST /events and PUT /triggers guards.
+    const willBeRecurring = data.recurrenceRule !== undefined ? data.recurrenceRule !== null : event.recurrenceRule !== null;
+    if (data.agentTrigger && willBeRecurring) {
+      return NextResponse.json(
+        { error: 'Agent triggers are not supported for recurring events' },
+        { status: 400 }
+      );
+    }
+
     // Pre-validate agent trigger before opening the event update tx so a bad
     // payload (off-drive agent / context page, missing prompt-or-instruction)
     // returns 400 without dirtying event state.
@@ -265,7 +277,12 @@ export async function PATCH(
       }
     }
 
-    // Update the event and sync pending trigger time atomically
+    // Update the event, sync pending trigger time, AND apply agentTrigger
+    // changes atomically. The trigger ops live inside the same tx so a
+    // failure halfway through (e.g. workflow row blocked by another writer,
+    // FK constraint surprise) rolls back the event update too — a partial
+    // write where the title moved but the trigger didn't would be confusing
+    // for the user and hard to retry safely.
     const [updatedEvent] = await db.transaction(async (tx) => {
       const result = await tx
         .update(calendarEvents)
@@ -286,10 +303,12 @@ export async function PATCH(
         .where(eq(calendarEvents.id, eventId))
         .returning();
 
-      if (adjustedStartAt) {
-        // Only re-aim triggers that haven't been processed yet — any
-        // workflow_runs row (running, success, error, cancelled) is a
-        // terminal-or-in-flight outcome we shouldn't disturb.
+      if (adjustedStartAt && data.agentTrigger === undefined) {
+        // Caller didn't touch the trigger payload — keep the existing
+        // re-aim semantics: only triggers that haven't been processed yet
+        // get their triggerAt bumped. If the caller IS upserting the
+        // trigger this tick, the upsert below will set triggerAt itself
+        // and there's no point doing the re-aim sweep.
         await tx
           .update(calendarTriggers)
           .set({ triggerAt: adjustedStartAt })
@@ -303,16 +322,12 @@ export async function PATCH(
           ));
       }
 
-      return result;
-    });
-
-    // Apply agentTrigger changes after the event update commits.
-    // null → drop the trigger; object → upsert (validated inside the helper).
-    if (data.agentTrigger === null) {
-      await removeCalendarTrigger(db, eventId);
-    } else if (data.agentTrigger && event.driveId) {
-      try {
-        await upsertCalendarTriggerWorkflow(db, {
+      // Apply agentTrigger changes inside the same tx so partial writes
+      // can't leave the event mutated but the trigger out of sync.
+      if (data.agentTrigger === null) {
+        await removeCalendarTrigger(tx, eventId);
+      } else if (data.agentTrigger && event.driveId) {
+        await upsertCalendarTriggerWorkflowInTx(tx, {
           driveId: event.driveId,
           scheduledById: userId,
           calendarEventId: eventId,
@@ -320,11 +335,10 @@ export async function PATCH(
           timezone: data.timezone ?? event.timezone ?? 'UTC',
           agentTrigger: data.agentTrigger,
         });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to update agent trigger';
-        return NextResponse.json({ error: message }, { status: 400 });
       }
-    }
+
+      return result;
+    });
 
     // Fetch complete event with relations
     const completeEvent = await db.query.calendarEvents.findFirst({

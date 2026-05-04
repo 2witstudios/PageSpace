@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
 import { eq, and, desc } from '@pagespace/db/operators';
-import { calendarEvents } from '@pagespace/db/schema/calendar';
+import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
@@ -43,6 +43,17 @@ async function loadEvent(eventId: string) {
   return db.query.calendarEvents.findFirst({
     where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
   });
+}
+
+// Fetch the event's attendee list so the broadcast hits each attendee's user
+// channel — not just the drive room — since personal-calendar clients only
+// join their own user channel.
+async function loadAttendeeIds(eventId: string): Promise<string[]> {
+  const rows = await db
+    .select({ userId: eventAttendees.userId })
+    .from(eventAttendees)
+    .where(eq(eventAttendees.eventId, eventId));
+  return rows.map((r) => r.userId);
 }
 
 // GET /api/calendar/events/[eventId]/triggers
@@ -161,6 +172,16 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     );
   }
 
+  // Reject recurring events. The cron poller fires one-shot occurrences, so
+  // attaching one trigger to a recurring event would silently misfire on
+  // every occurrence past the first. Mirrors the POST /events guard.
+  if (event.recurrenceRule) {
+    return NextResponse.json(
+      { error: 'Agent triggers are not supported for recurring events' },
+      { status: 400 }
+    );
+  }
+
   const canManage = await canManageEventTrigger(userId, event);
   if (!canManage) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -187,12 +208,13 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     resourceId: eventId,
   });
 
+  const attendeeIds = await loadAttendeeIds(eventId);
   void broadcastCalendarEvent({
     eventId,
     driveId: event.driveId,
     operation: 'updated',
     userId,
-    attendeeIds: [],
+    attendeeIds,
   });
 
   return NextResponse.json({ success: true });
@@ -234,12 +256,13 @@ export async function DELETE(request: Request, context: { params: Promise<{ even
     resourceId: eventId,
   });
 
+  const attendeeIds = await loadAttendeeIds(eventId);
   void broadcastCalendarEvent({
     eventId,
     driveId: event.driveId,
     operation: 'updated',
     userId,
-    attendeeIds: [],
+    attendeeIds,
   });
 
   return NextResponse.json({ success: true });

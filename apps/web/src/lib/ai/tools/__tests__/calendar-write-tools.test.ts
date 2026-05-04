@@ -99,8 +99,9 @@ vi.mock('@/lib/websocket/calendar-events', () => ({
 
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   createCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
-  upsertCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
+  validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -1157,7 +1158,7 @@ describe('calendar-write-tools', () => {
           from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
         });
 
-        const { upsertCalendarTriggerWorkflow } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const { upsertCalendarTriggerWorkflowInTx } = await import('@/lib/workflows/calendar-trigger-helpers');
         const result = await calendarWriteTools.update_calendar_event.execute!(
           {
             eventId: 'event-1',
@@ -1178,7 +1179,7 @@ describe('calendar-write-tools', () => {
           expected: true,
         });
 
-        expect(upsertCalendarTriggerWorkflow).toHaveBeenCalledWith(
+        expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({
             calendarEventId: 'event-1',
@@ -1232,7 +1233,7 @@ describe('calendar-write-tools', () => {
           }),
         });
 
-        const { upsertCalendarTriggerWorkflow } = await import('@/lib/workflows/calendar-trigger-helpers');
+        const { upsertCalendarTriggerWorkflowInTx } = await import('@/lib/workflows/calendar-trigger-helpers');
         const result = await calendarWriteTools.update_calendar_event.execute!(
           {
             eventId: 'event-1',
@@ -1248,7 +1249,7 @@ describe('calendar-write-tools', () => {
           expected: false,
         });
 
-        expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+        expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
       });
     });
   });

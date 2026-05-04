@@ -19,6 +19,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: { id: 'id', driveId: 'driveId', createdById: 'createdById', isTrashed: 'isTrashed' },
+  eventAttendees: { eventId: 'eventId', userId: 'userId' },
 }));
 vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   calendarTriggers: { id: 'id', calendarEventId: 'calendarEventId', workflowId: 'workflowId', triggerAt: 'triggerAt' },
@@ -179,6 +180,10 @@ describe('PUT /api/calendar/events/[eventId]/triggers', () => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuth(USER_ID));
     (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(baseEvent);
+    // loadAttendeeIds: empty list by default
+    (db.select as Mock).mockReturnValue({
+      from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+    });
   });
 
   it('forwards the validated payload to upsertCalendarTriggerWorkflow', async () => {
@@ -226,6 +231,17 @@ describe('PUT /api/calendar/events/[eventId]/triggers', () => {
     expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects an upsert on a recurring event', async () => {
+    (db.query.calendarEvents.findFirst as Mock).mockResolvedValue({
+      ...baseEvent,
+      recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+    });
+    const res = await PUT(mkRequest('PUT', { agentPageId: 'agent-1', prompt: 'p' }), ctx());
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/recur/i);
+    expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when an outsider asks', async () => {
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuth(OUTSIDER_ID));
     const res = await PUT(mkRequest('PUT', { agentPageId: 'agent-1', prompt: 'p' }), ctx());
@@ -245,6 +261,9 @@ describe('DELETE /api/calendar/events/[eventId]/triggers', () => {
     vi.clearAllMocks();
     (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuth(USER_ID));
     (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(baseEvent);
+    (db.select as Mock).mockReturnValue({
+      from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+    });
   });
 
   it('calls removeCalendarTrigger', async () => {
