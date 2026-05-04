@@ -1,13 +1,62 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const {
+  mockQueryPages,
+  mockSelect, mockSelectFrom, mockSelectWhere,
+  mockUpdate, mockUpdateSet, mockUpdateWhere,
+  mockDelete, mockDeleteWhere,
+  mockTransaction,
+} = vi.hoisted(() => {
+  const mockQueryPages = { findFirst: vi.fn(), findMany: vi.fn() };
+  const mockSelectWhere = vi.fn().mockResolvedValue([]);
+  const mockSelectFrom = vi.fn(() => ({ where: mockSelectWhere }));
+  const mockSelect = vi.fn(() => ({ from: mockSelectFrom }));
+  const mockUpdateWhere = vi.fn().mockResolvedValue(undefined);
+  const mockUpdateSet = vi.fn(() => ({ where: mockUpdateWhere }));
+  const mockUpdate = vi.fn(() => ({ set: mockUpdateSet }));
+  const mockDeleteWhere = vi.fn().mockResolvedValue(undefined);
+  const mockDelete = vi.fn(() => ({ where: mockDeleteWhere }));
+  const mockTransaction = vi.fn();
+  return {
+    mockQueryPages,
+    mockSelect, mockSelectFrom, mockSelectWhere,
+    mockUpdate, mockUpdateSet, mockUpdateWhere,
+    mockDelete, mockDeleteWhere,
+    mockTransaction,
+  };
+});
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: mockSelect,
+    update: mockUpdate,
+    delete: mockDelete,
+    query: { pages: mockQueryPages },
+    transaction: mockTransaction,
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
+  and: vi.fn((...conds) => ({ op: 'and', conds })),
+  inArray: vi.fn((field, values) => ({ op: 'inArray', field, values })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', type: 'type', isTrashed: 'isTrashed', driveId: 'driveId' },
+}));
 vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
-  calendarTriggers: { id: 'id' },
+  calendarTriggers: { id: 'id', workflowId: 'workflowId', calendarEventId: 'calendarEventId' },
 }));
 
-import { createCalendarTriggerWorkflow } from '../calendar-trigger-helpers';
+import {
+  createCalendarTriggerWorkflow,
+  validateCalendarAgentTrigger,
+  removeCalendarTrigger,
+  upsertCalendarTriggerWorkflow,
+} from '../calendar-trigger-helpers';
+import { db } from '@pagespace/db/db';
 
 // Build a fresh tx mock that records the order/identity of each insert and
 // captures the values payload so we can assert atomicity (both inserts
@@ -115,6 +164,211 @@ describe('createCalendarTriggerWorkflow', () => {
     const wfValues = captured.insertCalls[0].values as Record<string, unknown>;
     expect(wfValues.instructionPageId).toBe('page-instr');
     expect(wfValues.contextPageIds).toEqual(['ctx-a', 'ctx-b']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Validation parity with task-trigger-helpers.
+// The REST POST and AI create_calendar_event paths each replicate the same
+// pre-write checks (agent is AI_CHAT in this drive, instruction page in this
+// drive, every context page in this drive). The shared validator collapses
+// that duplication so the two surfaces can never drift.
+// ---------------------------------------------------------------------------
+describe('validateCalendarAgentTrigger', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQueryPages.findFirst.mockReset();
+    mockQueryPages.findMany.mockReset();
+  });
+
+  const baseInput = {
+    driveId: 'drive-1',
+    agentTrigger: {
+      agentPageId: 'agent-1',
+      prompt: 'Do work',
+      instructionPageId: undefined,
+      contextPageIds: [] as string[],
+    },
+  };
+
+  it('throws when neither prompt nor instructionPageId is provided', async () => {
+    await expect(
+      validateCalendarAgentTrigger(db, {
+        ...baseInput,
+        agentTrigger: { ...baseInput.agentTrigger, prompt: '', instructionPageId: undefined },
+      }),
+    ).rejects.toThrow(/prompt or instructionPageId/i);
+  });
+
+  it('throws when the agent page is not found', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce(undefined);
+    await expect(validateCalendarAgentTrigger(db, baseInput)).rejects.toThrow(/Agent .* not found/i);
+  });
+
+  it('throws when the agent page lives in a different drive', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'other-drive' });
+    await expect(validateCalendarAgentTrigger(db, baseInput)).rejects.toThrow(/same drive/i);
+  });
+
+  it('throws when the instruction page is not in the drive', async () => {
+    // First call: agent lookup succeeds.
+    mockQueryPages.findFirst
+      .mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' })
+      // Second call: instruction page lookup fails.
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      validateCalendarAgentTrigger(db, {
+        ...baseInput,
+        agentTrigger: { ...baseInput.agentTrigger, instructionPageId: 'instr-1' },
+      }),
+    ).rejects.toThrow(/Instruction page/i);
+  });
+
+  it('throws when one or more context pages are missing or in a different drive', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
+    mockQueryPages.findMany.mockResolvedValueOnce([{ id: 'ctx-a' }]); // only 1 of 2 returned
+
+    await expect(
+      validateCalendarAgentTrigger(db, {
+        ...baseInput,
+        agentTrigger: { ...baseInput.agentTrigger, contextPageIds: ['ctx-a', 'ctx-b'] },
+      }),
+    ).rejects.toThrow(/context pages/i);
+  });
+
+  it('throws when more than 10 context pages are passed', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
+    const tooMany = Array.from({ length: 11 }, (_, i) => `ctx-${i}`);
+    await expect(
+      validateCalendarAgentTrigger(db, {
+        ...baseInput,
+        agentTrigger: { ...baseInput.agentTrigger, contextPageIds: tooMany },
+      }),
+    ).rejects.toThrow(/at most 10/i);
+  });
+
+  it('returns the validated agentPageId on success', async () => {
+    mockQueryPages.findFirst
+      .mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' })
+      .mockResolvedValueOnce({ id: 'instr-1' });
+    mockQueryPages.findMany.mockResolvedValueOnce([{ id: 'ctx-a' }, { id: 'ctx-b' }]);
+
+    const result = await validateCalendarAgentTrigger(db, {
+      ...baseInput,
+      agentTrigger: {
+        agentPageId: 'agent-1',
+        prompt: 'Do work',
+        instructionPageId: 'instr-1',
+        contextPageIds: ['ctx-a', 'ctx-b'],
+      },
+    });
+
+    expect(result).toEqual({ agentPageId: 'agent-1' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Removal: deleting the workflows row cascades to calendar_triggers via FK.
+// This is the safe shape since the trigger row has no isEnabled column to
+// flip; full removal is what the user wants when they "remove the trigger".
+// ---------------------------------------------------------------------------
+describe('removeCalendarTrigger', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('deletes the linked workflows row(s) for the event so the trigger row cascades away', async () => {
+    mockSelectWhere.mockResolvedValueOnce([{ workflowId: 'wf-9' }]);
+
+    await removeCalendarTrigger(db, 'evt-1');
+
+    expect(mockSelect).toHaveBeenCalled();
+    expect(mockDelete).toHaveBeenCalled();
+    expect(mockDeleteWhere).toHaveBeenCalled();
+  });
+
+  it('is a no-op when no trigger exists for the event', async () => {
+    mockSelectWhere.mockResolvedValueOnce([]);
+
+    await removeCalendarTrigger(db, 'evt-no-trigger');
+
+    expect(mockSelect).toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Upsert: drives both the new PUT /api/calendar/events/[eventId]/triggers
+// endpoint and the agentTrigger field on PATCH /api/calendar/events/[eventId].
+// Updates the linked workflows row in place when a trigger row already exists
+// (matches task-trigger-helpers' upsert shape — the workflowId stays stable so
+// in-flight workflow_runs aren't orphaned).
+// ---------------------------------------------------------------------------
+describe('upsertCalendarTriggerWorkflow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQueryPages.findFirst.mockReset();
+    mockQueryPages.findMany.mockReset();
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb({
+      select: mockSelect,
+      update: mockUpdate,
+      insert: vi.fn(),
+    }));
+  });
+
+  const baseParams = {
+    driveId: 'drive-1',
+    scheduledById: 'user-1',
+    calendarEventId: 'evt-1',
+    triggerAt: new Date('2026-05-01T09:00:00Z'),
+    timezone: 'UTC',
+    agentTrigger: {
+      agentPageId: 'agent-1',
+      prompt: 'Run check',
+      instructionPageId: undefined,
+      contextPageIds: [] as string[],
+    },
+  };
+
+  it('updates the existing workflow row when a trigger already exists for the event', async () => {
+    // Validation calls
+    mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
+    // Existing trigger lookup inside the tx
+    mockSelectWhere.mockResolvedValueOnce([{ workflowId: 'wf-existing' }]);
+
+    await upsertCalendarTriggerWorkflow(db, baseParams);
+
+    expect(mockUpdate).toHaveBeenCalled();
+    // First update target should be the workflows row, not a fresh insert.
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      agentPageId: 'agent-1',
+      prompt: 'Run check',
+    }));
+  });
+
+  it('inserts a new workflow + trigger row when no trigger exists for the event', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
+    mockSelectWhere.mockResolvedValueOnce([]);
+    const txInsert = vi.fn(() => ({
+      values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'wf-new' }]) })),
+    }));
+    mockTransaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      select: mockSelect,
+      update: mockUpdate,
+      insert: txInsert,
+    }));
+
+    await upsertCalendarTriggerWorkflow(db, baseParams);
+
+    expect(txInsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects upserts that would fail validation (e.g. unknown agent)', async () => {
+    mockQueryPages.findFirst.mockResolvedValueOnce(undefined);
+
+    await expect(upsertCalendarTriggerWorkflow(db, baseParams)).rejects.toThrow(/Agent/i);
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 });
 
