@@ -182,6 +182,13 @@ export const driveInviteRepository = {
       );
   },
 
+  async bumpInvitedAt(memberId: string): Promise<void> {
+    await db
+      .update(driveMembers)
+      .set({ invitedAt: new Date() })
+      .where(eq(driveMembers.id, memberId));
+  },
+
   async acceptPendingMember(memberId: string): Promise<boolean> {
     const updated = await db
       .update(driveMembers)

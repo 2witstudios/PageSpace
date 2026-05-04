@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
   del: vi.fn().mockResolvedValue(undefined),
+  post: vi.fn().mockResolvedValue(undefined),
 }));
 
 const stableRouter = { push: vi.fn() };
@@ -44,7 +45,7 @@ vi.mock('@/hooks/useAuth', () => ({
 }));
 
 import { DriveMembers } from '../DriveMembers';
-import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, del, post } from '@/lib/auth/auth-fetch';
 
 const buildMember = (overrides: Partial<{
   id: string;
@@ -122,6 +123,36 @@ describe('DriveMembers pending invitations section', () => {
     await waitFor(() => {
       expect(del).toHaveBeenCalledWith('/api/drives/drive_xyz/members/user_pending');
     });
+  });
+
+  it('given an owner clicks Resend on a pending row, calls POST /api/drives/[driveId]/members/[userId]/resend', async () => {
+    respondWithMembers([
+      buildMember({ id: 'mem_pending', userId: 'user_pending', acceptedAt: null }),
+    ]);
+    const user = userEvent.setup();
+
+    render(<DriveMembers driveId="drive_xyz" />);
+
+    const resendBtn = await screen.findByRole('button', { name: /Resend invitation/i });
+    await user.click(resendBtn);
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith('/api/drives/drive_xyz/members/user_pending/resend', {});
+    });
+  });
+
+  it('given current user is a regular MEMBER, Resend action is not exposed for pending rows', async () => {
+    respondWithMembers(
+      [buildMember({ id: 'mem_pending', userId: 'user_pending', acceptedAt: null })],
+      'MEMBER'
+    );
+
+    render(<DriveMembers driveId="drive_xyz" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Resend invitation/i })).not.toBeInTheDocument();
   });
 
   it('given current user is a regular MEMBER, Revoke action is not exposed for pending rows', async () => {

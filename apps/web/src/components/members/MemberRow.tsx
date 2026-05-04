@@ -1,6 +1,6 @@
 'use client';
 
-import { Trash2, Eye, Edit, Share, User } from 'lucide-react';
+import { Trash2, Eye, Edit, Share, User, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -38,9 +38,10 @@ interface MemberRowProps {
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   isPending?: boolean;
   onRemove: () => void;
+  onResend?: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, isPending, onRemove }: MemberRowProps) {
+export function MemberRow({ member, driveId, currentUserRole, isPending, onRemove, onResend }: MemberRowProps) {
   const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
   const initials = displayName
     .split(' ')
@@ -166,6 +167,17 @@ export function MemberRow({ member, driveId, currentUserRole, isPending, onRemov
               <User className="w-4 h-4" />
             </Button>
           </Link>
+        )}
+        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && isPending && onResend && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onResend}
+            title="Resend invitation"
+            aria-label="Resend invitation"
+          >
+            <Send className="w-4 h-4" />
+          </Button>
         )}
         {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && member.role !== 'OWNER' && (
           <Button
