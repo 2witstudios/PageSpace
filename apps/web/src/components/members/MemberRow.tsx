@@ -12,7 +12,7 @@ interface MemberRowProps {
     userId: string;
     role: string;
     invitedAt: string;
-    acceptedAt?: string;
+    acceptedAt?: string | null;
     user: {
       id: string;
       email: string;
@@ -36,10 +36,11 @@ interface MemberRowProps {
   };
   driveId: string;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
+  isPending?: boolean;
   onRemove: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
+export function MemberRow({ member, driveId, currentUserRole, isPending, onRemove }: MemberRowProps) {
   const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
   const initials = displayName
     .split(' ')
@@ -121,6 +122,11 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
             {getRoleBadge()}
+            {isPending && (
+              <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                Pending
+              </Badge>
+            )}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
           
@@ -150,7 +156,7 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
 
       {/* Actions */}
       <div className="flex items-center space-x-2">
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && !isPending && (
           <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
             <Button
               variant="ghost"
@@ -167,7 +173,8 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
             size="sm"
             onClick={onRemove}
             className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-            title="Remove Member"
+            title={isPending ? 'Revoke invitation' : 'Remove Member'}
+            aria-label={isPending ? 'Revoke invitation' : 'Remove Member'}
           >
             <Trash2 className="w-4 h-4" />
           </Button>
