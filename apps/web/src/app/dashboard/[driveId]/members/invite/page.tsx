@@ -43,6 +43,7 @@ export default function InviteMemberPage() {
   const driveId = params.driveId as string;
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [pendingInviteEmail, setPendingInviteEmail] = useState<string | null>(null);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
@@ -104,10 +105,17 @@ export default function InviteMemberPage() {
 
   const handleUserSelect = (user: SelectedUser) => {
     setSelectedUser(user);
+    setPendingInviteEmail(null);
+  };
+
+  const handleInviteEmail = (email: string) => {
+    setPendingInviteEmail(email);
+    setSelectedUser(null);
   };
 
   const handleClearUser = () => {
     setSelectedUser(null);
+    setPendingInviteEmail(null);
     setPermissions(new Map());
     setSelectedUnifiedRole(null);
   };
@@ -121,7 +129,11 @@ export default function InviteMemberPage() {
   };
 
   const handleInvite = async () => {
-    if (!selectedUser) return;
+    if (!selectedUser && !pendingInviteEmail) return;
+
+    const targetIdentity: { userId: string } | { email: string } = selectedUser
+      ? { userId: selectedUser.userId }
+      : { email: pendingInviteEmail! };
 
     // Map unified role back to backend model
     const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
@@ -129,22 +141,35 @@ export default function InviteMemberPage() {
       ? selectedUnifiedRole.roleId
       : null;
 
+    const successToast = (kind: 'added' | 'invited') => {
+      if (kind === 'invited') {
+        toast({
+          title: 'Invitation sent',
+          description: `An email invitation has been sent to ${pendingInviteEmail}`,
+        });
+      } else {
+        toast({
+          title: 'Success',
+          description: backendRole === 'ADMIN' ? 'Admin invited successfully' : 'Member invited successfully',
+        });
+      }
+    };
+
     // Skip permission validation for Admin
     if (selectedUnifiedRole?.type === 'admin') {
       setSaving(true);
       try {
-        await post(`/api/drives/${driveId}/members/invite`, {
-          userId: selectedUser.userId,
-          role: 'ADMIN',
-          customRoleId: null,
-          permissions: [],
-        });
+        const response = await post<{ kind?: 'added' | 'invited' }>(
+          `/api/drives/${driveId}/members/invite`,
+          {
+            ...targetIdentity,
+            role: 'ADMIN',
+            customRoleId: null,
+            permissions: [],
+          }
+        );
 
-        toast({
-          title: 'Success',
-          description: 'Admin invited successfully',
-        });
-
+        successToast(response?.kind ?? 'added');
         router.push(`/dashboard/${driveId}/members`);
       } catch (error) {
         if (error instanceof Error && 'requiresEmailVerification' in error) {
@@ -184,18 +209,17 @@ export default function InviteMemberPage() {
 
     setSaving(true);
     try {
-      await post(`/api/drives/${driveId}/members/invite`, {
-        userId: selectedUser.userId,
-        role: backendRole,
-        customRoleId: backendCustomRoleId,
-        permissions: permissionArray,
-      });
+      const response = await post<{ kind?: 'added' | 'invited' }>(
+        `/api/drives/${driveId}/members/invite`,
+        {
+          ...targetIdentity,
+          role: backendRole,
+          customRoleId: backendCustomRoleId,
+          permissions: permissionArray,
+        }
+      );
 
-      toast({
-        title: 'Success',
-        description: 'Member invited successfully',
-      });
-
+      successToast(response?.kind ?? 'added');
       router.push(`/dashboard/${driveId}/members`);
     } catch (error) {
       // Check if this is a verification required error
@@ -255,7 +279,7 @@ export default function InviteMemberPage() {
           <CardHeader>
             <CardTitle>Select User</CardTitle>
             <CardDescription>
-              {selectedUser
+              {selectedUser || pendingInviteEmail
                 ? 'User selected. You can change your selection below.'
                 : 'Search for a user to invite to this drive'
               }
@@ -285,14 +309,31 @@ export default function InviteMemberPage() {
                   Change User
                 </Button>
               </div>
+            ) : pendingInviteEmail ? (
+              <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                <div className="flex items-center space-x-4">
+                  <Avatar className="w-12 h-12">
+                    <AvatarFallback>
+                      <User className="w-5 h-5" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="font-medium">{pendingInviteEmail}</p>
+                    <p className="text-sm text-muted-foreground">Will receive an email invitation to join PageSpace</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleClearUser}>
+                  Change User
+                </Button>
+              </div>
             ) : (
-              <UserSearch onSelect={handleUserSelect} />
+              <UserSearch onSelect={handleUserSelect} onInviteEmail={handleInviteEmail} />
             )}
           </CardContent>
         </Card>
 
         {/* Role & Permissions - Only show when user is selected */}
-        {selectedUser && (
+        {(selectedUser || pendingInviteEmail) && (
           <>
             {/* Unified Role Selection Card */}
             <Card className="mb-6">
