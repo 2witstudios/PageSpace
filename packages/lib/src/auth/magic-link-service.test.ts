@@ -7,6 +7,7 @@ import {
   createMagicLinkToken,
   verifyMagicLinkToken,
   MAGIC_LINK_EXPIRY_MINUTES,
+  INVITATION_LINK_EXPIRY_MINUTES,
 } from './magic-link-service';
 import { hashToken } from './token-utils';
 
@@ -199,6 +200,89 @@ describe('Magic Link Service', () => {
           expected: 'USER_SUSPENDED',
         });
       }
+    });
+
+    it('honors expiryMinutes parameter when provided', async () => {
+      const before = Date.now();
+      const customExpiry = 60 * 24 * 7; // 7 days
+
+      const result = await createMagicLinkToken({
+        email: testUserEmail,
+        expiryMinutes: customExpiry,
+      });
+
+      if (!result.ok) {
+        throw new Error('Expected success');
+      }
+
+      const storedToken = await db.query.verificationTokens.findFirst({
+        where: eq(verificationTokens.userId, testUserId),
+      });
+
+      const expectedExpiryMs = customExpiry * 60 * 1000;
+      const expiresAtMs = storedToken?.expiresAt?.getTime() ?? 0;
+
+      assert({
+        given: 'an expiryMinutes input parameter',
+        should: 'set expiresAt to honor it',
+        actual: expiresAtMs >= before + expectedExpiryMs - 2000 && expiresAtMs <= before + expectedExpiryMs + 2000,
+        expected: true,
+      });
+    });
+
+    it('falls back to MAGIC_LINK_EXPIRY_MINUTES when expiryMinutes omitted', async () => {
+      const before = Date.now();
+      const result = await createMagicLinkToken({ email: testUserEmail });
+
+      if (!result.ok) {
+        throw new Error('Expected success');
+      }
+
+      const storedToken = await db.query.verificationTokens.findFirst({
+        where: eq(verificationTokens.userId, testUserId),
+      });
+
+      const expectedExpiryMs = MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000;
+      const expiresAtMs = storedToken?.expiresAt?.getTime() ?? 0;
+
+      assert({
+        given: 'no expiryMinutes',
+        should: 'default to MAGIC_LINK_EXPIRY_MINUTES',
+        actual: expiresAtMs >= before + expectedExpiryMs - 2000 && expiresAtMs <= before + expectedExpiryMs + 2000,
+        expected: true,
+      });
+    });
+
+    it('rejects expiryMinutes larger than 30 days with VALIDATION_FAILED', async () => {
+      const result = await createMagicLinkToken({
+        email: testUserEmail,
+        expiryMinutes: 43201, // 30 days + 1 minute
+      });
+
+      assert({
+        given: 'expiryMinutes larger than 30 days',
+        should: 'return ok: false',
+        actual: result.ok,
+        expected: false,
+      });
+
+      if (!result.ok) {
+        assert({
+          given: 'expiryMinutes larger than 30 days',
+          should: 'return VALIDATION_FAILED error code',
+          actual: result.error.code,
+          expected: 'VALIDATION_FAILED',
+        });
+      }
+    });
+
+    it('exports INVITATION_LINK_EXPIRY_MINUTES = 7 days', () => {
+      assert({
+        given: 'the magic-link-service module',
+        should: 'export INVITATION_LINK_EXPIRY_MINUTES = 60 * 24 * 7',
+        actual: INVITATION_LINK_EXPIRY_MINUTES,
+        expected: 60 * 24 * 7,
+      });
     });
 
     it('cleans up old unused tokens for same user', async () => {

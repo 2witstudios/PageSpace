@@ -1,21 +1,25 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // ============================================================================
 // Contract Tests for POST /api/drives/[driveId]/members/invite
 //
-// Mocks the driveInviteRepository seam — no ORM chain mocks.
+// Mocks the driveInviteRepository seam, the magic-link service, the email
+// helper, the rate limiter, and the recipient-broadcast helper. No ORM
+// chain mocking — Drizzle is never poked here.
 // ============================================================================
-
-// ---------- vi.mock declarations ----------
 
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   driveInviteRepository: {
     findDriveById: vi.fn(),
     findAdminMembership: vi.fn(),
     findExistingMember: vi.fn(),
+    findUserIdByEmail: vi.fn(),
+    findActivePendingMemberByEmail: vi.fn(),
+    findInviterDisplay: vi.fn(),
     createDriveMember: vi.fn(),
+    createAcceptedMemberWithPermissions: vi.fn(),
     updateDriveMemberRole: vi.fn(),
     getValidPageIds: vi.fn(),
     findPagePermission: vi.fn(),
@@ -31,26 +35,28 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/notifications/notifications', () => ({
-    createDriveNotification: vi.fn().mockResolvedValue(undefined),
+  createDriveNotification: vi.fn().mockResolvedValue(undefined),
 }));
+
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
-    isEmailVerified: vi.fn().mockResolvedValue(true),
+  isEmailVerified: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-    loggers: {
+  loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
-    audit: vi.fn(),
-    auditRequest: vi.fn(),
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn(
     (driveId: string, userId: string, event: string, data: unknown) => ({
       driveId,
@@ -59,6 +65,10 @@ vi.mock('@/lib/websocket', () => ({
       ...(data as Record<string, unknown>),
     })
   ),
+}));
+
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -70,19 +80,37 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 
-// ---------- imports (after mocks) ----------
+vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
+  createMagicLinkToken: vi.fn(),
+  INVITATION_LINK_EXPIRY_MINUTES: 60 * 24 * 7,
+}));
+
+vi.mock('@pagespace/lib/services/notification-email-service', () => ({
+  sendPendingDriveInvitationEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
+  DISTRIBUTED_RATE_LIMITS: { DRIVE_INVITE: { maxAttempts: 3, windowMs: 900000 } },
+}));
 
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
+import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { loggers } from '@pagespace/lib/logging/logger-config';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import {
+  broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
+  createDriveMemberEventPayload,
+} from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-
-// ---------- helpers ----------
+import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -101,17 +129,14 @@ const createContext = (driveId: string) => ({
   params: Promise.resolve({ driveId }),
 });
 
-const createInviteRequest = (
-  driveId: string,
-  body: Record<string, unknown>
-) =>
+const buildPost = (driveId: string, body: unknown) =>
   new Request(`https://example.com/api/drives/${driveId}/members/invite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 
-// ---------- fixtures ----------
+const ORIGINAL_ENV = { ...process.env };
 
 const mockUserId = 'user_123';
 const mockDriveId = 'drive_abc';
@@ -123,436 +148,397 @@ const mockDrive = {
   ownerId: mockUserId,
 };
 
-const defaultBody = {
+const userIdBody = {
   userId: mockInvitedUserId,
   role: 'MEMBER',
-  permissions: [
-    { pageId: 'page_1', canView: true, canEdit: false, canShare: false },
-  ],
+  permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
 };
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 describe('POST /api/drives/[driveId]/members/invite', () => {
+  afterAll(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.WEB_APP_URL = 'https://app.example.com';
+    delete process.env.NEXT_PUBLIC_APP_URL;
+
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
 
-    // Repository defaults
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
     vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
-    vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({ id: 'mem_new' } as never);
+    vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+    vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue(null as never);
+    vi.mocked(driveInviteRepository.findInviterDisplay).mockResolvedValue({
+      name: 'Inviter Name',
+      email: 'inviter@example.com',
+    } as never);
+    vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({ id: 'mem_pending' } as never);
+    vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockResolvedValue({
+      memberId: 'mem_new',
+      permissionsGranted: 1,
+    } as never);
     vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
     vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
+
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
+    vi.mocked(createMagicLinkToken).mockResolvedValue({
+      ok: true,
+      data: { token: 'ps_magic_xyz', userId: 'user_pending', isNewUser: true },
+    } as never);
   });
 
-  // ---------- Authentication ----------
+  // ==========================================================================
+  // Boundary validation (the gap PR #1229 missed)
+  // ==========================================================================
 
-  describe('authentication', () => {
-    it('should return 401 when not authenticated', async () => {
+  describe('boundary validation', () => {
+    it('rejects role: OWNER with 400', async () => {
+      const response = await POST(
+        buildPost(mockDriveId, { userId: mockInvitedUserId, role: 'OWNER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects role: SUPERADMIN (any value not in MEMBER/ADMIN) with 400', async () => {
+      const response = await POST(
+        buildPost(mockDriveId, { userId: mockInvitedUserId, role: 'SUPERADMIN', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects non-string email with 400', async () => {
+      const response = await POST(
+        buildPost(mockDriveId, { email: 12345, role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects malformed email shape with 400', async () => {
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'not-an-email', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects empty body with 400', async () => {
+      const response = await POST(buildPost(mockDriveId, {}), createContext(mockDriveId));
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects array body with 400', async () => {
+      const response = await POST(buildPost(mockDriveId, []), createContext(mockDriveId));
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects malformed JSON body with 400', async () => {
+      const response = await POST(buildPost(mockDriveId, '{not json'), createContext(mockDriveId));
+      expect(response.status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // Auth + authorization
+  // ==========================================================================
+
+  describe('auth + authorization', () => {
+    it('returns 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthErrorResponse(401));
 
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).toBe(401);
     });
 
-    it('should call authenticateRequestWithOptions with correct auth options', async () => {
-      const request = createInviteRequest(mockDriveId, defaultBody);
-      await POST(request, createContext(mockDriveId));
-
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(request, {
-        allow: ['session'],
-        requireCSRF: true,
-      });
-    });
-  });
-
-  // ---------- Email verification ----------
-
-  describe('email verification', () => {
-    it('should return 403 when email is not verified', async () => {
+    it('returns 403 with requiresEmailVerification when inviter unverified', async () => {
       vi.mocked(isEmailVerified).mockResolvedValue(false);
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
-
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      const json = await response.json();
       expect(response.status).toBe(403);
-      expect(body.error).toContain('Email verification required');
-      expect(body.requiresEmailVerification).toBe(true);
+      expect(json.requiresEmailVerification).toBe(true);
     });
 
-    it('should proceed when email is verified', async () => {
-      vi.mocked(isEmailVerified).mockResolvedValue(true);
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  // ---------- Drive lookup ----------
-
-  describe('drive lookup', () => {
-    it('should return 404 when drive not found', async () => {
-      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null as never);
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(404);
-      expect(body.error).toBe('Drive not found');
-    });
-
-    it('should query drive by driveId from params', async () => {
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.findDriveById).toHaveBeenCalledWith(mockDriveId);
-    });
-  });
-
-  // ---------- Authorization ----------
-
-  describe('authorization', () => {
-    it('should return 403 when user is not owner and not admin', async () => {
+    it('returns 403 when inviter is neither owner nor accepted-admin', async () => {
       vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
         ...mockDrive,
-        ownerId: 'other_user',
+        ownerId: 'someone_else',
       } as never);
       vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
 
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
-
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).toBe(403);
-      expect(body.error).toBe('Only drive owners and admins can add members');
     });
 
-    it('should allow access when user is owner', async () => {
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(response.status).toBe(200);
-    });
-
-    it('should allow access when user is admin (not owner)', async () => {
+    it('returns 403 when inviter is a pending admin (acceptedAt IS NULL)', async () => {
+      // Epic 1 already filters acceptedAt IS NOT NULL inside findAdminMembership,
+      // so the seam returns null for a pending admin. Exercising that contract.
       vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
         ...mockDrive,
-        ownerId: 'other_user',
+        ownerId: 'someone_else',
       } as never);
-      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue({
-        id: 'admin_membership',
-      } as never);
+      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
 
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(response.status).toBe(200);
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).toBe(403);
     });
 
-    it('should skip admin check when user is owner', async () => {
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.findAdminMembership).not.toHaveBeenCalled();
-    });
-
-    it('should check admin membership when user is not owner', async () => {
-      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
-        ...mockDrive,
-        ownerId: 'other_user',
-      } as never);
-      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue({
-        id: 'admin_mem',
-      } as never);
-
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.findAdminMembership).toHaveBeenCalledWith(
-        mockDriveId,
-        mockUserId
-      );
+    it('returns 404 when drive not found', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null as never);
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(response.status).toBe(404);
     });
   });
 
-  // ---------- New member creation ----------
+  // ==========================================================================
+  // userId payload — preserves Epic 2 behavior
+  // ==========================================================================
 
-  describe('new member creation', () => {
-    it('should insert new member when not existing', async () => {
-      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
-      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
-        id: 'mem_new',
-      } as never);
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
+  describe('userId payload', () => {
+    it('returns kind: "added" with memberId for new join', async () => {
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      const json = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.memberId).toBe('mem_new');
-      const createCall = vi.mocked(driveInviteRepository.createDriveMember).mock.calls[0][0];
-      expect(createCall).toEqual(expect.objectContaining({
-        driveId: mockDriveId,
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: null,
-        invitedBy: mockUserId,
-      }));
-      expect(createCall.acceptedAt).toBeInstanceOf(Date);
+      expect(json.kind).toBe('added');
+      expect(json.memberId).toBe('mem_new');
+      expect(json.permissionsGranted).toBe(1);
     });
 
-    it('should use default MEMBER role when not specified', async () => {
-      const bodyWithoutRole = {
-        userId: mockInvitedUserId,
-        permissions: [],
-      };
+    it('uses transactional createAcceptedMemberWithPermissions for new join', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
-      await POST(
-        createInviteRequest(mockDriveId, bodyWithoutRole),
-        createContext(mockDriveId)
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          userId: mockInvitedUserId,
+          role: 'MEMBER',
+          invitedBy: mockUserId,
+        })
       );
-
-      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'MEMBER' })
-      );
+      // The non-transactional createDriveMember path is NOT used for the join.
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
 
-    it('should support ADMIN role', async () => {
-      const adminBody = {
-        userId: mockInvitedUserId,
-        role: 'ADMIN',
-        permissions: [],
-      };
-
-      await POST(
-        createInviteRequest(mockDriveId, adminBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'ADMIN' })
-      );
-    });
-
-    it('should pass customRoleId when provided', async () => {
-      const bodyWithCustomRole = {
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: 'custom_role_123',
-        permissions: [],
-      };
-
-      await POST(
-        createInviteRequest(mockDriveId, bodyWithCustomRole),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-        expect.objectContaining({ customRoleId: 'custom_role_123' })
-      );
-    });
-  });
-
-  // ---------- Existing member update ----------
-
-  describe('existing member update', () => {
-    it('should update role when member already exists', async () => {
+    it('updates existing member role via updateDriveMemberRole', async () => {
       vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
-        id: 'existing_mem',
+        id: 'mem_existing',
         userId: mockInvitedUserId,
+        acceptedAt: new Date(),
       } as never);
 
-      const response = await POST(
-        createInviteRequest(mockDriveId, { ...defaultBody, role: 'ADMIN' }),
+      await POST(
+        buildPost(mockDriveId, { ...userIdBody, role: 'ADMIN' }),
         createContext(mockDriveId)
       );
-      const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(body.memberId).toBe('existing_mem');
       expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith(
-        'existing_mem',
+        'mem_existing',
         'ADMIN',
         null
       );
     });
-
-    it('should not create new member when one already exists', async () => {
-      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
-        id: 'existing_mem',
-      } as never);
-
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
-    });
   });
 
-  // ---------- Page permissions ----------
+  // ==========================================================================
+  // Email payload — new feature
+  // ==========================================================================
 
-  describe('page permissions', () => {
-    it('should create new permissions for valid pages', async () => {
-      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
-      vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({
-        id: 'perm_new',
+  describe('email payload', () => {
+    it('falls through to add path when email maps to verified user with no pending row', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'user_existing_verified',
+        emailVerified: new Date(),
       } as never);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
 
       const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'verified@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
-      const body = await response.json();
+      const json = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.permissionsGranted).toBe(1);
-      expect(driveInviteRepository.createPagePermission).toHaveBeenCalledWith({
-        pageId: 'page_1',
-        userId: mockInvitedUserId,
-        canView: true,
-        canEdit: false,
-        canShare: false,
-        canDelete: false,
-        grantedBy: mockUserId,
+      expect(json.kind).toBe('added');
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('creates pending member + magic link + email when email maps to no user', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'newbie@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.kind).toBe('invited');
+      expect(json.email).toBe('newbie@example.com');
+
+      expect(createMagicLinkToken).toHaveBeenCalledWith({
+        email: 'newbie@example.com',
+        expiryMinutes: 60 * 24 * 7,
       });
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          role: 'MEMBER',
+          acceptedAt: null,
+        })
+      );
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipientEmail: 'newbie@example.com',
+          driveName: 'Test Drive',
+          magicLinkUrl: expect.stringContaining('https://app.example.com/api/auth/magic-link/verify?token='),
+        })
+      );
     });
 
-    it('should update existing permissions', async () => {
-      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue({
-        id: 'perm_existing',
-        pageId: 'page_1',
-        userId: mockInvitedUserId,
+    it('routes unverified existing user (orphan) through invitation flow, not auto-accept', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'orphan_user',
+        emailVerified: null,
       } as never);
-      vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({
-        id: 'perm_existing',
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'orphan@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.kind).toBe('invited');
+      expect(createMagicLinkToken).toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalled();
+    });
+
+    it('returns 409 with existingMemberId when active pending row exists', async () => {
+      vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue({
+        id: 'mem_pending_existing',
       } as never);
 
       const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'pending@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
-      const body = await response.json();
+      const json = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(body.permissionsGranted).toBe(1);
-      const updateCall = vi.mocked(driveInviteRepository.updatePagePermission).mock.calls[0];
-      expect(updateCall[0]).toBe('perm_existing');
-      expect(updateCall[1]).toEqual(expect.objectContaining({
-        canView: true,
-        canEdit: false,
-        canShare: false,
-        grantedBy: mockUserId,
-      }));
-      expect((updateCall[1] as Record<string, unknown>).grantedAt).toBeInstanceOf(Date);
+      expect(response.status).toBe(409);
+      expect(json.existingMemberId).toBe('mem_pending_existing');
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
-    it('should skip invalid page IDs and log warning', async () => {
-      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-
-      const bodyWithInvalidPage = {
-        userId: mockInvitedUserId,
-        permissions: [
-          { pageId: 'page_1', canView: true, canEdit: false, canShare: false },
-          { pageId: 'invalid_page', canView: true, canEdit: true, canShare: false },
-        ],
-      };
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, bodyWithInvalidPage),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.permissionsGranted).toBe(1);
-      expect(loggers.api.warn).toHaveBeenCalledWith(
-        `Invalid page ID invalid_page for drive ${mockDriveId}`
-      );
-    });
-
-    it('should handle empty permissions array', async () => {
-      const bodyWithNoPerms = {
-        userId: mockInvitedUserId,
-        permissions: [],
-      };
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, bodyWithNoPerms),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.permissionsGranted).toBe(0);
-      expect(body.message).toBe('User added with 0 page permissions');
-    });
-
-    it('should never grant canDelete via invite', async () => {
-      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
+    it('normalizes email to lowercase + trim before lookup AND storage', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: '  Foo@Example.COM  ', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
 
-      expect(driveInviteRepository.createPagePermission).toHaveBeenCalledWith(
-        expect.objectContaining({ canDelete: false })
+      expect(driveInviteRepository.findActivePendingMemberByEmail).toHaveBeenCalledWith(
+        mockDriveId,
+        'foo@example.com'
+      );
+      expect(driveInviteRepository.findUserIdByEmail).toHaveBeenCalledWith('foo@example.com');
+      expect(createMagicLinkToken).toHaveBeenCalledWith({
+        email: 'foo@example.com',
+        expiryMinutes: 60 * 24 * 7,
+      });
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientEmail: 'foo@example.com' })
       );
     });
   });
 
-  // ---------- Boundary obligations ----------
+  // ==========================================================================
+  // Rate limiting
+  // ==========================================================================
+
+  describe('rate limiting', () => {
+    it('returns 429 with Retry-After: 900 when global per-email limit exceeded', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true }) // pair-scoped passes
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900 }); // global blocks
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'spam@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
+    });
+
+    it('returns 429 with Retry-After: 900 when (driveId, email) pair limit exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({
+        allowed: false,
+        retryAfter: 900,
+      });
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'spam@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('900');
+    });
+
+    it('uses drive_invite:drive: and drive_invite:email: key prefixes', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
+      await POST(
+        buildPost(mockDriveId, { email: 'foo@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      const calls = vi.mocked(checkDistributedRateLimit).mock.calls.map((c) => c[0]);
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          `drive_invite:drive:${mockDriveId}:foo@example.com`,
+          'drive_invite:email:foo@example.com',
+        ])
+      );
+    });
+
+    it('returns 403 (not 500) when createMagicLinkToken returns USER_SUSPENDED', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(createMagicLinkToken).mockResolvedValue({
+        ok: false,
+        error: { code: 'USER_SUSPENDED', userId: 'suspended_user' },
+      } as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'suspended@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      expect(response.status).toBe(403);
+    });
+  });
+
+  // ==========================================================================
+  // Boundary obligations
+  // ==========================================================================
 
   describe('boundary obligations', () => {
-    it('should broadcast drive member event with correct payload', async () => {
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
+    it('broadcasts member_added on fresh accepted join (userId path)', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
       expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
         mockDriveId,
@@ -563,11 +549,44 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('should send notification to invited user', async () => {
+    it('broadcasts to drive recipients when others are present', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue(['admin_a', 'admin_b', mockInvitedUserId]);
+
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      // Excludes the just-joined invitee — they get the direct broadcast above.
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledWith(
+        expect.any(Object),
+        ['admin_a', 'admin_b']
+      );
+    });
+
+    it('does NOT broadcast member_added on pending email path (no user joined yet)', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
       await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'pending@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
+
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
+    });
+
+    it('does NOT broadcast member_added on pure role update for accepted member', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'mem_existing',
+        userId: mockInvitedUserId,
+        acceptedAt: new Date(),
+      } as never);
+
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+    });
+
+    it('sends in-app drive notification on fresh accepted join', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
       expect(createDriveNotification).toHaveBeenCalledWith(
         mockInvitedUserId,
@@ -578,52 +597,56 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
     });
 
-    it('should track drive operation for analytics', async () => {
+    it('does NOT send in-app drive notification on pending email path', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
       await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'pending@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
 
-      expect(trackDriveOperation).toHaveBeenCalledWith(
-        mockUserId,
-        'invite_member',
-        mockDriveId,
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
+    it('emits authz.permission.granted on userId-path success', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Object),
         expect.objectContaining({
-          invitedUserId: mockInvitedUserId,
-          role: 'MEMBER',
-          permissionsGranted: 1,
+          eventType: 'authz.permission.granted',
+          userId: mockUserId,
+          resourceType: 'drive',
+          resourceId: mockDriveId,
         })
       );
     });
 
-    it('should log member activity for audit trail', async () => {
-      vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
+    it('emits authz.permission.granted on email-path success', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'newbie@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
 
-      expect(getActorInfo).toHaveBeenCalledWith(mockUserId);
-      expect(logMemberActivity).toHaveBeenCalledWith(
-        mockUserId,
-        'member_add',
-        {
-          driveId: mockDriveId,
-          driveName: 'Test Drive',
-          targetUserId: mockInvitedUserId,
-          targetUserEmail: 'invited@example.com',
-          role: 'MEMBER',
-        },
-        { userId: 'user_123', email: 'user@example.com' }
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          eventType: 'authz.permission.granted',
+          userId: mockUserId,
+          resourceType: 'drive',
+          resourceId: mockDriveId,
+          details: expect.objectContaining({ targetEmail: 'newbie@example.com', pending: true }),
+        })
       );
     });
 
-    it('should handle undefined invited user email', async () => {
-      vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue(undefined);
+    it('logs member activity with target email on email path', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       await POST(
-        createInviteRequest(mockDriveId, defaultBody),
+        buildPost(mockDriveId, { email: 'newbie@example.com', role: 'MEMBER', permissions: [] }),
         createContext(mockDriveId)
       );
 
@@ -631,74 +654,88 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         mockUserId,
         'member_add',
         expect.objectContaining({
-          targetUserEmail: undefined,
+          driveId: mockDriveId,
+          driveName: 'Test Drive',
+          targetUserEmail: 'newbie@example.com',
+          role: 'MEMBER',
+          pending: true,
         }),
-        { userId: 'user_123', email: 'user@example.com' }
+        expect.any(Object)
+      );
+    });
+
+    it('tracks invite_member operation', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(trackDriveOperation).toHaveBeenCalledWith(
+        mockUserId,
+        'invite_member',
+        mockDriveId,
+        expect.objectContaining({ invitedUserId: mockInvitedUserId, role: 'MEMBER' })
       );
     });
   });
 
-  // ---------- Response contract ----------
+  // ==========================================================================
+  // Transactional integrity (the gap PR #1229 missed)
+  // ==========================================================================
 
-  describe('response contract', () => {
-    it('should return memberId, permissionsGranted, and message', async () => {
-      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
-        id: 'mem_999',
-      } as never);
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
+  describe('transactional integrity', () => {
+    it('does not return a memberId when the transactional insert throws', async () => {
+      vi.mocked(driveInviteRepository.createAcceptedMemberWithPermissions).mockRejectedValueOnce(
+        new Error('pagePermissions insert failed inside tx')
       );
-      const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(body.memberId).toBe('mem_999');
-      expect(body.permissionsGranted).toBe(1);
-      expect(body.message).toBe('User added with 1 page permissions');
-    });
-  });
-
-  // ---------- Error handling ----------
-
-  describe('error handling', () => {
-    it('should return 500 when an error is thrown', async () => {
-      vi.mocked(isEmailVerified).mockRejectedValueOnce(new Error('Service failure'));
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-      const body = await response.json();
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      const json = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toBe('Failed to add member');
+      expect(json.memberId).toBeUndefined();
     });
 
-    it('should log error when an error is thrown', async () => {
-      const error = new Error('Service failure');
-      vi.mocked(isEmailVerified).mockRejectedValueOnce(error);
+    it('uses the transactional repository helper, not the bare insert sequence', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(loggers.api.error).toHaveBeenCalledWith('Error adding member:', error);
-    });
-
-    it('should not create member or permissions on auth failure', async () => {
-      vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthErrorResponse(401));
-
-      await POST(
-        createInviteRequest(mockDriveId, defaultBody),
-        createContext(mockDriveId)
-      );
-
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalledTimes(1);
       expect(driveInviteRepository.createPagePermission).not.toHaveBeenCalled();
-      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
     });
   });
+
+  // ==========================================================================
+  // appUrl env validation
+  // ==========================================================================
+
+  describe('appUrl env validation', () => {
+    it('returns 500 (does not send email) when both WEB_APP_URL and NEXT_PUBLIC_APP_URL unset', async () => {
+      delete process.env.WEB_APP_URL;
+      delete process.env.NEXT_PUBLIC_APP_URL;
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'foo@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(500);
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+    });
+
+    it('falls back to NEXT_PUBLIC_APP_URL when only that is set', async () => {
+      delete process.env.WEB_APP_URL;
+      process.env.NEXT_PUBLIC_APP_URL = 'https://fallback.example.com';
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
+      await POST(
+        buildPost(mockDriveId, { email: 'foo@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          magicLinkUrl: expect.stringContaining('https://fallback.example.com/'),
+        })
+      );
+    });
+  });
+
 });

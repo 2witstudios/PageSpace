@@ -84,6 +84,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],
   ['drives/[driveId]/integrations/audit', 'Integration audit log — follow-up'],
+  ['drives/[driveId]/members', 'Read-only after Epic 4 retired the legacy POST; writes now go through members/invite which is audited'],
   ['drives/[driveId]/pages', 'Page list for drive — follow-up'],
   ['drives/[driveId]/permissions-tree', 'Permissions tree view — follow-up'],
   ['drives/[driveId]/search/glob', 'Glob search within drive — follow-up'],

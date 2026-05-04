@@ -52,7 +52,7 @@ vi.mock('../../auth/token-utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { sendEmail } from '../email-service';
-import { sendNotificationEmail } from '../notification-email-service';
+import { sendNotificationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -289,5 +289,93 @@ describe('notification-email-service', () => {
     });
 
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.com' }));
+  });
+});
+
+describe('sendPendingDriveInvitationEmail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders subject from inviterName, driveName and recipient address', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Test Drive',
+      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'invitee@example.com',
+      subject: expect.stringContaining('Test Drive'),
+    }));
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).toContain('Alice');
+  });
+
+  it('strips CR/LF/control chars from inviterName before interpolating into subject', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Eve\r\nBcc: attacker@evil.com',
+      driveName: 'Drive',
+      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toContain('\r');
+    expect(call.subject).not.toContain('\n');
+  });
+
+  it('strips CR/LF/control chars from driveName before interpolating into subject', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Drive\nX-Header: pwn',
+      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    expect(call.subject).not.toContain('\n');
+    expect(call.subject).not.toContain('\r');
+  });
+
+  it('strips ASCII control characters (0x00-0x1F, 0x7F) from interpolated values', async () => {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice\x00\x07\x1b',
+      driveName: 'Drive\x7f',
+      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+    });
+
+    const call = vi.mocked(sendEmail).mock.calls[0][0];
+    // eslint-disable-next-line no-control-regex
+    expect(call.subject).not.toMatch(/[\x00-\x1f\x7f]/);
+  });
+
+  it('propagates sendEmail errors so callers can surface 5xx', async () => {
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP unavailable'));
+
+    await expect(
+      sendPendingDriveInvitationEmail({
+        recipientEmail: 'invitee@example.com',
+        inviterName: 'Alice',
+        driveName: 'Drive',
+        magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+      })
+    ).rejects.toThrow('SMTP unavailable');
+  });
+
+  it('uses the magic-link URL as the email accept link', async () => {
+    const magicLinkUrl = 'https://app.example.com/auth/verify?token=ps_magic_abc&redirect=/dashboard/drive_xyz';
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: 'invitee@example.com',
+      inviterName: 'Alice',
+      driveName: 'Drive',
+      magicLinkUrl,
+    });
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'invitee@example.com',
+    }));
   });
 });

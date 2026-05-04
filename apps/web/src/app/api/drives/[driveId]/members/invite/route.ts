@@ -1,21 +1,60 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification } from '@pagespace/lib/notifications/notifications'
+import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { loggers } from '@pagespace/lib/logging/logger-config'
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import {
+  broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
+  createDriveMemberEventPayload,
+} from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import {
+  createMagicLinkToken,
+  INVITATION_LINK_EXPIRY_MINUTES,
+} from '@pagespace/lib/auth/magic-link-service';
+import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import {
+  checkDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security/distributed-rate-limit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
-interface PermissionEntry {
-  pageId: string;
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
+const permissionEntrySchema = z.object({
+  pageId: z.string().min(1),
+  canView: z.boolean(),
+  canEdit: z.boolean(),
+  canShare: z.boolean(),
+});
+
+// Discriminated by which identity field is present. Role enum is enforced
+// here at the boundary — PR #1229 took the role through a TypeScript cast
+// and accepted 'OWNER' silently. Zod refuses it now.
+const inviteBodySchema = z.union([
+  z.object({
+    userId: z.string().min(1),
+    role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
+    customRoleId: z.string().nullable().optional(),
+    permissions: z.array(permissionEntrySchema).default([]),
+  }),
+  z.object({
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
+    customRoleId: z.string().nullable().optional(),
+    permissions: z.array(permissionEntrySchema).default([]),
+  }),
+]);
+
+function resolveAppUrl(): string | null {
+  const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!url) return null;
+  return url.replace(/\/+$/, '');
 }
 
 export async function POST(
@@ -25,162 +64,412 @@ export async function POST(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    const inviterUserId = auth.userId;
 
     const { driveId } = await context.params;
 
-    // Check email verification
-    const emailVerified = await isEmailVerified(userId);
+    const emailVerified = await isEmailVerified(inviterUserId);
     if (!emailVerified) {
       return NextResponse.json(
         {
           error: 'Email verification required. Please verify your email to perform this action.',
-          requiresEmailVerification: true
+          requiresEmailVerification: true,
         },
         { status: 403 }
       );
     }
 
-    const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER', customRoleId, permissions } = body as {
-      userId: string;
-      role?: 'MEMBER' | 'ADMIN';
-      customRoleId?: string | null;
-      permissions: PermissionEntry[];
-    };
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-    // Check if user is drive owner or admin
+    const parsed = inviteBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid request body', issues: parsed.error.issues },
+        { status: 400 }
+      );
+    }
+    const body = parsed.data;
+
     const drive = await driveInviteRepository.findDriveById(driveId);
-
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive.ownerId === userId;
-    let isAdmin = false;
-
+    const isOwner = drive.ownerId === inviterUserId;
+    let isAcceptedAdmin = false;
     if (!isOwner) {
-      const adminMembership = await driveInviteRepository.findAdminMembership(driveId, userId);
-      isAdmin = adminMembership !== null;
+      // findAdminMembership filters acceptedAt IS NOT NULL — Epic 1's gate.
+      // A pending admin (not yet accepted) cannot exercise admin powers.
+      const adminMembership = await driveInviteRepository.findAdminMembership(driveId, inviterUserId);
+      isAcceptedAdmin = adminMembership !== null;
     }
-
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can add members' }, { status: 403 });
-    }
-
-    // Check if member already exists
-    const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
-
-    let memberId: string;
-
-    if (!existingMember) {
-      // Add as drive member with specified role
-      const newMember = await driveInviteRepository.createDriveMember({
-        driveId,
-        userId: invitedUserId,
-        role,
-        customRoleId: customRoleId || null,
-        invitedBy: userId,
-        acceptedAt: new Date(),
-      });
-
-      memberId = newMember.id;
-    } else {
-      // Update role if member exists
-      await driveInviteRepository.updateDriveMemberRole(
-        existingMember.id,
-        role,
-        customRoleId || null
+    if (!isOwner && !isAcceptedAdmin) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can add members' },
+        { status: 403 }
       );
-
-      memberId = existingMember.id;
     }
 
-    // Broadcast member added/updated event to the affected user
-    await broadcastDriveMemberEvent(
-      createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
-        role,
-        driveName: drive.name
-      })
+    if ('userId' in body) {
+      return await handleUserIdPath({
+        request,
+        body,
+        drive,
+        driveId,
+        inviterUserId,
+      });
+    }
+
+    return await handleEmailPath({
+      request,
+      body,
+      drive,
+      driveId,
+      inviterUserId,
+    });
+  } catch (error) {
+    loggers.api.error('Error adding member:', error as Error);
+    return NextResponse.json({ error: 'Failed to add member' }, { status: 500 });
+  }
+}
+
+interface DriveSummary {
+  id: string;
+  name: string;
+  ownerId: string;
+}
+
+interface UserIdBody {
+  userId: string;
+  role: 'MEMBER' | 'ADMIN';
+  customRoleId?: string | null;
+  permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+}
+
+interface EmailBody {
+  email: string;
+  role: 'MEMBER' | 'ADMIN';
+  customRoleId?: string | null;
+  permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+}
+
+async function handleUserIdPath(args: {
+  request: Request;
+  body: UserIdBody;
+  drive: DriveSummary;
+  driveId: string;
+  inviterUserId: string;
+}): Promise<Response> {
+  const { request, body, drive, driveId, inviterUserId } = args;
+  const { userId: invitedUserId, role, customRoleId, permissions } = body;
+
+  const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
+  const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
+
+  let memberId: string;
+  let permissionsGranted = 0;
+  const isFreshJoin = !existingMember;
+
+  if (!existingMember) {
+    const result = await driveInviteRepository.createAcceptedMemberWithPermissions({
+      driveId,
+      userId: invitedUserId,
+      role,
+      customRoleId: customRoleId ?? null,
+      invitedBy: inviterUserId,
+      permissions,
+      grantedBy: inviterUserId,
+      validPageIds,
+    });
+    memberId = result.memberId;
+    permissionsGranted = result.permissionsGranted;
+  } else {
+    await driveInviteRepository.updateDriveMemberRole(
+      existingMember.id,
+      role,
+      customRoleId ?? null
     );
-
-    // Validate that all pageIds belong to this drive
-    const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
-
-    // Add permissions for each page
-    const permissionPromises = permissions.map(async (perm) => {
+    memberId = existingMember.id;
+    for (const perm of permissions) {
       if (!validPageIds.has(perm.pageId)) {
         loggers.api.warn(`Invalid page ID ${perm.pageId} for drive ${driveId}`);
-        return null;
+        continue;
       }
-
-      // Check if permission already exists
       const existing = await driveInviteRepository.findPagePermission(perm.pageId, invitedUserId);
-
       if (existing) {
-        // Update existing permission
-        return driveInviteRepository.updatePagePermission(existing.id, {
+        await driveInviteRepository.updatePagePermission(existing.id, {
           canView: perm.canView,
           canEdit: perm.canEdit,
           canShare: perm.canShare,
-          grantedBy: userId,
+          grantedBy: inviterUserId,
           grantedAt: new Date(),
         });
       } else {
-        // Create new permission
-        return driveInviteRepository.createPagePermission({
+        await driveInviteRepository.createPagePermission({
           pageId: perm.pageId,
           userId: invitedUserId,
           canView: perm.canView,
           canEdit: perm.canEdit,
           canShare: perm.canShare,
-          canDelete: false, // Never grant delete via invite
-          grantedBy: userId,
+          canDelete: false,
+          grantedBy: inviterUserId,
         });
       }
-    });
+      permissionsGranted += 1;
+    }
+  }
 
-    const results = await Promise.all(permissionPromises);
-    const validResults = results.filter(r => r !== null);
-
-    // Send notification to added user
-    await createDriveNotification(
-      invitedUserId,
-      driveId,
-      'invited', // Always use 'invited' which now has "added" language
-      role,
-      userId
-    );
-
-    trackDriveOperation(userId, 'invite_member', driveId, {
-      invitedUserId,
-      role,
-      permissionsGranted: validResults.length,
-    });
-
-    // Log activity for audit trail
-    const actorInfo = await getActorInfo(userId);
-    const invitedUserEmail = await driveInviteRepository.findUserEmail(invitedUserId);
-    logMemberActivity(userId, 'member_add', {
+  if (isFreshJoin) {
+    await emitJoinSideEffects({
+      request,
       driveId,
       driveName: drive.name,
-      targetUserId: invitedUserId,
-      targetUserEmail: invitedUserEmail,
+      inviterUserId,
+      invitedUserId,
       role,
-    }, actorInfo);
-
-    auditRequest(request, { eventType: 'authz.permission.granted', userId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: invitedUserId, role, operation: 'invite' } });
-
-    return NextResponse.json({
-      memberId,
-      permissionsGranted: validResults.length,
-      message: `User added with ${validResults.length} page permissions`,
+      permissionsGranted,
     });
-  } catch (error) {
-    loggers.api.error('Error adding member:', error as Error);
+  } else {
+    auditRequest(request, {
+      eventType: 'authz.permission.granted',
+      userId: inviterUserId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { targetUserId: invitedUserId, role, operation: 'invite' },
+    });
+  }
+
+  return NextResponse.json({
+    kind: 'added',
+    memberId,
+    permissionsGranted,
+    message: `User added with ${permissionsGranted} page permissions`,
+  });
+}
+
+async function handleEmailPath(args: {
+  request: Request;
+  body: EmailBody;
+  drive: DriveSummary;
+  driveId: string;
+  inviterUserId: string;
+}): Promise<Response> {
+  const { request, body, drive, driveId, inviterUserId } = args;
+  const { email: rawEmail, role, customRoleId, permissions } = body;
+  const email = rawEmail.trim().toLowerCase();
+
+  // Pair-scoped rate limit (drive + email): catches a single drive spamming one address.
+  const driveRl = await checkDistributedRateLimit(
+    `drive_invite:drive:${driveId}:${email}`,
+    DISTRIBUTED_RATE_LIMITS.DRIVE_INVITE
+  );
+  if (!driveRl.allowed) {
     return NextResponse.json(
-      { error: 'Failed to add member' },
+      { error: 'Too many invitations to this address. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': String(driveRl.retryAfter ?? 900) } }
+    );
+  }
+  // Global per-email limit: catches the same address being spammed across drives.
+  const emailRl = await checkDistributedRateLimit(
+    `drive_invite:email:${email}`,
+    DISTRIBUTED_RATE_LIMITS.DRIVE_INVITE
+  );
+  if (!emailRl.allowed) {
+    return NextResponse.json(
+      { error: 'Too many invitations to this address. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': String(emailRl.retryAfter ?? 900) } }
+    );
+  }
+
+  const pendingForEmail = await driveInviteRepository.findActivePendingMemberByEmail(driveId, email);
+  if (pendingForEmail) {
+    return NextResponse.json(
+      { error: 'An invitation is already pending for this email.', existingMemberId: pendingForEmail.id },
+      { status: 409 }
+    );
+  }
+
+  const existingUser = await driveInviteRepository.findUserIdByEmail(email);
+
+  // Email maps to a verified user with no pending row → fall through to add path.
+  if (existingUser && existingUser.emailVerified) {
+    const alreadyAcceptedMember = await driveInviteRepository.findExistingMember(driveId, existingUser.id);
+    if (alreadyAcceptedMember && alreadyAcceptedMember.acceptedAt) {
+      return NextResponse.json(
+        { error: 'User is already a member of this drive.', existingMemberId: alreadyAcceptedMember.id },
+        { status: 409 }
+      );
+    }
+    return await handleUserIdPath({
+      request,
+      body: {
+        userId: existingUser.id,
+        role,
+        customRoleId: customRoleId ?? null,
+        permissions,
+      },
+      drive,
+      driveId,
+      inviterUserId,
+    });
+  }
+
+  // Email maps to no user OR an unverified existing user (orphan from a prior
+  // revoked invite). Both paths route through the invitation flow.
+  const appUrl = resolveAppUrl();
+  if (!appUrl) {
+    loggers.api.error(
+      'Drive invite email cannot be sent: WEB_APP_URL and NEXT_PUBLIC_APP_URL both unset'
+    );
+    return NextResponse.json(
+      { error: 'Email delivery is not configured on this deployment.' },
       { status: 500 }
     );
   }
+
+  const tokenResult = await createMagicLinkToken({
+    email,
+    expiryMinutes: INVITATION_LINK_EXPIRY_MINUTES,
+  });
+
+  if (!tokenResult.ok) {
+    if (tokenResult.error.code === 'USER_SUSPENDED') {
+      return NextResponse.json(
+        { error: 'This account is suspended and cannot be invited.' },
+        { status: 403 }
+      );
+    }
+    if (tokenResult.error.code === 'VALIDATION_FAILED') {
+      return NextResponse.json(
+        { error: tokenResult.error.message },
+        { status: 400 }
+      );
+    }
+    loggers.api.error('Failed to create magic link token for drive invite', {
+      code: tokenResult.error.code,
+    } as never);
+    return NextResponse.json({ error: 'Failed to add member' }, { status: 500 });
+  }
+
+  const newPendingUserId = tokenResult.data.userId;
+  const pendingMember = await driveInviteRepository.createDriveMember({
+    driveId,
+    userId: newPendingUserId,
+    role,
+    customRoleId: customRoleId ?? null,
+    invitedBy: inviterUserId,
+    acceptedAt: null,
+  });
+
+  const inviter = await driveInviteRepository.findInviterDisplay(inviterUserId);
+  const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(tokenResult.data.token)}`;
+
+  await sendPendingDriveInvitationEmail({
+    recipientEmail: email,
+    inviterName: inviter?.name ?? 'A teammate',
+    driveName: drive.name,
+    magicLinkUrl,
+  });
+
+  trackDriveOperation(inviterUserId, 'invite_member', driveId, {
+    invitedEmail: email,
+    role,
+    pending: true,
+  });
+
+  const actorInfo = await getActorInfo(inviterUserId);
+  logMemberActivity(
+    inviterUserId,
+    'member_add',
+    {
+      driveId,
+      driveName: drive.name,
+      targetUserEmail: email,
+      role,
+      pending: true,
+    } as never,
+    actorInfo
+  );
+
+  auditRequest(request, {
+    eventType: 'authz.permission.granted',
+    userId: inviterUserId,
+    resourceType: 'drive',
+    resourceId: driveId,
+    details: { targetEmail: email, role, operation: 'invite', pending: true },
+  });
+
+  return NextResponse.json({
+    kind: 'invited',
+    memberId: pendingMember.id,
+    email,
+    message: `Invitation sent to ${email}`,
+  });
+}
+
+async function emitJoinSideEffects(args: {
+  request: Request;
+  driveId: string;
+  driveName: string;
+  inviterUserId: string;
+  invitedUserId: string;
+  role: 'MEMBER' | 'ADMIN';
+  permissionsGranted: number;
+}): Promise<void> {
+  const { request, driveId, driveName, inviterUserId, invitedUserId, role, permissionsGranted } = args;
+
+  const payload = createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
+    role,
+    driveName,
+  });
+  // Notify the invited user directly (joining their own drives channel) ...
+  await broadcastDriveMemberEvent(payload);
+  // ... and notify other drive recipients so the members page updates live.
+  try {
+    const allRecipients = await getDriveRecipientUserIds(driveId);
+    const others = allRecipients.filter((id) => id !== invitedUserId);
+    if (others.length > 0) {
+      await broadcastDriveMemberEventToRecipients(payload, others);
+    }
+  } catch (error) {
+    loggers.api.warn('Failed to fan-out member_added to drive recipients', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  await createDriveNotification(invitedUserId, driveId, 'invited', role, inviterUserId);
+
+  trackDriveOperation(inviterUserId, 'invite_member', driveId, {
+    invitedUserId,
+    role,
+    permissionsGranted,
+  });
+
+  const actorInfo = await getActorInfo(inviterUserId);
+  const invitedUserEmail = await driveInviteRepository.findUserEmail(invitedUserId);
+  logMemberActivity(
+    inviterUserId,
+    'member_add',
+    {
+      driveId,
+      driveName,
+      targetUserId: invitedUserId,
+      targetUserEmail: invitedUserEmail,
+      role,
+    },
+    actorInfo
+  );
+
+  auditRequest(request, {
+    eventType: 'authz.permission.granted',
+    userId: inviterUserId,
+    resourceType: 'drive',
+    resourceId: driveId,
+    details: { targetUserId: invitedUserId, role, operation: 'invite' },
+  });
 }

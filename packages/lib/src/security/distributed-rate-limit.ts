@@ -558,6 +558,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
+  DRIVE_INVITE: {
+    maxAttempts: 3,
+    windowMs: 15 * 60 * 1000,
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================
