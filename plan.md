@@ -34,6 +34,9 @@ justification, and should be revisited as a follow-up:
   can't pull pages into a drive they haven't accepted into.
 - `apps/web/src/app/api/pages/tree/route.ts` — drive membership lookup for
   the tree-rendering authz check; same gate.
+- `packages/lib/src/services/drive-role-service.ts` — `checkDriveAccessForRoles`
+  membership lookup; same `acceptedAt` gate needed so a pending member
+  can't read or modify drive roles before accepting their invitation.
 
 ## Recently Completed
 
