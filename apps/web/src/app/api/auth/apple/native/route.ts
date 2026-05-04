@@ -18,6 +18,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -177,6 +178,15 @@ export async function POST(req: Request) {
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on Apple native login', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
+      return Response.json({ error: 'Server error' }, { status: 500 });
+    }
+
     // Create device token
     const { deviceToken } = await validateOrCreateDeviceToken({
       providedDeviceToken: undefined,
@@ -205,7 +215,7 @@ export async function POST(req: Request) {
       details: { method: `Apple OAuth Native (${platform})` },
     });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple-native',
       platform,

@@ -38,6 +38,7 @@ import {
   broadcastPageEvent,
   broadcastDriveEvent,
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   broadcastTaskEvent,
   broadcastUsageEvent,
   broadcastAiStreamStart,
@@ -215,6 +216,67 @@ describe('socket-utils', () => {
 
       expect(requestBody.channelId).toBe('user:user-456:drives');
       expect(requestBody.event).toBe('drive:member_added');
+    });
+  });
+
+  describe('broadcastDriveMemberEventToRecipients', () => {
+    it('given member event with multiple recipients, fans out to each user channel with the same payload', async () => {
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+        role: 'MEMBER',
+        driveName: 'Alpha',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, ['admin-a', 'admin-b']);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const channels = mockFetch.mock.calls.map((c) => JSON.parse(c[1].body).channelId).sort();
+      expect(channels).toEqual(['user:admin-a:drives', 'user:admin-b:drives']);
+      for (const call of mockFetch.mock.calls) {
+        const body = JSON.parse(call[1].body);
+        expect(body.event).toBe('drive:member_added');
+        expect(body.payload).toEqual(payload);
+      }
+    });
+
+    it('given empty recipient list, does not call fetch', async () => {
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, []);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given INTERNAL_REALTIME_URL is unset, does not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await broadcastDriveMemberEventToRecipients(payload, ['admin-a']);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch rejects for one recipient, does not throw (best-effort broadcast must never abort the calling operation)', async () => {
+      mockFetch.mockResolvedValueOnce(new Response()).mockRejectedValueOnce(new Error('realtime down'));
+      const payload: DriveMemberEventPayload = {
+        driveId: 'drive-abc',
+        userId: 'user-actor',
+        operation: 'member_added',
+      };
+
+      await expect(
+        broadcastDriveMemberEventToRecipients(payload, ['admin-a', 'admin-b'])
+      ).resolves.toBeUndefined();
     });
   });
 

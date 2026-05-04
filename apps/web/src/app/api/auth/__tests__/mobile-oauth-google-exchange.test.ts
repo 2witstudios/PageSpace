@@ -101,6 +101,10 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 import { verifyOAuthIdToken, createOrLinkOAuthUser } from '@pagespace/lib/auth/oauth-utils';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -276,7 +280,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         mockUser.id,
         'login',
         {
-          email: 'oauth@example.com',
+          email: 'oa***@example.com',
           ip: '192.168.1.1',
           provider: 'google',
           userAgent: null,

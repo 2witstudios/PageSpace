@@ -20,6 +20,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -201,24 +202,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Reset rate limits on successful login
-    try {
-      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
-    } catch (error) {
-      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    // Track login event (mask email to prevent PII in activity logs)
-    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
-    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
-      email: maskedEmail,
-      ip: clientIP,
-      provider: 'google-one-tap',
-      userAgent: req.headers.get('user-agent'),
-    });
-
     const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
@@ -241,6 +224,36 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on Google One Tap', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
+      return NextResponse.json({ error: 'Server error' }, { status: 500 });
+    }
+
+    // Reset rate limits — only after acceptance succeeds, so a failed acceptance
+    // does not silently clear failure counters or emit a misleading success event.
+    try {
+      await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
+    } catch (error) {
+      loggers.auth.warn('Rate limit reset failed after successful One Tap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Track login event — use the shared maskEmail utility so 1-char local
+    // parts and unusual addresses cannot leak through (the regex form would
+    // emit the raw email when the pattern did not match).
+    trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
+      email: maskEmail(email),
+      ip: clientIP,
+      provider: 'google-one-tap',
+      userAgent: req.headers.get('user-agent'),
+    });
+
     auditRequest(req, {
       eventType: 'auth.login.success',
       userId: user.id,

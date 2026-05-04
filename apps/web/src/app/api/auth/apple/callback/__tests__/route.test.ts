@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -126,6 +127,10 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
+vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
+  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
+}));
+
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -138,6 +143,7 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 // Helper to create signed state
 function createSignedState(
@@ -1139,6 +1145,56 @@ describe('POST /api/auth/apple/callback', () => {
       expect(errCall).toBeDefined();
       const meta = errCall?.[1] as { email?: string };
       expect(meta.email).toBe('te***@example.com');
+    });
+  });
+
+  describe('post-login pending invite acceptance', () => {
+    beforeEach(() => {
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
+    });
+
+    it('given a successful login, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      expect(acceptUserPendingInvitations).toHaveBeenCalledWith(mockNewUser.id);
+      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
+      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
+      expect(acceptOrder).toBeGreaterThan(sessionOrder);
+    });
+
+    it('given the helper throws, revokes the just-created session and redirects to signin?error=server_error', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+      const location = response.headers.get('Location')!;
+
+      expect(response.status).toBe(307);
+      expect(location).toContain('/auth/signin?error=server_error');
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_token',
+        'pending_invite_acceptance_failed'
+      );
+      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pending_invite_acceptance_failed'
+      );
+    });
+
+    it('given the helper resolves, redirect/response is unchanged', async () => {
+      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
+        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
+      ]);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get('Location')).not.toContain('error=');
     });
   });
 });

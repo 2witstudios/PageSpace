@@ -16,6 +16,7 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -168,12 +169,12 @@ export async function POST(req: Request) {
       resetDistributedRateLimit(emailRateLimitKey),
     ]);
 
-    // Track signup event (using 'signup' + passkey_registered for full event tracking)
-    // Mask PII to comply with data retention policies
-    const maskedEmail = email.substring(0, 3) + '***@' + (email.split('@')[1] || '***');
+    // Track signup event — use the shared maskEmail utility instead of an
+    // inline substring; the inline form leaks part of the domain into the
+    // local segment for short addresses (e.g. "a@x.io" → "a@x***@x.io").
     const maskedName = name.substring(0, 1) + '***';
     trackAuthEvent(userId, 'signup', {
-      email: maskedEmail,
+      email: maskEmail(email),
       name: maskedName,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),
@@ -208,6 +209,18 @@ export async function POST(req: Request) {
 
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on passkey signup', error as Error, { userId });
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
+      return NextResponse.json(
+        { error: 'Server error' },
+        { status: 500 }
+      );
+    }
 
     let deviceTokenValue: string | undefined;
     if (deviceId) {

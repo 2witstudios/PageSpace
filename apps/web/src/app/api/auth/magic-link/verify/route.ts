@@ -14,6 +14,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { acceptUserPendingInvitations, type AcceptedInvitation } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -111,6 +112,23 @@ export async function GET(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Accept any pending drive invitations now that the session is live. Genuine
+    // failures (acceptance write) revoke the session — the user shouldn't reach
+    // a half-state where they're authenticated but invisible to authz queries.
+    let acceptedInvitations: AcceptedInvitation[];
+    try {
+      acceptedInvitations = await acceptUserPendingInvitations(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on magic-link login', error as Error, { userId });
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
+      return redirectWithError('server_error');
+    }
+
+    const inviteDriveIdHint = searchParams.get('inviteDriveId');
+    const matchedInviteDrive = inviteDriveIdHint
+      ? acceptedInvitations.find((row) => row.driveId === inviteDriveIdHint)
+      : null;
+
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
     // If the magic link opens outside the desktop device, the cookie session still works.
@@ -143,17 +161,11 @@ export async function GET(req: Request) {
           // If the link was opened on a different device, the exchange code is
           // ignored and the user still has a valid cookie session.
           const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-          let desktopRedirectPath = '/dashboard';
-          if (isNewUser) {
-            try {
-              const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
-              if (provisionedDrive) {
-                desktopRedirectPath = `/dashboard/${provisionedDrive.driveId}`;
-              }
-            } catch (error) {
-              loggers.auth.error('Failed to provision Getting Started drive', error as Error, { userId });
-            }
-          }
+          const desktopRedirectPath = await resolvePostLoginRedirectPath({
+            matchedInviteDriveId: matchedInviteDrive?.driveId ?? null,
+            isNewUser,
+            userId,
+          });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
           desktopRedirectUrl.searchParams.set('desktopExchange', exchangeCode);
@@ -204,23 +216,13 @@ export async function GET(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
-    // Determine redirect URL
-    let redirectPath = '/dashboard';
-
-    // For new users, provision getting started drive if needed
-    if (isNewUser) {
-      try {
-        const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
-        if (provisionedDrive) {
-          redirectPath = `/dashboard/${provisionedDrive.driveId}`;
-        }
-      } catch (error) {
-        loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
-          userId,
-        });
-        // Continue with default dashboard redirect
-      }
-    }
+    // Determine redirect URL via the shared helper so the desktop and web
+    // post-login flows cannot drift on the next redirect-rule change.
+    const redirectPath = await resolvePostLoginRedirectPath({
+      matchedInviteDriveId: matchedInviteDrive?.driveId ?? null,
+      isNewUser,
+      userId,
+    });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
     const redirectUrl = new URL(redirectPath, baseUrl);
@@ -261,4 +263,39 @@ function redirectWithError(error: string): NextResponse {
   redirectUrl.searchParams.set('error', error);
 
   return NextResponse.redirect(redirectUrl.toString(), { status: 302 });
+}
+
+/**
+ * Resolve the post-login dashboard redirect path. Single source of truth for
+ * both the desktop exchange and web cookie flows so the two paths cannot drift
+ * out of sync on the next redirect-rule change. Provisioning errors are logged
+ * and swallowed — the user still lands on /dashboard.
+ */
+async function resolvePostLoginRedirectPath({
+  matchedInviteDriveId,
+  isNewUser,
+  userId,
+}: {
+  matchedInviteDriveId: string | null;
+  isNewUser: boolean;
+  userId: string;
+}): Promise<string> {
+  if (matchedInviteDriveId) {
+    return `/dashboard/${matchedInviteDriveId}`;
+  }
+
+  if (!isNewUser) {
+    return '/dashboard';
+  }
+
+  try {
+    const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+    if (provisionedDrive) {
+      return `/dashboard/${provisionedDrive.driveId}`;
+    }
+  } catch (error) {
+    loggers.auth.error('Failed to provision Getting Started drive', error as Error, { userId });
+  }
+
+  return '/dashboard';
 }

@@ -23,6 +23,7 @@ import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -207,6 +208,15 @@ export async function POST(req: Request) {
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Accept any pending drive invitations now that the session is live.
+    try {
+      await acceptUserPendingInvitations(user.id);
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations on Apple callback', error as Error, { userId: user.id });
+      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
+      return NextResponse.redirect(new URL('/auth/signin?error=server_error', baseUrl));
+    }
+
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
     } catch (resetError) {
@@ -222,7 +232,7 @@ export async function POST(req: Request) {
       details: { method: 'Apple OAuth' },
     });
     trackAuthEvent(user.id, 'login', {
-      email,
+      email: maskEmail(email),
       ip: clientIP,
       provider: 'apple',
       userAgent: req.headers.get('user-agent')
