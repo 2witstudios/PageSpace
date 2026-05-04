@@ -805,6 +805,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(emailCall.driveName).toBe('Test Drive');
       expect(emailCall.magicLinkUrl).toContain('token=ps_magic_test_token');
       expect(emailCall.magicLinkUrl).toContain(`inviteDriveId=${mockDriveId}`);
+
+      // Pending invites must not be broadcast as member_added — the user hasn't joined yet.
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
     });
 
     it('given an active pending row already exists for the email and the email maps to an existing temp user, still responds 409 (regression: re-invite bypass)', async () => {

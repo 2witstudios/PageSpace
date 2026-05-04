@@ -48,6 +48,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
@@ -185,6 +186,21 @@ describe('POST /api/drives/[driveId]/members/[userId]/resend', () => {
     );
 
     expect(response.status).toBe(401);
+    expect(createMagicLinkToken).not.toHaveBeenCalled();
+    expect(driveInviteRepository.bumpInvitedAt).not.toHaveBeenCalled();
+  });
+
+  it('given the caller has not verified their email, responds 403 with requiresEmailVerification', async () => {
+    vi.mocked(isEmailVerified).mockResolvedValueOnce(false);
+
+    const response = await POST(
+      createResendRequest(driveId, targetUserId),
+      createContext(driveId, targetUserId)
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.requiresEmailVerification).toBe(true);
     expect(createMagicLinkToken).not.toHaveBeenCalled();
     expect(driveInviteRepository.bumpInvitedAt).not.toHaveBeenCalled();
   });

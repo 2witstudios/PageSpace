@@ -205,7 +205,6 @@ describe('DriveMembers pending invitations section', () => {
     const handlers = socketHandlers.get('drive:member_added') ?? [];
     handlers.forEach((handler) => handler({ driveId: 'drive_OTHER', operation: 'member_added' }));
 
-    await new Promise((r) => setTimeout(r, 50));
     expect(fetchWithAuth).toHaveBeenCalledTimes(1);
   });
 });

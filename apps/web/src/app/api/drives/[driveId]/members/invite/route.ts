@@ -156,6 +156,7 @@ export async function POST(
     const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
 
     let memberId: string;
+    let membershipAccepted = false;
 
     if (!existingMember) {
       // Add as drive member with specified role; pending invites leave acceptedAt null
@@ -169,6 +170,7 @@ export async function POST(
       });
 
       memberId = newMember.id;
+      membershipAccepted = inviteKind !== 'invited';
     } else {
       // Update role if member exists
       await driveInviteRepository.updateDriveMemberRole(
@@ -178,15 +180,25 @@ export async function POST(
       );
 
       memberId = existingMember.id;
+      // If the legacy userId path lands on a pending row, accept it now —
+      // otherwise we'd emit member_added below for someone whose acceptedAt is null.
+      // Email path can't reach this branch for pending rows (409 fires earlier).
+      if (existingMember.acceptedAt === null && inviteKind === 'added') {
+        membershipAccepted = await driveInviteRepository.acceptPendingMember(existingMember.id);
+      } else {
+        membershipAccepted = existingMember.acceptedAt !== null;
+      }
     }
 
-    // Broadcast member added/updated event to the affected user
-    await broadcastDriveMemberEvent(
-      createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
-        role,
-        driveName: drive.name
-      })
-    );
+    if (membershipAccepted) {
+      // Broadcast member added/updated event to the affected user
+      await broadcastDriveMemberEvent(
+        createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
+          role,
+          driveName: drive.name
+        })
+      );
+    }
 
     // Validate that all pageIds belong to this drive
     const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
