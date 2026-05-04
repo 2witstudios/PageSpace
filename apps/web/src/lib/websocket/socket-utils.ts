@@ -269,18 +269,24 @@ export async function broadcastDriveMemberEventToRecipients(
 
   try {
     const results = await Promise.allSettled(
-      uniqueRecipients.map((userId) => {
+      uniqueRecipients.map(async (userId) => {
         const requestBody = JSON.stringify({
           channelId: `user:${userId}:drives`,
           event: `drive:${payload.operation}`,
           payload,
         });
-        return fetch(`${realtimeUrl}/api/broadcast`, {
+        // fetch only rejects on network failures — 4xx/5xx responses resolve
+        // normally, so we must explicitly check `response.ok` and throw to
+        // surface upstream broadcast failures in the Promise.allSettled tally.
+        const response = await fetch(`${realtimeUrl}/api/broadcast`, {
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
           signal: AbortSignal.timeout(5000),
         });
+        if (!response.ok) {
+          throw new Error(`Broadcast failed with status ${response.status}`);
+        }
       })
     );
 

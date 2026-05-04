@@ -12,7 +12,7 @@ import {
   formatDateInTimezone,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -77,11 +77,17 @@ export async function POST(req: Request) {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
-    // Get user's drives
+    // Get user's drives (accepted memberships only — pending invites have no
+    // legitimate access yet, so their pulse summary would leak content).
     const userDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, userId));
+      .where(
+        and(
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )
+      );
     const driveIds = userDrives.map(d => d.driveId);
 
     // ========================================

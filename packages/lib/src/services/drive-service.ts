@@ -399,9 +399,21 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
   const now = new Date();
 
-  // Try updating existing membership row
+  // Determine whether this user owns the drive — owner rows must be born accepted
+  // because the new acceptedAt-IS-NOT-NULL filter on listAccessibleDrives would
+  // otherwise hide an OWNER's auto-created membership and never surface their
+  // lastAccessedAt updates.
+  const [drive] = await db.select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  const isOwner = drive?.ownerId === userId;
+
+  // Try updating existing membership row.
+  // Owners get their acceptedAt promoted to now if it was null (back-compat for
+  // owner rows inserted before the auto-acceptance was added).
   const updated = await db.update(driveMembers)
-    .set({ lastAccessedAt: now })
+    .set(isOwner ? { lastAccessedAt: now, acceptedAt: now } : { lastAccessedAt: now })
     .where(and(
       eq(driveMembers.userId, userId),
       eq(driveMembers.driveId, driveId)
@@ -410,13 +422,7 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
 
   if (updated.length > 0) return;
 
-  // No membership row — check if user is the drive owner before inserting
-  const [drive] = await db.select({ ownerId: drives.ownerId })
-    .from(drives)
-    .where(eq(drives.id, driveId))
-    .limit(1);
-
-  if (drive?.ownerId === userId) {
+  if (isOwner) {
     await db.insert(driveMembers)
       .values({
         driveId,
@@ -424,10 +430,11 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
         role: 'OWNER',
         lastAccessedAt: now,
         invitedAt: now,
+        acceptedAt: now,
       })
       .onConflictDoUpdate({
         target: [driveMembers.driveId, driveMembers.userId],
-        set: { lastAccessedAt: now },
+        set: { lastAccessedAt: now, acceptedAt: now },
       });
   }
 }
