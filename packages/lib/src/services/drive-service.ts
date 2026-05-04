@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, not, inArray } from '@pagespace/db/operators';
+import { eq, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
@@ -77,7 +77,10 @@ export async function listAccessibleDrives(
   const memberDrives = await db
     .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(and(
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ));
 
   // 3. Get drives where user has page-level permissions
   // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
@@ -212,7 +215,11 @@ export async function getDriveAccess(
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
     .limit(1);
 
   if (membership.length > 0) {
@@ -260,7 +267,11 @@ export async function getDriveAccessWithDrive(
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
-    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
     .limit(1);
 
   if (membership.length > 0) {
@@ -375,25 +386,21 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 
 /**
  * Update a user's last accessed timestamp for a drive.
- * Tries updating an existing driveMembers row first. If no row was affected
- * (e.g., drive owner without a driveMembers entry), inserts one with OWNER role
- * only when the user actually owns the drive.
+ *
+ * Owner self-heal: the new acceptedAt gate (Epic 1) excludes drive_members
+ * rows with acceptedAt IS NULL from member-list queries (lastAccessedAt
+ * lookup, sidebar role display, recipient broadcast). Owners reach drives
+ * via drives.ownerId so they are not locked out of authz, but a legacy
+ * owner row with acceptedAt = NULL would stop populating those member-list
+ * paths. The owner branch upserts and backfills acceptedAt via COALESCE on
+ * conflict so the gate becomes a no-op for owner rows.
+ *
+ * Non-owners are never auto-accepted — pending invitations must be claimed
+ * through the post-login acceptance flow (Epic 3).
  */
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
   const now = new Date();
 
-  // Try updating existing membership row
-  const updated = await db.update(driveMembers)
-    .set({ lastAccessedAt: now })
-    .where(and(
-      eq(driveMembers.userId, userId),
-      eq(driveMembers.driveId, driveId)
-    ))
-    .returning({ id: driveMembers.id });
-
-  if (updated.length > 0) return;
-
-  // No membership row — check if user is the drive owner before inserting
   const [drive] = await db.select({ ownerId: drives.ownerId })
     .from(drives)
     .where(eq(drives.id, driveId))
@@ -405,12 +412,24 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
         driveId,
         userId,
         role: 'OWNER',
-        lastAccessedAt: now,
         invitedAt: now,
+        acceptedAt: now,
+        lastAccessedAt: now,
       })
       .onConflictDoUpdate({
         target: [driveMembers.driveId, driveMembers.userId],
-        set: { lastAccessedAt: now },
+        set: {
+          lastAccessedAt: now,
+          acceptedAt: sql`COALESCE(${driveMembers.acceptedAt}, ${now})`,
+        },
       });
+    return;
   }
+
+  await db.update(driveMembers)
+    .set({ lastAccessedAt: now })
+    .where(and(
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.driveId, driveId)
+    ));
 }

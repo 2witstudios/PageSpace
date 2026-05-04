@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...args: unknown[]) => args),
   asc: vi.fn((col) => ({ column: col, direction: 'asc' })),
+  isNotNull: vi.fn((a) => ({ field: a, op: 'isNotNull' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },

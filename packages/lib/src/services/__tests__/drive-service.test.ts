@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
 }));
 
 import { db } from '@pagespace/db/db';

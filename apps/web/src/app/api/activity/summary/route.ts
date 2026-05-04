@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, sql, count } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, sql, count, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
@@ -126,7 +126,10 @@ export async function GET(req: Request) {
     // First get drives user has access to (both owned and member drives)
     const [ownedDrives, memberDrives] = await Promise.all([
       db.select({ driveId: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
-      db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(eq(driveMembers.userId, userId)),
+      db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(and(
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      )),
     ]);
 
     // Combine and deduplicate drive IDs

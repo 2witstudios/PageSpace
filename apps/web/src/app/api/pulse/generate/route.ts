@@ -12,7 +12,7 @@ import {
   formatDateInTimezone,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -81,7 +81,10 @@ export async function POST(req: Request) {
     const userDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, userId));
+      .where(and(
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
+      ));
     const driveIds = userDrives.map(d => d.driveId);
 
     // ========================================
@@ -110,7 +113,8 @@ export async function POST(req: Request) {
       .leftJoin(users, eq(users.id, driveMembers.userId))
       .where(and(
         inArray(driveMembers.driveId, driveIds),
-        ne(driveMembers.userId, userId)
+        ne(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt)
       )) : [];
 
     const teamByDrive = teamMembers.reduce((acc, m) => {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc } from '@pagespace/db/operators'
+import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
@@ -50,7 +50,8 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
         .where(and(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, auth.userId),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         ))
         .limit(1);
 

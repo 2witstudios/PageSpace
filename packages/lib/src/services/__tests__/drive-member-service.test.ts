@@ -52,6 +52,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
   sql: vi.fn(),
 }));
 
