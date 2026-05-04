@@ -13,6 +13,7 @@ import {
   ConversationScrollButton,
 } from '@/components/ai/ui/conversation';
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
+import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
@@ -387,7 +388,7 @@ function ChannelView({ page }: ChannelViewProps) {
   }, [page.id]);
 
   return (
-    <div className="flex flex-col h-full">
+    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
         <div className="flex-grow overflow-hidden relative">
           <Conversation>
             <ConversationContent className="gap-4 max-w-4xl mx-auto p-4">
@@ -546,7 +547,7 @@ function ChannelView({ page }: ChannelViewProps) {
             )}
           </div>
         </div>
-    </div>
+    </MessageDropZone>
   );
 }
 
