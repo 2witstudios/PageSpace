@@ -390,7 +390,7 @@ function ChannelView({ page }: ChannelViewProps) {
   return (
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
         <div className="flex-grow overflow-hidden relative">
-          <Conversation>
+          <Conversation className="h-full">
             <ConversationContent className="gap-4 max-w-4xl mx-auto p-4">
                     {hasMore && (
                       <div className="flex justify-center py-2">
