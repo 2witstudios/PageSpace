@@ -245,7 +245,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     allDay: boolean;
     color?: string;
     attendeeIds?: string[];
-    agentTrigger?: { agentPageId: string; prompt: string };
+    pageId?: string | null;
   }) => {
     if (selectedEvent) {
       await updateEvent(selectedEvent.id, eventData);
