@@ -48,8 +48,12 @@ import {
   type AgentTriggerAgent,
 } from '@/components/agent-triggers/AgentTriggerSection';
 
-export type AgentTriggerSavePayload =
-  | { agentPageId: string; prompt?: string; instructionPageId: string | null; contextPageIds: string[] };
+export type AgentTriggerSavePayload = {
+  agentPageId: string;
+  prompt?: string;
+  instructionPageId: string | null;
+  contextPageIds: string[];
+};
 
 interface EventModalProps {
   isOpen: boolean;
@@ -102,12 +106,11 @@ interface EventTriggerRow {
 
 type LastRunStatus = 'never_run' | 'success' | 'error';
 
-const lastRunStatusFor = (row: EventTriggerRow): LastRunStatus =>
-  row.lastFiredAt === null
-    ? 'never_run'
-    : row.lastFireError
-      ? 'error'
-      : 'success';
+const lastRunStatusFor = (row: EventTriggerRow): LastRunStatus => {
+  if (row.lastFiredAt === null) return 'never_run';
+  if (row.lastFireError) return 'error';
+  return 'success';
+};
 
 const EMPTY_AGENT_VALUE: AgentTriggerValue = {
   agentPageId: '',
@@ -283,12 +286,9 @@ export function EventModal({
         instructionPageId: existingTrigger.instructionPageId,
         contextPageIds: existingTrigger.contextPageIds ?? [],
       });
-    } else if (!triggerKey) {
-      // New event (no fetch happened) → empty
-      setAgentEnabled(false);
-      setAgentValue(EMPTY_AGENT_VALUE);
-    } else if (!triggerLoading && triggerData) {
-      // Editing existing event but no trigger row exists → empty
+    } else if (!triggerKey || (!triggerLoading && triggerData)) {
+      // No fetch (new event) OR fetch landed with no trigger row (or with one
+      // we're ignoring on a recurring event) → reset to empty.
       setAgentEnabled(false);
       setAgentValue(EMPTY_AGENT_VALUE);
     }
@@ -397,11 +397,10 @@ export function EventModal({
     }
   };
 
-  const agentHeaderLabel = !agentEnabled
-    ? 'Off'
-    : selectedAgentName
-      ? `${selectedAgentName} at start`
-      : 'On';
+  let agentHeaderLabel: string;
+  if (!agentEnabled) agentHeaderLabel = 'Off';
+  else if (selectedAgentName) agentHeaderLabel = `${selectedAgentName} at start`;
+  else agentHeaderLabel = 'On';
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>

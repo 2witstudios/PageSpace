@@ -112,6 +112,15 @@ const renderModal = (opts: RenderOpts = {}) => {
   );
 };
 
+const firstSavePayload = async (
+  onSave: ReturnType<typeof vi.fn>,
+): Promise<{ agentTrigger?: unknown }> => {
+  await waitFor(() => {
+    if (!onSave.mock.calls.length) throw new Error('onSave not called');
+  });
+  return onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+};
+
 describe('EventModal — agent trigger disclosure', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -229,11 +238,7 @@ describe('EventModal — agent trigger disclosure', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
 
-    await waitFor(() => {
-      if (!onSave.mock.calls.length) throw new Error('onSave not called');
-    });
-
-    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+    const payload = await firstSavePayload(onSave);
 
     assert({
       given: 'an event with an existing trigger and the user clicks Update without changing anything',
@@ -261,11 +266,7 @@ describe('EventModal — agent trigger disclosure', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
 
-    await waitFor(() => {
-      if (!onSave.mock.calls.length) throw new Error('onSave not called');
-    });
-
-    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+    const payload = await firstSavePayload(onSave);
 
     assert({
       given: 'an existing trigger with the toggle flipped off',
@@ -296,11 +297,7 @@ describe('EventModal — agent trigger disclosure', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
 
-    await waitFor(() => {
-      if (!onSave.mock.calls.length) throw new Error('onSave not called');
-    });
-
-    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+    const payload = await firstSavePayload(onSave);
 
     assert({
       given: 'a recurring event with a stale trigger row',
@@ -320,11 +317,7 @@ describe('EventModal — agent trigger disclosure', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
 
-    await waitFor(() => {
-      if (!onSave.mock.calls.length) throw new Error('onSave not called');
-    });
-
-    const payload = onSave.mock.calls[0][0] as { agentTrigger?: unknown };
+    const payload = await firstSavePayload(onSave);
 
     assert({
       given: 'a personal calendar create flow',
