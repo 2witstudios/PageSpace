@@ -13,13 +13,16 @@ interface LinkButtonProps {
 }
 
 const DANGEROUS_PROTOCOL = /^\s*(javascript|data|vbscript):/i;
+const ABSOLUTE_OR_RELATIVE = /^(https?:\/\/|ftp:\/\/|mailto:|tel:|#|\/|\?|\.{1,2}\/)/i;
+const LOOKS_LIKE_HOSTNAME = /^[^\s/?#]+\.[^\s]+/;
 
 const normalizeUrl = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   if (DANGEROUS_PROTOCOL.test(trimmed)) return '';
-  if (/^(https?:\/\/|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+  if (ABSOLUTE_OR_RELATIVE.test(trimmed)) return trimmed;
+  if (LOOKS_LIKE_HOSTNAME.test(trimmed)) return `https://${trimmed}`;
+  return trimmed;
 };
 
 const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
