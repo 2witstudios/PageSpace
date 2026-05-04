@@ -85,6 +85,25 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findPendingMembersForUser: vi.fn().mockResolvedValue([]),
+    acceptPendingMember: vi.fn().mockResolvedValue(true),
+  },
+}));
+
+vi.mock('@/lib/websocket', () => ({
+  broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  createDriveMemberEventPayload: vi.fn(
+    (driveId: string, userId: string, event: string, data: unknown) => ({
+      driveId,
+      userId,
+      event,
+      ...(data as Record<string, unknown>),
+    })
+  ),
+}));
+
 import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
@@ -95,10 +114,16 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 
-const createVerifyRequest = (token?: string) => {
-  const url = token
-    ? `http://localhost/api/auth/magic-link/verify?token=${token}`
+const createVerifyRequest = (token?: string, inviteDriveId?: string) => {
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  if (inviteDriveId) params.set('inviteDriveId', inviteDriveId);
+  const qs = params.toString();
+  const url = qs
+    ? `http://localhost/api/auth/magic-link/verify?${qs}`
     : 'http://localhost/api/auth/magic-link/verify';
 
   return new Request(url, {
@@ -118,6 +143,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       data: { userId: 'test-user-id', isNewUser: false },
     });
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([]);
+    vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(true);
     // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -492,6 +519,78 @@ describe('GET /api/auth/magic-link/verify', () => {
           isNewUser: false,
         })
       );
+    });
+  });
+
+  describe('pending invitations', () => {
+    const pendingRow = (
+      memberId: string,
+      driveId: string,
+      role: 'MEMBER' | 'ADMIN' | 'OWNER' = 'MEMBER'
+    ) => ({
+      id: memberId,
+      driveId,
+      role,
+      driveName: `Drive ${driveId}`,
+    });
+
+    it('given a verify request with inviteDriveId matching a pending row, accepts and redirects to that drive', async () => {
+      vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+        pendingRow('mem_p1', 'drive_invited'),
+      ]);
+      vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(true);
+
+      const response = await GET(createVerifyRequest('valid-token', 'drive_invited'));
+      const location = response.headers.get('Location')!;
+
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_p1');
+      expect(location).toContain('/dashboard/drive_invited');
+      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+      expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
+        'drive_invited',
+        'test-user-id',
+        'member_added',
+        expect.objectContaining({ role: 'MEMBER' })
+      );
+    });
+
+    it('given pending rows but no inviteDriveId param, still accepts every pending row so the user is not stranded', async () => {
+      vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+        pendingRow('mem_a', 'drive_a'),
+        pendingRow('mem_b', 'drive_b', 'ADMIN'),
+      ]);
+      vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(true);
+
+      await GET(createVerifyRequest('valid-token'));
+
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledTimes(2);
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_a');
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_b');
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('given the conditional UPDATE returns false (concurrent acceptance), does not re-broadcast member_added', async () => {
+      vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([
+        pendingRow('mem_race', 'drive_x'),
+      ]);
+      vi.mocked(driveInviteRepository.acceptPendingMember).mockResolvedValue(false);
+
+      await GET(createVerifyRequest('valid-token'));
+
+      expect(driveInviteRepository.acceptPendingMember).toHaveBeenCalledWith('mem_race');
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+    });
+
+    it('given inviteDriveId does not match any pending row for this user, falls through to default redirect rather than error', async () => {
+      vi.mocked(driveInviteRepository.findPendingMembersForUser).mockResolvedValue([]);
+
+      const response = await GET(createVerifyRequest('valid-token', 'drive_unrelated'));
+      const location = response.headers.get('Location')!;
+
+      expect(response.status).toBe(302);
+      expect(location).not.toContain('/dashboard/drive_unrelated');
+      expect(location).toContain('/dashboard');
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
     });
   });
 

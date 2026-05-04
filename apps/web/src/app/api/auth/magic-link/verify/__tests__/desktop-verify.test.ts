@@ -101,6 +101,25 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findPendingMembersForUser: vi.fn().mockResolvedValue([]),
+    acceptPendingMember: vi.fn().mockResolvedValue(true),
+  },
+}));
+
+vi.mock('@/lib/websocket', () => ({
+  broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  createDriveMemberEventPayload: vi.fn(
+    (driveId: string, userId: string, event: string, data: unknown) => ({
+      driveId,
+      userId,
+      event,
+      ...(data as Record<string, unknown>),
+    })
+  ),
+}));
+
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';

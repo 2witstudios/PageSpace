@@ -8,6 +8,8 @@ import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -42,8 +44,15 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { userId: invitedUserId, role = 'MEMBER', customRoleId, permissions } = body as {
-      userId: string;
+    const {
+      userId: bodyUserId,
+      email: bodyEmail,
+      role = 'MEMBER',
+      customRoleId,
+      permissions,
+    } = body as {
+      userId?: string;
+      email?: string;
       role?: 'MEMBER' | 'ADMIN';
       customRoleId?: string | null;
       permissions: PermissionEntry[];
@@ -68,20 +77,62 @@ export async function POST(
       return NextResponse.json({ error: 'Only drive owners and admins can add members' }, { status: 403 });
     }
 
+    // Resolve email payload to a userId, branching to pending-invite path for new emails.
+    let invitedUserId: string;
+    let inviteKind: 'added' | 'invited' = 'added';
+    let normalizedEmail: string | null = null;
+    let pendingMagicToken: string | null = null;
+
+    if (bodyEmail && !bodyUserId) {
+      normalizedEmail = bodyEmail.toLowerCase().trim();
+
+      const existingUser = await driveInviteRepository.findUserIdByEmail(normalizedEmail);
+      if (existingUser) {
+        invitedUserId = existingUser.id;
+      } else {
+        const pending = await driveInviteRepository.findActivePendingMemberByEmail(
+          driveId,
+          normalizedEmail
+        );
+        if (pending) {
+          return NextResponse.json(
+            { error: 'An invitation is already pending for this email', existingMemberId: pending.id },
+            { status: 409 }
+          );
+        }
+
+        const tokenResult = await createMagicLinkToken({ email: normalizedEmail });
+        if (!tokenResult.ok) {
+          loggers.api.error('Failed to create magic link token for invite', new Error(tokenResult.error.code));
+          return NextResponse.json({ error: 'Failed to create invitation' }, { status: 500 });
+        }
+        invitedUserId = tokenResult.data.userId;
+        pendingMagicToken = tokenResult.data.token;
+        inviteKind = 'invited';
+      }
+    } else if (bodyUserId) {
+      invitedUserId = bodyUserId;
+    } else {
+      return NextResponse.json(
+        { error: 'Either userId or email is required' },
+        { status: 400 }
+      );
+    }
+
     // Check if member already exists
     const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
 
     let memberId: string;
 
     if (!existingMember) {
-      // Add as drive member with specified role
+      // Add as drive member with specified role; pending invites leave acceptedAt null
       const newMember = await driveInviteRepository.createDriveMember({
         driveId,
         userId: invitedUserId,
         role,
         customRoleId: customRoleId || null,
         invitedBy: userId,
-        acceptedAt: new Date(),
+        acceptedAt: inviteKind === 'invited' ? null : new Date(),
       });
 
       memberId = newMember.id;
@@ -143,14 +194,29 @@ export async function POST(
     const results = await Promise.all(permissionPromises);
     const validResults = results.filter(r => r !== null);
 
-    // Send notification to added user
-    await createDriveNotification(
-      invitedUserId,
-      driveId,
-      'invited', // Always use 'invited' which now has "added" language
-      role,
-      userId
-    );
+    if (inviteKind === 'invited' && pendingMagicToken && normalizedEmail) {
+      const appUrl =
+        process.env.WEB_APP_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        'http://localhost:3000';
+      const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${pendingMagicToken}&inviteDriveId=${driveId}`;
+      const inviterEmail = await driveInviteRepository.findUserEmail(userId);
+      await sendPendingDriveInvitationEmail({
+        recipientEmail: normalizedEmail,
+        inviterName: inviterEmail || 'A PageSpace user',
+        driveName: drive.name,
+        magicLinkUrl,
+      });
+    } else {
+      // Send notification to added existing user
+      await createDriveNotification(
+        invitedUserId,
+        driveId,
+        'invited', // Always use 'invited' which now has "added" language
+        role,
+        userId
+      );
+    }
 
     trackDriveOperation(userId, 'invite_member', driveId, {
       invitedUserId,
@@ -173,6 +239,8 @@ export async function POST(
 
     return NextResponse.json({
       memberId,
+      kind: inviteKind,
+      ...(normalizedEmail ? { email: normalizedEmail } : {}),
       permissionsGranted: validResults.length,
       message: `User added with ${validResults.length} page permissions`,
     });

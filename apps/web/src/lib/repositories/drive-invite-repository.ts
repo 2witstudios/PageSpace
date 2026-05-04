@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -55,13 +55,38 @@ export const driveInviteRepository = {
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
     customRoleId: string | null;
     invitedBy: string;
-    acceptedAt: Date;
+    acceptedAt: Date | null;
   }) {
     const results = await db
       .insert(driveMembers)
       .values(data)
       .returning();
     return results[0];
+  },
+
+  async findUserIdByEmail(email: string) {
+    const result = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    return result.at(0) ?? null;
+  },
+
+  async findActivePendingMemberByEmail(driveId: string, email: string) {
+    const result = await db
+      .select({ id: driveMembers.id })
+      .from(driveMembers)
+      .innerJoin(users, eq(users.id, driveMembers.userId))
+      .where(
+        and(
+          eq(driveMembers.driveId, driveId),
+          eq(users.email, email),
+          isNull(driveMembers.acceptedAt)
+        )
+      )
+      .limit(1);
+    return result.at(0) ?? null;
   },
 
   async updateDriveMemberRole(
@@ -137,6 +162,38 @@ export const driveInviteRepository = {
       columns: { email: true },
     });
     return user?.email;
+  },
+
+  async findPendingMembersForUser(userId: string) {
+    return db
+      .select({
+        id: driveMembers.id,
+        driveId: driveMembers.driveId,
+        role: driveMembers.role,
+        driveName: drives.name,
+      })
+      .from(driveMembers)
+      .innerJoin(drives, eq(drives.id, driveMembers.driveId))
+      .where(
+        and(
+          eq(driveMembers.userId, userId),
+          isNull(driveMembers.acceptedAt)
+        )
+      );
+  },
+
+  async acceptPendingMember(memberId: string): Promise<boolean> {
+    const updated = await db
+      .update(driveMembers)
+      .set({ acceptedAt: new Date() })
+      .where(
+        and(
+          eq(driveMembers.id, memberId),
+          isNull(driveMembers.acceptedAt)
+        )
+      )
+      .returning({ id: driveMembers.id });
+    return updated.length > 0;
   },
 };
 

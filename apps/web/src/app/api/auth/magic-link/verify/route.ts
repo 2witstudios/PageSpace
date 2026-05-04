@@ -14,6 +14,8 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -24,6 +26,7 @@ export async function GET(req: Request) {
     const clientIP = getClientIP(req);
     const { searchParams } = new URL(req.url);
     const token = searchParams.get('token');
+    const inviteDriveId = searchParams.get('inviteDriveId');
 
     // Validate token format
     const validation = verifyTokenSchema.safeParse({ token });
@@ -111,6 +114,28 @@ export async function GET(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Accept any pending drive invitations for this user (independent of how they signed in)
+    // and remember the drive id requested via ?inviteDriveId for the post-verify redirect.
+    let acceptedInviteDriveId: string | null = null;
+    try {
+      const pending = await driveInviteRepository.findPendingMembersForUser(userId);
+      for (const row of pending) {
+        const accepted = await driveInviteRepository.acceptPendingMember(row.id);
+        if (!accepted) continue;
+        await broadcastDriveMemberEvent(
+          createDriveMemberEventPayload(row.driveId, userId, 'member_added', {
+            role: row.role,
+            driveName: row.driveName,
+          })
+        );
+        if (inviteDriveId && row.driveId === inviteDriveId) {
+          acceptedInviteDriveId = row.driveId;
+        }
+      }
+    } catch (error) {
+      loggers.auth.error('Failed to accept pending invitations', error as Error, { userId });
+    }
+
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
     // If the magic link opens outside the desktop device, the cookie session still works.
@@ -144,7 +169,9 @@ export async function GET(req: Request) {
           // ignored and the user still has a valid cookie session.
           const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
           let desktopRedirectPath = '/dashboard';
-          if (isNewUser) {
+          if (acceptedInviteDriveId) {
+            desktopRedirectPath = `/dashboard/${acceptedInviteDriveId}`;
+          } else if (isNewUser) {
             try {
               const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
               if (provisionedDrive) {
@@ -207,8 +234,9 @@ export async function GET(req: Request) {
     // Determine redirect URL
     let redirectPath = '/dashboard';
 
-    // For new users, provision getting started drive if needed
-    if (isNewUser) {
+    if (acceptedInviteDriveId) {
+      redirectPath = `/dashboard/${acceptedInviteDriveId}`;
+    } else if (isNewUser) {
       try {
         const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
         if (provisionedDrive) {

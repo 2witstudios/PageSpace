@@ -266,6 +266,34 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
   }
 }
 
+interface PendingDriveInvitationEmailInput {
+  recipientEmail: string;
+  recipientName?: string;
+  inviterName: string;
+  driveName: string;
+  magicLinkUrl: string;
+}
+
+export async function sendPendingDriveInvitationEmail(
+  input: PendingDriveInvitationEmailInput
+): Promise<void> {
+  try {
+    await sendEmail({
+      to: input.recipientEmail,
+      subject: `${input.inviterName} invited you to ${input.driveName} on PageSpace`,
+      react: DriveInvitationEmail({
+        userName: input.recipientName || input.recipientEmail,
+        inviterName: input.inviterName,
+        driveName: input.driveName,
+        acceptUrl: input.magicLinkUrl,
+        unsubscribeUrl: '',
+      }),
+    });
+  } catch (error) {
+    console.error('Failed to send pending drive invitation email:', error);
+  }
+}
+
 /**
  * Send an email notification to a user
  * Fails gracefully without throwing to avoid breaking the notification creation

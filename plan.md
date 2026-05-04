@@ -2,6 +2,7 @@
 
 ## Active Epics
 
+- [Drive Invites by Email](tasks/drive-invites-by-email.md) — let owners and admins invite users who don't yet have a PageSpace account; reuses `drive_members.acceptedAt` for pending state, magic-link's temp-user auto-creation for binding, and the existing `DriveInvitationEmail` template — no new table, no new route namespace.
 - [DM File Attachments](tasks/dm-file-attachments.md) — bring DM conversations to channel parity for file attachments via a `fileConversations` join table, nullable `files.driveId`, and shared upload/token/processor/composer/renderer infrastructure.
 - [Multiplayer AI Chat Streaming](tasks/multiplayer-ai-chat-streaming.md) — Socket-notified, HTTP-joined AI stream sharing: all page viewers see live ghost text and "X is waiting for AI response…" indicators in real-time.
 - [AI Chat Send Flash Fix](tasks/ai-chat-send-flash-fix.md) — eliminate stream-abort and flash on send; stabilise `chatConfig` deps and extend `invalidateTree` guard to cover all active states.
