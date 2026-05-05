@@ -73,4 +73,88 @@ describe('useThreadInboxStore', () => {
       expected: 1,
     });
   });
+
+  it('bump with empty rootMessageId is a no-op (defensive guard against malformed inbox events)', () => {
+    useThreadInboxStore.getState().bump({ source: 'channel', contextId: 'page-1', rootMessageId: '' });
+    assert({
+      given: 'a bump with rootMessageId === ""',
+      should: 'leave the store untouched (no phantom empty-key root)',
+      actual: useThreadInboxStore.getState().contexts,
+      expected: {},
+    });
+  });
+
+  it('bump with null/undefined rootMessageId is a no-op at runtime', () => {
+    // The TS signature forbids null/undefined; assert runtime defensiveness so
+    // a malformed payload from the inbox socket can't poison the store.
+    useThreadInboxStore
+      .getState()
+      // @ts-expect-error — runtime defensiveness for malformed event payloads
+      .bump({ source: 'channel', contextId: 'page-1', rootMessageId: null });
+    useThreadInboxStore
+      .getState()
+      // @ts-expect-error — runtime defensiveness for malformed event payloads
+      .bump({ source: 'channel', contextId: 'page-1', rootMessageId: undefined });
+
+    assert({
+      given: 'bumps with rootMessageId === null and undefined',
+      should: 'leave the store empty (no String(null)/String(undefined) keys)',
+      actual: useThreadInboxStore.getState().contexts,
+      expected: {},
+    });
+  });
+
+  it('alternating bump/clearRoot for the same root converges deterministically and never goes negative', () => {
+    const args = { source: 'channel' as const, contextId: 'page-1', rootMessageId: 'root-1' };
+    const reads: number[] = [];
+    const readCount = () =>
+      useThreadInboxStore.getState().contexts['channel:page-1']?.byRoot[args.rootMessageId] ?? 0;
+
+    useThreadInboxStore.getState().bump(args);
+    useThreadInboxStore.getState().bump(args);
+    useThreadInboxStore.getState().bump(args);
+    reads.push(readCount());
+    useThreadInboxStore.getState().clearRoot(args);
+    reads.push(readCount());
+    useThreadInboxStore.getState().bump(args);
+    reads.push(readCount());
+    useThreadInboxStore.getState().clearRoot(args);
+    reads.push(readCount());
+    useThreadInboxStore.getState().bump(args);
+    reads.push(readCount());
+    useThreadInboxStore.getState().clearRoot(args);
+    reads.push(readCount());
+
+    assert({
+      given: 'alternating bump/clearRoot for the same root',
+      should: 'follow last-write-wins; counts never go negative or NaN at any step',
+      actual: {
+        intermediate: reads,
+        finalCount: useThreadInboxStore.getState().contextUnreadCount('channel', 'page-1'),
+        anyNegative: reads.some((n) => n < 0),
+        anyNaN: reads.some((n) => Number.isNaN(n)),
+      },
+      expected: {
+        intermediate: [3, 0, 1, 0, 1, 0],
+        finalCount: 0,
+        anyNegative: false,
+        anyNaN: false,
+      },
+    });
+  });
+
+  it('clearRoot for a non-existent root in an empty store is a no-op (does not throw)', () => {
+    // No prior bumps — store starts empty. clearRoot must not throw and must
+    // leave state observably unchanged.
+    useThreadInboxStore
+      .getState()
+      .clearRoot({ source: 'channel', contextId: 'page-1', rootMessageId: 'root-1' });
+
+    assert({
+      given: 'a clearRoot call against an empty store',
+      should: 'be a silent no-op with no contexts created',
+      actual: useThreadInboxStore.getState().contexts,
+      expected: {},
+    });
+  });
 });
