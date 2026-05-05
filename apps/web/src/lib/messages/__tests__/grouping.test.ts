@@ -45,4 +45,24 @@ describe('isFirstInGroup', () => {
       ),
     ).toBe(false);
   });
+
+  it('groups when the gap is exactly 5 minutes (boundary is exclusive)', () => {
+    const exactlyFive = new Date(t0.getTime() + 5 * 60 * 1000);
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: exactlyFive },
+        { authorKey: 'u1', createdAt: t0 },
+      ),
+    ).toBe(false);
+  });
+
+  it('breaks when the gap is just over 5 minutes', () => {
+    const justOver = new Date(t0.getTime() + 5 * 60 * 1000 + 1);
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: justOver },
+        { authorKey: 'u1', createdAt: t0 },
+      ),
+    ).toBe(true);
+  });
 });

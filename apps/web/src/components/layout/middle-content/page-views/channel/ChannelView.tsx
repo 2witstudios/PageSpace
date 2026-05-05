@@ -523,19 +523,21 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <span className="opacity-60">Enter to save · Esc to cancel</span>
                                     </div>
                                   </div>
-                                ) : m.content ? (
+                                ) : (
                                   <>
-                                    <div className="prose prose-sm dark:prose-invert max-w-none">
-                                      <StreamingMarkdown
-                                        content={m.content}
-                                        isStreaming={false}
-                                      />
-                                    </div>
+                                    {m.content && (
+                                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                                        <StreamingMarkdown
+                                          content={m.content}
+                                          isStreaming={false}
+                                        />
+                                      </div>
+                                    )}
                                     {!isFirst && m.editedAt && (
                                       <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                     )}
                                   </>
-                                ) : null}
+                                )}
                                 <MessageAttachment message={m} />
                                 {!isFirst && showMenu && (
                                   <DropdownMenu>
