@@ -254,7 +254,6 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
-    mockUpsertChannelReadStatus.mockResolvedValue(undefined);
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
   });
 
@@ -301,6 +300,10 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       })
     );
     expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+    // Replying in a thread is NOT the same as reading the channel — the
+    // thread path must NOT upsert channelReadStatus (which would silently
+    // mark unread top-level messages as read).
+    expect(mockUpsertChannelReadStatus).not.toHaveBeenCalled();
 
     const broadcasts = captureRealtimeBroadcasts(fetchMock);
     expect(broadcasts).toHaveLength(1);
