@@ -651,7 +651,7 @@ export default function InboxChannelPage() {
                       {m.editedAt && (
                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
                       )}
-                      <div className="ml-auto flex items-center gap-1 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity">
+                      <div className="ml-auto flex items-center gap-1">
                         {!isAi && !m.id.startsWith('temp-') && (
                           <button
                             type="button"
@@ -660,7 +660,7 @@ export default function InboxChannelPage() {
                             onClick={() =>
                               openThread({ source: 'channel', contextId: pageId, parentId: m.id })
                             }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition-opacity"
                           >
                             <MessageSquareReply size={14} aria-hidden />
                           </button>

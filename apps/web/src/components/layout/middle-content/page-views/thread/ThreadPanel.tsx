@@ -276,7 +276,10 @@ export function ThreadPanel({
     [currentUserId, source, contextId, parentId],
   );
 
-  const replyCount = data?.messages.length ?? replyCountHint ?? 0;
+  // Once we have a fetch response, count the actual visible rows (server +
+  // optimistic temps); before the first response, fall back to the parent's
+  // hint so the header doesn't flash "0 replies" then jump to N.
+  const replyCount = data ? replies.length : replyCountHint ?? 0;
 
   return (
     <aside

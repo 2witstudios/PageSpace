@@ -551,7 +551,7 @@ export default function InboxDMPage() {
                               onClick={() =>
                                 openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
                               }
-                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition-opacity"
                             >
                               <MessageSquareReply size={14} aria-hidden />
                             </button>
@@ -646,7 +646,7 @@ export default function InboxDMPage() {
                       </div>
                     )}
                     {!isFirst && (
-                      <div className="absolute top-0 right-0 flex items-center gap-1 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity">
+                      <div className="absolute top-0 right-0 flex items-center gap-1">
                         {showReplyInThread && (
                           <button
                             type="button"
@@ -655,7 +655,7 @@ export default function InboxDMPage() {
                             onClick={() =>
                               openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
                             }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition-opacity"
                           >
                             <MessageSquareReply size={14} aria-hidden />
                           </button>
