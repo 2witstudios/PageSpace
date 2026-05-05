@@ -43,6 +43,7 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: Object.assign(vi.fn(), { join: vi.fn() }),
   count: vi.fn(),
   isNotNull: vi.fn(),
+  isNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt' },
@@ -55,7 +56,7 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { assigneeId: 'assigneeId', userId: 'userId', status: 'status', dueDate: 'dueDate', completedAt: 'completedAt' },
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
-  directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead', isActive: 'isActive' },
+  directMessages: { conversationId: 'conversationId', senderId: 'senderId', isRead: 'isRead', isActive: 'isActive', parentId: 'parentId' },
   dmConversations: { id: 'id', participant1Id: 'participant1Id', participant2Id: 'participant2Id' },
 }));
 

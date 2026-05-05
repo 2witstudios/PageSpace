@@ -18,25 +18,35 @@ const {
   mockChannelMessagesFindFirst,
   mockReactionsFindFirst,
   mockFilesFindFirst,
+  mockFollowersWhere,
+  mockSelectFrom,
   mockInsertValues,
   mockInsertReturning,
   mockInsertOnConflictDoUpdate,
+  mockInsertOnConflictDoNothing,
   mockUpdateSet,
   mockUpdateWhere,
+  mockUpdateReturning,
   mockDeleteWhere,
   mockDeleteReturning,
+  mockTransaction,
 } = vi.hoisted(() => ({
   mockChannelMessagesFindMany: vi.fn(),
   mockChannelMessagesFindFirst: vi.fn(),
   mockReactionsFindFirst: vi.fn(),
   mockFilesFindFirst: vi.fn(),
+  mockFollowersWhere: vi.fn(),
+  mockSelectFrom: vi.fn(),
   mockInsertValues: vi.fn(),
   mockInsertReturning: vi.fn(),
   mockInsertOnConflictDoUpdate: vi.fn(),
+  mockInsertOnConflictDoNothing: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockUpdateReturning: vi.fn(),
   mockDeleteWhere: vi.fn(),
   mockDeleteReturning: vi.fn(),
+  mockTransaction: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -52,17 +62,30 @@ vi.mock('@pagespace/db/db', () => ({
     insert: vi.fn(() => ({ values: mockInsertValues })),
     update: vi.fn(() => ({ set: mockUpdateSet })),
     delete: vi.fn(() => ({ where: mockDeleteWhere })),
+    select: vi.fn(() => ({ from: mockSelectFrom })),
+    transaction: mockTransaction,
   },
 }));
 
-vi.mock('@pagespace/db/operators', () => ({
-  and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
-  desc: vi.fn((field: unknown) => ({ op: 'desc', field })),
-  eq: vi.fn((field: unknown, value: unknown) => ({ op: 'eq', field, value })),
-  isNull: vi.fn((field: unknown) => ({ op: 'isNull', field })),
-  lt: vi.fn((field: unknown, value: unknown) => ({ op: 'lt', field, value })),
-  or: vi.fn((...conditions: unknown[]) => ({ op: 'or', conditions })),
-}));
+vi.mock('@pagespace/db/operators', () => {
+  const sqlFn = Object.assign(
+    vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
+    {
+      join: vi.fn((items: unknown[], separator: unknown) => ({ items, separator })),
+    }
+  );
+  return {
+    and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
+    asc: vi.fn((field: unknown) => ({ op: 'asc', field })),
+    desc: vi.fn((field: unknown) => ({ op: 'desc', field })),
+    eq: vi.fn((field: unknown, value: unknown) => ({ op: 'eq', field, value })),
+    gt: vi.fn((field: unknown, value: unknown) => ({ op: 'gt', field, value })),
+    isNull: vi.fn((field: unknown) => ({ op: 'isNull', field })),
+    lt: vi.fn((field: unknown, value: unknown) => ({ op: 'lt', field, value })),
+    or: vi.fn((...conditions: unknown[]) => ({ op: 'or', conditions })),
+    sql: sqlFn,
+  };
+});
 
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: {
@@ -76,6 +99,9 @@ vi.mock('@pagespace/db/schema/chat', () => ({
     editedAt: 'channel_messages.editedAt',
     createdAt: 'channel_messages.createdAt',
     parentId: 'channel_messages.parentId',
+    replyCount: 'channel_messages.replyCount',
+    lastReplyAt: 'channel_messages.lastReplyAt',
+    mirroredFromId: 'channel_messages.mirroredFromId',
   },
   channelMessageReactions: {
     id: 'channel_message_reactions.id',
@@ -88,6 +114,10 @@ vi.mock('@pagespace/db/schema/chat', () => ({
     channelId: 'channel_read_status.channelId',
     lastReadAt: 'channel_read_status.lastReadAt',
   },
+  channelThreadFollowers: {
+    rootMessageId: 'channel_thread_followers.rootMessageId',
+    userId: 'channel_thread_followers.userId',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/storage', () => ({
@@ -97,8 +127,13 @@ vi.mock('@pagespace/db/schema/storage', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { channelMessages, channelMessageReactions, channelReadStatus } from '@pagespace/db/schema/chat';
-import { and, eq, isNull, lt, or } from '@pagespace/db/operators';
+import {
+  channelMessages,
+  channelMessageReactions,
+  channelReadStatus,
+  channelThreadFollowers,
+} from '@pagespace/db/schema/chat';
+import { and, asc, eq, gt, isNull, lt, or } from '@pagespace/db/operators';
 import { channelMessageRepository } from '../channel-message-repository';
 
 beforeEach(() => {
@@ -106,22 +141,53 @@ beforeEach(() => {
 
   // Insert pipeline
   mockInsertOnConflictDoUpdate.mockResolvedValue(undefined);
+  mockInsertOnConflictDoNothing.mockResolvedValue(undefined);
   mockInsertReturning.mockResolvedValue([{ id: 'msg-1' }]);
   mockInsertValues.mockReturnValue({
     returning: mockInsertReturning,
     onConflictDoUpdate: mockInsertOnConflictDoUpdate,
+    onConflictDoNothing: mockInsertOnConflictDoNothing,
   });
   vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
 
-  // Update pipeline
-  mockUpdateWhere.mockResolvedValue(undefined);
+  // Update pipeline (resolves to a chainable .returning() too, for soft-delete tx)
+  mockUpdateReturning.mockResolvedValue([{ parentId: null }]);
+  mockUpdateWhere.mockReturnValue({
+    returning: mockUpdateReturning,
+    then: (resolve: (v: unknown) => unknown) => resolve(undefined),
+  });
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   vi.mocked(db.update).mockReturnValue({ set: mockUpdateSet } as never);
 
   // Delete pipeline
   mockDeleteReturning.mockResolvedValue([{ id: 'reaction-1' }]);
-  mockDeleteWhere.mockReturnValue({ returning: mockDeleteReturning });
+  mockDeleteWhere.mockReturnValue({
+    returning: mockDeleteReturning,
+    then: (resolve: (v: unknown) => unknown) => resolve(undefined),
+  });
   vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
+
+  // Select pipeline. Two callers exist:
+  //  1) listChannelThreadFollowers — db.select(cols).from(table).where(...) → rows
+  //  2) insertChannelThreadReply — tx.select(cols).from(table).where(...).for('update') → rows
+  // The default chain handles both: where() returns an object that is itself
+  // thenable (so listFollowers awaits the rows directly) AND has .for() that
+  // returns a promise (so insertChannelThreadReply awaits the locked rows).
+  const defaultLockedRows: unknown[] = [];
+  const defaultRows: unknown[] = [];
+  mockSelectFrom.mockReturnValue({
+    where: vi.fn(() => ({
+      then: (resolve: (v: unknown) => unknown) => resolve(defaultRows),
+      for: vi.fn().mockResolvedValue(defaultLockedRows),
+    })),
+  });
+  vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
+
+  // Transaction passes db itself as the tx so all chain mocks above apply
+  // unchanged inside the callback.
+  mockTransaction.mockImplementation(
+    async (cb: (tx: unknown) => Promise<unknown>) => cb(db)
+  );
 });
 
 describe('channelMessageRepository.listChannelMessages', () => {
@@ -377,15 +443,493 @@ describe('channelMessageRepository.updateChannelMessageContent', () => {
 });
 
 describe('channelMessageRepository.softDeleteChannelMessage', () => {
-  it('flips isActive=false (a delete must not purge — soft only)', async () => {
-    await channelMessageRepository.softDeleteChannelMessage('msg-1');
+  it('flips isActive=false and returns 1 row affected for a fresh delete', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+
+    const count = await channelMessageRepository.softDeleteChannelMessage('msg-1');
 
     const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
     assert({
-      given: 'a delete request',
-      should: 'set isActive=false rather than removing the row, so retention/audit still has the data',
-      actual: set,
-      expected: { isActive: false },
+      given: 'a delete request for a top-level message',
+      should: 'set isActive=false and return 1 row affected so the route can audit + broadcast',
+      actual: { set, count },
+      expected: { set: { isActive: false }, count: 1 },
+    });
+  });
+
+  it('returns 0 affected rows on a double soft-delete (idempotency guard for routes)', async () => {
+    // The where(isActive=true) filter makes a second delete a no-op; the route
+    // must use the returned count to skip duplicate audit + broadcast.
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const count = await channelMessageRepository.softDeleteChannelMessage('already-deleted');
+
+    assert({
+      given: 'a soft-delete of an already-inactive message',
+      should: 'return 0 so the route can 404 instead of re-broadcasting message_deleted',
+      actual: { count, secondUpdateIssued: mockUpdateSet.mock.calls.length },
+      expected: { count: 0, secondUpdateIssued: 1 },
+    });
+  });
+
+  it('decrements the parent replyCount when the soft-deleted row is a thread reply, scoped to the returned parentId', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    // Two update calls: 1) flip isActive=false on the reply,
+    // 2) replyCount = GREATEST(replyCount - 1, 0) on the parent.
+    const setCalls = mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    // Verify the SECOND update's WHERE actually targets the parentId returned
+    // by the first UPDATE — this guards against a future refactor that
+    // accidentally decrements the wrong row.
+    const eqCalls = vi.mocked(eq).mock.calls;
+    const targetsParentId = eqCalls.some(
+      ([field, value]) => field === channelMessages.id && value === 'parent-1'
+    );
+    assert({
+      given: 'a soft-delete of a thread reply',
+      should: 'issue two updates inside the same tx (flip isActive + decrement parent.replyCount) and target the returned parentId',
+      actual: {
+        firstSet: setCalls[0],
+        secondHasReplyCount: 'replyCount' in (setCalls[1] ?? {}),
+        targetsParentId,
+      },
+      expected: {
+        firstSet: { isActive: false },
+        secondHasReplyCount: true,
+        targetsParentId: true,
+      },
+    });
+  });
+
+  it('does NOT issue a parent-counter update when the row is top-level (parentId is null)', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+
+    await channelMessageRepository.softDeleteChannelMessage('top-1');
+
+    assert({
+      given: 'a soft-delete of a top-level message (parentId IS NULL)',
+      should: 'only run the isActive flip — never touch a parent counter',
+      actual: mockUpdateSet.mock.calls.length,
+      expected: 1,
+    });
+  });
+});
+
+describe('channelMessageRepository.restoreChannelMessage', () => {
+  it('flips isActive=true when restoring a row and returns 1 row affected', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+
+    const count = await channelMessageRepository.restoreChannelMessage('msg-1');
+
+    const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'a restore request for a top-level row',
+      should: 'flip isActive back to true on the targeted row and return 1',
+      actual: { set, count },
+      expected: { set: { isActive: true }, count: 1 },
+    });
+  });
+
+  // Helper for restore tests: stub the parent re-read inside the tx.
+  // restoreChannelMessage uses `tx.select().from().where().for('update')` for
+  // the parent isActive check (mirrors the insert-side lock).
+  const stubParentSelectForUpdate = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn };
+  };
+
+  it('increments the parent replyCount when the restored row is a thread reply AND the parent is still active', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
+
+    const count = await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore of a thread reply whose parent is still active',
+      should: 'return 1 row restored AND run two updates (isActive flip + parent.replyCount bump)',
+      actual: {
+        count,
+        updateCount: mockUpdateSet.mock.calls.length,
+        secondHasReplyCount: 'replyCount' in (mockUpdateSet.mock.calls[1]?.[0] as Record<string, unknown> ?? {}),
+      },
+      expected: { count: 1, updateCount: 2, secondHasReplyCount: true },
+    });
+  });
+
+  it('does NOT increment the parent counter when the parent has been soft-deleted in the meantime, but still returns 1 row restored', async () => {
+    // Race scenario: reply was soft-deleted, parent was then soft-deleted, now
+    // an admin restores the reply. Bumping a tombstoned parent's replyCount
+    // would corrupt the counter the moment a future restore brings the parent
+    // back. Skip the bump — but the reply IS restored, so return 1.
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    stubParentSelectForUpdate({ id: 'parent-1', isActive: false });
+
+    const count = await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore of a thread reply whose parent is itself soft-deleted',
+      should: 'flip isActive=true on the reply, skip the parent bump, AND still return 1',
+      actual: { count, updateCount: mockUpdateSet.mock.calls.length },
+      expected: { count: 1, updateCount: 1 },
+    });
+  });
+
+  it('locks the parent row for the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    const { forFn } = stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
+
+    await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore parent re-read inside the tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until the restore commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
+    });
+  });
+});
+
+describe('channelMessageRepository.insertChannelThreadReply', () => {
+  const baseInput = {
+    parentId: 'parent-1',
+    pageId: 'page-1',
+    userId: 'user-replier',
+    content: 'thread response',
+    fileId: null,
+    attachmentMeta: null,
+  };
+
+  // The helper validates the parent with `tx.select(...).from(...).where(...).for('update')`.
+  // This helper stubs the FOR UPDATE chain to return the supplied parent row
+  // (or no row, when null is passed).
+  const stubParentForUpdate = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn, whereFn, fromFn };
+  };
+
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    const { forFn } = stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'user-parent',
+      isActive: true,
+    });
+    mockInsertReturning.mockResolvedValueOnce([
+      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
+    ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: new Date() },
+    ]);
+
+    await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent validation read inside the insert tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until this tx commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
+    });
+  });
+
+  it('rejects with parent_not_found when the parent row is missing or inactive', async () => {
+    stubParentForUpdate(null);
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent id that does not resolve to an active row',
+      should: 'return parent_not_found WITHOUT inserting a reply or follower row',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_not_found', insertCount: 0 },
+    });
+  });
+
+  it('rejects with parent_not_found when the parent row exists but is soft-deleted (isActive=false)', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'parent-author',
+      isActive: false,
+    });
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent that has been soft-deleted',
+      should: 'return parent_not_found — clients cannot reply into a tombstoned thread',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_not_found', insertCount: 0 },
+    });
+  });
+
+  it('rejects with parent_wrong_page when the parent belongs to a different channel', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'other-page',
+      parentId: null,
+      userId: 'parent-author',
+      isActive: true,
+    });
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent id whose pageId differs from the request page',
+      should: 'return parent_wrong_page so the route can 400 — never insert a reply scoped to the wrong channel',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_wrong_page', insertCount: 0 },
+    });
+  });
+
+  it('rejects with parent_not_top_level when the parent itself has parentId set (depth-2 attempt)', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: 'grandparent',
+      userId: 'parent-author',
+      isActive: true,
+    });
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent that is itself a thread reply',
+      should: 'return parent_not_top_level — threads are exactly one level deep',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_not_top_level', insertCount: 0 },
+    });
+  });
+
+  it('inserts the reply with parentId set, bumps replyCount + lastReplyAt, and upserts both followers', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'user-parent',
+      isActive: true,
+    });
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertReturning
+      .mockResolvedValueOnce([
+        { id: 'reply-1', createdAt: replyCreatedAt, parentId: 'parent-1' },
+      ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: replyCreatedAt },
+    ]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    const replyValues = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const followerValues = mockInsertValues.mock.calls[1]?.[0] as Array<Record<string, unknown>>;
+    const updateSet = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'a happy-path thread reply with a distinct replier and parent author',
+      should: 'insert the reply with parentId, set lastReplyAt, and upsert followers for parent author + replier',
+      actual: {
+        kind: result.kind,
+        replyParent: replyValues.parentId,
+        updateHasReplyCount: 'replyCount' in updateSet,
+        updateLastReplyAt: updateSet.lastReplyAt,
+        followerUserIds: followerValues.map((r) => r.userId).sort(),
+        usedOnConflictDoNothing: mockInsertOnConflictDoNothing.mock.calls.length,
+      },
+      expected: {
+        kind: 'ok',
+        replyParent: 'parent-1',
+        updateHasReplyCount: true,
+        updateLastReplyAt: replyCreatedAt,
+        followerUserIds: ['user-parent', 'user-replier'],
+        usedOnConflictDoNothing: 1,
+      },
+    });
+  });
+
+  it('dedupes followers when the parent author replies to their own thread (one follower row, not two)', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'user-self',
+      isActive: true,
+    });
+    mockInsertReturning.mockResolvedValueOnce([
+      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
+    ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: new Date() },
+    ]);
+
+    await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      userId: 'user-self',
+    });
+
+    const followerValues = mockInsertValues.mock.calls[1]?.[0] as Array<Record<string, unknown>>;
+    assert({
+      given: 'a reply where the parent author and replier are the same user',
+      should: 'send a single follower row to onConflictDoNothing — Postgres rejects duplicate rows in one INSERT even with ON CONFLICT',
+      actual: followerValues,
+      expected: [{ rootMessageId: 'parent-1', userId: 'user-self' }],
+    });
+  });
+
+  it('writes a second top-level row with mirroredFromId set when alsoSendToParent is true', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'user-parent',
+      isActive: true,
+    });
+    mockInsertReturning
+      .mockResolvedValueOnce([
+        { id: 'reply-1', createdAt: new Date('2026-05-04T12:00:00Z'), parentId: 'parent-1' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'mirror-1', createdAt: new Date('2026-05-04T12:00:01Z'), mirroredFromId: 'reply-1' },
+      ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: new Date('2026-05-04T12:00:00Z') },
+    ]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      alsoSendToParent: true,
+    });
+
+    // Three insert pipelines: 1) reply, 2) followers, 3) mirror top-level row.
+    const insertCount = mockInsertValues.mock.calls.length;
+    const mirrorValues = mockInsertValues.mock.calls[2]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'an alsoSendToParent thread reply',
+      should: 'write a second top-level row with mirroredFromId pointing at the reply id',
+      actual: {
+        kind: result.kind,
+        insertCount,
+        mirrorParentId: mirrorValues?.parentId ?? null,
+        mirrorMirroredFromId: mirrorValues?.mirroredFromId,
+        resultMirrorId: result.kind === 'ok' ? result.mirror?.id : null,
+      },
+      expected: {
+        kind: 'ok',
+        insertCount: 3,
+        mirrorParentId: null,
+        mirrorMirroredFromId: 'reply-1',
+        resultMirrorId: 'mirror-1',
+      },
+    });
+  });
+});
+
+describe('channelMessageRepository.listChannelThreadReplies', () => {
+  it('filters by parentId and asks for ascending order', async () => {
+    mockChannelMessagesFindMany.mockResolvedValueOnce([]);
+
+    await channelMessageRepository.listChannelThreadReplies({
+      rootId: 'parent-1',
+      limit: 50,
+    });
+
+    const eqCalls = vi.mocked(eq).mock.calls;
+    const ascCalls = vi.mocked(asc).mock.calls;
+    assert({
+      given: 'a list-replies request for a thread root',
+      should: 'WHERE parentId = root AND order ascending by (createdAt, id)',
+      actual: {
+        scopedToParent: eqCalls.some(
+          ([field, value]) => field === channelMessages.parentId && value === 'parent-1'
+        ),
+        ascCount: ascCalls.length,
+      },
+      expected: { scopedToParent: true, ascCount: 2 },
+    });
+  });
+
+  it('builds a strictly-greater-than composite cursor when after is supplied', async () => {
+    mockChannelMessagesFindMany.mockResolvedValueOnce([]);
+    const after = { createdAt: new Date('2026-05-04T12:00:00Z'), id: 'reply-cursor' };
+
+    await channelMessageRepository.listChannelThreadReplies({
+      rootId: 'parent-1',
+      limit: 50,
+      after,
+    });
+
+    const gtCalls = vi.mocked(gt).mock.calls;
+    assert({
+      given: 'an ascending-cursor pagination request',
+      should: 'use gt() against both createdAt and id so the next page never re-emits the cursor row',
+      actual: {
+        createdAt: gtCalls.some(([field, value]) => field === channelMessages.createdAt && value === after.createdAt),
+        id: gtCalls.some(([field, value]) => field === channelMessages.id && value === after.id),
+      },
+      expected: { createdAt: true, id: true },
+    });
+  });
+});
+
+describe('channelMessageRepository thread follower helpers', () => {
+  it('addChannelThreadFollower inserts (rootId, userId) and uses onConflictDoNothing for idempotency', async () => {
+    await channelMessageRepository.addChannelThreadFollower('root-1', 'user-1');
+
+    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'an explicit follower add',
+      should: 'insert the (rootMessageId, userId) pair with onConflictDoNothing so a re-add is a no-op',
+      actual: {
+        values,
+        usedOnConflictDoNothing: mockInsertOnConflictDoNothing.mock.calls.length,
+      },
+      expected: {
+        values: { rootMessageId: 'root-1', userId: 'user-1' },
+        usedOnConflictDoNothing: 1,
+      },
+    });
+  });
+
+  it('removeChannelThreadFollower deletes scoped to (rootId, userId) — never another user', async () => {
+    await channelMessageRepository.removeChannelThreadFollower('root-1', 'user-1');
+
+    const eqCalls = vi.mocked(eq).mock.calls;
+    assert({
+      given: 'an explicit follower remove',
+      should: 'WHERE on both rootMessageId AND userId so we never delete another user\'s follow row',
+      actual: {
+        scopedRoot: eqCalls.some(
+          ([field, value]) => field === channelThreadFollowers.rootMessageId && value === 'root-1'
+        ),
+        scopedUser: eqCalls.some(
+          ([field, value]) => field === channelThreadFollowers.userId && value === 'user-1'
+        ),
+      },
+      expected: { scopedRoot: true, scopedUser: true },
+    });
+  });
+
+  it('listChannelThreadFollowers returns a flat array of user ids — needed by inbox fanout', async () => {
+    const fromWhere = vi.fn().mockResolvedValueOnce([
+      { userId: 'user-a' },
+      { userId: 'user-b' },
+    ]);
+    mockSelectFrom.mockReturnValueOnce({ where: fromWhere });
+
+    const result = await channelMessageRepository.listChannelThreadFollowers('root-1');
+
+    assert({
+      given: 'a thread root with two followers',
+      should: 'return a flat string[] of user ids — callers fan out inbox events without re-shaping',
+      actual: result,
+      expected: ['user-a', 'user-b'],
     });
   });
 });
@@ -482,17 +1026,23 @@ describe('channelMessageRepository surface', () => {
   it('exports the full set of functions the channel routes need today', () => {
     assert({
       given: 'the repository module',
-      should: 'export the function set the channel routes call (top-level + reactions)',
+      should: 'export the function set the channel routes call (top-level + reactions + threads)',
       actual: Object.keys(channelMessageRepository).sort(),
       expected: [
         'addChannelReaction',
+        'addChannelThreadFollower',
         'fileExists',
         'findChannelMessageInPage',
         'insertChannelMessage',
+        'insertChannelThreadReply',
         'listChannelMessages',
+        'listChannelThreadFollowers',
+        'listChannelThreadReplies',
         'loadChannelMessageWithRelations',
         'loadChannelReactionWithUser',
         'removeChannelReaction',
+        'removeChannelThreadFollower',
+        'restoreChannelMessage',
         'softDeleteChannelMessage',
         'updateChannelMessageContent',
         'upsertChannelReadStatus',

@@ -51,6 +51,7 @@ interface Message {
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
   reactions?: Reaction[];
+  parentId?: string | null;
 }
 
 interface DmConversation {
@@ -131,6 +132,11 @@ export default function InboxDMPage() {
     socket.emit('join_dm_conversation', conversationId);
 
     const handleNewMessage = (message: Message) => {
+      // Thread replies belong to the panel; the main DM stream renders only
+      // top-level messages. PR 4 will surface parentId-bearing rows in the
+      // ThreadPanel; until then, drop them here so the thread API does not
+      // pollute the live DM view of older clients.
+      if (message.parentId) return;
       if (message.conversationId === conversationId) {
         setMessages((prev) => reconcileMessage(prev, message));
 

@@ -56,7 +56,12 @@ export async function POST(req: Request, { params }: RouteParams) {
     // Fetch with user info for broadcast
     const reactionWithUser = await channelMessageRepository.loadChannelReactionWithUser(reaction.id);
 
-    // Broadcast reaction to channel
+    // Broadcast reaction to channel.
+    // Reactions on a thread reply broadcast on the SAME channel room
+    // (`pageId`) — not a thread-specific room. PR 4's ThreadPanel will
+    // subscribe to the same room and pick up the event by matching `messageId`.
+    // Don't split this into a separate room without updating PR 4's panel
+    // subscription too.
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
         const requestBody = JSON.stringify({

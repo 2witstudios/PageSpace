@@ -12,7 +12,7 @@ import {
   formatDateInTimezone,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -333,7 +333,11 @@ export async function POST(req: Request) {
             inArray(directMessages.conversationId, conversationIds),
             ne(directMessages.senderId, userId),
             eq(directMessages.isRead, false),
-            eq(directMessages.isActive, true)
+            eq(directMessages.isActive, true),
+            // Exclude thread replies — pulse summaries should reflect the
+            // conversation stream, not panel-only thread replies. PR 5 will
+            // surface thread activity through a dedicated thread digest.
+            isNull(directMessages.parentId)
           )
         )
         .orderBy(desc(directMessages.createdAt))

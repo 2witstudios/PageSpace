@@ -6,7 +6,7 @@ import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
-import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
@@ -31,6 +31,9 @@ export async function GET(
       max: 100,
     });
     const beforeParam = searchParams.get('before');
+    const cursorParam = searchParams.get('cursor');
+    const rawParentId = searchParams.get('parentId');
+    const parentId = rawParentId ? rawParentId.trim() : '';
     let before: Date | undefined;
     if (beforeParam) {
       before = new Date(beforeParam);
@@ -40,6 +43,20 @@ export async function GET(
           { status: 400 }
         );
       }
+    }
+
+    let parsedAfter: { createdAt: Date; id: string } | undefined;
+    if (cursorParam) {
+      const sep = cursorParam.lastIndexOf('|');
+      if (sep === -1) {
+        return NextResponse.json({ error: 'Invalid cursor format' }, { status: 400 });
+      }
+      const cursorDate = new Date(cursorParam.slice(0, sep));
+      const cursorId = cursorParam.slice(sep + 1);
+      if (Number.isNaN(cursorDate.getTime()) || !cursorId) {
+        return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+      }
+      parsedAfter = { createdAt: cursorDate, id: cursorId };
     }
 
     const conversation = await dmMessageRepository.findConversationForParticipant(
@@ -52,6 +69,54 @@ export async function GET(
         { error: 'Conversation not found' },
         { status: 404 }
       );
+    }
+
+    // Thread-replies branch: caller is opening a thread panel and wants the
+    // ascending list of replies for one parent. The parent must belong to this
+    // conversation and itself be top-level. `findActiveMessage` already filters
+    // isActive=true, so a soft-deleted parent surfaces as 404 here. Mark-as-read
+    // is intentionally NOT triggered — that belongs to the conversation stream,
+    // not the panel.
+    if (parentId) {
+      const parent = await dmMessageRepository.findActiveMessage({
+        messageId: parentId,
+        conversationId,
+      });
+      if (!parent) {
+        return NextResponse.json(
+          { error: 'Parent message not found in this conversation' },
+          { status: 404 }
+        );
+      }
+      if (parent.parentId !== null) {
+        return NextResponse.json(
+          { error: 'Parent must be a top-level message' },
+          { status: 400 }
+        );
+      }
+
+      const replies = await dmMessageRepository.listDmThreadReplies({
+        rootId: parentId,
+        limit: limit + 1,
+        after: parsedAfter,
+      });
+
+      const hasMore = replies.length > limit;
+      const page = hasMore ? replies.slice(0, limit) : replies;
+      const last = page[page.length - 1];
+      const nextCursor = hasMore && last
+        ? `${last.createdAt.toISOString()}|${last.id}`
+        : null;
+
+      auditRequest(request, {
+        eventType: 'data.read',
+        userId,
+        resourceType: 'dm_thread',
+        resourceId: parentId,
+        details: { replyCount: page.length },
+      });
+
+      return NextResponse.json({ messages: page, nextCursor, hasMore });
     }
 
     const messages = await dmMessageRepository.listActiveMessages({
@@ -147,12 +212,17 @@ export async function POST(
       content?: unknown;
       fileId?: unknown;
       attachmentMeta?: unknown;
+      parentId?: unknown;
+      alsoSendToParent?: unknown;
     };
 
     const rawContent = typeof body.content === 'string' ? body.content : '';
     const content = rawContent.trim().length > 0 ? rawContent : '';
     const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
     const rawAttachmentMeta = body.attachmentMeta ?? null;
+    const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
+    const parentId = trimmedParent.length > 0 ? trimmedParent : null;
+    const alsoSendToParent = body.alsoSendToParent === true;
 
     if (content.length === 0 && !fileId) {
       return NextResponse.json(
@@ -229,6 +299,115 @@ export async function POST(
       }
     }
 
+    // Thread reply branch: validated parent inserts go through the
+    // transactional helper that bumps replyCount + lastReplyAt and upserts
+    // followers. Mirror copy (alsoSendToParent) writes a second top-level row.
+    if (parentId) {
+      const result = await dmMessageRepository.insertDmThreadReply({
+        parentId,
+        conversationId,
+        senderId: userId,
+        content,
+        fileId,
+        attachmentMeta,
+        alsoSendToParent,
+      });
+
+      if (result.kind === 'parent_not_found') {
+        return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
+      }
+      if (result.kind === 'parent_wrong_conversation') {
+        return NextResponse.json({ error: 'Parent message belongs to a different conversation' }, { status: 400 });
+      }
+      if (result.kind === 'parent_not_top_level') {
+        return NextResponse.json({ error: 'Threads are exactly one level deep' }, { status: 400 });
+      }
+
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId,
+        resourceType: 'dm_thread_reply',
+        resourceId: result.reply.id,
+      });
+
+      // Mirror row, when present, behaves as a top-level message — it should
+      // bump the conversation preview/inbox just like a regular send. The
+      // thread-only reply does NOT touch the inbox preview here; PR 5 wires
+      // the inbox bump for thread followers separately.
+      if (result.mirror) {
+        const previewSource = buildLastMessagePreview(content, attachmentMeta);
+        await dmMessageRepository.updateConversationLastMessage({
+          conversationId,
+          lastMessageAt: result.mirror.createdAt,
+          lastMessagePreview: previewSource,
+        });
+
+        const recipientId = conversation.participant1Id === userId
+          ? conversation.participant2Id
+          : conversation.participant1Id;
+
+        await createOrUpdateMessageNotification(
+          recipientId,
+          conversationId,
+          previewSource,
+          userId
+        );
+
+        await broadcastInboxEvent(recipientId, {
+          operation: 'dm_updated',
+          type: 'dm',
+          id: conversationId,
+          lastMessageAt: result.mirror.createdAt.toISOString(),
+          lastMessagePreview: previewSource,
+          attachmentMeta,
+        });
+      }
+
+      if (process.env.INTERNAL_REALTIME_URL) {
+        try {
+          // Two events with distinct ids — clients dedupe on id, so a viewer of
+          // both the thread panel and parent stream receives both copies cleanly.
+          // 5s timeout matches broadcastThreadReplyCountUpdated — an unhealthy
+          // realtime server must not stall the API response after the commit.
+          const threadBody = JSON.stringify({
+            channelId: `dm:${conversationId}`,
+            event: 'new_dm_message',
+            payload: result.reply,
+          });
+          await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(threadBody),
+            body: threadBody,
+            signal: AbortSignal.timeout(5000),
+          });
+
+          if (result.mirror) {
+            const mirrorBody = JSON.stringify({
+              channelId: `dm:${conversationId}`,
+              event: 'new_dm_message',
+              payload: result.mirror,
+            });
+            await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+              method: 'POST',
+              headers: createSignedBroadcastHeaders(mirrorBody),
+              body: mirrorBody,
+              signal: AbortSignal.timeout(5000),
+            });
+          }
+        } catch (error) {
+          loggers.realtime.error('Failed to broadcast DM thread reply to socket server:', error as Error);
+        }
+      }
+
+      await broadcastThreadReplyCountUpdated(`dm:${conversationId}`, {
+        rootId: result.rootId,
+        replyCount: result.replyCount,
+        lastReplyAt: result.lastReplyAt.toISOString(),
+      });
+
+      return NextResponse.json({ message: result.reply });
+    }
+
     const newMessage = await dmMessageRepository.insertDmMessage({
       conversationId,
       senderId: userId,
@@ -263,6 +442,8 @@ export async function POST(
       userId
     );
 
+    // 5s timeout matches the thread-path broadcasts so an unhealthy realtime
+    // server cannot stall the API response after the DB commit.
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
         const requestBody = JSON.stringify({
@@ -275,9 +456,10 @@ export async function POST(
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
+          signal: AbortSignal.timeout(5000),
         });
       } catch (error) {
-        loggers.realtime?.error?.('Failed to broadcast DM message to socket server:', error as Error);
+        loggers.realtime.error('Failed to broadcast DM message to socket server:', error as Error);
       }
     }
 

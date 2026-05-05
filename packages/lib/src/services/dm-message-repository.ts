@@ -8,8 +8,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
-import { dmConversations, directMessages, dmMessageReactions } from '@pagespace/db/schema/social';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
+import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
 export interface DmConversationParticipants {
@@ -157,20 +157,80 @@ async function findActiveMessage(
 }
 
 async function softDeleteMessage(messageId: string): Promise<number> {
-  const result = await db
-    .update(directMessages)
-    .set({
-      isActive: false,
-      deletedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(directMessages.id, messageId),
-        eq(directMessages.isActive, true)
+  // Soft-deleting a thread reply must decrement the parent's replyCount in the
+  // same transaction so the footer count never drifts above the real number of
+  // visible replies. GREATEST guards against a double soft-delete racing the
+  // counter into negative territory.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(directMessages)
+      .set({
+        isActive: false,
+        deletedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(directMessages.id, messageId),
+          eq(directMessages.isActive, true)
+        )
       )
-    )
-    .returning({ id: directMessages.id });
-  return result.length;
+      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+
+    const row = result[0];
+    if (row?.parentId) {
+      await tx
+        .update(directMessages)
+        .set({
+          replyCount: sql`GREATEST(${directMessages.replyCount} - 1, 0)`,
+        })
+        .where(eq(directMessages.id, row.parentId));
+    }
+
+    return result.length;
+  });
+}
+
+async function restoreDmMessage(messageId: string): Promise<number> {
+  // Mirror of softDeleteMessage. The parent counter is only bumped when the
+  // parent itself is still active — restoring an orphaned reply whose parent
+  // was deleted in the meantime must NOT inflate a tombstone's count. The
+  // parent re-read uses SELECT ... FOR UPDATE so a concurrent
+  // softDeleteMessage(parentId) blocks until our bump commits — the race the
+  // insert-side lock prevents on the way in.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(directMessages)
+      .set({
+        isActive: true,
+        deletedAt: null,
+      })
+      .where(
+        and(
+          eq(directMessages.id, messageId),
+          eq(directMessages.isActive, false)
+        )
+      )
+      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+
+    const row = result[0];
+    if (row?.parentId) {
+      const [parent] = await tx
+        .select({ id: directMessages.id, isActive: directMessages.isActive })
+        .from(directMessages)
+        .where(eq(directMessages.id, row.parentId))
+        .for('update');
+      if (parent?.isActive) {
+        await tx
+          .update(directMessages)
+          .set({
+            replyCount: sql`${directMessages.replyCount} + 1`,
+          })
+          .where(eq(directMessages.id, row.parentId));
+      }
+    }
+
+    return result.length;
+  });
 }
 
 async function purgeInactiveMessages(olderThan: Date): Promise<number> {
@@ -251,6 +311,9 @@ async function listActiveMessages(input: ListActiveMessagesInput) {
   const baseFilters = [
     eq(directMessages.conversationId, input.conversationId),
     eq(directMessages.isActive, true),
+    // Top-level only. Threads are exactly one level deep, and reply visibility
+    // is owned by the thread panel — never the main DM stream.
+    isNull(directMessages.parentId),
   ];
 
   if (input.before) {
@@ -313,16 +376,205 @@ async function updateConversationLastRead(
 }
 
 // ---------------------------------------------------------------------------
+// Thread reply helpers
+// ---------------------------------------------------------------------------
+
+export interface InsertDmThreadReplyInput {
+  parentId: string;
+  conversationId: string;
+  senderId: string;
+  content: string;
+  fileId: string | null;
+  attachmentMeta: AttachmentMeta | null;
+  alsoSendToParent?: boolean;
+}
+
+export type InsertDmThreadReplyResult =
+  | {
+      kind: 'ok';
+      reply: DmMessageRow;
+      mirror: DmMessageRow | null;
+      rootId: string;
+      replyCount: number;
+      lastReplyAt: Date;
+    }
+  | { kind: 'parent_not_found' }
+  | { kind: 'parent_wrong_conversation' }
+  | { kind: 'parent_not_top_level' };
+
+async function insertDmThreadReply(
+  input: InsertDmThreadReplyInput
+): Promise<InsertDmThreadReplyResult> {
+  return db.transaction(async (tx) => {
+    // SELECT ... FOR UPDATE locks the parent row for the rest of this tx so a
+    // concurrent softDeleteMessage(parentId) blocks until our INSERT and
+    // replyCount UPDATE commit. Without this lock, the parent could flip
+    // isActive=false between validation and INSERT, leaving an orphaned reply
+    // attached to a tombstoned parent.
+    const [parent] = await tx
+      .select({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+        parentId: directMessages.parentId,
+        senderId: directMessages.senderId,
+        isActive: directMessages.isActive,
+      })
+      .from(directMessages)
+      .where(eq(directMessages.id, input.parentId))
+      .for('update');
+
+    if (!parent || !parent.isActive) {
+      return { kind: 'parent_not_found' };
+    }
+    if (parent.conversationId !== input.conversationId) {
+      return { kind: 'parent_wrong_conversation' };
+    }
+    if (parent.parentId !== null) {
+      return { kind: 'parent_not_top_level' };
+    }
+
+    const [reply] = await tx
+      .insert(directMessages)
+      .values({
+        conversationId: input.conversationId,
+        senderId: input.senderId,
+        content: input.content,
+        fileId: input.fileId,
+        attachmentMeta: input.attachmentMeta,
+        parentId: input.parentId,
+      })
+      .returning();
+
+    const [updatedParent] = await tx
+      .update(directMessages)
+      .set({
+        replyCount: sql`${directMessages.replyCount} + 1`,
+        lastReplyAt: reply.createdAt,
+      })
+      .where(eq(directMessages.id, input.parentId))
+      .returning({
+        replyCount: directMessages.replyCount,
+        lastReplyAt: directMessages.lastReplyAt,
+      });
+
+    const followerRows =
+      parent.senderId === input.senderId
+        ? [{ rootMessageId: input.parentId, userId: input.senderId }]
+        : [
+            { rootMessageId: input.parentId, userId: parent.senderId },
+            { rootMessageId: input.parentId, userId: input.senderId },
+          ];
+
+    await tx
+      .insert(dmThreadFollowers)
+      .values(followerRows)
+      .onConflictDoNothing();
+
+    let mirror: DmMessageRow | null = null;
+    if (input.alsoSendToParent) {
+      const [mirrorRow] = await tx
+        .insert(directMessages)
+        .values({
+          conversationId: input.conversationId,
+          senderId: input.senderId,
+          content: input.content,
+          fileId: input.fileId,
+          attachmentMeta: input.attachmentMeta,
+          mirroredFromId: reply.id,
+        })
+        .returning();
+      mirror = mirrorRow;
+    }
+
+    return {
+      kind: 'ok',
+      reply,
+      mirror,
+      rootId: input.parentId,
+      replyCount: updatedParent.replyCount,
+      // We just SET lastReplyAt = reply.createdAt above, so the RETURNING value
+      // is non-null. Falling back to reply.createdAt makes that explicit
+      // instead of relying on a non-null assertion.
+      lastReplyAt: updatedParent.lastReplyAt ?? reply.createdAt,
+    };
+  });
+}
+
+export interface ListDmThreadRepliesInput {
+  rootId: string;
+  limit: number;
+  // Composite cursor: only rows strictly newer than (createdAt, id) are returned.
+  after?: { createdAt: Date; id: string };
+}
+
+async function listDmThreadReplies(
+  input: ListDmThreadRepliesInput
+): Promise<DmMessageRow[]> {
+  const conditions = [
+    eq(directMessages.parentId, input.rootId),
+    eq(directMessages.isActive, true),
+  ];
+
+  if (input.after) {
+    conditions.push(
+      or(
+        gt(directMessages.createdAt, input.after.createdAt),
+        and(
+          eq(directMessages.createdAt, input.after.createdAt),
+          gt(directMessages.id, input.after.id)
+        )
+      )!
+    );
+  }
+
+  return db
+    .select()
+    .from(directMessages)
+    .where(and(...conditions))
+    .orderBy(asc(directMessages.createdAt), asc(directMessages.id))
+    .limit(input.limit);
+}
+
+async function addDmThreadFollower(
+  rootId: string,
+  userId: string
+): Promise<void> {
+  await db
+    .insert(dmThreadFollowers)
+    .values({ rootMessageId: rootId, userId })
+    .onConflictDoNothing();
+}
+
+async function removeDmThreadFollower(
+  rootId: string,
+  userId: string
+): Promise<void> {
+  await db
+    .delete(dmThreadFollowers)
+    .where(
+      and(
+        eq(dmThreadFollowers.rootMessageId, rootId),
+        eq(dmThreadFollowers.userId, userId)
+      )
+    );
+}
+
+async function listDmThreadFollowers(rootId: string): Promise<string[]> {
+  const rows = await db
+    .select({ userId: dmThreadFollowers.userId })
+    .from(dmThreadFollowers)
+    .where(eq(dmThreadFollowers.rootMessageId, rootId));
+  return rows.map((row) => row.userId);
+}
+
+// ---------------------------------------------------------------------------
 // Reactions parity (PR 2 of 5)
 //
 // Mirrors the reaction surface from `channel-message-repository.ts` so the DM
-// route can reach feature parity. Kept in a clearly-marked section at the end
-// of the module so PR 3 (thread replies) merges cleanly above.
-//
-// Note: the reaction route uses the existing `findActiveMessage` helper for
-// the existence check so soft-deleted DMs (isActive=false) cannot accept
-// new reactions or have reactions removed — keeping reaction visibility
-// consistent with `listActiveMessages`.
+// route can reach feature parity. The reaction route uses the existing
+// `findActiveMessage` helper for the existence check so soft-deleted DMs
+// (isActive=false) cannot accept new reactions or have reactions removed —
+// keeping reaction visibility consistent with `listActiveMessages`.
 // ---------------------------------------------------------------------------
 
 export type DmReactionRow = InferSelectModel<typeof dmMessageReactions>;
@@ -380,11 +632,17 @@ export const dmMessageRepository = {
   updateConversationLastMessage,
   findActiveMessage,
   softDeleteMessage,
+  restoreDmMessage,
   purgeInactiveMessages,
   editActiveMessage,
   listActiveMessages,
   markActiveMessagesRead,
   updateConversationLastRead,
+  insertDmThreadReply,
+  listDmThreadReplies,
+  addDmThreadFollower,
+  removeDmThreadFollower,
+  listDmThreadFollowers,
   addDmReaction,
   loadDmReactionWithUser,
   removeDmReaction,

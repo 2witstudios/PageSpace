@@ -82,6 +82,11 @@ export async function POST(req: Request, { params }: RouteParams) {
     const reactionWithUser = await dmMessageRepository.loadDmReactionWithUser(reaction.id);
 
     try {
+      // Reactions on a thread reply broadcast on the SAME conversation room
+      // (`dm:{conversationId}`) — not a thread-specific room. PR 4's
+      // ThreadPanel will subscribe to the same room and pick up the event by
+      // matching `messageId`. Don't split this into a separate room without
+      // updating PR 4's panel subscription too.
       await broadcastDmEvent(JSON.stringify({
         channelId: `dm:${conversationId}`,
         event: 'reaction_added',

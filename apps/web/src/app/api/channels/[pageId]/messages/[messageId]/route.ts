@@ -106,7 +106,14 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'You can only delete your own messages' }, { status: 403 });
   }
 
-  await channelMessageRepository.softDeleteChannelMessage(messageId);
+  // softDeleteChannelMessage is gated on isActive=true, so a concurrent or
+  // duplicate DELETE returns 0 affected rows. Surface that as a 404 instead of
+  // re-broadcasting message_deleted (and re-auditing) for an already-deleted
+  // row.
+  const deleted = await channelMessageRepository.softDeleteChannelMessage(messageId);
+  if (deleted === 0) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
 
   auditRequest(req, {
     eventType: 'data.delete',
