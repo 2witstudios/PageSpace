@@ -412,7 +412,8 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
     );
     const recipients = threadUpdatedCalls.map(([userId]) => userId);
-    expect(recipients).toEqual(expect.arrayContaining(['follower-1', 'follower-2']));
+    // Explicit recipient set: only the non-author followers, exactly once each, never the reply author.
+    expect(recipients.sort()).toEqual(['follower-1', 'follower-2']);
     expect(recipients).not.toContain(USER_ID);
 
     // Each thread_updated payload carries the new contract fields.
@@ -429,6 +430,40 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     expect(payload.id).toBe(PAGE_ID);
     expect(payload.rootMessageId).toBe(PARENT_ID);
     expect(payload.lastReplyAt).toBe(replyCreatedAt.toISOString());
+    expect(typeof payload.lastReplyPreview).toBe('string');
+    expect(payload.lastReplyPreview.length).toBeGreaterThan(0);
+  });
+
+  it('does not emit thread_updated when the parent has zero followers, but still completes the reply-count bump', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'in-thread',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([]);
+
+    const res = await callPost({ content: 'in-thread', parentId: PARENT_ID });
+
+    expect(res.status).toBe(201);
+    const threadUpdated = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
+    );
+    expect(threadUpdated).toHaveLength(0);
+    // The reply-count fanout still happens regardless of follower set — it's
+    // scoped to viewers of the parent thread, not the follower list.
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalled();
   });
 
   it('emits channel_updated to a mentioned non-follower who can view the channel', async () => {

@@ -994,6 +994,40 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     expect(threadUpdated).toHaveLength(1);
     const [recipientId, payload] = threadUpdated[0];
     expect(recipientId).toBe(RECIPIENT_ID);
-    expect((payload as { rootMessageId: string }).rootMessageId).toBe(PARENT_ID);
+    expect(recipientId).not.toBe(SENDER_ID);
+    const typed = payload as { rootMessageId: string; lastReplyAt: string; lastReplyPreview: string };
+    expect(typed.rootMessageId).toBe(PARENT_ID);
+    expect(typed.lastReplyAt).toBe(replyCreatedAt.toISOString());
+    expect(typeof typed.lastReplyPreview).toBe('string');
+    expect(typed.lastReplyPreview.length).toBeGreaterThan(0);
+  });
+
+  it('does not emit thread_updated when the DM thread has zero followers, but still completes the reply-count bump', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertDmThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: {
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: 'lonely-reply',
+        createdAt: replyCreatedAt,
+      },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockListDmThreadFollowers.mockResolvedValueOnce([]);
+
+    const res = await callRoute({ content: 'lonely-reply', parentId: PARENT_ID });
+
+    expect(res.status).toBe(200);
+    const threadUpdated = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
+    );
+    expect(threadUpdated).toHaveLength(0);
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalled();
   });
 });
