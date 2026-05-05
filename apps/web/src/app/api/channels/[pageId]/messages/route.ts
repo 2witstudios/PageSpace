@@ -11,6 +11,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { buildThreadPreview } from '@/lib/channels/build-thread-preview';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {
@@ -37,19 +38,18 @@ async function fanOutChannelInboxUpdate(
 ): Promise<Set<string>> {
   const { pageId, driveId, driveOwnerId, senderUserId } = input;
 
-  const members = await db.query.driveMembers.findMany({
+  const driveMembersRows = await db.query.driveMembers.findMany({
     where: eq(driveMembers.driveId, driveId),
     columns: { userId: true },
   });
 
-  const memberUserIds = new Set(members.map((m) => m.userId));
-  if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
-    members.push({ userId: driveOwnerId });
+  // Build a local member set so we never mutate the ORM-returned array.
+  // Drive owner is always a recipient even if they have no explicit row.
+  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
+  if (driveOwnerId) {
+    memberUserIds.add(driveOwnerId);
   }
-
-  const otherMemberIds = members
-    .filter((m) => m.userId !== senderUserId)
-    .map((m) => m.userId);
+  const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
 
   const viewableUserIds = new Set<string>();
   if (otherMemberIds.length === 0) {
@@ -105,9 +105,8 @@ async function fanOutChannelInboxUpdate(
   return viewableUserIds;
 }
 
-function buildPreview(content: string): string {
-  return content.length > 100 ? content.substring(0, 100) + '...' : content;
-}
+// Local alias kept so the existing call sites in this file stay terse.
+const buildPreview = buildThreadPreview;
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

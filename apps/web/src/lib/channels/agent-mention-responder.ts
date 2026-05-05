@@ -11,6 +11,7 @@ import {
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
+import { buildThreadPreview } from '@/lib/channels/build-thread-preview';
 import type { ToolExecutionContext } from '@/lib/ai/core';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
@@ -247,9 +248,7 @@ async function postAgentThreadReply(input: {
 
   try {
     const followers = await channelMessageRepository.listChannelThreadFollowers(result.rootId);
-    const replyPreview = input.content.length > 100
-      ? input.content.substring(0, 100) + '...'
-      : input.content;
+    const replyPreview = buildThreadPreview(input.content);
     await Promise.all(
       followers
         .filter((followerId: string) => followerId !== input.userId)
