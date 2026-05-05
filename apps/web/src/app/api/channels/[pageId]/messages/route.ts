@@ -181,12 +181,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: 'Threads are exactly one level deep' }, { status: 400 });
     }
 
-    // Sender's own read status — sending counts as reading.
-    await channelMessageRepository.upsertChannelReadStatus({
-      userId,
-      channelId: pageId,
-      readAt: new Date(),
-    });
+    // Intentionally NO read-status upsert on the thread path: replying in a
+    // thread is not the same as reading the channel. The non-thread POST path
+    // upserts read-status and broadcasts read_status_changed; doing the upsert
+    // here without the matching broadcast would leave the sender's other tabs
+    // showing a stale unread badge until refresh, AND it would falsely mark
+    // unread top-level messages as read just because the sender posted in a
+    // thread. PR 4 will surface a thread-specific read receipt instead.
 
     const replyWithRelations = await channelMessageRepository.loadChannelMessageWithRelations(result.reply.id);
     const mirrorWithRelations = result.mirror
@@ -260,7 +261,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   loggers.realtime.debug('Database returned content type:', { type: typeof newMessage?.content });
   loggers.realtime.debug('Database returned content:', { content: newMessage?.content });
 
-  // Broadcast the new message to the channel
+  // Broadcast the new message to the channel.
+  // 5s timeout matches the thread-path broadcasts so an unhealthy realtime
+  // server cannot stall the API response after the DB commit.
   if (process.env.INTERNAL_REALTIME_URL) {
     try {
       const requestBody = JSON.stringify({
@@ -273,6 +276,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         method: 'POST',
         headers: createSignedBroadcastHeaders(requestBody),
         body: requestBody,
+        signal: AbortSignal.timeout(5000),
       });
     } catch (error) {
       loggers.realtime.error('Failed to broadcast message to socket server:', error as Error);

@@ -442,6 +442,8 @@ export async function POST(
       userId
     );
 
+    // 5s timeout matches the thread-path broadcasts so an unhealthy realtime
+    // server cannot stall the API response after the DB commit.
     if (process.env.INTERNAL_REALTIME_URL) {
       try {
         const requestBody = JSON.stringify({
@@ -454,9 +456,10 @@ export async function POST(
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
+          signal: AbortSignal.timeout(5000),
         });
       } catch (error) {
-        loggers.realtime?.error?.('Failed to broadcast DM message to socket server:', error as Error);
+        loggers.realtime.error('Failed to broadcast DM message to socket server:', error as Error);
       }
     }
 
