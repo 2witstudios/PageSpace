@@ -660,7 +660,7 @@ export default function InboxChannelPage() {
                             onClick={() =>
                               openThread({ source: 'channel', contextId: pageId, parentId: m.id })
                             }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition-opacity"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                           >
                             <MessageSquareReply size={14} aria-hidden />
                           </button>
