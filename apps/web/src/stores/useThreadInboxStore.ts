@@ -68,11 +68,7 @@ export interface ThreadInboxState {
 export const useThreadInboxStore = create<ThreadInboxState>((set, get) => ({
   contexts: {},
   bump: ({ source, contextId, rootMessageId }) => {
-    // Inbox events from realtime are programmatic and should always carry a
-    // non-empty root id; an empty/null payload here is a sentinel for an
-    // upstream bug, not user input. Drop silently rather than poison the
-    // store with "", "null", or "undefined" keys that would inflate badge
-    // counts and never get cleared by a panel-mount with the real root id.
+    // Drop malformed realtime payloads — empty/null keys would inflate the badge with nothing to clear them.
     if (!rootMessageId) return;
     set((state) => {
       const key = buildKey(source, contextId);
