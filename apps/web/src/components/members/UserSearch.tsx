@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,10 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const debouncedQuery = useDebounce(query, 300);
+  // Sequence guard: typeahead can issue overlapping fetches; only the latest
+  // response is allowed to commit state so a slow earlier request can't clobber
+  // a newer one.
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (debouncedQuery.length < 2) {
@@ -36,6 +40,7 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
       return;
     }
 
+    const currentId = ++requestIdRef.current;
     const searchUsers = async () => {
       setLoading(true);
       try {
@@ -48,12 +53,14 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
         const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
         if (!response.ok) throw new Error('Search failed');
         const data = await response.json();
+        if (requestIdRef.current !== currentId) return;
         setResults(data.users || []);
       } catch (error) {
+        if (requestIdRef.current !== currentId) return;
         console.error('Error searching users:', error);
         setResults([]);
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === currentId) setLoading(false);
       }
     };
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DriveMembers } from '../DriveMembers';
@@ -56,10 +56,16 @@ const okMembers = (members: ReturnType<typeof member>[], currentUserRole = 'OWNE
 const EVENTS = ['drive:member_added', 'drive:member_removed', 'drive:member_role_changed'] as const;
 
 describe('DriveMembers', () => {
+  const originalConfirm = window.confirm;
+
   beforeEach(() => {
     vi.clearAllMocks();
     socket = makeSocket();
     window.confirm = vi.fn(() => true);
+  });
+
+  afterEach(() => {
+    window.confirm = originalConfirm;
   });
 
   it('Given a mix of pending + accepted, renders two distinct sections with correct counts', async () => {

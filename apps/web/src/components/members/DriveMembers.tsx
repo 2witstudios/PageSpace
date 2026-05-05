@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
@@ -60,15 +60,22 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const router = useRouter();
   const { toast } = useToast();
   const socket = useSocket();
+  // Sequence guard: socket events can fire fetchMembers while a prior fetch is
+  // in flight. Only the latest request commits state to avoid a stale response
+  // overwriting a newer one.
+  const requestSeqRef = useRef(0);
 
   const fetchMembers = useCallback(async () => {
+    const currentSeq = ++requestSeqRef.current;
     try {
       const response = await fetchWithAuth(`/api/drives/${driveId}/members`);
       if (!response.ok) throw new Error('Failed to fetch members');
       const data = await response.json();
+      if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
     } catch (error) {
+      if (currentSeq !== requestSeqRef.current) return;
       console.error('Error fetching members:', error);
       toast({
         title: 'Error',
@@ -76,7 +83,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      if (currentSeq === requestSeqRef.current) setLoading(false);
     }
   }, [driveId, toast]);
 
