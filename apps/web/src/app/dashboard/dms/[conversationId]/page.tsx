@@ -13,6 +13,7 @@ import { ChannelInput, type ChannelInputRef } from '@/components/layout/middle-c
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
@@ -48,6 +49,7 @@ interface Message {
   createdAt: string;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  reactions?: Reaction[];
 }
 
 interface DmConversation {
@@ -137,13 +139,124 @@ export default function InboxDMPage() {
       }
     };
 
+    const handleReactionAdded = (data: { messageId: string; reaction: Reaction }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          const exists = m.reactions?.some((r) => r.id === data.reaction.id);
+          if (exists) return m;
+          // Drop any optimistic temp reaction the local user wrote for this same
+          // (emoji, userId) so the broadcast row replaces it without duplicating.
+          const filteredReactions = (m.reactions || []).filter((r) => {
+            if (!r.id.startsWith('temp-')) return true;
+            return !(r.emoji === data.reaction.emoji && r.userId === data.reaction.userId);
+          });
+          return {
+            ...m,
+            reactions: [...filteredReactions, data.reaction],
+          };
+        })
+      );
+    };
+
+    const handleReactionRemoved = (data: { messageId: string; emoji: string; userId: string }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === data.emoji && r.userId === data.userId)
+            ),
+          };
+        })
+      );
+    };
+
     socket.on('new_dm_message', handleNewMessage);
+    socket.on('reaction_added', handleReactionAdded);
+    socket.on('reaction_removed', handleReactionRemoved);
 
     return () => {
       socket.off('new_dm_message', handleNewMessage);
+      socket.off('reaction_added', handleReactionAdded);
+      socket.off('reaction_removed', handleReactionRemoved);
       socket.emit('leave_dm_conversation', conversationId);
     };
   }, [conversationId, user, socket]);
+
+  const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    const optimisticReaction: Reaction = {
+      id: `temp-${Date.now()}`,
+      emoji,
+      userId: user.id,
+      user: { id: user.id, name: user.name || 'You' },
+    };
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          reactions: [...(m.reactions || []), optimisticReaction],
+        };
+      })
+    );
+
+    try {
+      await post(`/api/messages/${conversationId}/${messageId}/reactions`, { emoji });
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === emoji && r.userId === user.id)
+            ),
+          };
+        })
+      );
+      toast.error('Failed to add reaction');
+    }
+  }, [conversationId, user]);
+
+  const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    let removed: Reaction | undefined;
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const next = (m.reactions || []).filter((r) => {
+          if (r.emoji === emoji && r.userId === user.id) {
+            removed = r;
+            return false;
+          }
+          return true;
+        });
+        return { ...m, reactions: next };
+      })
+    );
+
+    try {
+      await del(`/api/messages/${conversationId}/${messageId}/reactions`, { emoji });
+    } catch {
+      if (removed) {
+        const restored = removed;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? { ...m, reactions: [...(m.reactions || []), restored] }
+              : m
+          )
+        );
+      }
+      toast.error('Failed to remove reaction');
+    }
+  }, [conversationId, user]);
 
   const handleEditMessage = useCallback(async (messageId: string, content: string) => {
     const editedAt = new Date().toISOString();
@@ -367,6 +480,14 @@ export default function InboxDMPage() {
                         )}
                         <MessageAttachment message={message} />
                       </div>
+                    )}
+                    {user && !message.id.startsWith('temp-') && (
+                      <MessageReactions
+                        reactions={message.reactions || []}
+                        currentUserId={user.id}
+                        onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                        onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
+                      />
                     )}
                   </div>
                 </div>
