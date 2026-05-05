@@ -141,6 +141,16 @@
       "import": "./dist/repositories/drive-repository.js",
       "require": "./dist/repositories/drive-repository.js"
     },
+    "./services/preview": {
+      "types": "./dist/services/preview.d.ts",
+      "import": "./dist/services/preview.js",
+      "require": "./dist/services/preview.js"
+    },
+    "./services/quote-enrichment": {
+      "types": "./dist/services/quote-enrichment.d.ts",
+      "import": "./dist/services/quote-enrichment.js",
+      "require": "./dist/services/quote-enrichment.js"
+    },
     "./services/storage-limits": {
       "types": "./dist/services/storage-limits.d.ts",
       "import": "./dist/services/storage-limits.js",
@@ -728,6 +738,12 @@
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
+      ],
+      "services/preview": [
+        "./dist/services/preview.d.ts"
+      ],
+      "services/quote-enrichment": [
+        "./dist/services/quote-enrichment.d.ts"
       ],
       "services/storage-limits": [
         "./dist/services/storage-limits.d.ts"

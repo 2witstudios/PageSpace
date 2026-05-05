@@ -79,6 +79,11 @@ export const directMessages = pgTable('direct_messages', {
   // When "Also send to DM" mirrors a thread reply to the top-level conversation,
   // the top-level copy carries mirroredFromId pointing at the thread reply's id.
   mirroredFromId: text('mirroredFromId').references((): AnyPgColumn => directMessages.id, { onDelete: 'set null' }),
+  // Inline quote reply: top-level message embedding another in the same conversation.
+  // Orthogonal to threading — quoted messages are top-level (parentId IS NULL) and
+  // live in the main feed. onDelete: 'set null' so a quote-reply outlives a hard
+  // delete of its source; soft-deletes leave the FK intact for tombstone rendering.
+  quotedMessageId: text('quotedMessageId').references((): AnyPgColumn => directMessages.id, { onDelete: 'set null' }),
 }, (table) => {
   return {
     conversationIdx: index('direct_messages_conversation_id_idx').on(table.conversationId),
@@ -97,6 +102,7 @@ export const directMessages = pgTable('direct_messages', {
     // Composite index for efficient unread count queries (conversationId, senderId, isRead)
     unreadCountIdx: index('direct_messages_unread_count_idx').on(table.conversationId, table.senderId, table.isRead),
     parentCreatedIdx: index('direct_messages_parent_created_idx').on(table.parentId, table.createdAt),
+    quotedIdx: index('direct_messages_quoted_id_idx').on(table.quotedMessageId),
   }
 });
 

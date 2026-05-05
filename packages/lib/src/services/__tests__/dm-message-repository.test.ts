@@ -871,6 +871,45 @@ describe('dmMessageRepository.removeDmReaction', () => {
   });
 });
 
+describe('dmMessageRepository.insertDmMessage', () => {
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
+    await dmMessageRepository.insertDmMessage({
+      conversationId: 'conv-1',
+      senderId: 'user-1',
+      content: 'inline quote reply',
+      fileId: null,
+      attachmentMeta: null,
+      quotedMessageId: 'quoted-dm-1',
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'an insert request with quotedMessageId set',
+      should: 'forward the value verbatim so the new DM links to the quoted source',
+      actual: inserted.quotedMessageId,
+      expected: 'quoted-dm-1',
+    });
+  });
+
+  it('persists null quotedMessageId when the caller omits the field', async () => {
+    await dmMessageRepository.insertDmMessage({
+      conversationId: 'conv-1',
+      senderId: 'user-1',
+      content: 'plain top-level message',
+      fileId: null,
+      attachmentMeta: null,
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a top-level message with no quote context',
+      should: 'still write the column as null rather than dropping it from the payload',
+      actual: inserted.quotedMessageId,
+      expected: null,
+    });
+  });
+});
+
 // Surface guard: keep the public API shape stable so consumers don't break.
 describe('dmMessageRepository surface', () => {
   it('exports the reaction functions the DM routes need at parity with channels', () => {

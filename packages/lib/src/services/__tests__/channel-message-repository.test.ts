@@ -272,6 +272,43 @@ describe('channelMessageRepository.insertChannelMessage', () => {
       expected: { fileId: null, attachmentMeta: null },
     });
   });
+
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
+    await channelMessageRepository.insertChannelMessage({
+      pageId: 'page-1',
+      userId: 'user-1',
+      content: 'inline quote reply',
+      fileId: null,
+      attachmentMeta: null,
+      quotedMessageId: 'quoted-msg-1',
+    });
+
+    const inserted = testDbState.rows('channelMessages')[0];
+    assert({
+      given: 'an insert request with quotedMessageId set',
+      should: 'forward the value verbatim so the new row links to the quoted source',
+      actual: inserted.quotedMessageId,
+      expected: 'quoted-msg-1',
+    });
+  });
+
+  it('persists null quotedMessageId when the caller omits the field', async () => {
+    await channelMessageRepository.insertChannelMessage({
+      pageId: 'page-1',
+      userId: 'user-1',
+      content: 'plain top-level message',
+      fileId: null,
+      attachmentMeta: null,
+    });
+
+    const inserted = testDbState.rows('channelMessages')[0];
+    assert({
+      given: 'a top-level message with no quote context',
+      should: 'still write the column as null rather than dropping it from the payload',
+      actual: inserted.quotedMessageId,
+      expected: null,
+    });
+  });
 });
 
 describe('channelMessageRepository.upsertChannelReadStatus', () => {

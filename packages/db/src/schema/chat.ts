@@ -31,11 +31,17 @@ export const channelMessages = pgTable('channel_messages', {
   // When "Also send to channel" mirrors a thread reply to the top-level stream,
   // the top-level copy carries mirroredFromId pointing at the thread reply's id.
   mirroredFromId: text('mirroredFromId').references((): AnyPgColumn => channelMessages.id, { onDelete: 'set null' }),
+  // Inline quote reply: top-level message embedding another in the same channel.
+  // Orthogonal to threading — quoted messages are top-level (parentId IS NULL) and
+  // live in the main feed. onDelete: 'set null' so a quote-reply outlives a hard
+  // delete of its source; soft-deletes leave the FK intact for tombstone rendering.
+  quotedMessageId: text('quotedMessageId').references((): AnyPgColumn => channelMessages.id, { onDelete: 'set null' }),
 }, (table) => {
     return {
         pageIdx: index('channel_messages_page_id_idx').on(table.pageId),
         fileIdx: index('channel_messages_file_id_idx').on(table.fileId),
         parentCreatedIdx: index('channel_messages_parent_created_idx').on(table.parentId, table.createdAt),
+        quotedIdx: index('channel_messages_quoted_id_idx').on(table.quotedMessageId),
     }
 });
 

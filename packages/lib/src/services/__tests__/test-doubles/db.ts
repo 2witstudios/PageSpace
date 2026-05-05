@@ -798,7 +798,7 @@ export const chatSchema = {
   channelMessages: makeTable('channelMessages', [
     'id', 'pageId', 'userId', 'content', 'fileId', 'attachmentMeta',
     'isActive', 'editedAt', 'createdAt', 'parentId', 'replyCount',
-    'lastReplyAt', 'mirroredFromId', 'aiMeta',
+    'lastReplyAt', 'mirroredFromId', 'aiMeta', 'quotedMessageId',
   ]),
   channelMessageReactions: makeTable('channelMessageReactions', [
     'id', 'messageId', 'userId', 'emoji', 'createdAt',
@@ -820,7 +820,7 @@ export const socialSchema = {
     'id', 'conversationId', 'senderId', 'content', 'fileId',
     'attachmentMeta', 'isRead', 'readAt', 'isActive', 'isEdited',
     'editedAt', 'deletedAt', 'createdAt', 'parentId', 'replyCount',
-    'lastReplyAt', 'mirroredFromId',
+    'lastReplyAt', 'mirroredFromId', 'quotedMessageId',
   ]),
   dmThreadFollowers: makeTable('dmThreadFollowers', [
     'rootMessageId', 'userId', 'createdAt',

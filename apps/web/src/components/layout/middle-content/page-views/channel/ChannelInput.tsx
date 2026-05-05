@@ -2,7 +2,7 @@
 
 import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
+import { ArrowUp, X, FileIcon, ImageIcon, FileText, CornerUpLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
@@ -45,6 +45,11 @@ export interface ChannelInputProps {
   showAlsoSendToParent?: boolean;
   /** Stable key used to register the draft with useEditingStore so SWR can't clobber unsent text */
   editingSessionKey?: string;
+  /** Author + snippet for the quote-reply chip rendered above the input row.
+      Parent owns the active quoted message id; this prop only drives the chip UI. */
+  quotedPreview?: { authorName: string; snippet: string } | null;
+  /** Dismiss the active quote — invoked when the user clicks the chip's X. */
+  onClearQuote?: () => void;
   /** Additional class names */
   className?: string;
 }
@@ -92,6 +97,8 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       parentId,
       showAlsoSendToParent = false,
       editingSessionKey,
+      quotedPreview,
+      onClearQuote,
       className,
     },
     ref
@@ -268,6 +275,36 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             isFocused && 'ring-1 ring-primary/20'
           )}
         >
+          {/* Quote-reply chip — mirrors the attachment-preview language so users
+              recognise it as a dismissable composer affordance. Parent owns the
+              state; we only render the chip when quotedPreview is set. */}
+          {quotedPreview && (
+            <div className="px-3 pt-3" data-testid="channel-input-quote-chip">
+              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg border-l-2 border-primary/40">
+                <CornerUpLeft className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">
+                    Replying to {quotedPreview.authorName}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {quotedPreview.snippet}
+                  </p>
+                </div>
+                {onClearQuote ? (
+                  <button
+                    onClick={onClearQuote}
+                    className="p-1 hover:bg-muted rounded"
+                    title="Cancel quote reply"
+                    aria-label="Cancel quote reply"
+                    type="button"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          )}
+
           {/* Attachment preview */}
           {(attachment || isUploading) && (
             <div className="px-3 pt-3">

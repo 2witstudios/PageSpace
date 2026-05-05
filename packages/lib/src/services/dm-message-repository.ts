@@ -122,6 +122,7 @@ export interface InsertDmMessageInput {
   content: string;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  quotedMessageId?: string | null;
 }
 
 export type DmMessageRow = InferSelectModel<typeof directMessages>;
@@ -135,6 +136,7 @@ async function insertDmMessage(input: InsertDmMessageInput): Promise<DmMessageRo
       content: input.content,
       fileId: input.fileId,
       attachmentMeta: input.attachmentMeta,
+      quotedMessageId: input.quotedMessageId ?? null,
     })
     .returning();
   return row;
