@@ -9,16 +9,22 @@ import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/C
 import { ChannelInputFooter } from './ChannelInputFooter';
 import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
 import { formatFileSize } from '@/lib/attachment-utils';
+import { useEditingSession } from '@/stores/useEditingSession';
 
 export type { FileAttachment };
+
+export interface ChannelInputSendOptions {
+  /** When true (thread mode), the reply should be mirrored as a top-level message in the parent context */
+  alsoSendToParent?: boolean;
+}
 
 export interface ChannelInputProps {
   /** Current input value */
   value: string;
   /** Input change handler */
   onChange: (value: string) => void;
-  /** Send message handler - receives optional attachment */
-  onSend: (attachment?: FileAttachment) => void;
+  /** Send message handler - receives optional attachment and thread options */
+  onSend: (attachment?: FileAttachment, options?: ChannelInputSendOptions) => void;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -33,6 +39,12 @@ export interface ChannelInputProps {
   channelId?: string;
   /** DM conversation ID for uploads (used when this input is rendered in a DM context) */
   conversationId?: string;
+  /** Thread root id — when set, this input composes a reply for that thread */
+  parentId?: string;
+  /** Render the "Also send to channel/DM" checkbox in the footer (thread composer only) */
+  showAlsoSendToParent?: boolean;
+  /** Stable key used to register the draft with useEditingStore so SWR can't clobber unsent text */
+  editingSessionKey?: string;
   /** Additional class names */
   className?: string;
 }
@@ -77,6 +89,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       attachmentsEnabled = false,
       channelId,
       conversationId,
+      parentId,
+      showAlsoSendToParent = false,
+      editingSessionKey,
       className,
     },
     ref
@@ -85,6 +100,18 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const fileInputRef = useRef<HTMLInputElement>(null);
     const shouldReduceMotion = useReducedMotion();
     const [isFocused, setIsFocused] = useState(false);
+    const [alsoSendToParent, setAlsoSendToParent] = useState(false);
+
+    // Hold an editing-store session whenever the user has unsent draft text in
+    // this composer instance. Prevents SWR refreshes / auth refreshes from
+    // unmounting or clobbering the in-progress message — see useEditingStore
+    // for the broader contract.
+    useEditingSession(
+      editingSessionKey ?? '',
+      Boolean(editingSessionKey) && value.trim().length > 0,
+      'form',
+      { componentName: 'ChannelInput', pageId: channelId, conversationId },
+    );
 
     const uploadUrl = channelId
       ? `/api/channels/${channelId}/upload`
@@ -115,8 +142,13 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
 
     const handleSend = () => {
       if ((value.trim() || attachment) && !disabled && !isUploading) {
-        onSend(attachment || undefined);
+        if (parentId) {
+          onSend(attachment || undefined, { alsoSendToParent });
+        } else {
+          onSend(attachment || undefined);
+        }
         clearAttachment();
+        if (parentId) setAlsoSendToParent(false);
       }
     };
 
@@ -325,6 +357,12 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             onAttachmentClick={handleAttachmentClick}
             attachmentsEnabled={attachmentsEnabled && hasUploadTarget}
             disabled={disabled || isUploading}
+            alsoSendToParentEnabled={Boolean(parentId) && showAlsoSendToParent}
+            alsoSendToParentLabel={
+              conversationId && !channelId ? 'Also send to DM' : 'Also send to channel'
+            }
+            alsoSendToParent={alsoSendToParent}
+            onAlsoSendToParentChange={setAlsoSendToParent}
           />
         </InputCard>
       </div>
