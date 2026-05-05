@@ -134,6 +134,10 @@ export default function InboxDMPage() {
   // Close any open thread when navigating between conversations.
   useEffect(() => {
     closeThread();
+    // Also drop any active quote so a chip composed against a previous DM
+    // cannot leak its messageId into the next conversation's POST.
+    setQuotedMessageId(null);
+    setActiveQuotedSnapshot(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
@@ -434,6 +438,13 @@ export default function InboxDMPage() {
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInputValue(content);
+      // Restore the quote chip so the user's retry still carries the quote
+      // they originally selected; without this the failed-send recovery would
+      // silently strip the quote context.
+      if (activeQuoteId) {
+        setQuotedMessageId(activeQuoteId);
+        setActiveQuotedSnapshot(activeQuoteSnapshot);
+      }
     }
   };
 

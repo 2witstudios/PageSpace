@@ -61,7 +61,14 @@ const MessageQuoteBlock: React.FC<MessageQuoteBlockProps> = ({
       onClick={isClickable ? handleClick : undefined}
       role={isClickable ? 'button' : undefined}
       tabIndex={isClickable ? 0 : undefined}
-      onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') handleClick(); } : undefined}
+      onKeyDown={isClickable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          // Space normally scrolls the page; preventDefault keeps focus on the
+          // quote block so keyboard activation matches the click affordance.
+          e.preventDefault();
+          handleClick();
+        }
+      } : undefined}
     >
       <div className="flex items-center gap-1.5 mb-0.5">
         <Avatar className="h-4 w-4">

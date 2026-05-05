@@ -290,15 +290,17 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                     {quotedPreview.snippet}
                   </p>
                 </div>
-                <button
-                  onClick={onClearQuote}
-                  className="p-1 hover:bg-muted rounded"
-                  title="Cancel quote reply"
-                  aria-label="Cancel quote reply"
-                  type="button"
-                >
-                  <X className="h-4 w-4 text-muted-foreground" />
-                </button>
+                {onClearQuote ? (
+                  <button
+                    onClick={onClearQuote}
+                    className="p-1 hover:bg-muted rounded"
+                    title="Cancel quote reply"
+                    aria-label="Cancel quote reply"
+                    type="button"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                ) : null}
               </div>
             </div>
           )}

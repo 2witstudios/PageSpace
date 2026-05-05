@@ -135,6 +135,20 @@ describe('attachQuotedMessages — soft-delete and missing rows', () => {
     });
   });
 
+  it('blanks contentSnippet for soft-deleted sources so deleted text never crosses the wire', async () => {
+    mockChannelFindMany.mockResolvedValue([channelRow('q1', 'sensitive deleted body', false)]);
+    const rows = [{ id: 'r1', quotedMessageId: 'q1' }];
+
+    const result = await attachQuotedMessages(rows, 'channel');
+
+    assert({
+      given: 'a quote pointing at a soft-deleted source whose body still exists in the DB',
+      should: 'omit the deleted body from the snapshot; the renderer\'s tombstone is the displayed UI but the payload itself must not carry the deleted text',
+      actual: result[0].quotedMessage?.contentSnippet,
+      expected: '',
+    });
+  });
+
   it('does not filter the IN-query by isActive — soft-deleted rows must still resolve', async () => {
     mockChannelFindMany.mockResolvedValue([]);
     const rows = [{ id: 'r1', quotedMessageId: 'q1' }];
@@ -192,6 +206,38 @@ describe('attachQuotedMessages — snapshot shape', () => {
       should: 'read authorName from the user relation (not sender)',
       actual: result[0].quotedMessage?.authorName,
       expected: 'Alice',
+    });
+  });
+
+  it('prefers aiMeta.senderName over the human user when the channel quote is AI-authored', async () => {
+    mockChannelFindMany.mockResolvedValue([
+      {
+        id: 'q1',
+        content: 'agent reply',
+        createdAt: new Date('2026-05-05T00:00:00Z'),
+        isActive: true,
+        // Human triggered the agent — their user row is still present, but the
+        // displayed author should be the agent persona.
+        user: { id: 'human-1', name: 'Alice', image: null },
+        aiMeta: {
+          senderType: 'agent',
+          senderName: 'Triage Agent',
+          agentPageId: 'agent-page-7',
+        },
+      },
+    ]);
+    const rows = [{ id: 'r1', quotedMessageId: 'q1' }];
+
+    const result = await attachQuotedMessages(rows, 'channel');
+
+    assert({
+      given: 'an AI-authored channel message used as a quote source',
+      should: 'expose the agent persona in the snapshot, not the triggering human user',
+      actual: {
+        authorName: result[0].quotedMessage?.authorName,
+        authorId: result[0].quotedMessage?.authorId,
+      },
+      expected: { authorName: 'Triage Agent', authorId: 'agent-page-7' },
     });
   });
 

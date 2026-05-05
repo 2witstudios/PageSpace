@@ -228,6 +228,13 @@ function ChannelView({ page }: ChannelViewProps) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
+      // Restore the quote chip so the user's retry still carries the quote
+      // they originally selected; without this the failed-send recovery would
+      // silently strip the quote context.
+      if (activeQuoteId) {
+        setQuotedMessageId(activeQuoteId);
+        setActiveQuotedSnapshot(activeQuoteSnapshot ?? null);
+      }
     }
   };
 
@@ -615,18 +622,26 @@ function ChannelView({ page }: ChannelViewProps) {
                                       </button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end">
-                                      <DropdownMenuItem
-                                        onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                      >
-                                        <Pencil className="mr-2 h-4 w-4" /> Edit
+                                      <DropdownMenuItem onClick={() => handleStartQuote(m)}>
+                                        <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
                                       </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
-                                      <DropdownMenuItem
-                                        onClick={() => handleDeleteMessage(m.id)}
-                                        className="text-destructive focus:text-destructive"
-                                      >
-                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                      </DropdownMenuItem>
+                                      {showOwnerActions && (
+                                        <>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                          >
+                                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            onClick={() => handleDeleteMessage(m.id)}
+                                            className="text-destructive focus:text-destructive"
+                                          >
+                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                          </DropdownMenuItem>
+                                        </>
+                                      )}
                                     </DropdownMenuContent>
                                   </DropdownMenu>
                                 )}

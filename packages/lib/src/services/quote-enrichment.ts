@@ -7,7 +7,9 @@
  *
  * Soft-deleted source messages are intentionally NOT filtered out by the query
  * — the renderer reads `isActive` to decide whether to show a tombstone, and
- * silently dropping the row would make the embed disappear instead.
+ * silently dropping the row would make the embed disappear instead. The
+ * snapshot does, however, blank `contentSnippet` for soft-deleted rows so the
+ * payload never carries the deleted body across the wire.
  */
 
 import { db } from '@pagespace/db/db';
@@ -28,25 +30,42 @@ export interface QuotedMessageSnapshot {
   isActive: boolean;
 }
 
+interface ChannelAiMeta {
+  senderType: 'global_assistant' | 'agent';
+  senderName: string;
+  agentPageId?: string;
+}
+
 interface QuoteSourceRow {
   id: string;
   content: string;
   createdAt: Date;
   isActive: boolean;
+  // Channel rows expose `user` (human author) and `aiMeta` (assistant/agent
+  // author for messages posted by AI tools); DM rows expose `sender`. The
+  // resolver below prefers aiMeta first so AI-authored channel quotes keep
+  // the agent label rather than falling back to the triggering human's name.
   user?: { id: string; name: string | null; image: string | null } | null;
   sender?: { id: string; name: string | null; image: string | null } | null;
+  aiMeta?: ChannelAiMeta | null;
 }
 
 const userColumns = { id: true, name: true, image: true } as const;
 
 function snapshotFromRow(row: QuoteSourceRow): QuotedMessageSnapshot {
-  const author = row.user ?? row.sender ?? null;
+  const human = row.user ?? row.sender ?? null;
+  const isAi = !!row.aiMeta;
   return {
     id: row.id,
-    authorId: author?.id ?? null,
-    authorName: author?.name ?? null,
-    authorImage: author?.image ?? null,
-    contentSnippet: buildThreadPreview(row.content),
+    authorId: isAi ? row.aiMeta?.agentPageId ?? null : human?.id ?? null,
+    authorName: isAi ? row.aiMeta?.senderName ?? null : human?.name ?? null,
+    // AI-authored messages don't carry a per-message avatar; fall back to null
+    // so the renderer can show its initials placeholder consistently.
+    authorImage: isAi ? null : human?.image ?? null,
+    // Soft-deleted sources resolve to a tombstone snapshot — keep the row's
+    // metadata for context but blank the body so deleted text never crosses
+    // the wire even if the renderer is bypassed.
+    contentSnippet: row.isActive ? buildThreadPreview(row.content) : '',
     createdAt: row.createdAt,
     isActive: row.isActive,
   };
