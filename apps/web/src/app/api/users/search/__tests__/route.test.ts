@@ -103,7 +103,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { and, isNotNull } from '@pagespace/db/operators';
 
 // ============================================================================
 // Test Helpers
